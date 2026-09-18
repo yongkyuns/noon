@@ -326,6 +326,15 @@ impl SemanticExecutionPlayer {
         })
     }
 
+    /// Request bounded history only for sequential source execution. Pre-authored
+    /// immutable plans already contain their complete timeline and need no journal.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn begin_replay_retention(&mut self) -> Result<(), String> {
+        self.session
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .map_err(|error| error.to_string())
+    }
+
     /// Change only derived transport framing while retaining the same runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn rebind_transport(
@@ -2920,6 +2929,18 @@ impl SemanticExecutionPlayer {
     pub fn initial_delta_json(&mut self) -> Result<String, String> {
         self.encoded_delta(true)?
             .ok_or_else(|| "initial snapshot missing".into())
+    }
+
+    /// Validate completed replay in Rust, before the host exposes seeking/looping.
+    /// A failed capability leaves the final coherent frame and semantic scene intact.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
+    pub fn seal_replay(&mut self) -> Result<(), String> {
+        if self.session.replay_scope_active() {
+            self.session
+                .seal_replay()
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     /// Explicit read-only diagnostics; never used to drive or reconstruct execution.

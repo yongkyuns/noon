@@ -11,15 +11,20 @@ import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_MORPH_REGRESSION_PORT ?? 4199);
 const base = `http://127.0.0.1:${port}/web/`;
+const example = process.env.NOON_REPLAY_CASE ?? "tiger";
+assert.ok(["tiger", "dynamic"].includes(example));
 const artifacts = path.resolve(root, process.env.NOON_MORPH_REGRESSION_ARTIFACTS ??
-  "browser-smoke-artifacts/playground-playback-morph");
+  `browser-smoke-artifacts/playground-playback-${example === "tiger" ? "morph" : "dynamic"}`);
 const backend = process.env.NOON_MORPH_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
 // Original gallery timings: wait .5, morph 1.8, hold .75, return 1.8, hold .85.
 // Samples bracket BOTH completion boundaries and include the formerly wrong gap.
-const times = [0, 0.25, 0.499, 0.5, 1.4, 2.299, 2.3, 2.301, 2.7,
+const tigerTimes = [0, 0.25, 0.499, 0.5, 1.4, 2.299, 2.3, 2.301, 2.7,
   3.049, 3.05, 3.051, 3.95, 4.849, 4.85, 5.3, 5.65];
-const report = { backend, times, comparisons: [], errors: [] };
+const times = example === "tiger" ? tigerTimes : [0.35, 0.9, 1.45, 1.7, 2.17, 2.72, 3.17,
+  3.41, 3.51, 3.7, 3.91, 4.01, 4.2, 4.46, 4.8, 4.999];
+const expectedDuration = example === "tiger" ? 5.7 : 5.0;
+const report = { backend, example, times, comparisons: [], errors: [], observations: [] };
 await mkdir(artifacts, { recursive: true });
 const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1",
   "--directory", root], { stdio: "ignore" });
@@ -60,7 +65,7 @@ try {
   page.on("pageerror", error => report.errors.push(error.stack ?? String(error)));
   page.on("console", message => { if (message.type() === "error") report.errors.push(message.text()); });
   await page.goto(`${base}morph-regression.html`);
-  const source = await readFile(path.join(root, "web/python/examples/manim_compatible_svg_tiger_morph.py"), "utf8");
+  const source = await readFile(path.join(root, example === "tiger" ? "web/python/examples/manim_compatible_svg_tiger_morph.py" : "web/python/examples/manim_parity_stress_grid.py"), "utf8");
   await page.evaluate(async source => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
@@ -85,16 +90,28 @@ try {
   report.initialRenderer = await page.evaluate(() => window.morphRegression.execution.metrics());
   assert.equal(report.initialRenderer.metrics.backend, backend === "webgl" ? "WebGL2" : "WebGPU");
   const originals = new Map();
+  const sourceObjects = new Map();
   for (const time of times) {
     const state = await page.evaluate(t => window.morphRegression.execution.sampleToAuthoredTime(t), time);
     assert.ok(Math.abs(state.time - time) < 1e-9, `first-pass sample missed ${time}: ${state.time}`);
+    const frame = await page.evaluate(async () => (await window.morphRegression.execution.debugFrame()));
+    sourceObjects.set(time, frame);
+    report.observations.push({ mode: "source", time, objects: frame.objects.length });
+    await writeFile(path.join(artifacts, `source-${time}.json`), JSON.stringify(frame));
     originals.set(time, await page.locator("#scene").screenshot({ path: path.join(artifacts, `source-${time}.png`) }));
   }
   // The first pass itself must hold the rocket and must not be an empty or
   // unchanging scene. Parity alone would allow two identically broken paths.
+  if (example === "tiger") {
   assert.ok(difference(originals.get(0.25), originals.get(2.7)) > 0.02, "tiger and rocket must be visibly different");
   assert.ok(difference(originals.get(2.301), originals.get(2.7)) < 0.002, "first-pass rocket must remain held");
   assert.ok(difference(originals.get(2.7), originals.get(3.049)) < 0.002, "first-pass rocket must remain held until return");
+  } else {
+    assert.ok(difference(originals.get(0.35), originals.get(0.9)) > 0.02, "Create must visibly introduce the grid");
+    assert.equal(sourceObjects.get(0.9).objects.filter(object => object.present && object.appearance > 0).length, 626,
+      "all grid shapes and labels must appear before the authored late fade");
+    assert.ok(sourceObjects.get(3.91).objects.length > 626, "the first pass must include temporary pulse objects");
+  }
   report.completed = await page.evaluate(async () => {
     const h = window.morphRegression;
     // Cross the floating-point final endpoint with the explicit completion flag.
@@ -106,10 +123,11 @@ try {
       continuationGeneration: null,
     }, { authoringClient: h.authoring, loopDurationSeconds: authored.duration });
     await h.execution.pause();
-    return { final, duration: authored.duration, metrics: await h.execution.metrics() };
+    return { final, duration: authored.duration, metrics: await h.execution.metrics(), state: await h.execution.state() };
   });
   assert.equal(report.completed.final.sourceCompleted, true);
-  assert.ok(Math.abs(report.completed.duration - 5.7) < 1e-9);
+  assert.ok(Math.abs(report.completed.duration - expectedDuration) < 1e-9);
+  assert.equal(report.completed.state.replaySupported, true, "Rust must explicitly admit replay");
   assert.equal(report.completed.metrics.metrics.backend, backend === "webgl" ? "WebGL2" : "WebGPU");
   for (const mode of ["seek", "forward"]) {
     await page.evaluate(() => window.morphRegression.execution.seek(0));
@@ -123,6 +141,13 @@ try {
         return player.advanceTo(time);
       }, { time, mode });
       assert.ok(Math.abs(state.time - time) < 1e-9);
+      const frame = await page.evaluate(async () => (await window.morphRegression.execution.debugFrame()));
+      report.observations.push({ mode, time, objects: frame.objects.length });
+      await writeFile(path.join(artifacts, `${mode}-${time}.json`), JSON.stringify(frame));
+      const reference = sourceObjects.get(time);
+      const visibleIds = value => value.objects.filter(object => object.present && object.appearance > 1e-6)
+        .map(object => object.id).sort((a, b) => a - b);
+      assert.deepEqual(visibleIds(frame), visibleIds(reference), `${mode} historical visibility at ${time}`);
       const capture = await page.locator("#scene").screenshot({ path: path.join(artifacts, `${mode}-${time}.png`) });
       const mismatch = difference(originals.get(time), capture);
       report.comparisons.push({ mode, time, mismatch });
@@ -130,9 +155,9 @@ try {
   }
   assert.deepEqual(report.errors, []);
   const bad = report.comparisons.filter(sample => sample.mismatch >= 0.002);
-  assert.deepEqual(bad, [], "completed replay must preserve the first-pass frame throughout both morphs and holds");
+  assert.deepEqual(bad, [], "completed replay must preserve the first-pass frame throughout all animation, lifecycle and hold phases");
   report.outcome = "pass";
-  console.log(`${backend}: ${report.comparisons.length} source/replay morph samples passed`);
+  console.log(`${backend}/${example}: ${report.comparisons.length} source/replay samples passed`);
 } catch (error) {
   report.outcome = "fail";
   report.failure = error.stack ?? String(error);

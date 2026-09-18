@@ -6,6 +6,8 @@ on:
       - master
     paths:
       - ".github/workflows/playground-playback-controls.yml"
+      - "crates/noon/**"
+      - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
       - "crates/noon-web/**"
@@ -17,7 +19,10 @@ on:
       - "web/**"
   pull_request:
     paths:
+      - "crates/noon/**"
+      - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
+      - "crates/noon-web/**"
       - "web/playground-playback-controls*"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
@@ -64,6 +69,10 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
+      - name: Test native replay history and locality
+        run: |
+          cargo test -p noon --no-default-features --test finite_replay_history
+          cargo test -p noon-runtime --test finite_replay_locality
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
@@ -94,6 +103,10 @@ jobs:
         run: |
           node scripts/playground-playback-morph-regression.mjs
           NOON_MORPH_BACKEND=webgpu NOON_MORPH_REGRESSION_ARTIFACTS=browser-smoke-artifacts/playground-playback-morph-webgpu node scripts/playground-playback-morph-regression.mjs
+      - name: Verify dynamic load membership and content history
+        run: |
+          NOON_REPLAY_CASE=dynamic node scripts/playground-playback-morph-regression.mjs
+          NOON_REPLAY_CASE=dynamic NOON_MORPH_BACKEND=webgpu NOON_MORPH_REGRESSION_ARTIFACTS=browser-smoke-artifacts/playground-playback-dynamic-webgpu node scripts/playground-playback-morph-regression.mjs
       - name: Upload playback diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -104,5 +117,7 @@ jobs:
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph
             browser-smoke-artifacts/playground-playback-morph-webgpu
+            browser-smoke-artifacts/playground-playback-dynamic
+            browser-smoke-artifacts/playground-playback-dynamic-webgpu
           if-no-files-found: error
           retention-days: 7

@@ -588,7 +588,7 @@ async function ensureRuntimeReady({
       status.dataset.runtimeStartup = "started-on-demand";
       const sourceOwnsExecution = semanticExecution.continuationGeneration != null;
       updatePlaybackControls({
-        supported: !sourceOwnsExecution,
+        supported: !sourceOwnsExecution && initialState.replaySupported !== false,
         player: nextPlayer,
         durationSeconds: loopDurationSeconds,
       });
@@ -1045,7 +1045,7 @@ async function runScene() {
       }
 
       updatePlaybackControls({
-        supported: true,
+        supported: result.replaySupported !== false,
         player,
         durationSeconds: loopDurationSeconds,
       });
@@ -1058,6 +1058,7 @@ async function runScene() {
         durationSeconds: playbackDurationSeconds,
       });
 
+      if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;
       status.dataset.executionMode = player.mode;
@@ -1069,7 +1070,9 @@ async function runScene() {
         result,
         `${report.metrics.objectCount} objects · ${rendererBackend} ${player.mode} worker`,
       );
-      patchStatus.value = `${phase.label} · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
+      patchStatus.value = result.replaySupported === false
+        ? `Completed · ${example.title} · replay unavailable: ${result.replayUnavailable}`
+        : `${phase.label} · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
       patchStatus.dataset.state = "applied";
       patchStatus.dataset.exampleId = example.id;
       patchStatus.dataset.parityStatus = example.parityStatus;

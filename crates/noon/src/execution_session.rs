@@ -4,6 +4,7 @@ mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
 mod publication;
+mod replay;
 mod signal_timeline;
 pub use callback::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
@@ -677,6 +678,7 @@ pub struct ExecutionSession {
     execution_index: SemanticExecutionIndex,
     reachability: SemanticExecutionReachability,
     slots: noon_runtime::ExecutionSlotTable,
+    replay_pinned_exits: Option<HashSet<ObjectId>>,
     spatial_index: ExecutionSpatialIndex,
     last_spatial_update: SpatialIndexUpdateStats,
     reactive_projection: SemanticReactiveProjection,
@@ -712,6 +714,7 @@ impl Clone for ExecutionSession {
             execution_index: self.execution_index.clone(),
             reachability: self.reachability.clone(),
             slots: self.slots.clone(),
+            replay_pinned_exits: self.replay_pinned_exits.clone(),
             spatial_index: self.spatial_index.clone(),
             last_spatial_update: self.last_spatial_update,
             reactive_projection: self.reactive_projection.clone(),
@@ -880,6 +883,7 @@ impl ExecutionSession {
             execution_index,
             reachability,
             slots,
+            replay_pinned_exits: None,
             spatial_index,
             last_spatial_update,
             reactive_projection,
