@@ -208,3 +208,6 @@ impl NativePointerInput {
         Some(NativeEventOccurrence::new(self.sequence, source))
     }
 }
+
+#[cfg(test)]
+mod tests;

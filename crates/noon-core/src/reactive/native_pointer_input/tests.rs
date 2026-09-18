@@ -1,4 +1,4 @@
-use noon_core::{
+use crate::{
     NativeEventOccurrence, NativeEventSource, NativeInputModifiers, NativeInputRuntimeError,
     NativeInputValue, NativePointerCancellation, NativePointerContext, NativePointerId,
     NativePointerInput, NativePointerInputKind, NativePointerPosition, NativeStateSource,
