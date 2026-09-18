@@ -22,7 +22,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags --depth=32 origin a7eb3713a262b07fff8569e9eb3cc1f08bc311bd
-          test "$(git merge-base HEAD FETCH_HEAD)" = e09709ca2ae36d7591f816d52e84c7dd0540c82d
+          # The clock branch predates the text-color master update. Preserve that
+          # update from the replay branch instead of mistaking PR base for ancestry.
+          test "$(git merge-base HEAD FETCH_HEAD)" = 295abd185a4ef396c73c450aa404c4cfdce8a599
+          git merge-base --is-ancestor e09709ca2ae36d7591f816d52e84c7dd0540c82d FETCH_HEAD
           git merge --no-commit --no-ff a7eb3713a262b07fff8569e9eb3cc1f08bc311bd || true
           python3 - <<'PY'
           import subprocess
