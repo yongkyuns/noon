@@ -23,8 +23,8 @@ async function startLiveAuthoring() {
     );
 
     // Cross a real paint boundary after the loaded source/gallery is ready, then immediately
-    // warm the persistent Pyodide + execution session. Editing after this point is deliberately
-    // inert with respect to execution: the preview keeps running until explicit Run.
+    // warm the persistent Pyodide + execution session. Subsequent edits are handled by main.js: cancel the old run
+    // immediately, then debounce only the next source submission.
     status.dataset.liveAuthoring = "preloading";
     await afterInitialPaint();
     if (disposed) return;

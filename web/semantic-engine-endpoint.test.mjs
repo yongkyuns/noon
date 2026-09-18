@@ -30,6 +30,7 @@ function fixture(
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
   let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
+  let leased = false;
   let initialSnapshots = 0, resourceBundles = 0;
   const callbackReads = [];
   const nativeInputs = [];
@@ -92,14 +93,14 @@ function fixture(
     time: () => time, isPlaying: () => playing,
   };
   const context = {
-    createExecutionPlayer: () => { created += 1; return player; },
-    resumeExecutionPlayer: () => { resumed += 1; return player; },
-    returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
-    liveHandoffDuration: () => Math.max(time, 1),
+    createExecutionPlayer: () => { leased = true; created += 1; return player; },
+    resumeExecutionPlayer: () => { leased = true; resumed += 1; return player; },
+    returnExecutionPlayer: (value) => { leased = false; returned += 1; returnedPlayer = value; },
+    liveHandoffDuration: () => leased ? undefined : Math.max(time, 1),
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
-  return { control, render, player, stats: () => ({
+  return { control, render, player, context, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
     initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
     authoredSampleTimes,
@@ -1726,5 +1727,24 @@ test("source result waits for final edits without another segment or callback dr
     assert.equal(f.stats().returned, 1);
     assert.equal(f.stats().resumed, 0);
     assert.equal(f.stats().initialSnapshots, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("live progress exposes the Rust-authored horizon even while its context is leased", async () => {
+  const f = fixture("transferable", null, { generation: 81, onComplete() {}, onError() {} });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.equal(f.context.liveHandoffDuration(), undefined, "a leased context must not be queried for its player duration");
+    const before = await request(f.control.port2, "state", 501);
+    assert.equal(before.durationSeconds, 1);
+    f.player.seekDeltaJson(0.4);
+    const after = await request(f.control.port2, "state", 502);
+    assert.equal(after.time, 0.4);
+    assert.equal(after.durationSeconds, 1);
+    assert.deepEqual(f.stats().continuationDriveTimes, [], "observing progress must not schedule or drive animation");
   } finally { endpoint?.stop(); f.close(); }
 });

@@ -94,7 +94,7 @@ assert.match(
 );
 assert.match(
   playgroundConstruction,
-  /onRecoverableError\(error\) \{\s*showRecoverableSceneError\(error\);\s*\}/,
+  /onRecoverableError\(error\) \{\s*if \(editStopPromise !== null\) return;\s*if \(player !== candidate && runtimePreparation\?\.candidate !== candidate\) return;\s*showRecoverableSceneError\(error\);\s*\}/,
   "recoverable execution errors must be presented as scene errors",
 );
 const recoverableHandler = playgroundConstruction.match(

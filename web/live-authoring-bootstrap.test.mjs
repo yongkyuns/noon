@@ -22,12 +22,12 @@ assert.match(
 assert.doesNotMatch(
   bootstrap,
   /LatestSourceRunner|addEventListener\("input"|requestLatestSource/,
-  "editing must remain execution-inert after the warmup Run",
+  "preload must not install a second editor lifecycle owner",
 );
 assert.match(
   bootstrap,
-  /Editing after this point is deliberately[\s\S]*explicit Run/,
-  "the bootstrap must document the explicit authoring boundary",
+  /Subsequent edits are handled by main\.js[\s\S]*debounce only the next source submission/,
+  "the bootstrap must leave edit cancellation and reruns to main.js",
 );
 assert.match(
   bootstrap,
@@ -45,4 +45,4 @@ assert.doesNotMatch(
   "live authoring must not introduce another Python client, execution owner, or worker topology",
 );
 
-console.log("✓ authoring preloads after paint while Python edits remain execution-inert until Run");
+console.log("✓ authoring preloads after paint without duplicating main.js edit lifecycle");

@@ -77,6 +77,8 @@ async function snapshot(page) {
       "";
     return {
       playing: controls?.dataset.playing ?? null,
+      controllable: controls?.dataset.controllable ?? null,
+      scrubberDisabled: scrubber?.disabled ?? true,
       busy: controls?.dataset.busy ?? null,
       scrubberValue: Number(scrubber?.value ?? NaN),
       scrubberMax: Number(scrubber?.max ?? NaN),
@@ -263,7 +265,8 @@ try {
   diagnostics.phases.push({ phase: "paused-held", target: finalScrubTarget, ...pausedHeld });
   assert.equal(pausedHeld.authoringCount, pausedBaselineCount + 1, "duplicate paused Run was not coalesced");
   assert.equal(pausedHeld.playbackAvailability, "unavailable", "source/replay transition must hide host controls");
-  assert.equal(pausedHeld.playing, null, "source-owned pass must remove replay controls");
+  assert.equal(pausedHeld.controllable, "false", "source-owned pass must disable replay commands");
+  assert.equal(pausedHeld.scrubberDisabled, true);
   assert.equal(pausedHeld.runInFlight, true, "held source completion must retain its active Run");
   assert.equal(pausedHeld.canvasIdentity, "original");
   assert.equal(pausedHeld.canvasCount, 1);
@@ -301,7 +304,8 @@ try {
   diagnostics.phases.push({ phase: "running-held", ...runningHeld });
   assert.equal(runningHeld.authoringCount, runningBaselineCount + 1, "duplicate running Run was not coalesced");
   assert.equal(runningHeld.playbackAvailability, "unavailable", "source ownership must hide replay controls");
-  assert.equal(runningHeld.playing, null, "source-owned pass must remove replay controls");
+  assert.equal(runningHeld.controllable, "false", "source-owned pass must disable replay commands");
+  assert.equal(runningHeld.scrubberDisabled, true);
   assert.equal(runningHeld.runInFlight, true);
   assert.equal(runningHeld.canvasIdentity, "original");
 

@@ -61,9 +61,9 @@ const replacementStart = sourceOwnedStress.indexOf(
 assert.ok(playingStart >= 0 && replacementStart > playingStart);
 const midAnimationEdit = sourceOwnedStress.slice(playingStart, replacementStart);
 assert.match(midAnimationEdit, /await replaceSource\(editor, page, rows7Source\)/);
-assert.match(midAnimationEdit, /current preview continues · Run to apply/);
-assert.match(midAnimationEdit, /rows7EditedDuringRows5\.runDisabled, false/);
-assert.match(midAnimationEdit, /await page\.locator\("#replace-scene"\)\.click\(\)/);
+assert.match(midAnimationEdit, /restarting/);
+assert.match(midAnimationEdit, /rows7EditedDuringRows5\.runGeneration > sourceOwnedGeneration/);
+assert.doesNotMatch(midAnimationEdit, /await page\.locator\("#replace-scene"\)\.click\(\)/);
 assert.doesNotMatch(midAnimationEdit, /waitForAppliedRun\(/);
 assert.match(sourceOwnedStress, /const SOURCE_OWNED_DURATION_SECONDS = 600;/);
 assert.match(sourceOwnedStress, /const firstStressPlayBoundary =/);

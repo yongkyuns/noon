@@ -68,6 +68,9 @@ export async function attachSemanticEngine(
   let lastPresentedPublication = null;
   let pendingPresentation = null;
   let continuationActive = false;
+  // Read-only UI metadata sampled before transferring the runtime lease. The
+  // context cannot answer this query while the player is leased to this endpoint.
+  let continuationDurationSeconds = null;
   let continuationGeneration = continuation?.generation ?? null;
   let executionWakeCadence = null;
   let pendingRendererObservation = null;
@@ -200,9 +203,12 @@ export async function attachSemanticEngine(
       if (!Number.isFinite(time) || time < 0) {
         throw new Error("returned semantic continuation has no valid authored time");
       }
-      return { type, time, playing: false, nextPatchSequence: "0" };
+      return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: time };
     }
-    return { type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" };
+    return {
+      type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0",
+      ...(continuation === null ? {} : { durationSeconds: continuationDurationSeconds }),
+    };
   };
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
@@ -785,6 +791,7 @@ export async function attachSemanticEngine(
     if (![EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE].includes(transportMode)) {
       throw new Error("unsupported semantic execution transport");
     }
+    if (continuation !== null) continuationDurationSeconds = context.liveHandoffDuration();
     player = context.createExecutionPlayer(loopDurationSeconds, session);
     if (initiallyPaused) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
@@ -921,6 +928,7 @@ export async function attachSemanticEngine(
       if (!Number.isSafeInteger(generation) || generation !== continuation.generation) {
         throw new Error("stale semantic continuation generation");
       }
+      continuationDurationSeconds = context.liveHandoffDuration();
       player = context.resumeExecutionPlayer();
       continuationGeneration = generation;
       continuationActive = true;
