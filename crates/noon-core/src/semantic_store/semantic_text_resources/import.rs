@@ -46,16 +46,26 @@ impl SemanticStore {
         handle: TextResourceHandle,
     ) {
         const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
+        const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
         if self
             .compiled_text_resources
             .insert(identity.clone(), handle)
             .is_none()
         {
+            self.compiled_text_resource_retained_bytes = self
+                .compiled_text_resource_retained_bytes
+                .saturating_add(compiled_identity_bytes(&identity));
             self.compiled_text_resource_order.push_back(identity);
         }
-        while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES {
+        while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES
+            || self.compiled_text_resource_retained_bytes > MAX_COMPILED_TEXT_IDENTITY_BYTES
+        {
             if let Some(expired) = self.compiled_text_resource_order.pop_front() {
-                self.compiled_text_resources.remove(&expired);
+                if self.compiled_text_resources.remove(&expired).is_some() {
+                    self.compiled_text_resource_retained_bytes = self
+                        .compiled_text_resource_retained_bytes
+                        .saturating_sub(compiled_identity_bytes(&expired));
+                }
             }
         }
     }
@@ -145,6 +155,16 @@ impl SemanticStore {
         self.remember_compiled_text_resource(identity, handle);
         Ok(handle)
     }
+}
+
+fn compiled_identity_bytes(identity: &crate::TextCompilationIdentity) -> usize {
+    identity.descriptor.len().saturating_add(
+        identity
+            .font_contents
+            .iter()
+            .map(|font| font.len())
+            .sum::<usize>(),
+    )
 }
 
 #[cfg(test)]
