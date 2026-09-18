@@ -128,10 +128,11 @@ function pngCentroidX(bytes) {
     }
   }
   assert.equal(bitDepth, 8);
-  assert.equal(colorType, 6);
+  assert.ok(colorType === 2 || colorType === 6, `unsupported PNG color type ${colorType}`);
   assert.equal(interlace, 0);
+  const channels = colorType === 6 ? 4 : 3;
   const raw = inflateSync(Buffer.concat(idat));
-  const stride = width * 4;
+  const stride = width * channels;
   let previous = Buffer.alloc(stride);
   let cursor = 0;
   let weightedX = 0;
@@ -142,9 +143,9 @@ function pngCentroidX(bytes) {
     cursor += stride;
     const row = Buffer.alloc(stride);
     for (let x = 0; x < stride; x += 1) {
-      const left = x >= 4 ? row[x - 4] : 0;
+      const left = x >= channels ? row[x - channels] : 0;
       const up = previous[x];
-      const upperLeft = x >= 4 ? previous[x - 4] : 0;
+      const upperLeft = x >= channels ? previous[x - channels] : 0;
       const value = encoded[x];
       if (filter === 0) row[x] = value;
       else if (filter === 1) row[x] = (value + left) & 255;
@@ -161,9 +162,10 @@ function pngCentroidX(bytes) {
       }
     }
     for (let x = 0; x < width; x += 1) {
-      const i = x * 4;
+      const i = x * channels;
       const blueExcess = Math.max(0, row[i + 2] - Math.max(row[i], row[i + 1]));
-      const pixelWeight = blueExcess * (row[i + 3] / 255);
+      const alpha = channels === 4 ? row[i + 3] / 255 : 1;
+      const pixelWeight = blueExcess * alpha;
       weightedX += x * pixelWeight;
       weight += pixelWeight;
     }
