@@ -54,7 +54,7 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertFalse(any("Axes" in error and "ready browser evidence" in error for error in errors))
         self.assertFalse(any("ThreeDScene" in error and "ready browser evidence" in error for error in errors))
 
-    def test_current_policy_records_exported_text_and_unexported_plotting(self) -> None:
+    def test_current_policy_distinguishes_exported_plotting_from_missing_coordinates(self) -> None:
         policy = json.loads(
             (ROOT / "compat" / "manim-v0.21.0.json").read_text(encoding="utf-8")
         )
@@ -62,14 +62,12 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertEqual(policy["overrides"]["Typst"]["status"], "partial")
         self.assertEqual(policy["overrides"]["NumberPlane"]["status"], "partial")
         self.assertEqual(policy["overrides"]["ImplicitFunction"]["status"], "partial")
-        for name in (
-            "Axes",
-            "NumberLine",
-            "ComplexPlane",
-            "PolarPlane",
-            "ParametricFunction",
-            "FunctionGraph",
-        ):
+        for name in ("Axes", "NumberLine", "ParametricFunction", "FunctionGraph"):
+            with self.subTest(name=name):
+                self.assertIn(name, coverage.noon_public_exports())
+                self.assertEqual(policy["overrides"][name]["status"], "partial")
+                self.assertTrue(policy["overrides"][name]["evidence"])
+        for name in ("ComplexPlane", "PolarPlane"):
             with self.subTest(name=name):
                 self.assertEqual(policy["overrides"][name]["status"], "missing")
 
