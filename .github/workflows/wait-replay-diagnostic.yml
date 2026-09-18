@@ -1,0 +1,93 @@
+name: Wait replay transition diagnostic
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/wait-replay-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 674bc01b6de321c294cc7502dabb025fe88a3fbf
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: product-candidate-1
+          run-id: 35388175324
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify exact retained runtime
+        run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          root=Path('web'); ident=json.loads((root/'runtime-build-identity.json').read_text())
+          assert ident['sourceRevision']=='75bdb7dedcb10c2c63f24680dc639112af8c977c'
+          for role in ('worker','wasm','glue'):
+              item=ident['files'][role]
+              assert hashlib.sha256((root/item['path']).read_bytes()).hexdigest()==item['sha256'],role
+          print(json.dumps(ident,indent=2))
+          PY
+      - name: Install browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Add diagnostic observation only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/playground-wait-clock-regression.mjs'); s=p.read_text()
+          s=s.replace('let browser;', 'let browser;\nlet observedPage;\nconst observedWorkers = [];')
+          s=s.replace('const page = await context.newPage();', '''const page = await context.newPage();
+            observedPage = page;
+            page.on("worker", worker => {
+              observedWorkers.push(worker);
+              void worker.evaluate(() => {
+                globalThis.__waitTrace = [];
+                const original = MessagePort.prototype.postMessage;
+                MessagePort.prototype.postMessage = function(message, ...args) {
+                  if (message?.channel === "noon.engine" || message?.type === "execution_wake") {
+                    const {type, requestId, time, playing, cadence, timerAfterMilliseconds, message: error} = message;
+                    globalThis.__waitTrace.push({wall: performance.now(), type, requestId, time, playing, cadence, timerAfterMilliseconds, error});
+                    if (globalThis.__waitTrace.length > 500) globalThis.__waitTrace.shift();
+                  }
+                  return original.call(this, message, ...args);
+                };
+              }).catch(() => {});
+            });
+            await page.addInitScript(() => {
+              globalThis.__waitUiTrace = [];
+              addEventListener("DOMContentLoaded", () => {
+                const observe = () => {
+                  const controls = document.querySelector(".playback-controls");
+                  if (!controls) return;
+                  globalThis.__waitUiTrace.push({wall: performance.now(), ...controls.dataset,
+                    label: controls.querySelector(".playback-toggle")?.textContent,
+                    status: document.querySelector("#status-text")?.textContent});
+                  if (globalThis.__waitUiTrace.length > 500) globalThis.__waitUiTrace.shift();
+                };
+                new MutationObserver(observe).observe(document.querySelector(".preview-pane"),
+                  {subtree:true, attributes:true, attributeFilter:["data-playing","data-busy","data-elapsed-seconds"]});
+              });
+            });''')
+          s=s.replace('report.failure = error.stack ?? String(error);', '''report.failure = error.stack ?? String(error);
+            report.uiTrace = await observedPage?.evaluate(() => globalThis.__waitUiTrace).catch(() => null);
+            report.workers = await Promise.all(observedWorkers.map(async worker => ({url:worker.url(),
+              trace:await worker.evaluate(() => globalThis.__waitTrace).catch(() => null)})));
+            await observedPage?.screenshot({path:path.join(out,"failure.png")}).catch(() => {});''')
+          p.write_text(s)
+          PY
+      - name: Reproduce original transition with unchanged assertions
+        run: node scripts/playground-wait-clock-regression.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wait-replay-transition-diagnostic
+          path: browser-smoke-artifacts/playground-wait-clock
+          retention-days: 7
+          if-no-files-found: error
