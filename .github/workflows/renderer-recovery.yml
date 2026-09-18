@@ -24,6 +24,11 @@ on:
       - "web/retained-execution-worker-client.js"
       - "web/authoring-execution-client.js"
       - "web/render-gpu-diagnostics.js"
+  pull_request:
+    paths:
+      - ".github/workflows/renderer-recovery.yml"
+      - "scripts/renderer-*-smoke.mjs"
+      - "scripts/webgpu-device-capture*.mjs"
   workflow_dispatch:
 
 permissions:

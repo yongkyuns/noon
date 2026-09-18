@@ -676,12 +676,25 @@ impl Mobject {
     }
 
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
-        if let Some(b) = self.boundary_bounds()? {
-            Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
-        } else {
-            let t = self.state()?.transform.translation;
-            Ok((t.x, t.y))
-        }
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        let mut transform = state.transform;
+        let translation = transform.translation;
+        // Measure around the origin, then translate the center once. Translating
+        // both extrema before averaging can lose a small authored translation or
+        // introduce platform-dependent rounding even for centrally symmetric content.
+        transform.translation.x = 0.0;
+        transform.translation.y = 0.0;
+        let center =
+            boundary_for_content(&store, state.content, transform)?.map_or((0.0, 0.0), |bounds| {
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                )
+            });
+        Ok((center.0 + translation.x, center.1 + translation.y))
     }
     pub fn width(&self) -> Result<f64, AuthoringError> {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::width))

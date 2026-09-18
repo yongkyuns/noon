@@ -2,6 +2,7 @@ import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
+import { createRunRequestRouter } from "./playground-run-request-router.js";
 import {
   exampleUrl,
   filterGalleryExamples,
@@ -343,8 +344,8 @@ let playbackControls = null;
 let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
-let runTransitionPromise = null;
 let activeSourceContinuation = null;
+let activeRunRequest = null;
 let runtimeStartPromise = null;
 let runtimePreparation = null;
 let playerNeedsRestart = false;
@@ -810,36 +811,6 @@ async function supersedeActiveSourceContinuation() {
   return true;
 }
 
-async function requestSceneRun() {
-  if (runTransitionPromise !== null) {
-    await runTransitionPromise;
-    return requestSceneRun();
-  }
-
-  const priorRun = sceneRunPromise;
-  if (priorRun === null) {
-    return runScene();
-  }
-
-  const transition = (async () => {
-    const superseded = await supersedeActiveSourceContinuation();
-    if (!superseded) {
-      patchStatus.value = "Run queued until the current Python build reaches an execution boundary…";
-      patchStatus.dataset.state = "running";
-    }
-    await priorRun;
-  })();
-  runTransitionPromise = transition;
-  try {
-    await transition;
-  } finally {
-    if (runTransitionPromise === transition) {
-      runTransitionPromise = null;
-    }
-  }
-  return runScene();
-}
-
 function sameSemanticContinuation(left, right) {
   return left?.contextId === right?.contextId &&
     left?.continuationGeneration === right?.continuationGeneration;
@@ -852,6 +823,8 @@ async function runScene() {
 
   const runToken = generations.beginRun(example.id);
   const source = sceneSourceEditor.value;
+  const runRequest = { token: runToken, source };
+  activeRunRequest = runRequest;
   const releaseBusy = beginBusy();
   const task = (async () => {
     let earlyContinuation = null;
@@ -1062,6 +1035,9 @@ async function runScene() {
   try {
     return await task;
   } finally {
+    if (activeRunRequest === runRequest) {
+      activeRunRequest = null;
+    }
     if (activeSourceContinuation?.runToken === runToken) {
       activeSourceContinuation = null;
     }
@@ -1070,6 +1046,24 @@ async function runScene() {
     }
     releaseBusy();
   }
+}
+
+const runRequestRouter = createRunRequestRouter({
+  currentSource: () => sceneSourceEditor.value,
+  currentRun: () => sceneRunPromise,
+  activeSourceContinuation: () => activeSourceContinuation,
+  activeRunRequest: () => activeRunRequest,
+  isActiveRunCurrent: (token) => token !== undefined && isCurrentRun(token),
+  run: runScene,
+  supersede: supersedeActiveSourceContinuation,
+  onQueued() {
+    patchStatus.value = "Run queued until the current Python build reaches an execution boundary…";
+    patchStatus.dataset.state = "running";
+  },
+});
+
+function requestSceneRun() {
+  return runRequestRouter.request();
 }
 
 async function selectExample(

@@ -12,6 +12,10 @@ on:
       - "scripts/playground-playback-controls-smoke.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
       - "web/**"
+  pull_request:
+    paths:
+      - ".github/workflows/playground-playback-controls.yml"
+      - "scripts/playground-playback-*.mjs"
   workflow_dispatch:
 
 permissions:

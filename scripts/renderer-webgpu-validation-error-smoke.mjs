@@ -90,7 +90,8 @@ async function renderAndCapture(page, name) {
 
 async function triggerValidationError(page) {
   await page.evaluate(() => {
-    const device = window.__noonWebGpuDeviceCapture?.devices[0];
+    const capture = window.__noonWebGpuDeviceCapture;
+    const device = capture?.devices[capture.ownerDeviceIndex];
     if (!device) throw new Error("captured Noon GPUDevice is unavailable");
     // WebGPU requires a non-zero usage bitmask. The browser must generate a
     // GPUValidationError for this real device operation without losing the device.
@@ -167,7 +168,14 @@ try {
   const initial = await waitForHarness(page);
   const captureBefore = await readWebGpuCapture(page);
   assert.equal(captureBefore.patched, true, `WebGPU capture patch failed: ${captureBefore.patchError}`);
-  assert.equal(captureBefore.deviceCount, 1, "expected one initial Noon GPUDevice");
+  assert.notEqual(captureBefore.ownerDeviceIndex, null, "primary #scene GPUDevice was not configured");
+  const ownerDeviceIndex = captureBefore.ownerDeviceIndex;
+  assert.equal(
+    captureBefore.configuredCanvasIds[ownerDeviceIndex]?.includes("scene"),
+    true,
+    "captured owner is not the device configured for the primary #scene surface",
+  );
+  assert.equal(captureBefore.lost[ownerDeviceIndex], null, "initial Noon owner device must be healthy");
 
   const baseline = await renderAndCapture(page, "baseline");
   await triggerValidationError(page);
@@ -188,8 +196,8 @@ try {
   assert.equal(afterErrorMetrics.rendererBackend, "WebGPU", "GPU validation error changed backend identity");
 
   const captureAfterError = await readWebGpuCapture(page);
-  assert.equal(captureAfterError.deviceCount, 1, "validation error unexpectedly replaced the GPUDevice");
-  assert.equal(captureAfterError.lost[0], null, "validation error unexpectedly lost the GPUDevice");
+  assert.equal(captureAfterError.ownerDeviceIndex, ownerDeviceIndex, "validation error replaced the primary GPUDevice");
+  assert.equal(captureAfterError.lost[ownerDeviceIndex], null, "validation error unexpectedly lost the primary GPUDevice");
 
   const recovered = await renderAndCapture(page, "after-handled-error");
   assert.equal(recovered.metrics.revision, baseline.metrics.revision, "handled GPU error changed scene revision");

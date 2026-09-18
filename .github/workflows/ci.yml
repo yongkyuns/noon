@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-  # Exercise producer/consumer wiring before CI-infrastructure changes reach master.
+  # Exercise changed CI infrastructure and editor harnesses before they reach master.
   pull_request:
     paths:
       - ".github/actions/dev-wasm-build/**"
@@ -12,6 +12,7 @@ on:
       - ".github/workflows/ci.yml"
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
+      - "scripts/python-editor-*.mjs"
   workflow_dispatch:
 
 permissions:

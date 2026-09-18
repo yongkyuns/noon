@@ -47,6 +47,27 @@ async function waitForServer() {
   throw new Error(`Playground playback server did not start: ${lastError}\n${serverOutput}`);
 }
 
+function parseSeconds(text) {
+  const match = String(text).match(/([0-9]+(?:\.[0-9]+)?)\s*s/);
+  assert.ok(match, `unable to parse seconds from ${JSON.stringify(text)}`);
+  return Number(match[1]);
+}
+
+async function waitForMetricNear(page, target, tolerance = 0.08, timeout = 10_000) {
+  await page.waitForFunction(
+    ({ target: expected, tolerance: allowed }) => {
+      const raw =
+        document.querySelector("#metric-time")?.value ??
+        document.querySelector("#metric-time")?.textContent ??
+        "";
+      const observed = Number(String(raw).match(/([0-9]+(?:\.[0-9]+)?)\s*s/)?.[1]);
+      return Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
+    },
+    { target, tolerance },
+    { timeout },
+  );
+}
+
 async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
   await page.waitForFunction(
     (id) => {
@@ -110,6 +131,10 @@ async function playbackSnapshot(page) {
       playbackAvailability: status?.dataset.playbackControls ?? null,
       runText: document.querySelector("#replace-scene")?.textContent?.trim() ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
+      patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+      patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+      patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
+      runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
       canvasIdentity: canvas?.dataset.playbackSmokeIdentity ?? null,
       canvasCount: document.querySelectorAll("canvas").length,
       documentWidth: document.documentElement.scrollWidth,
@@ -165,6 +190,28 @@ try {
       });
       observer.observe(status, { attributes: true });
     }, { once: true });
+
+    window.__noonPlaybackLifecycle = { sawSourceOwnedPass: false, samples: [] };
+    const observePlaybackOwnership = () => {
+      const currentStatus = document.querySelector("#status");
+      if (!currentStatus) return;
+      const sample = {
+        controls: currentStatus.dataset.playbackControls ?? null,
+        hasControls: document.querySelector(".playback-controls") !== null,
+        runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
+      };
+      window.__noonPlaybackLifecycle.samples.push(sample);
+      if (sample.controls === "unavailable" && sample.runInFlight) {
+        window.__noonPlaybackLifecycle.sawSourceOwnedPass = true;
+      }
+    };
+    const playbackObserver = new MutationObserver(observePlaybackOwnership);
+    playbackObserver.observe(document, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ["data-playback-controls"],
+    });
+    observePlaybackOwnership();
   });
 
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
@@ -177,13 +224,66 @@ try {
 
   const initial = await playbackSnapshot(page);
   diagnostics.initial = initial;
-  assert.equal(initial.hasControls, false, "source-owned execution must not expose host playback controls");
-  assert.equal(initial.playbackAvailability, "unavailable");
+  diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
+  assert.equal(
+    diagnostics.lifecycle.sawSourceOwnedPass,
+    true,
+    "the first source-owned pass must keep host playback controls unavailable",
+  );
+  assert.ok(
+    diagnostics.lifecycle.samples
+      .filter((sample) => sample.controls === "unavailable")
+      .every((sample) => !sample.hasControls),
+    "unavailable source-owned playback must not expose host controls",
+  );
+  assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
+  assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");
   assert.equal(initial.runDisabled, false, "Run must remain available after source completion");
+  assert.equal(initial.scrubberDisabled, false, "completed replay must remain seekable");
+  assert.ok(Number(initial.scrubberMax) > 0, "completed replay must expose authored duration");
   assert.equal(initial.canvasCount, 1);
   assert.equal(initial.canvasIdentity, "original");
   assert.ok(initial.rendererBackend === "WebGL2" || initial.rendererBackend === "WebGPU");
+
+  assert.ok(
+    initial.playing === "true" || initial.playing === "false",
+    "completed replay lease must publish a playback state",
+  );
+  if (initial.playing === "true") {
+    await page.locator(".playback-toggle").click();
+    await page.waitForFunction(
+      () => document.querySelector(".playback-controls")?.dataset.playing === "false",
+    );
+  }
+  const seekTarget = Number(initial.scrubberMax) * 0.6;
+  await page.locator(".playback-scrubber").evaluate((input, target) => {
+    input.value = String(target);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, seekTarget);
+  await waitForMetricNear(page, seekTarget);
+  const sought = await playbackSnapshot(page);
+  diagnostics.sought = sought;
+  assert.equal(sought.playing, "false", "seeking a completed replay must preserve its paused state");
+  assert.equal(sought.canvasIdentity, "original", "completed replay seek must preserve the canvas");
+  assert.equal(sought.rendererBackend, initial.rendererBackend, "completed replay seek changed renderer backend");
+  assert.ok(
+    Math.abs(parseSeconds(sought.metricTime) - seekTarget) <= 0.08,
+    `completed replay seek missed target: ${sought.metricTime} vs ${seekTarget}`,
+  );
+
+  const initialGeneration = initial.runGeneration;
+  await page.evaluate(() => {
+    const source = document.querySelector("#python-scene-source");
+    source.value = `${source.value.trimEnd()}\n        self.wait(0.25)\n`;
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const edited = await playbackSnapshot(page);
+  diagnostics.edited = edited;
+  assert.equal(edited.patchState, "ready", "editing must leave the completed preview intact until Run");
+  assert.equal(edited.runGeneration, initialGeneration, "editing must not start a replacement run");
+  assert.equal(edited.hasControls, true, "editing must retain the completed replay lease");
+  assert.equal(edited.canvasIdentity, "original", "editing must not replace the canvas");
 
   const runButton = page.locator("#replace-scene");
   await runButton.click();
@@ -198,9 +298,16 @@ try {
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, false);
-  assert.equal(rerun.playbackAvailability, "unavailable");
+  assert.equal(rerun.hasControls, true, "explicit Run must restore a completed replay lease");
+  assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
+  assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
+  assert.ok(rerun.runGeneration > initialGeneration, "explicit Run must apply the newest source generation");
+  assert.equal(
+    Number(rerun.scrubberMax),
+    Number(initial.scrubberMax) + 0.25,
+    "Run must execute the edited source's added wait",
+  );
   assert.equal(rerun.canvasIdentity, "original", "source rerun must preserve the canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
@@ -221,7 +328,7 @@ try {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ source-owned Playground Run remains deterministic without competing host playback controls");
+  console.log("✓ first-pass source ownership transitions to a seekable completed replay without replacing the canvas");
 } catch (error) {
   if (page !== null) {
     try {

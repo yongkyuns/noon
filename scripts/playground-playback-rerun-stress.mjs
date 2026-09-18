@@ -88,8 +88,11 @@ async function snapshot(page) {
       rendererBackend: status?.dataset.rendererBackend ?? null,
       runtimeState: status?.dataset.state ?? null,
       runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      playbackAvailability: status?.dataset.playbackControls ?? null,
       generationDiagnostics: window.__noonExampleGallery?.generationDiagnostics ?? null,
+      runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
       authoringCount: window.__noonRerunStress?.authoringCount ?? 0,
+      sourceOwnedTransitions: window.__noonRerunStress?.sourceOwnedTransitions?.length ?? 0,
     };
   });
 }
@@ -127,6 +130,26 @@ async function releaseHeldRun(page) {
   });
 }
 
+async function waitForCompletedReplay(page, exampleId) {
+  await waitForApplied(page, exampleId);
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#status")?.dataset.playbackControls === "available" &&
+      document.querySelector(".playback-controls")?.dataset.busy === "false",
+  );
+}
+
+async function waitForSourceOwnedPass(page, previousTransitions) {
+  await page.waitForFunction(
+    (previous) =>
+      window.__noonRerunStress?.sourceOwnedTransitions?.length > previous &&
+      window.__noonExampleGallery?.runInFlight === true &&
+      document.querySelector("#status")?.dataset.playbackControls === "unavailable",
+    previousTransitions,
+    { timeout: 30_000 },
+  );
+}
+
 let browser = null;
 let page = null;
 const pageErrors = [];
@@ -160,6 +183,7 @@ try {
       holdExample: null,
       holdReached: false,
       release: null,
+      sourceOwnedTransitions: [],
     };
     window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
       afterAuthoring(payload) {
@@ -173,6 +197,27 @@ try {
         });
       },
     };
+    const observeSourceOwnership = () => {
+      const status = document.querySelector("#status");
+      const stress = window.__noonRerunStress;
+      if (
+        status?.dataset.playbackControls === "unavailable" &&
+        window.__noonExampleGallery?.runInFlight === true
+      ) {
+        const latest = stress.sourceOwnedTransitions.at(-1);
+        const runGeneration = window.__noonExampleGallery.generationDiagnostics?.runGeneration ?? null;
+        if (latest?.runGeneration !== runGeneration) {
+          stress.sourceOwnedTransitions.push({ runGeneration, at: performance.now() });
+        }
+      }
+    };
+    const sourceOwnershipObserver = new MutationObserver(observeSourceOwnership);
+    sourceOwnershipObserver.observe(document, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ["data-playback-controls"],
+    });
+    observeSourceOwnership();
   });
 
   const exampleId = "parity-create-circle";
@@ -186,18 +231,19 @@ try {
 
   const initial = await snapshot(page);
   diagnostics.phases.push({ phase: "initial", ...initial });
-  assert.equal(initial.playing, "true");
+  assert.equal(initial.playing, "false", "completed replay must begin paused");
+  assert.equal(initial.playbackAvailability, "available");
+  assert.ok(initial.sourceOwnedTransitions >= 1, "initial source pass never established exclusive playback ownership");
   assert.equal(initial.canvasIdentity, "original");
   assert.equal(initial.canvasCount, 1);
   assert.ok(initial.rendererBackend === "WebGL2" || initial.rendererBackend === "WebGPU");
   assert.ok(Number.isFinite(initial.scrubberMax) && initial.scrubberMax > 0);
 
-  // Pause, enqueue a burst of scrub requests, then overlap a held rerun. The
-  // playback controller may coalesce seeks, but the scene rerun must not unpause,
-  // replace the canvas, or wedge the controls.
-  await page.locator(".playback-toggle").click();
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "false");
+  // A completed replay is seekable while paused. The next explicit Run must
+  // temporarily return control to source ownership, then expose a new paused
+  // replay lease without replacing the canvas or wedging controls.
   const pausedBaselineCount = (await snapshot(page)).authoringCount;
+  const pausedBaselineTransitions = (await snapshot(page)).sourceOwnedTransitions;
   await holdNextRun(page, exampleId);
   const finalScrubTarget = await page.locator(".playback-scrubber").evaluate((input) => {
     const max = Number(input.max);
@@ -211,56 +257,64 @@ try {
     window.__pausedRunB = window.__noonExampleGallery.run();
     return last;
   });
+  await waitForSourceOwnedPass(page, pausedBaselineTransitions);
   await waitForHeldRun(page);
   const pausedHeld = await snapshot(page);
   diagnostics.phases.push({ phase: "paused-held", target: finalScrubTarget, ...pausedHeld });
   assert.equal(pausedHeld.authoringCount, pausedBaselineCount + 1, "duplicate paused Run was not coalesced");
-  assert.equal(pausedHeld.playing, "false");
+  assert.equal(pausedHeld.playbackAvailability, "unavailable", "source/replay transition must hide host controls");
+  assert.equal(pausedHeld.playing, null, "source-owned pass must remove replay controls");
+  assert.equal(pausedHeld.runInFlight, true, "held source completion must retain its active Run");
   assert.equal(pausedHeld.canvasIdentity, "original");
   assert.equal(pausedHeld.canvasCount, 1);
 
   await releaseHeldRun(page);
   await page.evaluate(async () => Promise.all([window.__pausedRunA, window.__pausedRunB]));
-  await waitForApplied(page, exampleId);
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+  await waitForCompletedReplay(page, exampleId);
   const pausedSettled = await snapshot(page);
   diagnostics.phases.push({ phase: "paused-settled", ...pausedSettled });
-  assert.equal(pausedSettled.playing, "false", "rerun while paused resumed playback");
+  assert.equal(pausedSettled.playing, "false", "completed replay must return paused after the source pass");
+  assert.equal(pausedSettled.playbackAvailability, "available");
   assert.equal(pausedSettled.canvasIdentity, "original");
   assert.equal(pausedSettled.canvasCount, 1);
-  assert.equal(pausedSettled.runtimeState, "running");
+  assert.equal(pausedSettled.runtimeState, "ready");
   assert.equal(pausedSettled.patchExample, exampleId);
   assert.ok(
     pausedSettled.scrubberValue >= 0 && pausedSettled.scrubberValue <= pausedSettled.scrubberMax,
     "settled scrubber escaped the authored duration",
   );
 
-  // Resume and repeat the held duplicate rerun while logical time is advancing.
+  // Resume the completed replay, then verify an explicit Run enters exclusive
+  // source ownership again and returns another completed replay lease.
   await page.locator(".playback-toggle").click();
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
   const runningBaselineCount = (await snapshot(page)).authoringCount;
+  const runningBaselineTransitions = (await snapshot(page)).sourceOwnedTransitions;
   await holdNextRun(page, exampleId);
   await page.evaluate(() => {
     window.__runningRunA = window.__noonExampleGallery.run();
     window.__runningRunB = window.__noonExampleGallery.run();
   });
+  await waitForSourceOwnedPass(page, runningBaselineTransitions);
   await waitForHeldRun(page);
   const runningHeld = await snapshot(page);
   diagnostics.phases.push({ phase: "running-held", ...runningHeld });
   assert.equal(runningHeld.authoringCount, runningBaselineCount + 1, "duplicate running Run was not coalesced");
-  assert.equal(runningHeld.playing, "true");
+  assert.equal(runningHeld.playbackAvailability, "unavailable", "source ownership must hide replay controls");
+  assert.equal(runningHeld.playing, null, "source-owned pass must remove replay controls");
+  assert.equal(runningHeld.runInFlight, true);
   assert.equal(runningHeld.canvasIdentity, "original");
 
   await releaseHeldRun(page);
   await page.evaluate(async () => Promise.all([window.__runningRunA, window.__runningRunB]));
-  await waitForApplied(page, exampleId);
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+  await waitForCompletedReplay(page, exampleId);
   const runningSettled = await snapshot(page);
   diagnostics.phases.push({ phase: "running-settled", ...runningSettled });
-  assert.equal(runningSettled.playing, "true", "rerun while playing paused playback");
+  assert.equal(runningSettled.playing, "false", "completed replay must not inherit source-pass wall-clock playback");
+  assert.equal(runningSettled.playbackAvailability, "available");
   assert.equal(runningSettled.canvasIdentity, "original");
   assert.equal(runningSettled.canvasCount, 1);
-  assert.equal(runningSettled.runtimeState, "running");
+  assert.equal(runningSettled.runtimeState, "ready");
 
   // Repeat state transitions without hooks to catch command-queue ordering bugs.
   for (let iteration = 0; iteration < 8; iteration += 1) {
@@ -282,21 +336,28 @@ try {
         }
       }, iteration);
     }
-    const beforeCount = (await snapshot(page)).authoringCount;
+    const before = await snapshot(page);
+    const beforeCount = before.authoringCount;
+    const beforeTransitions = before.sourceOwnedTransitions;
     await page.evaluate(async () => {
       await Promise.all([window.__noonExampleGallery.run(), window.__noonExampleGallery.run()]);
     });
-    await waitForApplied(page, exampleId);
-    await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+    await page.waitForFunction(
+      (previous) => window.__noonRerunStress?.sourceOwnedTransitions?.length > previous,
+      beforeTransitions,
+      { timeout: 30_000 },
+    );
+    await waitForCompletedReplay(page, exampleId);
     const settled = await snapshot(page);
     diagnostics.phases.push({ phase: `iteration-${iteration}`, ...settled });
     assert.equal(settled.authoringCount, beforeCount + 1, `iteration ${iteration}: duplicate Run was not coalesced`);
-    assert.equal(settled.playing, shouldPause ? "false" : "true");
+    assert.equal(settled.playing, "false", "each completed source replay must settle paused");
+    assert.equal(settled.playbackAvailability, "available");
     assert.equal(settled.canvasIdentity, "original");
     assert.equal(settled.canvasCount, 1);
     assert.equal(settled.patchState, "applied");
     assert.equal(settled.patchExample, exampleId);
-    assert.equal(settled.runtimeState, "running");
+    assert.equal(settled.runtimeState, "ready");
   }
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
@@ -306,7 +367,7 @@ try {
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ playback-state rerun stress: paused/scrub/running commands remain coherent");
+  console.log("✓ replay rerun stress: source ownership, seek queues, duplicate Runs and canvas reuse remain coherent");
 } catch (error) {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;

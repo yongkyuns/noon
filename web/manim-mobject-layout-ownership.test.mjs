@@ -63,7 +63,10 @@ test("Rust semantic handle remains the layout-query source of truth", () => {
   const widthStart = rustHandleSource.indexOf("pub fn width(&self)", centerStart);
   assert.ok(centerStart >= 0 && widthStart > centerStart);
   const centerBody = rustHandleSource.slice(centerStart, widthStart);
-  assert.match(centerBody, /self\.boundary_bounds\(\)/);
+  // The center query measures shared content before adding translation, avoiding
+  // cancellation in world-space extrema while preserving semantic ownership.
+  assert.match(centerBody, /semantic_object_state_checked\(self\.id\)/);
+  assert.match(centerBody, /boundary_for_content\(&store, state\.content, transform\)/);
 
   const widthEnd = rustHandleSource.indexOf("pub fn height(&self)", widthStart);
   const widthBody = rustHandleSource.slice(widthStart, widthEnd);
