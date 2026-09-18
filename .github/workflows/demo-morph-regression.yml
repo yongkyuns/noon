@@ -9,7 +9,7 @@ permissions:
 jobs:
   diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,18 +30,40 @@ jobs:
           node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(JSON.parse(fs.readFileSync('web/runtime-build-identity.json')).sourceRevision,'83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb');"
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Record source and replay transitions
+      - name: Require old runtime to fail the intermediate-hold pixel regression
         shell: bash
         run: |
           set -euo pipefail
-          cp staging/.demo-regression/morph-diagnostic.mjs scripts/morph-diagnostic.mjs
-          node scripts/morph-diagnostic.mjs
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          item = next(x for x in json.loads(Path('staging/.demo-regression/fix-part-1.json').read_text()) if x['path'] == 'scripts/playground-playback-morph-regression.mjs')
+          assert item['before'] is None
+          Path(item['path']).write_text(item['edits'][0][2])
+          PY
+          set +e
+          node scripts/playground-playback-morph-regression.mjs > morph-baseline.log 2>&1
+          code=$?
+          set -e
+          cat morph-baseline.log
+          test "$code" -ne 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('browser-smoke-artifacts/playground-playback-morph/morph-regression.json').read_text())
+          assert r['outcome'] == 'fail', r
+          assert r['errors'] == [], r['errors']
+          assert len(r['comparisons']) == 34, r
+          assert any(s['time']==2.7 and s['mismatch']>0.02 for s in r['comparisons']), r
+          print('Confirmed temporal regression: original runtime shows wrong shape in rocket hold.')
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: morph-regression-baseline
+          name: morph-regression-red-proof
           path: |
-            morph-diagnostics
+            browser-smoke-artifacts/playground-playback-morph
+            morph-baseline.log
             web/runtime-build-identity.json
           if-no-files-found: error
           retention-days: 3
