@@ -1,0 +1,28 @@
+name: Demo editor source snapshot
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          persist-credentials: false
+      - name: Export pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/noon-source"
+          git rev-parse HEAD > "$RUNNER_TEMP/noon-source/source-sha.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/noon-source/noon-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noon-demo-source-be26da2
+          path: ${{ runner.temp }}/noon-source
+          retention-days: 1
+          if-no-files-found: error
