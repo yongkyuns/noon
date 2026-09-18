@@ -442,7 +442,13 @@ export async function attachSemanticEngine(
     } else if (message.type === "native_event") {
       player.emitNativeEventJson(JSON.stringify({ source: message.source }));
     } else if (message.type === "browser_pointer_input") {
-      const { type: _type, requestId: _requestId, ...input } = message;
+      const {
+        channel: _channel,
+        protocolVersion: _protocolVersion,
+        type: _type,
+        requestId: _requestId,
+        ...input
+      } = message;
       player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
@@ -821,7 +827,7 @@ export async function attachSemanticEngine(
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event",
+          "native_state_input", "native_event", "browser_pointer_input",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -848,7 +854,9 @@ export async function attachSemanticEngine(
           }
         }
         if (player === null &&
-            (message.type === "native_state_input" || message.type === "native_event")) {
+            (message.type === "native_state_input" ||
+             message.type === "native_event" ||
+             message.type === "browser_pointer_input")) {
           throw new Error("native input requires an active Python source continuation segment");
         }
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&
