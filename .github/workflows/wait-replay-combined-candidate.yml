@@ -33,8 +33,6 @@ jobs:
           assert set(conflicts)<=allowed,conflicts
           for name in conflicts:
               if name=='web/semantic-engine-endpoint.test.mjs':
-                  # Both PRs append independent complete test blocks at EOF. A
-                  # line-wise union can merge their identical closing braces.
                   replay=subprocess.check_output(['git','show',f':3:{name}'],text=True)
                   clock=subprocess.check_output(['git','show',f':2:{name}'],text=True)
                   marker='test("real-time state observes the Rust wait clock without driving or publishing",'
@@ -64,15 +62,21 @@ jobs:
           git diff --cached --check
           node --test web/*.test.mjs > "$RUNNER_TEMP/combined-web-tests.log" 2>&1
           tail -12 "$RUNNER_TEMP/combined-web-tests.log"
-      - name: Publish candidate branch, not either PR or master
+      - name: Export intended tree before publishing code-only candidate
         run: |
           set -euo pipefail
           git commit -m 'Integrate wait-clock observation with finite replay history and preserve both regression suites'
-          branch="prep/wait-replay-combined-${GITHUB_RUN_ID}"
-          git push origin "HEAD:refs/heads/$branch"
-          printf '%s\n' "$(git rev-parse HEAD)" "$branch" "$(git rev-parse HEAD^{tree})" > "$RUNNER_TEMP/combined-candidate.txt"
-          git show --stat --oneline HEAD
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/combined-source.tar.gz"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/intended-tree.txt"
+          cp .github/workflows/playground-playback-controls.yml "$RUNNER_TEMP/intended-playback-workflow.yml"
+          # This job has no workflows permission. Retain the existing workflow
+          # for its code-only publication; the authorized connector must restore
+          # the exported workflow and verify the complete intended tree separately.
+          git checkout bb9f4fc798422e11dd706a0819e0cf4c85e10b72 -- .github/workflows/playground-playback-controls.yml
+          git commit --amend --no-edit
+          branch="prep/wait-replay-combined-${GITHUB_RUN_ID}"
+          printf '%s\n' "$(git rev-parse HEAD)" "$branch" "$(git rev-parse HEAD^{tree})" > "$RUNNER_TEMP/combined-candidate.txt"
+          git push origin "HEAD:refs/heads/$branch"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -81,5 +85,7 @@ jobs:
             ${{ runner.temp }}/combined-web-tests.log
             ${{ runner.temp }}/combined-candidate.txt
             ${{ runner.temp }}/combined-source.tar.gz
+            ${{ runner.temp }}/intended-tree.txt
+            ${{ runner.temp }}/intended-playback-workflow.yml
           retention-days: 7
           if-no-files-found: error
