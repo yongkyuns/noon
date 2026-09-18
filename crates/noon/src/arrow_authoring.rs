@@ -8,9 +8,9 @@
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
-    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
-    VectorPath,
+    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
+    StoredGeometry, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -231,8 +231,9 @@ impl ManimArrow {
     ) -> Result<Self, AuthoringError> {
         let committed = {
             let mut store_ref = store.borrow_mut();
-            let prepared = options.prepare(&mut store_ref)?;
-            commit_prepared(&mut store_ref, prepared)?
+            publish_arrow_options(options, &mut store_ref, |store, transaction| {
+                transaction.apply(store).map_err(AuthoringError::from)
+            })?
         };
         Self::from_committed(store, committed)
     }
@@ -271,7 +272,7 @@ impl ManimArrow {
         }
     }
 
-    fn from_committed(
+    pub(crate) fn from_committed(
         store: Rc<RefCell<SemanticStore>>,
         committed: CommittedArrow,
     ) -> Result<Self, AuthoringError> {
@@ -371,7 +372,8 @@ struct StagedArrow {
     start_tip: Option<noon_core::SemanticLocalNodeToken>,
 }
 
-struct CommittedArrow {
+#[derive(Debug)]
+pub(crate) struct CommittedArrow {
     family: noon_core::SemanticNodeId,
     shaft: noon_core::SemanticNodeId,
     end_tip: noon_core::SemanticNodeId,
@@ -385,32 +387,32 @@ struct ShortenedLine {
     length: f64,
 }
 
-fn commit_prepared(
+/// Materialize one Arrow request inside the existing resource rollback scope.
+/// Both raw-store integration and Scene-owned execution publish this same transaction.
+pub(crate) fn publish_arrow_options(
+    options: ManimArrowOptions,
     store: &mut SemanticStore,
-    prepared: PreparedArrow,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
 ) -> Result<CommittedArrow, AuthoringError> {
-    let end_path = prepared.end_tip.clone();
-    store.with_geometry_path(end_path, |store, end_tip_handle| {
-        if let Some(start_path) = prepared.start_tip.clone() {
-            store.with_geometry_path(start_path, |store, start_tip_handle| {
-                commit_transaction(store, &prepared, end_tip_handle, Some(start_tip_handle))
-            })
-        } else {
-            commit_transaction(store, &prepared, end_tip_handle, None)
-        }
+    let prepared = options.prepare(store)?;
+    let mut paths = vec![prepared.end_tip.clone()];
+    if let Some(path) = &prepared.start_tip {
+        paths.push(path.clone());
+    }
+    store.with_geometry_paths(paths, |store, handles| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let staged = stage_prepared_arrow(
+            &mut transaction,
+            &prepared,
+            handles[0],
+            handles.get(1).copied(),
+        );
+        let result = publish(store, transaction)?;
+        resolve_staged_arrow(staged, |token| result.resolve(token))
     })
-}
-
-fn commit_transaction(
-    store: &mut SemanticStore,
-    prepared: &PreparedArrow,
-    end_tip_handle: noon_core::GeometryResourceHandle,
-    start_tip_handle: Option<noon_core::GeometryResourceHandle>,
-) -> Result<CommittedArrow, AuthoringError> {
-    let mut transaction = SemanticMutationTransaction::new();
-    let staged = stage_prepared_arrow(&mut transaction, prepared, end_tip_handle, start_tip_handle);
-    let result = transaction.apply(store).map_err(AuthoringError::from)?;
-    resolve_staged_arrow(staged, |token| result.resolve(token))
 }
 
 fn stage_prepared_arrow(

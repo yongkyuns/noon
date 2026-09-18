@@ -99,7 +99,7 @@ fn arrow_construction_rejects_invalid_values_without_publishing() {
 
 #[test]
 fn buff_and_tip_caps_match_pinned_manim_reference_cases() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
 
     let mut oversized_buff = ManimArrowOptions::arrow(-0.2, 0.0, 0.2, 0.0).unwrap();
     oversized_buff.set_buff(0.25).unwrap();

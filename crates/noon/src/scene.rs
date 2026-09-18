@@ -118,13 +118,34 @@ impl Scene {
         Mobject::from_node(store_rc, node)
     }
 
-    /// Construct one detached Arrow-family object through the shared Rust
-    /// transaction. The options select Arrow, Vector, or DoubleArrow semantics.
+    /// Construct one detached Arrow family before or after execution bootstrap.
+    /// The options select Arrow, Vector, or DoubleArrow semantics. Membership
+    /// remains explicit, and both tip resources share the atomic publication scope.
     pub fn manim_arrow(
-        &self,
+        &mut self,
         options: crate::ManimArrowOptions,
     ) -> Result<crate::ManimArrow, crate::AuthoringError> {
-        crate::ManimArrow::create(Rc::clone(&self.store), options)
+        let Some(execution) = self.execution.as_mut() else {
+            return crate::ManimArrow::create(Rc::clone(&self.store), options);
+        };
+        let store_rc = Rc::clone(&self.store);
+        let root = self.root;
+        {
+            let store = store_rc.borrow();
+            execution
+                .require_resource_creation_at_root(&store, root)
+                .map_err(AuthoringError::from)?;
+        }
+        let committed = crate::arrow_authoring::publish_arrow_options(
+            options,
+            &mut store_rc.borrow_mut(),
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            },
+        )?;
+        crate::ManimArrow::from_committed(store_rc, committed)
     }
 
     pub fn root(&self) -> SemanticNodeId {
@@ -716,6 +737,8 @@ impl Scene {
         LiveSession::new(&self.store, self.root, session)
     }
 }
+#[cfg(test)]
+mod arrow_atomicity_tests;
 #[cfg(test)]
 mod geometry_atomicity_tests;
 #[cfg(test)]
