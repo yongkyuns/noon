@@ -67,6 +67,10 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
+        self.require_replay_writable()?;
+        if self.replay_scope_active() {
+            return Ok(None);
+        }
         if transaction.mutations().iter().any(|patch| {
             !matches!(
                 patch,

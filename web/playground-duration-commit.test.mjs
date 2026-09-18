@@ -15,7 +15,7 @@ assert.ok(runtimeStart >= 0 && runtimeEnd > runtimeStart, "runtime startup bound
 const runtimeBody = main.slice(runtimeStart, runtimeEnd);
 assert.match(
   runtimeBody,
-  /updatePlaybackControls\(\{[\s\S]*?supported: !sourceOwnsExecution,[\s\S]*?player: nextPlayer,[\s\S]*?durationSeconds: loopDurationSeconds,/,
+  /updatePlaybackControls\(\{[\s\S]*?supported: !sourceOwnsExecution && initialState\.replaySupported !== false,[\s\S]*?player: nextPlayer,[\s\S]*?durationSeconds: loopDurationSeconds,/,
   "cold playback controls must use the authored duration without publishing global scene state early",
 );
 assert.match(

@@ -1040,7 +1040,40 @@ def _point_matching(api):
             _object_observation(line), list(line.get_start())[:2], list(line.get_end())[:2]]
 
 
+def _text_range_color_observation(api):
+    source = "Noon  café\nNoon Ω"
+    plain = api.Text(source, font="DejaVu Sans Mono", font_size=42)
+    styled = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42,
+        t2c={"No": "#EF4444", "[6:10]": "#3B82F6", "[-1:]": "#22C55E"},
+    )
+    # The long alias supersedes t2c, including a conflicting short-form mapping.
+    alias = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42,
+        t2c={"Noon": "#FF0000", "No": "#0000FF"},
+        text2color={"café": "#3B82F6"},
+    )
+    inherited = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42, color=api.BLUE,
+        t2c={"Noon": api.BLUE, "No": "#FF0000"},
+    )
+    try:
+        api.Text("Noon", font="DejaVu Sans Mono", t2c={"Noon": "#FF0000", "No": "#0000FF"})
+    except ValueError:
+        rejected = True
+    else:
+        rejected = False
+    return {
+        "styled_size_ratio": [styled.width / plain.width, styled.height / plain.height],
+        "alias_size_ratio": [alias.width / plain.width, alias.height / plain.height],
+        "default_overlap_size_ratio": [inherited.width / plain.width, inherited.height / plain.height],
+        "conflicting_overlap_rejected": rejected,
+    }
+
+
 FIXTURES = [
+    Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
+            lambda: _text_range_color_observation(manim)),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
     Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
     Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),

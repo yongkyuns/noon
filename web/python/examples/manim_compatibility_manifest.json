@@ -310,6 +310,22 @@
       "thumbnail_alt": "Inline styled MarkupText with colored spans",
       "thumbnail_time": 0,
       "order": 1190
+    },
+    {
+      "id": "noon-text-range-colors",
+      "title": "TextRangeColors",
+      "summary": "Color repeated substring matches plus Unicode, whitespace, newline, and nonoverlapping positive and negative source ranges.",
+      "status": "ready",
+      "path": "python/examples/text_range_colors.py",
+      "category": "manim-compatible/text",
+      "features": ["Text", "t2c", "text2color", "substring selectors", "Unicode", "whitespace", "newlines", "negative ranges", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "text-range-colors",
+      "thumbnail": "thumbnails/manim/text-range-colors.svg",
+      "thumbnail_alt": "Monospaced multiline text with repeated red substring and blue and green source ranges",
+      "thumbnail_time": 0,
+      "order": 1200
     }
   ]
 }

@@ -430,6 +430,13 @@ impl From<noon::TextAuthoringError> for AuthoringFailure {
         match error {
             E::InvalidFontSize(_) => Self::new("invalid_input", "text.invalid_font_size", message),
             E::InvalidOpacity(_) => Self::new("invalid_input", "text.invalid_opacity", message),
+            E::TextSourceStyle(_) => Self::new("invalid_input", "text.source_style", message),
+            E::InvalidTextColorSelector(_) => {
+                Self::new("invalid_input", "text.invalid_color_selector", message)
+            }
+            E::TextColorUnsupportedSourceKind(_) => {
+                Self::new("unsupported_operation", "text.color_source_kind", message)
+            }
             E::FontUnavailable(_) => {
                 Self::new("missing_resource", "text.font_unavailable", message)
             }
@@ -614,6 +621,7 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
             }

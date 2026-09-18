@@ -122,6 +122,7 @@ impl PreparedEffectivePropertyBatch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedFrameCommitError {
+    ReplaySealed,
     ForeignRuntime {
         expected: RuntimeIdentity,
         actual: RuntimeIdentity,
@@ -140,6 +141,9 @@ pub enum PreparedFrameCommitError {
 impl std::fmt::Display for PreparedFrameCommitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => {
+                formatter.write_str("sealed replay cannot publish a live prepared frame")
+            }
             Self::ForeignRuntime { expected, actual } => write!(
                 formatter,
                 "prepared runtime identity {actual:?} does not match {expected:?}"
@@ -248,6 +252,9 @@ impl SceneInstance {
         time: f64,
         reactive_inputs: &[(SignalId, ReactiveValue)],
     ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        if self.replay_is_sealed() {
+            return Err(EvaluationError::ReplaySealed);
+        }
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
@@ -447,6 +454,9 @@ impl SceneInstance {
         prepared: &PreparedFrameEvaluation,
         effective: &PreparedEffectivePropertyBatch,
     ) -> Result<(), PreparedFrameCommitError> {
+        if self.replay_is_sealed() {
+            return Err(PreparedFrameCommitError::ReplaySealed);
+        }
         if prepared.runtime != self.identity {
             return Err(PreparedFrameCommitError::ForeignRuntime {
                 expected: self.identity,
@@ -499,6 +509,7 @@ impl SceneInstance {
         effective: PreparedEffectivePropertyBatch,
     ) -> Result<&FrameState, PreparedFrameCommitError> {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
+        self.invalidate_replay_domain();
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()

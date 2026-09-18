@@ -18,6 +18,7 @@ export class PlaygroundPlaybackControls {
   #playing = true;
   #externalBusy = false;
   #controllable = true;
+  #unavailableReason = null;
   #commandPending = false;
   #seekActive = false;
   #desiredSeek = null;
@@ -103,8 +104,16 @@ export class PlaygroundPlaybackControls {
 
   setControllable(controllable) {
     this.#controllable = Boolean(controllable);
+    this.#unavailableReason = null;
     this.#root.dataset.controllable = String(this.#controllable);
     this.#root.title = this.#controllable ? "" : "Live progress · seeking is available after Python finishes";
+    this.#render();
+  }
+
+  setUnavailable(reason) {
+    this.setControllable(false);
+    this.#unavailableReason = String(reason ?? "History not retained");
+    this.#root.title = `Replay unavailable: ${this.#unavailableReason}`;
     this.#render();
   }
 
@@ -235,13 +244,14 @@ export class PlaygroundPlaybackControls {
 
   #render() {
     if (this.#destroyed) return;
-    this.#playButton.textContent = !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
+    this.#playButton.textContent = this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
     this.#playButton.setAttribute(
       "aria-label",
-      !this.#controllable ? "Python owns live playback" : this.#playing ? "Pause animation" : "Play animation",
+      !this.#controllable ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
     this.#scrubber.hidden = !this.#controllable;
     this.#liveStatus.hidden = this.#controllable;
+    this.#liveStatus.textContent = this.#unavailableReason !== null ? "Replay unavailable" : "Duration pending";
     this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
     this.#renderDisabled();
@@ -263,7 +273,7 @@ export class PlaygroundPlaybackControls {
     );
     this.#timeOutput.value = this.#controllable
       ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
-      : `${formatTime(time)} / — s`;
+      : this.#unavailableReason !== null ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
   }
 
   #renderDisabled() {

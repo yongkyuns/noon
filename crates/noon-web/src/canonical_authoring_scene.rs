@@ -395,7 +395,9 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            self.player_ownership = PlayerOwnership::Active(self.build_live_player(duration, 0)?);
+            let mut player = self.build_live_player(duration, 0)?;
+            player.begin_replay_retention()?;
+            self.player_ownership = PlayerOwnership::Active(player);
         }
         Ok(self
             .player_ownership
@@ -940,6 +942,7 @@ impl CanonicalAuthoringScene {
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
             let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            player.begin_replay_retention()?;
             let end_time = player.live_wait(duration)?;
             // Shared admission is fallible. Publish the first runtime only once
             // it owns a valid segment; rejection leaves this context unstarted.
@@ -1381,6 +1384,7 @@ impl CanonicalAuthoringScene {
         let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            player.begin_replay_retention()?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
@@ -6294,6 +6298,7 @@ mod wasm {
             blue: f64,
             alpha: f64,
             opacity: f64,
+            colors: Option<crate::WasmTextColorBatch>,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             let text =
                 crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
@@ -6304,7 +6309,8 @@ mod wasm {
                         checked_f32("text blue", blue)?,
                         checked_f32("text alpha", alpha)?,
                     ))
-                    .set_opacity(checked_f32("text opacity", opacity)?);
+                    .set_opacity(checked_f32("text opacity", opacity)?)
+                    .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
             self.inner
                 .live_create_text(text)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
@@ -7892,7 +7898,9 @@ mod tests {
         assert_eq!(text.source.as_ref(), "A\nB");
         assert_eq!(text.runs.len(), 2);
         assert_eq!(text.runs[0].font_size, 36.0);
-        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 54.0).abs() < 1e-6);
+        // Manim's 11.25 SVG-unit step at 36pt and 50% extra spacing maps to
+        // 40.5 units in the shared point-sized shaping coordinates.
+        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 40.5).abs() < 1e-6);
         assert_eq!(
             state.transform.scale.x,
             f64::from(noon::integration::NATIVE_POINT_TO_SCENE_SCALE)

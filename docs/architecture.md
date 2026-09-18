@@ -590,6 +590,76 @@ Compatibility updater `dt` is defined from authored/simulation-time advancement.
 
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 
+### Historical execution and object lifetime
+
+One authored scene owner does not make a latest-state execution projection a
+history of that scene. Object existence, current scene membership, membership at
+an earlier authored time, and physical execution/GPU retirement are different
+questions. In particular, completing a FadeOut may detach a still-valid semantic
+object; it must not erase earlier execution data while that data is promised to
+replay. Reusing the same object identity on FadeIn does not restore deleted tracks.
+
+For a declared deterministic replay range, the core invariant is:
+
+```text
+first execution at t == reconstructed replay at t == rewind then forward to t
+```
+
+Equality covers effective content, transform/style, presence, painter order and
+resource versions throughout the range, not merely object counts or the final
+frame. Completing an earlier animation must not substitute the latest authored
+base for that animation's historical endpoint. Prepared morph coordinate frames
+must release correctly to later affine drivers at the same time-qualified
+execution revision. Optimizations are subordinate to this invariant.
+
+Finite source execution may explicitly retain sparse compiler-owned reversible
+revisions under its existing Runtime, then seal that range for read-only replay.
+Only successfully published changes enter that history. It must reuse the normal
+evaluator, immutable resource handles and semantic-derived identities; no second
+mutable Semantic Scene, frontend state mirror, per-frame scene snapshots or
+re-execution of arbitrary host source is permitted. The authored scene remains at
+its current frontier. Historical projection changes advance execution/frame
+publication identity, not authored semantic revisions.
+
+History and necessary execution identity/resource pins have an explicit scope and
+retention budget. Removal from current membership cannot reclaim a pin still
+needed by that scope. Discarding the scope restores the authored frontier before
+releasing pins and permitting further edits. Ordinary indefinitely editable live
+sessions do not accumulate historical revisions by default. A capacity limit or
+unsupported execution domain must leave first execution coherent and reject the
+replay capability, never silently reconstruct incorrect past frames. Required
+callbacks, native input and scalar/family-specific execution need their own
+qualified participation in the same contract; source completion alone is not
+proof of seekability.
+
+Playback admission is an engine decision. The host must enable seek/restart/loop
+controls only after the Rust execution owner validates the advertised capability.
+A non-replayable completed execution may retain its final presentation and explain
+the limitation, but may not fall back to seeking a destructively updated plan.
+
+Replay capability and forward execution admission are distinct. Denying backward
+replay must not reject a paused, explicit forward authored-time observation through
+the existing callback-aware Runtime path. Rust validates its monotonic target and
+orders required callbacks; the host still waits for the matching publication and
+renderer observation. This does not authorize rewind, looping, callback
+re-execution or takeover of an active source continuation.
+
+A related observation distinction applies to static waits: the timestamp of the
+last evaluated/rendered frame is not necessarily current elapsed playback time.
+An authored wait advances playback time at the selected rate while unchanged
+rendering may sleep. The existing Rust clock and runtime deadlines bound that
+observation; pause and required dependency barriers remain authoritative. Unknown
+future source duration does not justify a frozen elapsed-time counter or a second
+JavaScript animation clock.
+
+**Implementation finding, September 18, 2026:** #1660 records premature missing
+columns and absent pulse objects in Dynamic Load Stress replay, caused by current
+membership retirement deleting historical channels and by later base/render-frame
+state leaking backward. #1658 qualified a narrower morph/hold sequence, not the
+full lifecycle contract. #1661 separately addresses wait-time observation. These
+issues carry dated evidence and repair status; their existence is not a claim
+that every history domain has been implemented or qualified.
+
 ### Identity generations, revisions, versions and sequences
 
 Identity validity, authored/execution revisioning, effective publication, external event ordering, and GPU lifetime are distinct domains. They must not collapse into one ambiguous global generation counter:

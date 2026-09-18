@@ -125,6 +125,7 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<PreparedAuthoredPlanChange, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -157,6 +158,7 @@ impl SceneInstance {
         &mut self,
         prepared: PreparedAuthoredPlanChange,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if prepared.runtime != self.runtime_identity() || prepared.expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -164,6 +166,7 @@ impl SceneInstance {
                 actual: current,
             });
         }
+        self.invalidate_replay_domain();
         self.publication = PublicationContext::new(
             prepared.scene_revision,
             prepared.execution_revision,
@@ -284,6 +287,7 @@ impl SceneInstance {
         additional_objects: usize,
         structural_change_possible: bool,
     ) -> Result<(), AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -330,6 +334,7 @@ impl SceneInstance {
         &mut self,
         transaction: &ExecutionMutationTransaction,
     ) -> Result<&FrameState, CompilePatchError> {
+        self.require_replay_writable()?;
         self.compiled.preflight_execution_transaction(transaction)?;
         let changed = self.apply_preflighted_transaction(transaction);
         if changed {
@@ -372,6 +377,7 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -413,6 +419,9 @@ impl SceneInstance {
             None
         };
 
+        if effective_changed {
+            self.invalidate_replay_domain();
+        }
         let mut affected = HashSet::new();
         if effective.is_some() {
             for patch in transaction.mutations() {

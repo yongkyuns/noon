@@ -11,9 +11,8 @@ use noon_core::{
     SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
-    apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
-    AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
-    PreparedReactiveSignalEnrollmentBatch,
+    preflight_execution_slot_membership_shape, AuthoredPublicationError, ExecutionSlotError,
+    FrameObjectState, PreparedEffectivePropertyBatch, PreparedReactiveSignalEnrollmentBatch,
 };
 
 use super::ExecutionSession;
@@ -42,6 +41,7 @@ pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
     SegmentCompletionPending,
     ForeignSemanticStore,
+    ReplaySealed,
     StaleSceneRevision {
         expected: SceneRevision,
         actual: SceneRevision,
@@ -56,6 +56,7 @@ pub enum ExecutionSessionPublicationError {
 impl std::fmt::Display for ExecutionSessionPublicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => f.write_str("discard sealed replay before authored mutation"),
             Self::RequiredCallbackPending => {
                 f.write_str("a required callback publication is pending")
             }
@@ -92,6 +93,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Runtime(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::RequiredCallbackPending
+            | Self::ReplaySealed
             | Self::SegmentCompletionPending
             | Self::ForeignSemanticStore
             | Self::StaleSceneRevision { .. }
@@ -152,6 +154,9 @@ impl ExecutionSession {
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
+        if self.runtime.replay_is_sealed() {
+            return Err(ExecutionSessionPublicationError::ReplaySealed);
+        }
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
@@ -360,6 +365,7 @@ impl ExecutionSession {
             && execution_prefix.is_empty()
             && effective.is_none()
             && scalar.is_none()
+            && !self.runtime.replay_scope_active()
             && PreparedPublication::supports(&prepared)
         {
             return Ok(PreparedPublication::prepare(self, prepared, order_root)?.publish());
@@ -529,8 +535,7 @@ impl ExecutionSession {
                 .apply_revision(revision, self.frame().time);
             self.last_callback_receipt = None;
         }
-        apply_execution_slot_membership_changes(&mut self.slots, &exited, &entered)
-            .expect("exact membership is a subset of the preflighted structural shape");
+        self.publish_replay_membership(&exited, &entered);
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);

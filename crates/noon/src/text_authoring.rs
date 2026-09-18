@@ -26,6 +26,8 @@ use noon_core::{
     Vec2, WHITE,
 };
 #[cfg(feature = "native-text")]
+use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
+#[cfg(feature = "native-text")]
 pub use noon_text::shaping::NativeFontFace;
 #[cfg(feature = "native-text")]
 use noon_text::shaping::{
@@ -264,7 +266,8 @@ typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
 
 /// Native plain text authored through the same retained resource contract as Typst.
 ///
-/// This first public slice intentionally exposes deterministic plain/multiline text.
+/// This slice exposes deterministic plain/multiline text plus constructor-time
+/// source-range colors.
 /// [`MarkupText`] uses the same retained pipeline with explicit styled spans.
 /// Fallback chains and bidi/script itemization remain backend follow-ups.
 #[derive(Clone, Debug, PartialEq)]
@@ -276,6 +279,8 @@ pub struct Text {
     font_face: Option<NativeFontFace>,
     font_size: f32,
     line_spacing: f32,
+    source_fills: Vec<TextSourceFill>,
+    text2color: Vec<(Arc<str>, Color)>,
     presentation: TextPresentation,
 }
 
@@ -289,6 +294,8 @@ impl Text {
             font_face: None,
             font_size: DEFAULT_NATIVE_TEXT_FONT_SIZE,
             line_spacing: -1.0,
+            source_fills: Vec::new(),
+            text2color: Vec::new(),
             presentation: TextPresentation::default(),
         }
     }
@@ -330,6 +337,35 @@ impl Text {
 
     pub fn with_line_spacing(mut self, line_spacing: f32) -> Self {
         self.line_spacing = line_spacing;
+        self
+    }
+
+    /// Apply intrinsic paints to exact UTF-8 source ranges after shaping.
+    ///
+    /// Every range is checked during construction admission. Invalid UTF-8
+    /// boundaries, cluster cuts and overlapping explicit fills fail before the
+    /// resource or semantic object is published.
+    pub fn with_source_fills(mut self, fills: impl IntoIterator<Item = TextSourceFill>) -> Self {
+        self.source_fills.extend(fills);
+        self
+    }
+
+    /// Apply Manim-compatible `t2c` source selectors during construction.
+    ///
+    /// Plain selectors color every non-overlapping substring occurrence.
+    /// `[start:end]` selectors use Unicode character indexes, including
+    /// negative endpoints, and are then projected to retained UTF-8 source
+    /// spans. Invalid selectors fail when this Text is admitted to a scene.
+    pub fn with_text2color<I, S>(mut self, colors: I) -> Self
+    where
+        I: IntoIterator<Item = (S, Color)>,
+        S: Into<Arc<str>>,
+    {
+        self.text2color.extend(
+            colors
+                .into_iter()
+                .map(|(selector, color)| (selector.into(), color)),
+        );
         self
     }
 
@@ -395,12 +431,47 @@ impl Text {
         options.line_spacing = self.line_spacing;
         options.fill = fill;
         let mut compiler = NativeTextCompiler::new();
-        if self.markup {
-            return markup::compile(self, &font, &options, &mut compiler);
-        }
-        let artifact = compiler.compile_plain(self.source.as_ref(), &font, &options)?;
-        debug_assert_eq!(artifact.resource.kind, TextSourceKind::Plain);
+        let mut artifact = if self.markup {
+            markup::compile(self, &font, &options, &mut compiler)?
+        } else {
+            compiler.compile_plain(self.source.as_ref(), &font, &options)?
+        };
+        self.apply_source_fills(&mut artifact.resource)?;
         Ok(artifact)
+    }
+
+    fn apply_source_fills(&self, resource: &mut TextResource) -> Result<(), TextAuthoringError> {
+        if self.source_fills.is_empty() && self.text2color.is_empty() {
+            return Ok(());
+        }
+        if resource.kind != TextSourceKind::Plain {
+            return Err(TextAuthoringError::TextColorUnsupportedSourceKind(
+                resource.kind,
+            ));
+        }
+
+        let mut fills = self.source_fills.clone();
+        for (selector, color) in &self.text2color {
+            if let Some(span) = manim_slice_source_span(resource.source.as_ref(), selector)? {
+                // The selector parser has projected Unicode indexes to a stable
+                // UTF-8 source identity; projection validates it before paint.
+                if *color != self.presentation.color {
+                    fills.push(TextSourceFill::new(span, *color));
+                }
+            } else {
+                if *color != self.presentation.color {
+                    fills.extend(
+                        resource
+                            .source_parts_for(selector)
+                            .map_err(|_| TextSourceStyleError::InvalidSourceSpan)?
+                            .into_iter()
+                            .map(|part| TextSourceFill::new(part.source_span, *color)),
+                    );
+                }
+            }
+        }
+        *resource = resource.with_source_fills(&fills)?;
+        Ok(())
     }
 
     fn compile(self, scene: &mut RetainedScene) -> Result<CompiledObject, TextAuthoringError> {
@@ -470,6 +541,71 @@ fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringErro
     Err(TextAuthoringError::FontUnavailable(Arc::from(family)))
 }
 
+/// Parse ManimCE's supported `[start:end]` `t2c` selector form.
+///
+/// Endpoints are Unicode character indexes, matching Python string slicing, then
+/// become stable UTF-8 byte spans for retained resource projection. A bracketed
+/// selector that is not this form remains an ordinary substring selector.
+#[cfg(feature = "native-text")]
+fn manim_slice_source_span(
+    source: &str,
+    selector: &str,
+) -> Result<Option<TextSourceSpan>, TextAuthoringError> {
+    let Some(rest) = selector.strip_prefix('[') else {
+        return Ok(None);
+    };
+    let Some(close) = rest.find(']') else {
+        return Ok(None);
+    };
+    let body = &rest[..close];
+    let Some((start_text, end_text)) = body.split_once(':') else {
+        return Ok(None);
+    };
+    if end_text.contains(':')
+        || !start_text
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-')
+        || !end_text
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-')
+    {
+        return Ok(None);
+    }
+
+    let invalid = || TextAuthoringError::InvalidTextColorSelector(Arc::from(selector));
+    let char_len = isize::try_from(source.chars().count()).map_err(|_| invalid())?;
+    let endpoint = |value: &str, default: isize| -> Result<isize, TextAuthoringError> {
+        if value.is_empty() {
+            return Ok(default);
+        }
+        let value = value.parse::<isize>().map_err(|_| invalid())?;
+        Ok(if value < 0 { char_len + value } else { value })
+    };
+    let start = endpoint(start_text, 0)?;
+    let end = endpoint(end_text, char_len)?;
+    if start < 0 || end < 0 || start > end || start > char_len || end > char_len {
+        return Err(invalid());
+    }
+
+    let byte_index = |index: isize| -> Result<u32, TextAuthoringError> {
+        let index = usize::try_from(index).map_err(|_| invalid())?;
+        let byte = if index == source.chars().count() {
+            source.len()
+        } else {
+            source
+                .char_indices()
+                .nth(index)
+                .map(|(byte, _)| byte)
+                .ok_or_else(invalid)?
+        };
+        u32::try_from(byte).map_err(|_| invalid())
+    };
+    Ok(Some(TextSourceSpan::new(
+        byte_index(start)?,
+        byte_index(end)?,
+    )))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextAuthoringError {
     InvalidFontSize(f32),
@@ -491,6 +627,12 @@ pub enum TextAuthoringError {
         bold: bool,
         italic: bool,
     },
+    #[cfg(feature = "native-text")]
+    InvalidTextColorSelector(Arc<str>),
+    #[cfg(feature = "native-text")]
+    TextSourceStyle(TextSourceStyleError),
+    #[cfg(feature = "native-text")]
+    TextColorUnsupportedSourceKind(TextSourceKind),
     #[cfg(feature = "typst")]
     Typst(TypstBackendError),
     Font(FontResourceError),
@@ -541,6 +683,17 @@ impl std::fmt::Display for TextAuthoringError {
                 formatter,
                 "native font {family:?} has no selected face for bold={bold}, italic={italic}"
             ),
+            #[cfg(feature = "native-text")]
+            Self::InvalidTextColorSelector(selector) => {
+                write!(formatter, "invalid Manim text color selector {selector:?}")
+            }
+            #[cfg(feature = "native-text")]
+            Self::TextSourceStyle(error) => error.fmt(formatter),
+            #[cfg(feature = "native-text")]
+            Self::TextColorUnsupportedSourceKind(kind) => write!(
+                formatter,
+                "native text range colors support plain Text, not {kind:?} source"
+            ),
             #[cfg(feature = "typst")]
             Self::Typst(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
@@ -560,6 +713,8 @@ impl std::error::Error for TextAuthoringError {
             Self::NativeText(error) => Some(error),
             #[cfg(feature = "native-text")]
             Self::Markup(error) => Some(error),
+            #[cfg(feature = "native-text")]
+            Self::TextSourceStyle(error) => Some(error),
             #[cfg(feature = "typst")]
             Self::Typst(error) => Some(error),
             Self::Font(error) => Some(error),
@@ -577,6 +732,13 @@ impl std::error::Error for TextAuthoringError {
 impl From<NativeTextError> for TextAuthoringError {
     fn from(value: NativeTextError) -> Self {
         Self::NativeText(value)
+    }
+}
+
+#[cfg(feature = "native-text")]
+impl From<TextSourceStyleError> for TextAuthoringError {
+    fn from(value: TextSourceStyleError) -> Self {
+        Self::TextSourceStyle(value)
     }
 }
 
