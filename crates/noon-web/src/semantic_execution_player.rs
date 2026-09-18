@@ -297,6 +297,7 @@ impl SemanticExecutionPlayer {
             live_wake_clock: BrowserExecutionWakeClock::default(),
             #[cfg(any(target_arch = "wasm32", test))]
             next_native_event_sequence: 0,
+            #[cfg(any(target_arch = "wasm32", test))]
             browser_pointer_view_revision: None,
         })
     }
