@@ -89,24 +89,29 @@ jobs:
           cargo clippy -p noon-runtime --all-targets -- -D warnings
           cargo fmt --all -- --check
           git diff --check
-      - name: Publish clean regression candidate
+      - name: Publish code-only regression candidate
         shell: bash
         run: |
           set -euo pipefail
-          git add crates/noon-runtime web scripts .github/workflows/playground-playback-controls.yml
+          # Actions has contents permission, not workflow mutation permission.
+          # Leave CI wiring to the separately authorized repository connector.
+          git restore .github/workflows/playground-playback-controls.yml
+          git add crates/noon-runtime web scripts
           python3 - <<'PY'
           import json, os, subprocess
           from pathlib import Path
           actual = subprocess.check_output(['git','diff','--cached','--name-only'], text=True).splitlines()
-          assert sorted(actual) == json.loads(Path(os.environ['RUNNER_TEMP'], 'allowed-paths.json').read_text()), actual
+          allowed = json.loads(Path(os.environ['RUNNER_TEMP'], 'allowed-paths.json').read_text())
+          allowed.remove('.github/workflows/playground-playback-controls.yml')
+          assert sorted(actual) == sorted(allowed), actual
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Preserve completed morph targets through replay holds and report honest live progress'
-          git push origin HEAD:refs/heads/fix/morph-replay-timeline
           git rev-parse HEAD > "$RUNNER_TEMP/morph-candidate-sha.txt"
-          git show --stat --oneline HEAD
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/morph-candidate-source.tar.gz"
+          git push origin HEAD:refs/heads/fix/morph-replay-timeline
+          git show --stat --oneline HEAD
       - uses: actions/upload-artifact@v7
         if: always()
         with:
