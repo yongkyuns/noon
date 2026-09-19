@@ -1,0 +1,101 @@
+diff --git a/web/browser-pointer-input.js b/web/browser-pointer-input.js
+--- a/web/browser-pointer-input.js
++++ b/web/browser-pointer-input.js
+@@ -107,6 +107,14 @@
+   const collect = (type, event) => {
+     if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
+     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
++    // A held contact without an admitted press cannot resume after cancellation
++    // or enter from outside. Keep ordinary parent validation/ignore semantics;
++    // do not interpret its coalesced button mask as a new press transition.
++    if (type === "pointermove" && event.buttons !== 0 &&
++        (selected === null || selected.id !== event.pointerId)) {
++      receive(type, event);
++      return;
++    }
+     if (type !== "pointermove" || typeof event.getCoalescedEvents !== "function") {
+       receive(type, event);
+       return;
+diff --git a/web/browser-pointer-input.test.mjs b/web/browser-pointer-input.test.mjs
+--- a/web/browser-pointer-input.test.mjs
++++ b/web/browser-pointer-input.test.mjs
+@@ -360,3 +360,45 @@
+   await inputTurn();
+   assert.equal(pointerMessages(replacement.attachments.at(-1).controlPort.peer).length, 0);
+ });
++
++test("held coalesced re-entry after viewport cancellation is ignored until a new press", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  dom.emit("pointerdown");
++  dom.emit("pointerleave");
++  dom.emit("pointermove", { buttons: 1, getCoalescedEvents() {
++    assert.fail("a retired held contact must not inspect or resume coalesced history");
++  } });
++  dom.emit("pointerup");
++  await inputTurn();
++  assert.deepEqual(errors, []);
++  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "cancel"]);
++  const retired = pointerMessages(engine)[0].source_id;
++  dom.emit("pointerdown"); dom.emit("pointerup");
++  await inputTurn();
++  const messages = pointerMessages(engine);
++  assert.deepEqual(messages.map(m => m.kind), ["press", "cancel", "press", "release"]);
++  assert.ok(messages[2].source_id > retired);
++  assert.equal(messages[2].source_id, messages[3].source_id);
++});
++
++test("an unbound held coalesced pointer keeps ordinary parent validation without inventing a press", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  dom.emit("pointermove", { buttons: 1, getCoalescedEvents() {
++    assert.fail("an outside gesture has no admitted press");
++  } });
++  await inputTurn();
++  assert.deepEqual(errors, []);
++  assert.equal(pointerMessages(engine).length, 0);
++  // Ignoring an outside gesture must not bypass the existing parent preflight.
++  dom.emit("pointermove", { buttons: 1, clientX: NaN, getCoalescedEvents() {
++    assert.fail("invalid parent must fail before sample inspection");
++  } });
++  await inputTurn();
++  assert.equal(errors.length, 1);
++  assert.match(errors[0].message, /coordinates must be finite/);
++  assert.equal(pointerMessages(engine).length, 0);
++});
+diff --git a/scripts/browser-pointer-input-smoke.mjs b/scripts/browser-pointer-input-smoke.mjs
+--- a/scripts/browser-pointer-input-smoke.mjs
++++ b/scripts/browser-pointer-input-smoke.mjs
+@@ -120,6 +120,18 @@
+         assert.ok(events.some(event => event.kind === "cancel"));
+         assert.equal(events.filter(event => event.kind === "release").length, 0);
+       });
++      await run("trusted held re-entry remains cancelled", "trusted-browser-mouse", async page => {
++        await page.mouse.move(200, 150); await page.mouse.down();
++        await page.mouse.move(800, 500); await page.mouse.move(200, 150); await page.mouse.up();
++        await page.mouse.click(200, 150);
++      }, ({ events, faults, raw }) => {
++        assert.deepEqual(faults, []);
++        assert.ok(raw.every(event => event.trusted));
++        const edges = events.filter(event => event.kind !== "move");
++        assert.deepEqual(edges.map(event => event.kind), ["press", "cancel", "press", "release"]);
++        assert.ok(edges[2].source_id > edges[0].source_id);
++        assert.equal(edges[2].source_id, edges[3].source_id);
++      });
+       await run("coalesced excursion replaces summary", "injected-coalesced-pointer-events", page =>
+         page.evaluate(() => {
+           pointerProbe.emit("pointerdown");
+diff --git a/.github/workflows/playground-playback-controls.yml b/.github/workflows/playground-playback-controls.yml
+--- a/.github/workflows/playground-playback-controls.yml
++++ b/.github/workflows/playground-playback-controls.yml
+@@ -139,6 +139,8 @@
+         with:
+           name: playground-playback-controls
+           path: |
++            browser-smoke-artifacts/pointer-dom
++            browser-smoke-artifacts/pointer-selection
+             browser-smoke-artifacts/playground-playback-controls
+             browser-smoke-artifacts/playground-playback-rerun-stress
+             browser-smoke-artifacts/playground-playback-morph

@@ -33,6 +33,7 @@ jobs:
           0c7cc0a5f18132e2a4a1be5ddc9d52601088e5d4e2cf94e55614c77df3ef3498  browser-oracle.patch
           e56f2b441252d00f36ca1136a0983f1b2d5ff6ea5e70192b50587494312fb38b  browser-pointer-input-smoke.mjs
           781b27b980e2ba9806ad3b2e789532afe572b52a38dde5df7c6449b1d0248a79  pointer-selection-qualification.mjs
+          e331244f187de94e8e5935046c9793d75f6bc79c9fb8051a5b8b828009ac042f  browser-reentry-followup.patch
           HASHES
           git worktree add --detach "$RUNNER_TEMP/noon-c5-browser" 7261c1ebf35eba91ae6efd8436b822a9c887bf2c
           cd "$RUNNER_TEMP/noon-c5-browser"
@@ -43,6 +44,8 @@ jobs:
           done
           cp "$GITHUB_WORKSPACE/.github/qualification/browser-pointer-input-smoke.mjs" scripts/
           cp "$GITHUB_WORKSPACE/.github/qualification/pointer-selection-qualification.mjs" scripts/
+          git apply --check "$GITHUB_WORKSPACE/.github/qualification/browser-reentry-followup.patch"
+          git apply "$GITHUB_WORKSPACE/.github/qualification/browser-reentry-followup.patch"
           git add crates/noon-web web scripts .github/workflows/playground-playback-controls.yml
           git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/unformatted.patch"
           git rev-parse HEAD > "$GITHUB_WORKSPACE/proof/base.txt"
@@ -58,6 +61,7 @@ jobs:
           git add crates/noon-web
           git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/formatted.patch"
           git write-tree > "$GITHUB_WORKSPACE/proof/formatted-tree.txt"
+          test "$(git write-tree)" = 8ab1861695cdd96d70d622187ec01309eb4e82bf
       - name: Cache Cargo sources
         uses: actions/cache@v6
         with:
@@ -111,5 +115,55 @@ jobs:
         with:
           name: c5-browser-pixel-candidate-proof
           path: proof/
+          if-no-files-found: error
+          retention-days: 7
+  publish-tested-code:
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the exact feature base, not the validation branch
+        uses: actions/checkout@v7
+        with:
+          ref: 7261c1ebf35eba91ae6efd8436b822a9c887bf2c
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: c5-browser-pixel-candidate-proof
+          path: ${{ runner.temp }}/c5-tested-proof
+      - name: Verify completed qualification and create a clean code-only child
+        env:
+          PROOF_DIR: ${{ runner.temp }}/c5-tested-proof
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          report = json.loads((proof / 'pointer-selection/report.json').read_text())
+          assert report['status'] == 'passed'
+          assert len(report['cases']) == 4
+          assert {(c['backend'], c['transportMode']) for c in report['cases']} == {(b,t) for b in ['webgpu','webgl'] for t in ['transferable','shared']}
+          assert all(c['status'] == 'passed' for c in report['cases'])
+          dom = json.loads((proof / 'pointer-dom/report.json').read_text())
+          assert dom['status'] == 'passed' and len(dom['cases']) == 18
+          assert all(c['status'] == 'passed' for c in dom['cases'])
+          assert (proof / 'formatted-tree.txt').read_text().strip() == '8ab1861695cdd96d70d622187ec01309eb4e82bf'
+          PY
+          test "$(git rev-parse HEAD)" = 7261c1ebf35eba91ae6efd8436b822a9c887bf2c
+          git apply --index "$PROOF_DIR/formatted.patch"
+          test "$(git write-tree)" = 8ab1861695cdd96d70d622187ec01309eb4e82bf
+          # The supported repository API will add the permanent workflow to the
+          # final feature tree; this job publishes only the already tested code.
+          git restore --source=HEAD --staged --worktree -- .github/workflows/playground-playback-controls.yml
+          git diff --cached --check
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: qualify browser session selection and visible worker overlays'
+          git push origin HEAD:refs/heads/staging/c5-browser-selection-${{ github.run_id }}
+          git rev-parse HEAD HEAD^{tree} | tee "$PROOF_DIR/published-code.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c5-browser-tested-code-publication
+          path: ${{ runner.temp }}/c5-tested-proof/published-code.txt
           if-no-files-found: error
           retention-days: 7
