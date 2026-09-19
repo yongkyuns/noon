@@ -1,0 +1,92 @@
+name: C2 targeted Firefox autoplay proof
+on:
+  push:
+    branches: [work/c2-firefox-autoplay-proof]
+    paths: [.github/workflows/c2-firefox-autoplay-proof.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  firefox-pointer-autoplay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e3586f547e8251d8668caf51757730f3478fa77e
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: Linux-playwright-firefox-1.62.1
+      - name: Install pinned Firefox harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps firefox
+      - name: Require this head's compiled runtime artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 18); do
+            if gh api repos/yongkyuns/noon/actions/runs/35414222095/artifacts --jq '.artifacts | any(.name == "playground-cross-browser-web-runtime")' | grep -qx true; then exit 0; fi
+            sleep 10
+          done
+          echo 'Exact-head runtime artifact did not become available' >&2
+          exit 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          path: web
+          repository: yongkyuns/noon
+          run-id: 35414222095
+          github-token: ${{ github.token }}
+      - name: Prepare isolated two-scene pointer-injection qualification
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          identity = json.loads(Path('web/runtime-build-identity.json').read_text())
+          assert identity['sourceRevision'] in ['bc43a492fb5950df679179fa3029d9189f0c3f9a', 'e3586f547e8251d8668caf51757730f3478fa77e'], identity
+          print(json.dumps(identity, indent=2))
+          source = Path('scripts/playground-gallery-runtime-smoke.mjs').read_text()
+          def replace(old, new):
+              global source
+              assert source.count(old) == 1, (old, source.count(old))
+              source = source.replace(old, new, 1)
+          replace("const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square'];", "const affected = ['parity-moving-around', 'noon-raster-image'];")
+          replace("  assert.equal(new Set(entries.map(e => e.id)).size, entries.length, 'duplicate gallery IDs');", "  entries.splice(0, entries.length, ...entries.filter(e => affected.includes(e.id)));\n  assert.equal(new Set(entries.map(e => e.id)).size, 2, 'targeted cases missing');")
+          replace('      window.__galleryAuthoringResults = [];', '''      window.__galleryAuthoringResults = [];
+                window.__pointerWakeCommands = [];
+                const originalPost = MessagePort.prototype.postMessage;
+                MessagePort.prototype.postMessage = function (...args) {
+                  const message = args[0];
+                  if (message?.channel === 'noon.engine' && message.type === 'browser_pointer_input') {
+                    window.__pointerWakeCommands.push({ kind: message.kind, view_revision: message.view_revision });
+                  }
+                  return Reflect.apply(originalPost, this, args);
+                };''')
+          replace('        const metric = state.metrics?.metrics;', '''        const metric = state.metrics?.metrics;
+                  if (!result.pointerInjected && state.inFlight && metric?.time > 0.15) {
+                    const bounds = await page.locator('#scene').boundingBox();
+                    assert.ok(bounds && bounds.width > 0 && bounds.height > 0);
+                    await page.mouse.move(bounds.x + bounds.width * 0.45, bounds.y + bounds.height * 0.45);
+                    await page.mouse.move(bounds.x + bounds.width * 0.55, bounds.y + bounds.height * 0.55);
+                    result.pointerInjected = true;
+                    result.inputAuthoredTime = metric.time;
+                  }''')
+          replace("      assert.ok(completed, `${entry.id}: initial autoplay did not finish`);", "      assert.ok(completed, `${entry.id}: initial autoplay did not finish`);\n      assert.equal(result.pointerInjected, true, 'test must inject input during active autoplay');\n      result.pointerCommands = await page.evaluate(() => window.__pointerWakeCommands);\n      assert.ok(result.pointerCommands.some(command => command.kind === 'move'), 'DOM input must reach the real engine control port');")
+          Path('scripts/.c2-pointer-gallery-smoke.mjs').write_text(source)
+          PY
+      - name: Verify both scenes finish after real browser pointer delivery
+        env:
+          NOON_PLAYGROUND_BROWSER: firefox
+          NOON_PLAYGROUND_PROFILE: desktop-dpr2
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/c2-pointer-autoplay
+        run: xvfb-run -a node scripts/.c2-pointer-gallery-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c2-firefox-pointer-autoplay
+          path: |
+            browser-smoke-artifacts/c2-pointer-autoplay
+            web/runtime-build-identity.json
+          retention-days: 7
