@@ -846,7 +846,7 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    fn capture_mobject_state(
+    pub(crate) fn capture_mobject_state(
         &self,
         source: &Mobject,
     ) -> Result<SemanticObjectState, LiveSessionError> {

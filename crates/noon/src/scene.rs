@@ -866,6 +866,22 @@ impl Scene {
         .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn change_chart_values(
+        &mut self,
+        chart: &mut crate::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), crate::CoordinateAuthoringError> {
+        if !Rc::ptr_eq(&self.store, chart.family().integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        if self.execution.is_some() {
+            chart.change_bar_values_live(&mut self.owned_live(), values, update_colors)
+        } else {
+            chart.change_bar_values_cold(values, update_colors)
+        }
+    }
+
     /// Install the execution component lowered from this exact Scene.
     ///
     /// This is private migration plumbing for the Scene-owned live path. External

@@ -36,6 +36,61 @@ pub use function_plot_role::SemanticFunctionPlotRole;
 mod decimal_number;
 pub use decimal_number::SemanticDecimalNumber;
 
+/// Authored numeric input and constructor paint for an ordinary chart rectangle.
+/// These values cannot be recovered from geometry after user transforms/styles.
+#[derive(Clone, Copy, Debug)]
+pub struct SemanticBarRole {
+    pub value: f64,
+    pub original_color: crate::Color,
+    pub width: f64,
+    pub fill_opacity: f64,
+    pub stroke_width: f64,
+}
+
+impl PartialEq for SemanticBarRole {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits() == other.bits()
+    }
+}
+impl Eq for SemanticBarRole {}
+impl std::hash::Hash for SemanticBarRole {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bits().hash(state);
+    }
+}
+impl SemanticBarRole {
+    fn bits(&self) -> [u64; 8] {
+        [
+            self.value,
+            self.width,
+            self.fill_opacity,
+            self.stroke_width,
+            f64::from(self.original_color.red),
+            f64::from(self.original_color.green),
+            f64::from(self.original_color.blue),
+            f64::from(self.original_color.alpha),
+        ]
+        .map(|v| if v == 0.0 { 0 } else { v.to_bits() })
+    }
+    pub fn is_valid(&self) -> bool {
+        self.value.is_finite()
+            && self.width.is_finite()
+            && self.width > 0.0
+            && self.fill_opacity.is_finite()
+            && (0.0..=1.0).contains(&self.fill_opacity)
+            && self.stroke_width.is_finite()
+            && self.stroke_width >= 0.0
+            && [
+                self.original_color.red,
+                self.original_color.green,
+                self.original_color.blue,
+                self.original_color.alpha,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+    }
+}
+
 /// Target authored content carried by one semantic object.
 ///
 /// Cheap analytic geometry stays inline through [`StoredGeometry`]. Heavy geometry
@@ -203,6 +258,7 @@ pub enum SemanticObjectRole {
     SampleSpaceHorizontalPart,
     /// Identifies an ordinary retained rectangle in a Manim SampleSpace vertical partition.
     SampleSpaceVerticalPart,
+    Bar(SemanticBarRole),
 }
 
 impl SemanticObjectRole {
@@ -211,6 +267,7 @@ impl SemanticObjectRole {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
             Self::FunctionPlot(range) => range.is_valid(),
+            Self::Bar(bar) => bar.is_valid(),
             Self::Ordinary
             | Self::Camera2D
             | Self::Inset2DView(_)

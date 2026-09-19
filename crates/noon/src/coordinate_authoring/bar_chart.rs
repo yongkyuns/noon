@@ -7,8 +7,8 @@
 use std::rc::Rc;
 
 use noon_core::{
-    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
-    SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry,
+    Color, SemanticBarRole, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole,
+    SemanticObjectState, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry,
 };
 
 use super::{CoordinateAuthoringError, ManimAxes, ManimAxesOptions};
@@ -65,8 +65,8 @@ impl ManimBarChartOptions {
         let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let inferred = [
             values.iter().copied().fold(0.0_f64, f64::min),
-            maximum,
-            (maximum / y_length * 100.0).round() / 100.0,
+            maximum.max(0.0),
+            (maximum / y_length * 100.0).round_ties_even() / 100.0,
         ];
         let y_range = match y_range {
             None | Some([]) => inferred,
@@ -82,7 +82,7 @@ impl ManimBarChartOptions {
     }
 }
 
-/// One semantic family containing axes followed by the bar family.
+/// One semantic family containing the bar family followed by axes.
 #[derive(Clone, Debug)]
 pub struct ManimBarChart {
     family: MobjectFamily,
@@ -113,160 +113,232 @@ impl ManimBarChart {
     pub fn bars(&self) -> &MobjectFamily {
         &self.bars
     }
-    /// Read values from the authoritative bar leaves and current axes frame.
+    /// Read authored numeric inputs, independently of current rectangle geometry.
     pub fn values(&self) -> Result<Vec<f64>, CoordinateAuthoringError> {
-        let frame = self.axes.authored_frame()?;
-        let baseline = noon_geometry::origin_shift(frame.y().range());
-        let store = Rc::clone(self.family.integration_store());
-        let store = store.borrow();
+        let store = self.family.integration_store().borrow();
         direct_bar_nodes(&self.bars)?
             .into_iter()
             .map(|node| {
-                let state = store
-                    .semantic_object_state_checked(node)
-                    .map_err(AuthoringError::from)?;
-                let point = [state.transform.translation.x, state.transform.translation.y];
-                Ok((frame.point_to_coords(point)?[1] - baseline) * 2.0)
+                Ok(bar_role(
+                    store
+                        .semantic_object_state_checked(node)
+                        .map_err(AuthoringError::from)?,
+                )?
+                .value)
             })
             .collect()
     }
 
-    /// Update the prefix represented by `values` in one atomic semantic
-    /// transaction. Bars keep their identities, geometry resources and style
-    /// unless `update_colors` explicitly requests the standard recoloring.
     pub fn change_bar_values(
         &mut self,
         scene: &mut Scene,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), CoordinateAuthoringError> {
-        if !Rc::ptr_eq(scene.integration_store(), self.family.integration_store()) {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(CoordinateAuthoringError::InvalidOptions(
-                "bar values must be finite",
-            ));
-        }
-        let frame = self.axes.authored_frame()?;
-        let store = scene.integration_store().borrow();
-        let transaction = prepare_value_update(&store, frame, &self.bars, values, update_colors)?;
-        drop(store);
-        scene.apply_semantic_transaction(transaction)?;
-        Ok(())
+        scene.change_chart_values(self, values, update_colors)
     }
 
-    /// Cold-store counterpart for typed WASM authoring before a live execution
-    /// context exists. It uses the same prepared transaction as Scene-owned
-    /// updates, without introducing a frontend mutation model.
-    pub fn change_bar_values_in_store(
-        &mut self,
-        store: &Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        values: &[f64],
-        update_colors: bool,
-    ) -> Result<(), CoordinateAuthoringError> {
-        if !Rc::ptr_eq(store, self.family.integration_store()) {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(CoordinateAuthoringError::InvalidOptions(
-                "bar values must be finite",
-            ));
-        }
-        let frame = self.axes.authored_frame()?;
-        let borrowed = store.borrow();
-        let transaction =
-            prepare_value_update(&borrowed, frame, &self.bars, values, update_colors)?;
-        drop(borrowed);
-        transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        Ok(())
-    }
-
-    /// Apply a cold typed-authoring update through this chart's own semantic
-    /// store. The store identity is derived from the retained family handle.
     pub fn change_bar_values_cold(
         &mut self,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), CoordinateAuthoringError> {
         let store = Rc::clone(self.family.integration_store());
-        self.change_bar_values_in_store(&store, values, update_colors)
+        let frame = self.axes.authored_frame()?;
+        let prepared = {
+            let borrowed = store.borrow();
+            prepare_value_update(
+                &borrowed,
+                frame,
+                &self.bars,
+                values,
+                update_colors,
+                |node| {
+                    borrowed
+                        .semantic_object_state_checked(node)
+                        .cloned()
+                        .map_err(AuthoringError::from)
+                        .map_err(Into::into)
+                },
+            )?
+        };
+        prepared.publish(&mut store.borrow_mut(), |store, transaction| {
+            transaction.apply(store).map_err(AuthoringError::from)
+        })?;
+        Ok(())
     }
 
-    /// Running-session update from one effective axes observation, published by
-    /// the same prepared mutation transaction as cold and Scene-owned edits.
     pub fn change_bar_values_live(
         &mut self,
         live: &mut crate::LiveSession<'_>,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), CoordinateAuthoringError> {
-        self.family.validate()?;
         if !Rc::ptr_eq(live.integration_store(), self.family.integration_store()) {
             return Err(AuthoringError::ForeignStore.into());
         }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(CoordinateAuthoringError::InvalidOptions(
-                "bar values must be finite",
-            ));
-        }
         let frame = live.effective_axes_frame(&self.axes)?;
-        let store = live.integration_store().borrow();
-        let transaction = prepare_value_update(&store, frame, &self.bars, values, update_colors)?;
-        drop(store);
-        live.apply(transaction)?;
+        let prepared = {
+            let store = live.integration_store().borrow();
+            prepare_value_update(&store, frame, &self.bars, values, update_colors, |node| {
+                let object =
+                    crate::Mobject::from_node(Rc::clone(self.family.integration_store()), node)?;
+                live.capture_mobject_state(&object).map_err(Into::into)
+            })?
+        };
+        live.publish_path_edits(prepared)?;
         Ok(())
     }
 }
 
-pub(crate) fn prepare_value_update(
+fn bar_role(state: &SemanticObjectState) -> Result<SemanticBarRole, CoordinateAuthoringError> {
+    match state.role() {
+        SemanticObjectRole::Bar(role) => Ok(role),
+        _ => Err(CoordinateAuthoringError::InvalidTopology),
+    }
+}
+
+/// Prepare only the requested bars, plus all paint when explicitly recoloring.
+/// Rotation/shear uses the ordinary world-axis deformation and resource admission.
+fn prepare_value_update(
     store: &noon_core::SemanticStore,
     frame: noon_geometry::AxesFrame,
     bars: &MobjectFamily,
     values: &[f64],
     update_colors: bool,
-) -> Result<SemanticMutationTransaction, CoordinateAuthoringError> {
-    let nodes = direct_bar_nodes_prefix(store, bars, values.len())?;
-    let first = first_bar_node(store, bars)?;
-    let (unit_x, unit_y) = axis_vector(frame, true)?;
-    let unit = unit_x.hypot(unit_y);
-    let width = store
-        .semantic_object_state_checked(first)
-        .map_err(AuthoringError::from)?
-        .transform
-        .scale
-        .x
-        .abs()
-        / unit;
-    let colors = if update_colors {
-        let all_nodes = direct_bar_nodes(bars)?;
-        let colors = bar_colors(store, &all_nodes)?;
-        Some((all_nodes, colors))
-    } else {
-        None
+    mut capture: impl FnMut(
+        noon_core::SemanticNodeId,
+    ) -> Result<SemanticObjectState, CoordinateAuthoringError>,
+) -> Result<crate::path_editing::PreparedPathEdits, CoordinateAuthoringError> {
+    use crate::semantic_mobject::{
+        boundary_for_content, scale_state_about_center, stage_state_changes,
     };
-    let mut transaction = SemanticMutationTransaction::new();
-    for (index, (&node, &value)) in nodes.iter().zip(values).enumerate() {
-        let (translation, scale, rotation_z) = bar_transform(frame, index, width, value)?;
-        transaction.set_property(node, SemanticObjectProperty::Translation, translation);
-        transaction.set_property(node, SemanticObjectProperty::Scale, scale);
-        transaction.set_property(node, SemanticObjectProperty::RotationZ, rotation_z);
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "bar values must be finite",
+        ));
     }
-    if let Some((nodes, colors)) = colors {
-        let count = nodes.len();
-        for (index, node) in nodes.into_iter().enumerate() {
-            let mut style = store
-                .semantic_object_state_checked(node)
-                .map_err(AuthoringError::from)?
-                .style
-                .clone();
-            set_bar_color(&mut style, gradient_color(&colors, index, count));
-            transaction.replace_style(node, style);
+    let nodes = if update_colors {
+        direct_bar_nodes(bars)?
+    } else {
+        direct_bar_nodes_prefix(store, bars, values.len())?
+    };
+    if values.len() > nodes.len() {
+        return Err(CoordinateAuthoringError::InvalidTopology);
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    let mut replacements = Vec::new();
+    for (index, node) in nodes.into_iter().enumerate() {
+        let authored = store
+            .semantic_object_state_checked(node)
+            .map_err(AuthoringError::from)?;
+        let mut state = capture(node)?;
+        let mut role = bar_role(authored)?;
+        let mut target = noon_core::SemanticTransactionNodeRef::from(node);
+        let mut path = None;
+        if let Some(&value) = values.get(index) {
+            if role.value == 0.0 {
+                // Manim admits a fresh leaf when the previous authored value was zero.
+                state = fresh_bar(frame, index, value, role)?;
+                let fresh = transaction.create_node(SemanticNodeCreation::object(state.clone()));
+                transaction.remove_member(bars.node_id(), node);
+                transaction.add_member(bars.node_id(), fresh);
+                transaction.reorder_member(
+                    bars.node_id(),
+                    fresh,
+                    store
+                        .semantic_family_checked(bars.node_id())
+                        .map_err(AuthoringError::from)?
+                        .next_member(node),
+                );
+                target = fresh.into();
+            } else {
+                let bounds = boundary_for_content(store, state.content, state.transform)?
+                    .ok_or(AuthoringError::MissingLayoutBounds(node))?;
+                let center = (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                );
+                let factor = (value / role.value).abs();
+                let old_edge = if role.value > 0.0 {
+                    bounds.min_y
+                } else {
+                    bounds.max_y
+                };
+                let edge = if value / role.value < 0.0 {
+                    if role.value > 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                } else if role.value > 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                let destination = (
+                    center.0,
+                    old_edge - edge * (bounds.max_y - bounds.min_y) * factor * 0.5,
+                );
+                match crate::dimension_fit::world_scale_factors(
+                    state.transform.rotation_z,
+                    1.0,
+                    factor,
+                ) {
+                    Ok((x, y)) => scale_state_about_center(store, &mut state, x, y, destination)?,
+                    Err(_) => {
+                        path = Some(crate::family_affine::world_scaled_path(
+                            store,
+                            &state,
+                            1.0,
+                            factor,
+                            center,
+                            destination,
+                        )?);
+                    }
+                }
+            }
+            role.value = value;
+            transaction.replace_role(target, SemanticObjectRole::Bar(role));
+        }
+        if update_colors {
+            set_bar_color(&mut state.style, role.original_color);
+        }
+        if target == noon_core::SemanticTransactionNodeRef::from(node) {
+            if let Some(path) = path {
+                replacements.push((node, state, path));
+            } else {
+                stage_state_changes(&mut transaction, node, authored, &state);
+            }
+        } else if update_colors {
+            transaction.replace_style(target, state.style);
         }
     }
-    Ok(transaction)
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+            .with_transaction(transaction),
+    )
+}
+
+fn fresh_bar(
+    frame: noon_geometry::AxesFrame,
+    index: usize,
+    value: f64,
+    role: SemanticBarRole,
+) -> Result<SemanticObjectState, CoordinateAuthoringError> {
+    let (translation, scale, rotation) = bar_transform(frame, index, role.width, value)?;
+    let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+        size: noon_core::Vec2::new(1.0, 1.0),
+    });
+    state.transform.translation = translation;
+    state.transform.scale = scale;
+    state.transform.rotation_z = rotation;
+    state.style.fill_opacity = role.fill_opacity;
+    state.style.stroke_width = role.stroke_width;
+    state.style.stroke = Some(SemanticPaint::Solid(noon_core::WHITE));
+    state.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+    state.set_role(SemanticObjectRole::Bar(SemanticBarRole { value, ..role }));
+    Ok(state)
 }
 
 impl Scene {
@@ -314,7 +386,7 @@ impl ManimBarChart {
             .borrow()
             .semantic_family_members_checked(family.node_id())
             .map_err(AuthoringError::from)?;
-        let [axes, bars] = members.as_slice() else {
+        let [bars, axes] = members.as_slice() else {
             return Err(CoordinateAuthoringError::InvalidTopology);
         };
         let store = Rc::clone(family.integration_store());
@@ -339,6 +411,7 @@ pub(crate) fn prepare(
 > {
     validate_options(options)?;
     let count = options.values.len();
+    let colors = crate::color_gradient(&options.bar_colors, count)?;
     let frame = noon_geometry::AxesFrame::centered(
         [0.0, count as f64, 1.0],
         options.y_range,
@@ -366,11 +439,9 @@ pub(crate) fn prepare(
             bar_transform(frame, index, options.bar_width, value)?;
         let mut style = SemanticStyle::default();
         style.stroke_width = options.bar_stroke_width;
+        style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
         style.fill_opacity = options.bar_fill_opacity;
-        set_bar_color(
-            &mut style,
-            gradient_color(&options.bar_colors, index, count),
-        );
+        set_bar_color(&mut style, colors[index]);
         let mut state = noon_core::SemanticObjectState::new(StoredGeometry::Rectangle {
             size: noon_core::Vec2::new(1.0, 1.0),
         });
@@ -378,11 +449,18 @@ pub(crate) fn prepare(
         state.transform.scale = scale;
         state.transform.rotation_z = rotation_z;
         state.style = style;
+        state.set_role(SemanticObjectRole::Bar(SemanticBarRole {
+            value,
+            original_color: colors[index],
+            width: options.bar_width,
+            fill_opacity: options.bar_fill_opacity,
+            stroke_width: options.bar_stroke_width,
+        }));
         let bar = transaction.create_node(SemanticNodeCreation::object(state));
         transaction.add_member(bars, bar);
     }
-    transaction.add_member(chart, axes);
     transaction.add_member(chart, bars);
+    transaction.add_member(chart, axes);
     Ok((transaction, chart, axes, bars))
 }
 
@@ -446,108 +524,29 @@ fn direct_bar_nodes_prefix(
     Ok(nodes)
 }
 
-fn first_bar_node(
-    store: &noon_core::SemanticStore,
-    family: &MobjectFamily,
-) -> Result<noon_core::SemanticNodeId, CoordinateAuthoringError> {
-    family.validate()?;
-    store
-        .semantic_family_checked(family.node_id())
-        .map_err(AuthoringError::from)?
-        .first_member()
-        .ok_or(CoordinateAuthoringError::InvalidTopology)
-}
-
-fn bar_colors(
-    store: &noon_core::SemanticStore,
-    nodes: &[noon_core::SemanticNodeId],
-) -> Result<Vec<Color>, CoordinateAuthoringError> {
-    nodes
-        .iter()
-        .map(|node| {
-            let state = store
-                .semantic_object_state_checked(*node)
-                .map_err(AuthoringError::from)?;
-            match state.style.fill {
-                Some(SemanticPaint::Solid(color)) => Ok(color),
-                _ => Err(CoordinateAuthoringError::InvalidTopology),
-            }
-        })
-        .collect()
-}
-
 fn bar_transform(
     frame: noon_geometry::AxesFrame,
     index: usize,
     bar_width: f64,
     value: f64,
 ) -> Result<(SemanticVec3, SemanticVec3, f64), CoordinateAuthoringError> {
-    let x = index as f64 + 0.5;
-    let baseline = noon_geometry::origin_shift(frame.y().range());
-    let center = frame.coords_to_point(x, baseline + value * 0.5)?;
-    let (x_unit_x, x_unit_y) = axis_vector(frame, true)?;
-    let (y_unit_x, y_unit_y) = axis_vector(frame, false)?;
-    let width = x_unit_x.hypot(x_unit_y) * bar_width;
-    let height = y_unit_x.hypot(y_unit_y) * value.abs();
-    let x_unit = x_unit_x.hypot(x_unit_y);
-    let y_unit = y_unit_x.hypot(y_unit_y);
-    // A retained Rectangle has rotation plus independent local scales, but no
-    // shear component.  Reject a skewed authoritative axes frame before
-    // staging any mutation rather than publishing a visually different chart.
-    if x_unit == 0.0
-        || y_unit == 0.0
-        || (x_unit_x * y_unit_x + x_unit_y * y_unit_y).abs() > 1.0e-9 * x_unit * y_unit
-    {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "bar chart requires orthogonal axes",
-        ));
-    }
-    let rotation_z = x_unit_y.atan2(x_unit_x);
-    // Rectangle transforms encode a rotated orthogonal basis.  Preserve the
-    // y-axis orientation (including reflected axes) in its signed local scale.
-    let orientation = (x_unit_x * y_unit_y - x_unit_y * y_unit_x).signum();
+    let origin = frame.coords_to_point(0.0, 0.0)?;
+    let across = frame.coords_to_point(bar_width, 0.0)?;
+    let top = frame.coords_to_point(0.0, value)?;
+    let base = frame.coords_to_point(index as f64 + 0.5, 0.0)?;
+    let width = across[0] - origin[0];
+    let height = (top[1] - origin[1]).abs();
+    let sign = if value >= 0.0 { 1.0 } else { -1.0 };
     Ok((
-        SemanticVec3::new(center[0], center[1], 0.0),
-        SemanticVec3::new(width, height * orientation, 1.0),
-        rotation_z,
+        SemanticVec3::new(base[0], base[1] + sign * height * 0.5, 0.0),
+        SemanticVec3::new(width, height, 1.0),
+        0.0,
     ))
-}
-
-fn axis_vector(
-    frame: noon_geometry::AxesFrame,
-    x_axis: bool,
-) -> Result<(f64, f64), CoordinateAuthoringError> {
-    let baseline = noon_geometry::origin_shift(frame.y().range());
-    let origin = frame.coords_to_point(0.0, baseline)?;
-    let point = if x_axis {
-        frame.coords_to_point(1.0, baseline)?
-    } else {
-        frame.coords_to_point(0.0, baseline + 1.0)?
-    };
-    Ok((point[0] - origin[0], point[1] - origin[1]))
 }
 
 fn set_bar_color(style: &mut SemanticStyle, color: Color) {
     style.fill = Some(SemanticPaint::Solid(color));
     style.stroke = Some(SemanticPaint::Solid(color));
-}
-
-fn gradient_color(colors: &[Color], index: usize, count: usize) -> Color {
-    if colors.len() == 1 || count <= 1 {
-        return colors[0];
-    }
-    let position = index as f64 * (colors.len() - 1) as f64 / (count - 1) as f64;
-    let lower = position.floor() as usize;
-    let upper = position.ceil() as usize;
-    let t = (position - lower as f64) as f32;
-    let from = colors[lower];
-    let to = colors[upper];
-    Color::rgba(
-        from.red + (to.red - from.red) * t,
-        from.green + (to.green - from.green) * t,
-        from.blue + (to.blue - from.blue) * t,
-        from.alpha + (to.alpha - from.alpha) * t,
-    )
 }
 
 #[cfg(test)]
@@ -593,7 +592,9 @@ mod tests {
         chart
             .change_bar_values(&mut scene, &[1.0, -1.0], false)
             .unwrap();
-        let after: Vec<_> = nodes
+        let updated_nodes = direct_bar_nodes(chart.bars()).unwrap();
+        assert_ne!(updated_nodes[1], nodes[1]);
+        let after: Vec<_> = updated_nodes
             .iter()
             .map(|node| {
                 scene
@@ -613,7 +614,7 @@ mod tests {
         assert!(chart
             .change_bar_values(&mut scene, &[f64::NAN], false)
             .is_err());
-        let rolled_back: Vec<_> = nodes
+        let rolled_back: Vec<_> = updated_nodes
             .iter()
             .map(|node| {
                 scene
@@ -709,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn skewed_axes_are_rejected_without_mutating_bars() {
+    fn skewed_axes_do_not_replace_nonzero_bar_geometry() {
         let mut scene = Scene::new();
         let mut chart = scene.bar_chart(&options()).unwrap();
         chart
@@ -726,15 +727,16 @@ mod tests {
             .semantic_object_state_checked(node)
             .unwrap()
             .clone();
-        assert!(chart.change_bar_values(&mut scene, &[2.0], false).is_err());
-        assert_eq!(
-            scene
-                .integration_store()
-                .borrow()
-                .semantic_object_state_checked(node)
-                .unwrap(),
-            &before
-        );
+        chart.change_bar_values(&mut scene, &[2.0], false).unwrap();
+        let after = scene
+            .integration_store()
+            .borrow()
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .clone();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.transform.scale, before.transform.scale);
+        assert_eq!(bar_role(&after).unwrap().value, 2.0);
     }
 
     #[test]
@@ -763,5 +765,64 @@ mod tests {
         let reconstructed = ManimBarChart::from_family(copied.root().clone()).unwrap();
         assert_eq!(reconstructed.values().unwrap(), vec![-2.0, 0.0, 3.0]);
         assert_ne!(reconstructed.family().node_id(), chart.family().node_id());
+    }
+    #[test]
+    fn updates_use_authored_values_and_restore_constructor_palette() {
+        let mut scene = Scene::new();
+        let mut chart = scene.bar_chart(&options()).unwrap();
+        let node = direct_bar_nodes(chart.bars()).unwrap()[0];
+        let mut bar =
+            crate::Mobject::from_node(Rc::clone(scene.integration_store()), node).unwrap();
+        let original = bar.state().unwrap();
+        bar.shift(1.0, 2.0).unwrap();
+        bar.set_color(1.0, 0.0, 0.0, 1.0).unwrap();
+        assert_eq!(chart.values().unwrap(), vec![-2.0, 0.0, 3.0]);
+        let edge = bar.layout_bounds().unwrap().unwrap().max_y;
+        chart.change_bar_values(&mut scene, &[4.0], true).unwrap();
+        let after = bar.state().unwrap();
+        let bounds = bar.layout_bounds().unwrap().unwrap();
+        assert!((bounds.min_y - edge).abs() < 1e-8);
+        assert!((bounds.height() - 2.0).abs() < 1e-8);
+        assert_eq!(after.content, original.content);
+        assert_eq!(after.style.fill, original.style.fill);
+        assert_eq!(chart.values().unwrap(), vec![4.0, 0.0, 3.0]);
+        let copy = chart.family().copy_family().unwrap();
+        let copied = ManimBarChart::from_family(copy.root().clone()).unwrap();
+        assert_eq!(copied.values().unwrap(), chart.values().unwrap());
+    }
+    #[test]
+    fn rotated_value_change_stretches_current_world_height_locally() {
+        let mut scene = Scene::new();
+        let mut chart = scene.bar_chart(&options()).unwrap();
+        chart
+            .family()
+            .rotate(0.37, crate::ManimRotationPivot::Point(0.0, 0.0))
+            .unwrap();
+        let nodes = direct_bar_nodes(chart.bars()).unwrap();
+        let bar =
+            crate::Mobject::from_node(Rc::clone(scene.integration_store()), nodes[0]).unwrap();
+        let before = bar.layout_bounds().unwrap().unwrap();
+        let unchanged = scene
+            .integration_store()
+            .borrow()
+            .semantic_object_state_checked(nodes[2])
+            .unwrap()
+            .clone();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        chart.change_bar_values(&mut scene, &[4.0], false).unwrap();
+        let after = bar.layout_bounds().unwrap().unwrap();
+        assert!((after.width() - before.width()).abs() < 1e-6);
+        assert!((after.height() - before.height() * 2.0).abs() < 1e-6);
+        assert!((after.min_y - before.max_y).abs() < 1e-6);
+        let store = scene.integration_store().borrow();
+        assert_eq!(store.geometry_resources().len(), resources + 1);
+        assert_eq!(
+            store.semantic_object_state_checked(nodes[2]).unwrap(),
+            &unchanged
+        );
     }
 }
