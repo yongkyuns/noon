@@ -1,7 +1,10 @@
 //! Thin WASM handles for shared Rust SampleSpace construction and partitions.
 
-use crate::authoring_error::{AuthoringFailure, js_error};
-use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore};
+use crate::authoring_error::{js_error, AuthoringFailure};
+use crate::{
+    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmAuthoringStore,
+};
 use noon::{Color, SampleSpace, SampleSpaceOptions};
 use std::fmt::Display;
 use wasm_bindgen::prelude::*;
@@ -18,7 +21,7 @@ fn failure(error: impl Display) -> JsValue {
 /// consuming `WasmAuthoringStore.createSampleSpace` operation.
 #[wasm_bindgen]
 pub struct WasmSampleSpaceOptions {
-    options: SampleSpaceOptions,
+    pub(crate) options: SampleSpaceOptions,
 }
 
 #[wasm_bindgen]
@@ -65,7 +68,7 @@ fn family_color(red: f64, green: f64, blue: f64) -> Result<Color, JsValue> {
 
 #[wasm_bindgen]
 pub struct WasmSampleSpaceHandle {
-    sample_space: SampleSpace,
+    pub(crate) sample_space: SampleSpace,
 }
 
 #[wasm_bindgen]
@@ -82,7 +85,100 @@ impl WasmAuthoringStore {
 }
 
 #[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveCreateSampleSpace)]
+    pub fn live_create_sample_space(
+        &mut self,
+        options: WasmSampleSpaceOptions,
+    ) -> Result<WasmSampleSpaceHandle, JsValue> {
+        self.inner
+            .live_create_sample_space(&options.options)
+            .map(WasmSampleSpaceHandle::from_sample_space)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGetHorizontalDivision)]
+    pub fn live_get_horizontal_division(
+        &mut self,
+        sample_space: &WasmSampleSpaceHandle,
+        probabilities: &[f64],
+        colors: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let colors = colors_from_rgba(colors)?;
+        self.inner
+            .live_get_sample_space_division(
+                &sample_space.sample_space,
+                probabilities,
+                &colors,
+                false,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGetVerticalDivision)]
+    pub fn live_get_vertical_division(
+        &mut self,
+        sample_space: &WasmSampleSpaceHandle,
+        probabilities: &[f64],
+        colors: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let colors = colors_from_rgba(colors)?;
+        self.inner
+            .live_get_sample_space_division(
+                &sample_space.sample_space,
+                probabilities,
+                &colors,
+                true,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveDivideHorizontally)]
+    pub fn live_divide_horizontally(
+        &mut self,
+        sample_space: &mut WasmSampleSpaceHandle,
+        probabilities: &[f64],
+        colors: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let colors = colors_from_rgba(colors)?;
+        self.inner
+            .live_divide_sample_space(
+                &mut sample_space.sample_space,
+                probabilities,
+                &colors,
+                false,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveDivideVertically)]
+    pub fn live_divide_vertically(
+        &mut self,
+        sample_space: &mut WasmSampleSpaceHandle,
+        probabilities: &[f64],
+        colors: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let colors = colors_from_rgba(colors)?;
+        self.inner
+            .live_divide_sample_space(&mut sample_space.sample_space, probabilities, &colors, true)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_error::js_error)
+    }
+}
+
+#[wasm_bindgen]
 impl WasmSampleSpaceHandle {
+    pub(crate) fn from_sample_space(sample_space: SampleSpace) -> Self {
+        Self { sample_space }
+    }
+
+    pub(crate) fn sample_space_mut(&mut self) -> &mut SampleSpace {
+        &mut self.sample_space
+    }
+
     pub fn family(&self) -> WasmAuthoringFamilyHandle {
         WasmAuthoringFamilyHandle::from_semantic_family(self.sample_space.family().clone())
     }
@@ -92,19 +188,19 @@ impl WasmSampleSpaceHandle {
     }
 
     #[wasm_bindgen(js_name = horizontalParts)]
-    pub fn horizontal_parts(&self) -> Option<WasmAuthoringFamilyHandle> {
+    pub fn horizontal_parts(&self) -> Result<Option<WasmAuthoringFamilyHandle>, JsValue> {
         self.sample_space
             .horizontal_parts()
-            .cloned()
-            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map(|family| family.map(WasmAuthoringFamilyHandle::from_semantic_family))
+            .map_err(failure)
     }
 
     #[wasm_bindgen(js_name = verticalParts)]
-    pub fn vertical_parts(&self) -> Option<WasmAuthoringFamilyHandle> {
+    pub fn vertical_parts(&self) -> Result<Option<WasmAuthoringFamilyHandle>, JsValue> {
         self.sample_space
             .vertical_parts()
-            .cloned()
-            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map(|family| family.map(WasmAuthoringFamilyHandle::from_semantic_family))
+            .map_err(failure)
     }
 
     #[wasm_bindgen(js_name = completePList)]
@@ -147,7 +243,7 @@ impl WasmSampleSpaceHandle {
         let colors = colors_from_rgba(colors)?;
         self.sample_space
             .divide_horizontally_detached(probabilities.iter().copied(), &colors)
-            .map(|family| WasmAuthoringFamilyHandle::from_semantic_family(family.clone()))
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
             .map_err(failure)
     }
 
@@ -160,7 +256,47 @@ impl WasmSampleSpaceHandle {
         let colors = colors_from_rgba(colors)?;
         self.sample_space
             .divide_vertically_detached(probabilities.iter().copied(), &colors)
-            .map(|family| WasmAuthoringFamilyHandle::from_semantic_family(family.clone()))
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+}
+
+#[wasm_bindgen]
+impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = memberIsFamily)]
+    pub fn member_is_family(&self, index: usize) -> Result<bool, JsValue> {
+        let family = self.semantic_family()?;
+        let store = family.integration_store();
+        let member = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(failure)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| failure("family member index is out of bounds"))?;
+        Ok(store.borrow().semantic_family_checked(member).is_ok())
+    }
+
+    #[wasm_bindgen(js_name = memberFamily)]
+    pub fn member_family(&self, index: usize) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let family = self.semantic_family()?;
+        let store = family.integration_store();
+        let member = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(failure)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| failure("family member index is out of bounds"))?;
+        noon::MobjectFamily::from_node(std::rc::Rc::clone(store), member)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = asSampleSpace)]
+    pub fn as_sample_space(&self) -> Result<WasmSampleSpaceHandle, JsValue> {
+        SampleSpace::from_family(self.semantic_family()?)
+            .map(WasmSampleSpaceHandle::from_sample_space)
             .map_err(failure)
     }
 }

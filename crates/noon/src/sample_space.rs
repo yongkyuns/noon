@@ -2,9 +2,10 @@
 
 use crate::{AuthoringError, Color, ManimGeometryOptions, Mobject, MobjectFamily, Scene};
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeCreation, SemanticStore,
+    Bounds2D64, SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectRole, SemanticStore,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 const PINNED_EPSILON: f64 = 0.0001;
 const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
@@ -38,31 +39,48 @@ impl Default for SampleSpaceOptions {
 pub struct SampleSpace {
     rectangle: Mobject,
     family: MobjectFamily,
-    horizontal_parts: Option<MobjectFamily>,
-    vertical_parts: Option<MobjectFamily>,
 }
 
 #[derive(Debug)]
 pub enum SampleSpaceError {
     Authoring(AuthoringError),
+    Live(crate::LiveSessionError),
     InvalidProbability,
+    InvalidFamily,
 }
 impl From<AuthoringError> for SampleSpaceError {
     fn from(value: AuthoringError) -> Self {
         Self::Authoring(value)
     }
 }
+impl From<crate::LiveSessionError> for SampleSpaceError {
+    fn from(value: crate::LiveSessionError) -> Self {
+        Self::Live(value)
+    }
+}
 impl std::fmt::Display for SampleSpaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(e) => e.fmt(f),
+            Self::Live(e) => e.fmt(f),
             Self::InvalidProbability => {
                 f.write_str("probabilities must be finite, nonnegative, and sum to at most one")
             }
+            Self::InvalidFamily => f.write_str("semantic family is not a SampleSpace"),
         }
     }
 }
 impl std::error::Error for SampleSpaceError {}
+
+impl From<SampleSpaceError> for crate::LiveSessionError {
+    fn from(value: SampleSpaceError) -> Self {
+        match value {
+            SampleSpaceError::Live(error) => error,
+            SampleSpaceError::Authoring(error) => error.into(),
+            error => Self::Mobject(error.to_string()),
+        }
+    }
+}
 
 impl SampleSpace {
     /// Construct the SampleSpace base rectangle and family in one semantic
@@ -102,6 +120,22 @@ impl SampleSpace {
         Self::from_creation_result(store, result, family, rectangle)
     }
 
+    /// Construct and publish a SampleSpace through an existing live session.
+    pub fn new_live(
+        session: &mut crate::LiveSession<'_>,
+        options: &SampleSpaceOptions,
+    ) -> Result<Self, SampleSpaceError> {
+        let store = Rc::clone(session.integration_store());
+        let (result, (family, rectangle)) = session.apply_resource_transaction(
+            |semantic_store| -> Result<_, SampleSpaceError> {
+                let (transaction, family, rectangle) =
+                    prepare_sample_space(semantic_store, options)?;
+                Ok((transaction, (family, rectangle)))
+            },
+        )?;
+        Self::from_creation_result(store, result, family, rectangle)
+    }
+
     /// Construct the same Rust-owned composition directly in an existing
     /// semantic store. This is the typed in-process entry used by the WASM and
     /// Python adapters; no scene or frontend layout model is introduced.
@@ -134,9 +168,25 @@ impl SampleSpace {
         Ok(Self {
             rectangle: Mobject::from_node(Rc::clone(&store), rectangle)?,
             family: MobjectFamily::from_node(store, family)?,
-            horizontal_parts: None,
-            vertical_parts: None,
         })
+    }
+
+    /// Rehydrate a SampleSpace wrapper from its retained semantic family.
+    /// Partition relations are recovered from the partition object roles in the
+    /// current family tree, so cloned/mutated families need no frontend cache.
+    pub fn from_family(family: MobjectFamily) -> Result<Self, SampleSpaceError> {
+        family.validate()?;
+        let store = Rc::clone(family.integration_store());
+        let first = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(AuthoringError::from)?
+            .into_iter()
+            .next()
+            .ok_or(SampleSpaceError::InvalidFamily)?;
+        let rectangle = Mobject::from_node(Rc::clone(&store), first)
+            .map_err(|_| SampleSpaceError::InvalidFamily)?;
+        Ok(Self { rectangle, family })
     }
 
     pub fn rectangle(&self) -> &Mobject {
@@ -145,11 +195,38 @@ impl SampleSpace {
     pub fn family(&self) -> &MobjectFamily {
         &self.family
     }
-    pub fn horizontal_parts(&self) -> Option<&MobjectFamily> {
-        self.horizontal_parts.as_ref()
+    pub fn horizontal_parts(&self) -> Result<Option<MobjectFamily>, SampleSpaceError> {
+        self.partition_family(SemanticObjectRole::SampleSpaceHorizontalPart)
     }
-    pub fn vertical_parts(&self) -> Option<&MobjectFamily> {
-        self.vertical_parts.as_ref()
+    pub fn vertical_parts(&self) -> Result<Option<MobjectFamily>, SampleSpaceError> {
+        self.partition_family(SemanticObjectRole::SampleSpaceVerticalPart)
+    }
+
+    fn partition_family(
+        &self,
+        role: SemanticObjectRole,
+    ) -> Result<Option<MobjectFamily>, SampleSpaceError> {
+        self.family.validate()?;
+        let store = self.family.integration_store();
+        let matching = {
+            let semantic_store = store.borrow();
+            let roots = semantic_store
+                .semantic_family_members_checked(self.family.node_id())
+                .map_err(AuthoringError::from)?;
+            let mut matching = None;
+            for member in roots.into_iter().skip(1) {
+                let Ok(children) = semantic_store.semantic_family_members_checked(member) else {
+                    continue;
+                };
+                if family_contains_role(&semantic_store, &children, &role)? {
+                    matching = Some(member);
+                }
+            }
+            matching
+        };
+        matching
+            .map(|id| MobjectFamily::from_node(Rc::clone(store), id).map_err(Into::into))
+            .transpose()
     }
     pub fn complete_p_list(
         values: impl IntoIterator<Item = f64>,
@@ -175,12 +252,12 @@ impl SampleSpace {
         scene: &mut Scene,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
-    ) -> Result<&MobjectFamily, SampleSpaceError> {
+    ) -> Result<MobjectFamily, SampleSpaceError> {
         let store = Rc::clone(scene.integration_store());
         let (transaction, family_token) =
             self.prepare_division(&store, probabilities, colors, false, true)?;
         let result = scene.apply_semantic_transaction(transaction)?;
-        self.commit_division(store, result, family_token, false)
+        self.commit_division(store, result, family_token)
     }
 
     pub fn divide_vertically(
@@ -188,12 +265,12 @@ impl SampleSpace {
         scene: &mut Scene,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
-    ) -> Result<&MobjectFamily, SampleSpaceError> {
+    ) -> Result<MobjectFamily, SampleSpaceError> {
         let store = Rc::clone(scene.integration_store());
         let (transaction, family_token) =
             self.prepare_division(&store, probabilities, colors, true, true)?;
         let result = scene.apply_semantic_transaction(transaction)?;
-        self.commit_division(store, result, family_token, true)
+        self.commit_division(store, result, family_token)
     }
 
     /// Shared-store form for adapters whose store already owns the semantic
@@ -202,28 +279,124 @@ impl SampleSpace {
         &mut self,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
-    ) -> Result<&MobjectFamily, SampleSpaceError> {
+    ) -> Result<MobjectFamily, SampleSpaceError> {
         let store = Rc::clone(self.family.integration_store());
         let (transaction, family_token) =
             self.prepare_division(&store, probabilities, colors, false, true)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;
-        self.commit_division(store, result, family_token, false)
+        self.commit_division(store, result, family_token)
     }
 
     pub fn divide_vertically_detached(
         &mut self,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
-    ) -> Result<&MobjectFamily, SampleSpaceError> {
+    ) -> Result<MobjectFamily, SampleSpaceError> {
         let store = Rc::clone(self.family.integration_store());
         let (transaction, family_token) =
             self.prepare_division(&store, probabilities, colors, true, true)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;
-        self.commit_division(store, result, family_token, true)
+        self.commit_division(store, result, family_token)
+    }
+
+    pub fn divide_horizontally_live(
+        &mut self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        self.divide_live(session, probabilities, colors, false, true)
+    }
+
+    pub fn divide_vertically_live(
+        &mut self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        self.divide_live(session, probabilities, colors, true, true)
+    }
+
+    pub fn get_horizontal_division_live(
+        &self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        self.get_division_live(session, probabilities, colors, false)
+    }
+
+    pub fn get_vertical_division_live(
+        &self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        self.get_division_live(session, probabilities, colors, true)
+    }
+
+    fn divide_live(
+        &mut self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+        vertical: bool,
+        attach_to_space: bool,
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        let store = Rc::clone(session.integration_store());
+        let bounds = self.effective_bounds(session)?;
+        let (result, family_token) = session.apply_resource_transaction(|semantic_store| {
+            self.prepare_division_in_store(
+                semantic_store,
+                probabilities,
+                colors,
+                vertical,
+                attach_to_space,
+                bounds,
+            )
+        })?;
+        self.commit_division(store, result, family_token)
+    }
+
+    fn get_division_live(
+        &self,
+        session: &mut crate::LiveSession<'_>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+        vertical: bool,
+    ) -> Result<MobjectFamily, SampleSpaceError> {
+        let store = Rc::clone(session.integration_store());
+        let bounds = self.effective_bounds(session)?;
+        let (result, family_token) = session.apply_resource_transaction(|semantic_store| {
+            self.prepare_division_in_store(
+                semantic_store,
+                probabilities,
+                colors,
+                vertical,
+                false,
+                bounds,
+            )
+        })?;
+        let id = result
+            .resolve(family_token)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(family_token))?;
+        MobjectFamily::from_node(store, id).map_err(Into::into)
+    }
+
+    fn effective_bounds(
+        &self,
+        session: &crate::LiveSession<'_>,
+    ) -> Result<Bounds2D64, SampleSpaceError> {
+        if !Rc::ptr_eq(session.integration_store(), self.family.integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        session
+            .capture_boundary_bounds(&self.rectangle)?
+            .ok_or(SampleSpaceError::InvalidProbability)
     }
 
     /// Build horizontal parts as a detached family without adding them to this
@@ -272,6 +445,29 @@ impl SampleSpace {
         vertical: bool,
         attach_to_space: bool,
     ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), SampleSpaceError> {
+        let bounds = self
+            .rectangle
+            .layout_bounds()?
+            .ok_or(SampleSpaceError::InvalidProbability)?;
+        self.prepare_division_at_bounds(
+            store,
+            probabilities,
+            colors,
+            vertical,
+            attach_to_space,
+            bounds,
+        )
+    }
+
+    fn prepare_division_at_bounds(
+        &self,
+        store: &Rc<RefCell<SemanticStore>>,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+        vertical: bool,
+        attach_to_space: bool,
+        bounds: Bounds2D64,
+    ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), SampleSpaceError> {
         if !Rc::ptr_eq(store, self.family.integration_store())
             || !Rc::ptr_eq(store, self.rectangle.integration_store())
         {
@@ -280,17 +476,31 @@ impl SampleSpace {
         self.family.validate()?;
         self.rectangle.validate()?;
 
+        self.prepare_division_in_store(
+            &mut store.borrow_mut(),
+            probabilities,
+            colors,
+            vertical,
+            attach_to_space,
+            bounds,
+        )
+    }
+
+    fn prepare_division_in_store(
+        &self,
+        semantic_store: &mut SemanticStore,
+        probabilities: impl IntoIterator<Item = f64>,
+        colors: &[Color],
+        vertical: bool,
+        attach_to_space: bool,
+        bounds: Bounds2D64,
+    ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), SampleSpaceError> {
         let probabilities = Self::complete_p_list(probabilities)?;
         // Manim samples its reference colors evenly over all parts. Validate an
         // empty palette even if a caller provides an empty probability iterable.
         let colors = crate::color_gradient(colors, probabilities.len())?;
-        let bounds = self
-            .rectangle
-            .layout_bounds()?
-            .ok_or(SampleSpaceError::InvalidProbability)?;
         let mut cursor = if vertical { bounds.min_x } else { bounds.max_y };
 
-        let mut semantic_store = store.borrow_mut();
         let mut transaction = SemanticMutationTransaction::new();
         let parts_family = transaction.create_node(SemanticNodeCreation::family());
         for (index, probability) in probabilities.into_iter().enumerate() {
@@ -317,6 +527,11 @@ impl SampleSpace {
             };
             let color = colors[index];
             let mut geometry = ManimGeometryOptions::rectangle(width, height)?;
+            geometry.set_semantic_role(if vertical {
+                SemanticObjectRole::SampleSpaceVerticalPart
+            } else {
+                SemanticObjectRole::SampleSpaceHorizontalPart
+            });
             geometry.set_fill(
                 f64::from(color.red),
                 f64::from(color.green),
@@ -332,7 +547,7 @@ impl SampleSpace {
             )?;
             geometry.set_stroke_width(0.5 * MANIM_CAIRO_LINE_WIDTH_MULTIPLE)?;
             geometry.set_translation(x, y)?;
-            let state = geometry.with_state(&mut semantic_store, |_, state| Ok(state))?;
+            let state = geometry.with_state(semantic_store, |_, state| Ok(state))?;
             let part = transaction.create_node(SemanticNodeCreation::object(state));
             transaction.add_member(parts_family, part);
         }
@@ -345,30 +560,38 @@ impl SampleSpace {
     }
 
     fn commit_division(
-        &mut self,
+        &self,
         store: Rc<RefCell<SemanticStore>>,
         result: noon_core::SemanticMutationTransactionResult,
         family_token: SemanticLocalNodeToken,
-        vertical: bool,
-    ) -> Result<&MobjectFamily, SampleSpaceError> {
+    ) -> Result<MobjectFamily, SampleSpaceError> {
         let id = result
             .resolve(family_token)
             .ok_or(AuthoringError::UnresolvedCreatedNode(family_token))?;
-        let family = MobjectFamily::from_node(store, id)?;
-        if vertical {
-            self.vertical_parts = Some(family);
-            Ok(self
-                .vertical_parts
-                .as_ref()
-                .expect("partition was just assigned"))
-        } else {
-            self.horizontal_parts = Some(family);
-            Ok(self
-                .horizontal_parts
-                .as_ref()
-                .expect("partition was just assigned"))
+        MobjectFamily::from_node(store, id).map_err(Into::into)
+    }
+}
+
+fn family_contains_role(
+    store: &SemanticStore,
+    children: &[SemanticNodeId],
+    role: &SemanticObjectRole,
+) -> Result<bool, SampleSpaceError> {
+    let mut pending = children.to_vec();
+    let mut visited = HashSet::new();
+    while let Some(node) = pending.pop() {
+        if !visited.insert(node) {
+            continue;
+        }
+        if let Ok(state) = store.semantic_object_state_checked(node) {
+            if &state.role() == role {
+                return Ok(true);
+            }
+        } else if let Ok(members) = store.semantic_family_members_checked(node) {
+            pending.extend(members);
         }
     }
+    Ok(false)
 }
 
 fn prepare_sample_space(
@@ -502,7 +725,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(scene.revision(), before);
-        assert!(space.horizontal_parts().is_none());
+        assert!(space.horizontal_parts().unwrap().is_none());
     }
 
     #[test]
@@ -518,7 +741,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(other.revision(), before);
-        assert!(space.horizontal_parts().is_none());
+        assert!(space.horizontal_parts().unwrap().is_none());
     }
 
     #[test]
@@ -555,5 +778,72 @@ mod tests {
         assert!((part_bounds[0].min_x - target.min_x).abs() < 1e-6);
         assert!((part_bounds[0].max_x - part_bounds[1].min_x).abs() < 1e-6);
         assert!((part_bounds[1].max_x - target.max_x).abs() < 1e-6);
+    }
+
+    #[test]
+    fn partition_queries_follow_family_structure_and_survive_semantic_copy() {
+        let mut scene = Scene::new();
+        let mut space =
+            SampleSpace::new(&mut scene, 4.0, 2.0, crate::GRAY, 1.0, WHITE, 0.5).unwrap();
+        let first = space
+            .divide_horizontally(&mut scene, [0.5], &[RED])
+            .unwrap();
+        let second = space
+            .divide_horizontally(&mut scene, [0.25], &[BLUE])
+            .unwrap();
+        assert_eq!(
+            space.horizontal_parts().unwrap().unwrap().node_id(),
+            second.node_id()
+        );
+
+        space.family().remove((&second).into()).unwrap();
+        assert_eq!(
+            space.horizontal_parts().unwrap().unwrap().node_id(),
+            first.node_id()
+        );
+        space.family().remove((&first).into()).unwrap();
+        assert!(space.horizontal_parts().unwrap().is_none());
+
+        let copied_family = space.family().copy_family().unwrap();
+        let copied = SampleSpace::from_family(copied_family.root().clone()).unwrap();
+        assert_eq!(
+            copied.rectangle().node_id(),
+            copied_family.mobject(space.rectangle()).unwrap().node_id()
+        );
+        assert!(copied.horizontal_parts().unwrap().is_none());
+
+        let mut populated =
+            SampleSpace::new_with_options(&mut scene, &SampleSpaceOptions::default()).unwrap();
+        populated
+            .divide_horizontally(&mut scene, [0.25, 0.5], &[RED, BLUE])
+            .unwrap();
+        populated
+            .divide_vertically(&mut scene, [0.4], &[GREEN])
+            .unwrap();
+        let clone = populated.family().copy_family().unwrap();
+        let rehydrated = SampleSpace::from_family(clone.root().clone()).unwrap();
+        assert_ne!(rehydrated.family().node_id(), populated.family().node_id());
+        assert_eq!(
+            rehydrated
+                .horizontal_parts()
+                .unwrap()
+                .unwrap()
+                .layout()
+                .unwrap()
+                .leaves()
+                .len(),
+            3
+        );
+        assert_eq!(
+            rehydrated
+                .vertical_parts()
+                .unwrap()
+                .unwrap()
+                .layout()
+                .unwrap()
+                .leaves()
+                .len(),
+            2
+        );
     }
 }

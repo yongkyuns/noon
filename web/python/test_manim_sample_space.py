@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import noon
 import _manim_compat as compat
@@ -30,7 +30,18 @@ class _FamilyHandle:
                 for member in self._members]
 
     def memberMobject(self, index):
+        if isinstance(self._members[index], _FamilyHandle):
+            raise TypeError("member is a family")
         return self._members[index]
+
+    def memberIsFamily(self, index):
+        return isinstance(self._members[index], _FamilyHandle)
+
+    def memberFamily(self, index):
+        member = self._members[index]
+        if not isinstance(member, _FamilyHandle):
+            raise TypeError("member is a Mobject")
+        return member
 
 
 class _Options:
@@ -160,8 +171,7 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
 
         self.assertIs(noon.SampleSpace, sample_space.SampleSpace)
         self.assertIsInstance(space, compat.Group)
-        self.assertEqual(len(space.submobjects), 1)
-        self.assertIsInstance(space.submobjects[0], compat.Rectangle)
+        self.assertEqual(len(space._semantic_member_wrappers), 1)
         options = self.created_options[0]
         self.assertEqual((options.width, options.height), (3.0, 3.0))
         self.assertEqual(options.values["fill_opacity"], 1.0)
@@ -172,7 +182,6 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
         space.divide_horizontally([0.25, 0.5], colors=[noon.GREEN_E, noon.BLUE_E])
 
         parts = space.horizontal_parts
-        self.assertIs(parts, space.submobjects[1])
         self.assertIs(parts, space.horizontal_parts)
         self.assertEqual(len(parts.submobjects), 3)
         self.assertTrue(all(isinstance(member, compat.Rectangle) for member in parts.submobjects))
@@ -181,7 +190,6 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
         detached = space.get_vertical_division([0.4], colors=[noon.YELLOW])
         self.assertIsInstance(detached, compat.Group)
         self.assertEqual(len(detached.submobjects), 2)
-        self.assertEqual(len(space.submobjects), 2)
         self.assertIsNone(space.vertical_parts)
 
     def test_probability_query_runs_through_the_typed_handle(self):
@@ -235,8 +243,83 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
     def test_subdivision_helper_rejects_unimplemented_brace_options(self):
         space = sample_space.SampleSpace()
         space.divide_horizontally([0.5])
+        with patch.object(noon, "Brace", return_value=_AnnotationMobject("brace"), create=True), \
+             patch.object(noon, "MathTex", side_effect=lambda text: _AnnotationMobject(text), create=True), \
+             patch.object(compat, "VGroup", _AnnotationGroup):
+            self.assertIsNotNone(space.get_side_braces_and_labels(["A", "B"], min_num_quads=1))
         with self.assertRaises(NotImplementedError):
             space.get_side_braces_and_labels(["A", "B"], min_num_quads=2)
+
+    def test_post_bootstrap_construction_and_partition_route_through_live_context(self):
+        handle = _SampleSpaceHandle()
+        context = Mock()
+        context.liveCreateSampleSpace.return_value = handle
+        context.liveGetHorizontalDivision.side_effect = lambda target, probabilities, colors: target.getHorizontalDivision(
+            probabilities, colors
+        )
+        context.liveGetVerticalDivision.side_effect = lambda target, probabilities, colors: target.getVerticalDivision(
+            probabilities, colors
+        )
+        context.liveDivideHorizontally.side_effect = lambda target, probabilities, colors: target.divideHorizontally(
+            probabilities, colors
+        )
+        context.liveDivideVertically.side_effect = lambda target, probabilities, colors: target.divideVertically(
+            probabilities, colors
+        )
+        with patch.object(sample_space._shared, "_live_constructor_context", return_value=context):
+            space = sample_space.SampleSpace(height=2.0, width=4.0)
+            self.assertIs(space._canonical_live_target_context, context)
+            self.assertIsNone(space.horizontal_parts)
+            self.assertIsInstance(space.get_horizontal_division([0.5]), compat.Group)
+            self.assertIsInstance(space.get_vertical_division([0.5]), compat.Group)
+            space.divide_horizontally([0.5])
+            space.divide_vertically([0.5])
+        context.liveCreateSampleSpace.assert_called_once()
+        context.liveGetHorizontalDivision.assert_called_once()
+        context.liveGetVerticalDivision.assert_called_once()
+        context.liveDivideHorizontally.assert_called_once()
+        context.liveDivideVertically.assert_called_once()
+        self.assertIsInstance(space.horizontal_parts, compat.Group)
+        self.assertIsInstance(space.vertical_parts, compat.Group)
+
+    def test_partition_query_refreshes_nested_members_from_authoritative_family(self):
+        space = sample_space.SampleSpace()
+        space.divide_horizontally([0.5])
+        parts = space.horizontal_parts
+        original_leaf = parts.submobjects[0]
+        parts_handle = space._sample_space_handle._horizontal
+        parts_handle._members.append(_MobjectHandle(999))
+
+        self.assertIs(space.horizontal_parts, parts)
+        self.assertIs(parts.submobjects[0], original_leaf)
+        self.assertEqual(len(parts.submobjects), 3)
+        self.assertEqual(parts.submobjects[-1]._semantic_handle.semanticSlot, 999)
+
+    def test_semantic_family_rehydration_rebuilds_nested_children_without_partition_cache(self):
+        source = sample_space.SampleSpace()
+        source.divide_horizontally([0.5])
+        copied_space = _SampleSpaceHandle()
+        copied_rectangle = _MobjectHandle(501)
+        copied_parts = _FamilyHandle(502, [_MobjectHandle(503), _MobjectHandle(504)])
+        copied_family = _FamilyHandle(500, [copied_rectangle, copied_parts])
+        copied_family.asSampleSpace = lambda: copied_space
+        copied_space._rectangle = copied_rectangle
+        copied_space._family = copied_family
+        copied_space._horizontal = copied_parts
+        copied = object.__new__(sample_space.SampleSpace)
+        copied._semantic_family_handle = copied_family
+        copied._semantic_member_wrappers = {
+            "501:1": sample_space._leaf(copied_rectangle),
+            "502:1": sample_space._family_group(copied_parts),
+        }
+        copied.default_label_scale_val = 1.0
+
+        copied._rehydrate_semantic_family_handle()
+
+        self.assertIs(copied._sample_space_handle, copied_space)
+        parts = copied.horizontal_parts
+        self.assertIs(parts, copied.horizontal_parts)
+        self.assertEqual(len(parts.submobjects), 2)
 
 
 if __name__ == "__main__":

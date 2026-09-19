@@ -1845,6 +1845,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            "_sample_space_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps
             # the authoritative family and every leaf below; there is no valid
@@ -1873,6 +1874,8 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
+            if context is not None:
+                target._canonical_live_target_context = context
         else:
             _initialize_shared_wrapper(target)
             target._semantic_handle = engine_call(copied.mobjectFor, source._semantic_handle)
@@ -1890,6 +1893,11 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             else:
                 target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
                 target.__dict__.pop("_semantic_arrow_index", None)
+    for source, target in pairs:
+        if isinstance(source, _compat.Group):
+            rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)
+            if rehydrate is not None:
+                rehydrate()
     return clone
 
 

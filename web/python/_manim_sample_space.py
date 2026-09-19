@@ -51,41 +51,55 @@ def _colors(values):
             for component in (color.red, color.green, color.blue, color.alpha)]
 
 
-def _leaf(handle):
+def _leaf(handle, context=None):
     wrapper = object.__new__(_compat.Rectangle)
     _shared._attach_shared_handle(wrapper, handle)
+    if context is not None:
+        wrapper._canonical_live_target_context = context
     return wrapper
 
 
-def _family_group(handle):
-    wrapper = object.__new__(_compat.Group)
-    count = int(engine_call(lambda: handle.memberCount, operation="SampleSpace.parts"))
-    members = [
-        _leaf(engine_call(handle.memberMobject, index, operation="SampleSpace.parts"))
-        for index in range(count)
-    ]
+def _family_group(handle, wrapper=None, context=None):
+    if wrapper is None:
+        wrapper = object.__new__(_compat.Group)
+    if context is None:
+        context = getattr(wrapper, "_canonical_live_target_context", None)
+    old_members = getattr(wrapper, "_semantic_member_wrappers", {})
+    keys = list(engine_call(handle.memberKeys, operation="SampleSpace.parts"))
+    members = {}
+    for index, key in enumerate(keys):
+        key = str(key)
+        if bool(engine_call(handle.memberIsFamily, index, operation="SampleSpace.parts")):
+            member_handle = engine_call(handle.memberFamily, index, operation="SampleSpace.parts")
+            member = old_members.get(key)
+            if not isinstance(member, _compat.Group):
+                member = object.__new__(_compat.Group)
+            _family_group(member_handle, member, context)
+        else:
+            member_handle = engine_call(handle.memberMobject, index, operation="SampleSpace.parts")
+            member = old_members.get(key)
+            if not isinstance(member, _base.Mobject):
+                member = object.__new__(_compat.Rectangle)
+            _shared._attach_shared_handle(member, member_handle)
+            if context is not None:
+                member._canonical_live_target_context = context
+        members[key] = member
     wrapper._semantic_family_handle = handle
-    wrapper._semantic_member_wrappers = {
-        _shared._family_wrapper_key(member): member for member in members
-    }
+    wrapper._semantic_member_wrappers = members
+    if context is not None:
+        wrapper._canonical_live_target_context = context
     return wrapper
 
 
 def _constructor_context():
     if _sample_space_options is None or _create_sample_space is None:
         raise RuntimeError("SampleSpace requires the shared Rust authoring host")
-    context = _shared._live_constructor_context("SampleSpace")
-    if context is not None:
-        raise NotImplementedError(
-            "SampleSpace construction after live execution starts is not yet exposed"
-        )
+    return _shared._live_constructor_context("SampleSpace")
 
 
 def _partition_context(sample_space):
-    if _shared._live_mutation_context(sample_space) is not None:
-        raise NotImplementedError(
-            "SampleSpace partitions after live execution starts are not yet exposed"
-        )
+    context = _shared._live_mutation_context(sample_space)
+    return context if context is not None else _shared._live_constructor_context("SampleSpace partition")
 
 
 class SampleSpace(_compat.Group):
@@ -106,7 +120,7 @@ class SampleSpace(_compat.Group):
         stroke_color: object = _DEFAULT_STROKE,
         default_label_scale_val: float = 1.0,
     ) -> None:
-        _constructor_context()
+        context = _constructor_context()
         fill = _compat._as_color("fill_color", fill_color)
         stroke = _compat._as_color("stroke_color", stroke_color)
         options = engine_call(
@@ -121,16 +135,23 @@ class SampleSpace(_compat.Group):
         engine_call(options.setStrokeColor, stroke.red, stroke.green, stroke.blue,
                     operation="SampleSpace")
         engine_call(options.setStrokeWidth, float(stroke_width), operation="SampleSpace")
-        handle = engine_call(_create_sample_space, options, operation="SampleSpace")
+        handle = engine_call(
+            context.liveCreateSampleSpace if context is not None else _create_sample_space,
+            options,
+            operation="SampleSpace",
+        )
 
-        rectangle = _leaf(engine_call(handle.rectangle, operation="SampleSpace.rectangle"))
+        rectangle = _leaf(
+            engine_call(handle.rectangle, operation="SampleSpace.rectangle"), context
+        )
         family = engine_call(handle.family, operation="SampleSpace.family")
         self._semantic_family_handle = family
         self._semantic_member_wrappers = {
             _shared._family_wrapper_key(rectangle): rectangle,
         }
         self._sample_space_handle = handle
-        self._sample_space_part_wrappers = {}
+        if context is not None:
+            self._canonical_live_target_context = context
         self.default_label_scale_val = float(default_label_scale_val)
 
     def complete_p_list(self, p_list: float | Iterable[float]) -> list[float]:
@@ -142,41 +163,51 @@ class SampleSpace(_compat.Group):
         )]
 
     def _parts(self, kind: str, p_list, colors):
-        _partition_context(self)
+        context = _partition_context(self)
         probabilities = _probabilities(p_list)
         color_values = _colors(colors)
+        if context is not None:
+            live_kind = "liveGetVerticalDivision" if kind == "getVerticalDivision" else "liveGetHorizontalDivision"
+            family = engine_call(
+                getattr(context, live_kind),
+                self._sample_space_handle,
+                _array(probabilities),
+                _array(color_values),
+                operation=f"SampleSpace.{kind}",
+            )
+            return _family_group(family, context=context)
         family = engine_call(
             getattr(self._sample_space_handle, kind),
             _array(probabilities),
             _array(color_values),
             operation=f"SampleSpace.{kind}",
         )
-        key = _family_key(family)
-        existing = self._sample_space_part_wrappers.get(key)
-        if existing is not None:
-            wrapper = existing
-        else:
-            wrapper = _family_group(family)
-            self._sample_space_part_wrappers[key] = wrapper
-        return wrapper
+        return _family_group(family)
 
     def _divide(self, kind: str, p_list, colors):
-        _partition_context(self)
+        context = _partition_context(self)
         probabilities = _probabilities(p_list)
         color_values = _colors(colors)
-        family = engine_call(
-            getattr(self._sample_space_handle, kind),
-            _array(probabilities),
-            _array(color_values),
-            operation=f"SampleSpace.{kind}",
-        )
-        wrapper = self._sample_space_part_wrappers.get(_family_key(family))
-        if wrapper is None:
-            wrapper = _family_group(family)
-            self._sample_space_part_wrappers[_family_key(family)] = wrapper
-        self._semantic_member_wrappers[_family_key(family)] = wrapper
-        # The property reads the latest Rust-owned partition identity. This
-        # assignment only records wrapper identity for Scene membership.
+        if context is not None:
+            live_kind = "liveDivideVertically" if kind == "divideVertically" else "liveDivideHorizontally"
+            family = engine_call(
+                getattr(context, live_kind),
+                self._sample_space_handle,
+                _array(probabilities),
+                _array(color_values),
+                operation=f"SampleSpace.{kind}",
+            )
+        else:
+            family = engine_call(
+                getattr(self._sample_space_handle, kind),
+                _array(probabilities),
+                _array(color_values),
+                operation=f"SampleSpace.{kind}",
+            )
+        key = _family_key(family)
+        wrapper = self._semantic_member_wrappers.get(key)
+        wrapper = _family_group(family, wrapper, context)
+        self._semantic_member_wrappers[key] = wrapper
         return self
 
     def get_horizontal_division(
@@ -233,12 +264,23 @@ class SampleSpace(_compat.Group):
 
     def _wrap_parts_query(self, family):
         key = _family_key(family)
-        wrapper = self._sample_space_part_wrappers.get(key)
-        if wrapper is None:
-            wrapper = _family_group(family)
-            self._sample_space_part_wrappers[key] = wrapper
+        wrapper = self._semantic_member_wrappers.get(key)
+        wrapper = _family_group(family, wrapper, _partition_context(self))
         self._semantic_member_wrappers[key] = wrapper
         return wrapper
+
+    def _rehydrate_semantic_family_handle(self):
+        """Rebind a copied SampleSpace to its copied Rust family graph."""
+        self._sample_space_handle = engine_call(
+            self._semantic_family_handle.asSampleSpace,
+            operation="SampleSpace.copy",
+        )
+        _family_group(self._semantic_family_handle, self)
+
+    def _rebind_copied_semantic_handle(self):
+        # Group copies already map the rectangle member to the corresponding
+        # copied Rust object. Its wrapper identity must remain stable.
+        return None
 
     def get_subdivision_braces_and_labels(
         self,
@@ -248,7 +290,14 @@ class SampleSpace(_compat.Group):
         buff: float = _base.SMALL_BUFF,
         min_num_quads: int = 1,
     ) -> _compat.Group:
-        """Build Manim's brace and MathTex annotations for a partition family."""
+        """Build Manim's brace and MathTex annotations for a partition family.
+
+        Pinned Manim v0.21 forwards ``min_num_quads`` into ``Brace`` even though
+        that constructor does not accept it, so the upstream default currently
+        raises ``TypeError: Mobject.__init__() got an unexpected keyword
+        argument 'min_num_quads'``. Noon repairs that broken default behavior
+        for ``1``; other values remain unsupported.
+        """
         _partition_context(self)
         if not isinstance(parts, _compat.Group):
             raise TypeError("parts must be a SampleSpace partition family")
@@ -329,7 +378,6 @@ class SampleSpace(_compat.Group):
         if parts is not None:
             return parts[index]
         return super().__getitem__(index)
-
 
 def _family_key(family) -> str:
     return f"{int(family.semanticSlot)}:{int(family.semanticGeneration)}"
