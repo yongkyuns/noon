@@ -1,0 +1,82 @@
+name: C5 native click selection validation
+on:
+  push:
+    branches: [work/c5-click-selection]
+    paths:
+      - .github/workflows/c5-click-selection.yml
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: true
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 3
+      - name: Verify and apply the exact reviewed source patch
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          patch = gzip.decompress(base64.b64decode(Path('.github/c5-click-selection.patch.b64').read_bytes()))
+          assert hashlib.sha256(patch).hexdigest() == '35044966b348f22cc93548348faacc89be841783396f068410503d8d987ba8a2'
+          Path('/tmp/c5-selection.patch').write_bytes(patch)
+          PY
+          git apply --index /tmp/c5-selection.patch
+          git rm .github/c5-click-selection.patch.b64 .github/workflows/c5-click-selection.yml
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      - name: Format source
+        run: cargo fmt --all
+      - name: Execute shared native click and input tests
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee /tmp/c5-selection-tests.log
+          grep -q '21 passed; 0 failed' /tmp/c5-selection-tests.log
+          cargo test -p noon --no-default-features --lib execution_session::input::tests -- --nocapture 2>&1 | tee /tmp/c5-selection-input.log
+          cargo test -p noon --no-default-features --lib execution_session::picking::tests -- --nocapture 2>&1 | tee /tmp/c5-selection-picking.log
+      - name: Repository fast validation
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast e8e74f7fa92fb964fec5a34d1d68bd8fd2455f23 2>&1 | tee /tmp/c5-selection-fast.log
+      - name: Direct single-context WASM compilation
+        run: |
+          set -euo pipefail
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-selection-wasm.log
+      - name: Publish validated code-only tree
+        run: |
+          git add -u
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Validate shared native click recognition and transient session selection'
+          git rev-parse HEAD HEAD^{tree} > /tmp/c5-selection-identity.txt
+          git archive --format=tar.gz HEAD > /tmp/c5-selection-source.tar.gz
+          git push origin HEAD:refs/heads/work/c5-click-selection
+      - name: Retain logs and exact working diff
+        if: always()
+        run: git diff HEAD --binary > /tmp/c5-selection-working.patch
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c5-native-click-selection-proof
+          retention-days: 7
+          path: |
+            /tmp/c5-selection-*.log
+            /tmp/c5-selection-identity.txt
+            /tmp/c5-selection-source.tar.gz
+            /tmp/c5-selection-working.patch
