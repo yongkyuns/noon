@@ -52,15 +52,13 @@ pub(crate) fn prepare_riemann_paths(
     if let Some((bound, _)) = bounded {
         interval = clip_interval(interval, graph_range(bound)?)?;
     }
-    let partition_count = ((interval[1] - interval[0]) / options.dx).ceil();
-    if !partition_count.is_finite()
-        || partition_count > noon_geometry::DEFAULT_PLOT_SAMPLE_LIMIT as f64
-    {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "Riemann partition exceeds admission limit",
-        ));
-    }
-    let colors = crate::color_gradient(&options.colors, partition_count as usize)?;
+    let plan = riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;
+    // The shared plot planner appends one exact terminal endpoint separately
+    // from arange's samples. Only that appended endpoint is not a rectangle.
+    // Do not filter rounded regular samples: NumPy may repeat them or round
+    // them onto/past the nominal end of its half-open input interval.
+    let samples = &plan.parameters()[..plan.parameters().len() - 1];
+    let colors = crate::color_gradient(&options.colors, samples.len())?;
     let style = SemanticStyle {
         fill_opacity: options.fill_opacity,
         stroke: Some(SemanticPaint::Solid(options.stroke_color)),
@@ -80,13 +78,9 @@ pub(crate) fn prepare_riemann_paths(
     }
     let mut paths = Vec::new();
     paths
-        .try_reserve_exact(partition_count as usize)
+        .try_reserve_exact(samples.len())
         .map_err(|_| CoordinateError::AllocationFailed)?;
-    for index in 0..partition_count as usize {
-        let x = interval[0] + index as f64 * options.dx;
-        if x >= interval[1] {
-            break;
-        }
+    for (index, &x) in samples.iter().enumerate() {
         let sample_x = match options.sample {
             RiemannSample::Left => x,
             RiemannSample::Right => x + options.dx,
@@ -136,6 +130,17 @@ pub(crate) fn prepare_riemann_paths(
         ));
     }
     Ok(paths)
+}
+
+/// Reuse the existing bounded NumPy-compatible plot sample planner. Its extra
+/// endpoint is preparation data, not an extra rectangle charged to admission.
+fn riemann_partition_plan(
+    interval: [f64; 2],
+    dx: f64,
+) -> Result<noon_geometry::PlotSamplingPlan, PlotPreparationError> {
+    let mut options = PlotSamplingOptions::parametric(&[interval[0], interval[1], dx])?;
+    options.max_samples = noon_geometry::DEFAULT_PLOT_SAMPLE_LIMIT + 1;
+    options.plan()
 }
 
 pub(crate) fn publish_path_family(
@@ -266,3 +271,6 @@ fn graph_y_at(
     }
     Ok(frame.point_to_coords(graph.point_from_proportion((low + high) * 0.5)?.into())?[1])
 }
+
+#[cfg(test)]
+mod tests;
