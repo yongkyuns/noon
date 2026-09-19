@@ -172,10 +172,10 @@ pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
-    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, ManimPolarPlane,
-    ManimPolarPlaneOptions, PolarAzimuthDirection, RiemannRectangleOptions, RiemannRectanglePlan,
-    RiemannSample,
+    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
+    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection,
+    RiemannRectangleOptions, RiemannRectanglePlan, RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;

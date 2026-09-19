@@ -25,6 +25,23 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_create_axes(options)
     }
 
+    pub(crate) fn live_create_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        self.active_live_player()?.live_create_bar_chart(options)
+    }
+
+    pub(crate) fn live_change_bar_values(
+        &mut self,
+        chart: &mut noon::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.active_live_player()?
+            .live_change_bar_values(chart, values, update_colors)
+    }
+
     pub(super) fn live_create_number_line(
         &mut self,
         options: &noon::ManimNumberLineOptions,

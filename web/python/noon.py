@@ -767,6 +767,7 @@ _PUBLIC_EXPORTS = {
     "MobjectMatrix": "_manim_matrix",
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
+    "BarChart": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",
     "PolarPlane": "_manim_polar_plane",
     "ComplexPlane": "_manim_complex_plane",

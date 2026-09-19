@@ -29,6 +29,26 @@ impl SemanticExecutionPlayer {
             .map_err(crate::plot_error::coordinate_failure)
     }
 
+    pub(crate) fn live_create_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.bar_chart(options)))?
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
+    pub(crate) fn live_change_bar_values(
+        &mut self,
+        chart: &mut noon::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(chart.change_bar_values_live(live, values, update_colors))
+        })?
+        .map_err(crate::plot_error::coordinate_failure)
+    }
+
     pub(crate) fn live_create_number_line(
         &mut self,
         options: &noon::ManimNumberLineOptions,

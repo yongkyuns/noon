@@ -5,12 +5,23 @@ use crate::coordinate_authoring::{
 };
 use crate::AuthoringError;
 use crate::{
-    AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, ManimPolarPlane,
-    ManimPolarPlaneOptions, NumberLineFrame, PolarFrame,
+    AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimBarChart,
+    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, NumberLineFrame, PolarFrame,
 };
 
 impl LiveSession<'_> {
+    /// Construct the chart's axes, retained bars and nested families in one
+    /// running publication transaction.
+    pub fn bar_chart(
+        &mut self,
+        options: &ManimBarChartOptions,
+    ) -> Result<ManimBarChart, CoordinateAuthoringError> {
+        let (transaction, chart, axes, bars) =
+            crate::coordinate_authoring::bar_chart::prepare(options)?;
+        let result = self.apply(transaction)?;
+        ManimBarChart::from_result(Rc::clone(self.store), &result, chart, axes, bars)
+    }
     /// Prepare and publish all shafts, ticks and families atomically. The result
     /// is detached: construction alone neither admits nor renders the axes.
     pub fn axes(

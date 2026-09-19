@@ -21,10 +21,12 @@ from _noon_errors import engine_call
 try:
     from js import noonAuthoringCoordinateOptions as _coordinate_options
     from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
+    from js import noonAuthoringBarChartOptions as _bar_chart_options
+    from js import noonCreateAuthoringBarChart as _create_bar_chart
     from js import noonPlotSamplingPlan as _sampling_plan
     from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = _jsnull = None
+    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _sampling_plan = _to_js = _jsnull = None
 
 
 class _NumberLabel(NamedTuple):
@@ -499,6 +501,63 @@ class Axes(_compat.Group):
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
+class BarChart(_compat.Group):
+    """Shared-Rust static bar chart with explicit, atomic value changes.
+
+    The compatibility wrapper owns argument coercion and wrapper identity. Axes,
+    rectangle layout, color gradients and updates stay in the typed Rust chart.
+    """
+
+    def __init__(self, values, bar_names=None, y_range=None, x_length=None,
+                 y_length=None, bar_colors=None, bar_width=0.6,
+                 bar_fill_opacity=0.7, bar_stroke_width=3, **kwargs):
+        if bar_names is not None or kwargs:
+            unsupported = sorted(kwargs)
+            if bar_names is not None:
+                unsupported.append("bar_names")
+            raise NotImplementedError("unsupported BarChart option(s): " + ", ".join(unsupported))
+        values = tuple(float(value) for value in values)
+        if _bar_chart_options is None:
+            raise RuntimeError("BarChart requires the shared Rust authoring host")
+        options = engine_call(_bar_chart_options, _array(values),
+                              _array(() if y_range is None else y_range),
+                              0.0 if x_length is None else float(x_length),
+                              0.0 if y_length is None else float(y_length))
+        try:
+            engine_call(options.setStyle, float(bar_width), float(bar_fill_opacity), float(bar_stroke_width))
+            if bar_colors is not None:
+                colors = bar_colors if isinstance(bar_colors, (tuple, list)) else (bar_colors,)
+                rgba = [component for color in colors for component in (
+                    _compat._as_color("bar color", color).red,
+                    _compat._as_color("bar color", color).green,
+                    _compat._as_color("bar color", color).blue,
+                    _compat._as_color("bar color", color).alpha,
+                )]
+                engine_call(options.setColors, _array(rgba))
+            self._bar_chart_context = _coordinate_constructor_context()
+            self._bar_chart_handle = engine_call(
+                self._bar_chart_context.liveCreateBarChart if self._bar_chart_context is not None else _create_bar_chart,
+                options,
+            )
+        except BaseException:
+            options.free()
+            raise
+        bars = engine_call(self._bar_chart_handle.bars)
+        self.bars = _family(object.__new__(_compat.VGroup), bars,
+                            [_leaf(handle, _compat.Rectangle) for handle in engine_call(bars.directMobjects)])
+        axes = engine_call(self._bar_chart_handle.axes)
+        self.axes = _family(object.__new__(_compat.Group), axes, [])
+        _family(self, engine_call(self._bar_chart_handle.family), [self.axes, self.bars])
+
+    def change_bar_values(self, values, update_colors=True):
+        values = tuple(float(value) for value in values)
+        engine_call(
+            self._bar_chart_context.liveChangeBarValues if self._bar_chart_context is not None else self._bar_chart_handle.changeBarValues,
+            *( (self._bar_chart_handle, _array(values), bool(update_colors)) if self._bar_chart_context is not None else (_array(values), bool(update_colors)) ),
+        )
+        return self
+
+
 def _callable(function):
     if not callable(function):
         raise TypeError("plot function must be callable")
@@ -557,4 +616,4 @@ class FunctionGraph(_compat.VMobject):
         self.underlying_function = function
 
 
-__all__ = ["NumberLine", "Axes", "FunctionGraph", "ParametricFunction"]
+__all__ = ["NumberLine", "Axes", "BarChart", "FunctionGraph", "ParametricFunction"]

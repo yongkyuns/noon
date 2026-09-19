@@ -68,6 +68,8 @@ impl Default for RiemannRectangleOptions {
 pub(crate) mod area;
 mod polar_plane;
 pub use area::RiemannRectanglePlan;
+pub(crate) mod bar_chart;
+pub use bar_chart::{ManimBarChart, ManimBarChartOptions};
 pub(crate) use polar_plane::prepare_polar_plane;
 pub use polar_plane::{ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection};
 

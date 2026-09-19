@@ -1885,6 +1885,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle",
+            "_bar_chart_handle", "_bar_chart_context",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps
             # the authoritative family and every leaf below; there is no valid
@@ -1934,6 +1935,9 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             else:
                 target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
                 target.__dict__.pop("_semantic_arrow_index", None)
+        if hasattr(source, "_bar_chart_handle"):
+            target._bar_chart_handle = engine_call(target._semantic_family_handle.barChart)
+            target._bar_chart_context = getattr(source, "_bar_chart_context", None)
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)

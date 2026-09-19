@@ -2961,7 +2961,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
-        pub(super) inner: CanonicalAuthoringScene,
+        pub(crate) inner: CanonicalAuthoringScene,
     }
 
     #[wasm_bindgen]
