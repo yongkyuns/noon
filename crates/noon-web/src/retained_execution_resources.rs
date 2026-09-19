@@ -101,6 +101,10 @@ impl InstalledRetainedExecutionMirror {
         self.wire.camera()
     }
 
+    pub fn inset_2d_views(&self) -> &[noon_core::Inset2DViewState] {
+        self.wire.inset_2d_views()
+    }
+
     pub fn apply_json(
         &mut self,
         json: &str,
@@ -793,6 +797,7 @@ mod tests {
                 snapshot: false,
                 time: 2.0,
                 camera: initial.camera,
+                inset_2d_views: Vec::new(),
                 objects: vec![changed.clone(), changed],
                 removed_slots: Vec::new(),
                 painter_order: None,
@@ -843,6 +848,7 @@ mod tests {
             snapshot: false,
             time: 0.5,
             camera: initial.camera,
+            inset_2d_views: Vec::new(),
             objects: vec![changed],
             removed_slots: Vec::new(),
             painter_order: None,

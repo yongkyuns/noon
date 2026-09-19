@@ -208,6 +208,44 @@ impl ExecutionSession {
         query.object_indices = merge_ranked_viewport_rows(&visible, &anchors);
         query
     }
+
+    /// Merge independently indexed camera queries into one painter-ordered
+    /// renderer projection before adding transient presentation anchors.
+    #[doc(hidden)]
+    pub fn renderer_viewport_query_union(
+        &self,
+        queries: impl IntoIterator<Item = crate::execution_session::ExecutionViewportQuery>,
+    ) -> crate::execution_session::ExecutionViewportQuery {
+        let mut merged = crate::execution_session::ExecutionViewportQuery::default();
+        let mut seen = std::collections::HashSet::new();
+        for query in queries {
+            merged.spatial_stats.cells_visited = merged
+                .spatial_stats
+                .cells_visited
+                .saturating_add(query.spatial_stats.cells_visited);
+            merged.spatial_stats.candidates_tested = merged
+                .spatial_stats
+                .candidates_tested
+                .saturating_add(query.spatial_stats.candidates_tested);
+            merged.spatial_stats.full_scan_fallbacks = merged
+                .spatial_stats
+                .full_scan_fallbacks
+                .saturating_add(query.spatial_stats.full_scan_fallbacks);
+            merged.object_indices.extend(
+                query
+                    .object_indices
+                    .into_iter()
+                    .filter(|index| seen.insert(*index)),
+            );
+        }
+        merged.object_indices.sort_unstable_by_key(|&index| {
+            self.runtime
+                .painter_rank(index)
+                .expect("live viewport candidate has a painter rank")
+        });
+        merged.spatial_stats.results = merged.object_indices.len();
+        self.renderer_viewport_query(merged)
+    }
 }
 
 #[cfg(test)]

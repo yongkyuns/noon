@@ -445,6 +445,73 @@ def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object
     return _commit_typed_binding(mobject, scene, reservation, handle)
 
 
+def _bind_zoomed_view(
+    scene: _base.Scene,
+    camera_frame: _base.Mobject,
+    display: _base.Mobject,
+    *,
+    display_height: float,
+    display_width: float,
+    display_center: _base.Vec2 | None,
+    display_corner: _base.Vec2,
+    display_corner_buff: float,
+    camera_frame_start: _base.Vec2,
+    zoom_factor: float,
+    camera_frame_stroke_width: float,
+    image_frame_stroke_width: float,
+    capture_own_display: bool,
+):
+    """Bind one Rust-authored inset pair without mirroring its geometry in Python."""
+    if camera_frame is display:
+        raise ValueError("zoomed camera frame and display must be distinct wrappers")
+    if camera_frame._scene is not None or display._scene is not None:
+        raise ValueError("zoomed-view wrappers are already bound")
+    context = _context(scene)
+    frame_id = scene._next_object_id
+    display_id = frame_id + 1
+    frame_reservation = _reserve_typed_binding(
+        camera_frame, scene, object(), None, object_id=frame_id
+    )
+    display_reservation = _reserve_typed_binding(
+        display, scene, object(), None, object_id=display_id
+    )
+    center_x = None if display_center is None else float(display_center.x)
+    center_y = None if display_center is None else float(display_center.y)
+    view = engine_call(
+        context.createZoomedView,
+        str(frame_id),
+        str(display_id),
+        float(display_height),
+        float(display_width),
+        center_x,
+        center_y,
+        float(display_corner.x),
+        float(display_corner.y),
+        float(display_corner_buff),
+        float(camera_frame_start.x),
+        float(camera_frame_start.y),
+        float(zoom_factor),
+        float(camera_frame_stroke_width),
+        float(image_frame_stroke_width),
+        bool(capture_own_display),
+        operation="ZoomedScene.setup",
+    )
+    frame_handle = engine_call(view.cameraFrame, operation="ZoomedScene.camera_frame")
+    display_handle = engine_call(view.display, operation="ZoomedScene.display")
+    _semantic_handles._attach_shared_handle(camera_frame, frame_handle)
+    _semantic_handles._attach_shared_handle(display, display_handle)
+    _commit_typed_binding(camera_frame, scene, frame_reservation, frame_handle)
+    _commit_typed_binding(display, scene, display_reservation, display_handle)
+    return view
+
+
+def _activate_zoomed_view(scene: _base.Scene, view: object, *wrappers: _base.Mobject) -> None:
+    """Publish the relation and foreground membership through one Rust transaction."""
+    engine_call(_context(scene).activateZooming, view, operation="ZoomedScene.activate_zooming")
+    for wrapper in wrappers:
+        _register_membership_wrappers(scene, wrapper)
+
+
 def _record_mobject_binding(
     mobject: _base.Mobject,
     scene: _base.Scene,

@@ -397,6 +397,43 @@ impl std::fmt::Display for ExecutionSessionCameraError {
 
 impl std::error::Error for ExecutionSessionCameraError {}
 
+/// Error produced when an authored inset cannot be derived from one coherent
+/// effective runtime frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionSessionInset2DError {
+    MissingCameraFrame { object: ObjectId },
+    InvalidCameraFrame { object: ObjectId },
+    MissingDisplay { object: ObjectId },
+    InvalidDisplay { object: ObjectId },
+}
+
+impl std::fmt::Display for ExecutionSessionInset2DError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (kind, object) = match *self {
+            Self::MissingCameraFrame { object } => ("camera frame is missing", object),
+            Self::InvalidCameraFrame { object } => ("camera frame is invalid", object),
+            Self::MissingDisplay { object } => ("display is missing", object),
+            Self::InvalidDisplay { object } => {
+                ("display must be a positive unrotated rectangle", object)
+            }
+        };
+        write!(
+            formatter,
+            "inset 2D view {kind} for object {}",
+            object.get()
+        )
+    }
+}
+
+impl std::error::Error for ExecutionSessionInset2DError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Inset2DExecutionBinding {
+    camera_frame: ObjectId,
+    display: ObjectId,
+    capture_own_display: bool,
+}
+
 /// Unsupported lifecycle shape for the bounded canonical leaf-fade operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionFadeError {
@@ -701,6 +738,7 @@ pub struct ExecutionSession {
     signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
+    inset_2d_views: Vec<Inset2DExecutionBinding>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
@@ -739,6 +777,7 @@ impl Clone for ExecutionSession {
             signal_timeline: self.signal_timeline.clone(),
             runtime,
             camera_object: self.camera_object,
+            inset_2d_views: self.inset_2d_views.clone(),
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
@@ -806,12 +845,10 @@ impl ExecutionSession {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_store(store)?;
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     /// Instantiate the existing runtime for one semantic scene family.
@@ -827,12 +864,10 @@ impl ExecutionSession {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_root(store, root)?;
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     /// Instantiate one scene with an explicitly selected, exact authored animation graph.
@@ -863,12 +898,10 @@ impl ExecutionSession {
             animation_root,
             origin,
         )?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     fn from_lowered(
@@ -910,6 +943,7 @@ impl ExecutionSession {
             signal_timeline,
             runtime,
             camera_object,
+            inset_2d_views: Vec::new(),
             next_activation_track_id,
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
@@ -989,24 +1023,46 @@ impl ExecutionSession {
 
     /// Query current visible rows through the session-owned execution-slot index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.query_viewports(&[bounds])
+    }
+
+    /// Query the union of several camera bounds in canonical painter order.
+    /// Work scales with the candidate sets of the active views and never expands
+    /// to a full scene scan merely because an inset is active.
+    pub fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
         self.sync_spatial_index();
-        let query = self.spatial_index.query_rect(bounds);
-        let object_indices: Vec<_> = query
-            .slots()
-            .iter()
-            .filter_map(|&slot| {
+        let mut slots = std::collections::BTreeSet::new();
+        let mut spatial_stats = SpatialQueryStats::default();
+        for bounds in bounds {
+            let query = self.spatial_index.query_rect(*bounds);
+            slots.extend(query.slots().iter().copied());
+            let stats = query.stats();
+            spatial_stats.cells_visited = spatial_stats
+                .cells_visited
+                .saturating_add(stats.cells_visited);
+            spatial_stats.candidates_tested = spatial_stats
+                .candidates_tested
+                .saturating_add(stats.candidates_tested);
+            spatial_stats.full_scan_fallbacks = spatial_stats
+                .full_scan_fallbacks
+                .saturating_add(stats.full_scan_fallbacks);
+        }
+        let mut object_indices: Vec<_> = slots
+            .into_iter()
+            .filter_map(|slot| {
                 let object = self.slots.object_for_slot(slot)?;
                 self.runtime.frame_index_for_object(object)
             })
             .collect();
-        debug_assert_eq!(
-            object_indices.len(),
-            query.stats().results,
-            "live spatial candidates must resolve through execution identity"
-        );
+        object_indices.sort_unstable_by_key(|&index| {
+            self.runtime
+                .painter_rank(index)
+                .expect("live spatial candidate has a painter rank")
+        });
+        spatial_stats.results = object_indices.len();
         ExecutionViewportQuery {
             object_indices,
-            spatial_stats: query.stats(),
+            spatial_stats,
         }
     }
 
@@ -1044,6 +1100,94 @@ impl ExecutionSession {
             .ok_or(ExecutionSessionCameraError {
                 object: camera_object,
             })
+    }
+
+    /// Active inset views derived from ordinary objects in the current frame epoch.
+    ///
+    /// The authoritative semantic relation is resolved only when topology changes.
+    /// Per-frame work is therefore bounded by active views and reads the frame and
+    /// display rows from the same already-evaluated runtime frame.
+    pub fn inset_2d_views(
+        &self,
+    ) -> Result<Vec<noon_core::Inset2DViewState>, ExecutionSessionInset2DError> {
+        self.inset_2d_views
+            .iter()
+            .map(|binding| {
+                let camera_object = self.runtime.effective_object(binding.camera_frame).ok_or(
+                    ExecutionSessionInset2DError::MissingCameraFrame {
+                        object: binding.camera_frame,
+                    },
+                )?;
+                let camera = camera_object
+                    .geometry()
+                    .and_then(|geometry| {
+                        Camera2DState::from_frame_object(geometry, camera_object.transform)
+                    })
+                    .ok_or(ExecutionSessionInset2DError::InvalidCameraFrame {
+                        object: binding.camera_frame,
+                    })?;
+                let display = self.runtime.effective_object(binding.display).ok_or(
+                    ExecutionSessionInset2DError::MissingDisplay {
+                        object: binding.display,
+                    },
+                )?;
+                let size = match display.geometry() {
+                    Some(noon_core::GeometryRef::Rectangle { size })
+                        if display.transform.translation.x.is_finite()
+                            && display.transform.translation.y.is_finite()
+                            && display.transform.rotation.is_finite()
+                            && display.transform.rotation.abs() <= 1.0e-6
+                            && display.transform.scale.x.is_finite()
+                            && display.transform.scale.y.is_finite() =>
+                    {
+                        noon_core::Vec2::new(
+                            size.x * display.transform.scale.x.abs(),
+                            size.y * display.transform.scale.y.abs(),
+                        )
+                    }
+                    _ => {
+                        return Err(ExecutionSessionInset2DError::InvalidDisplay {
+                            object: binding.display,
+                        });
+                    }
+                };
+                if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+                    return Err(ExecutionSessionInset2DError::InvalidDisplay {
+                        object: binding.display,
+                    });
+                }
+                Ok(noon_core::Inset2DViewState {
+                    camera_frame: binding.camera_frame,
+                    display: binding.display,
+                    camera,
+                    display_center: display.transform.translation,
+                    display_size: size,
+                    display_stroke_width: display.style.stroke_width
+                        * display
+                            .transform
+                            .scale
+                            .x
+                            .abs()
+                            .max(display.transform.scale.y.abs()),
+                    capture_own_display: binding.capture_own_display,
+                })
+            })
+            .collect()
+    }
+
+    fn sync_inset_2d_view_bindings(&mut self, store: &SemanticStore) {
+        self.inset_2d_views = store
+            .inset_2d_views()
+            .filter_map(|(display, role)| {
+                Some(Inset2DExecutionBinding {
+                    camera_frame: self
+                        .execution_index
+                        .execution_object_id(role.camera_frame)?,
+                    display: self.execution_index.execution_object_id(display)?,
+                    capture_own_display: role.capture_own_display,
+                })
+            })
+            .collect();
     }
 
     fn sync_spatial_index(&mut self) {

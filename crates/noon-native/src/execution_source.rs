@@ -4,8 +4,8 @@ use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
 };
 use noon_core::{
-    Camera2DState, NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
-    NativeStateSource, PublicationContext, Rect,
+    Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
+    NativePointerInput, NativeStateSource, PublicationContext, Rect,
 };
 
 use crate::NativeHostError;
@@ -21,7 +21,8 @@ mod viewport_tests;
 pub(crate) trait NativeExecutionSource {
     fn frame_time(&self) -> f64;
     fn camera(&self) -> Result<Camera2DState, NativeHostError>;
-    fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery;
+    fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery;
+    fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError>;
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
     /// Advance canonical execution and report whether this call committed at
@@ -86,9 +87,15 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.camera().map_err(Into::into)
     }
 
-    fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        let query = self.session.query_viewport(bounds);
+    fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
+        let query = self.session.query_viewports(bounds);
         self.session.renderer_viewport_query(query)
+    }
+
+    fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
+        self.session
+            .inset_2d_views()
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn timeline(&self) -> TimelineWakeState {
@@ -208,9 +215,22 @@ where
         self.program.session().camera().map_err(Into::into)
     }
 
-    fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        let query = self.program.query_viewport(bounds);
-        self.program.session().renderer_viewport_query(query)
+    fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
+        let queries = bounds
+            .iter()
+            .copied()
+            .map(|bounds| self.program.query_viewport(bounds))
+            .collect::<Vec<_>>();
+        self.program
+            .session()
+            .renderer_viewport_query_union(queries)
+    }
+
+    fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
+        self.program
+            .session()
+            .inset_2d_views()
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn timeline(&self) -> TimelineWakeState {

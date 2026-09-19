@@ -949,3 +949,11 @@ pub async fn create_direct_animated_priority_smoke_renderer(
     let session = noon::example_scenes::animated_priority::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createZoomedSceneRenderer)]
+pub async fn create_zoomed_scene_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::zoomed_scene::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

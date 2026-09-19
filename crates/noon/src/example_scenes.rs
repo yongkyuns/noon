@@ -50,6 +50,7 @@ pub mod text_source_parts;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
+pub mod zoomed_scene;
 
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 use crate::{MathTypst, Typst};

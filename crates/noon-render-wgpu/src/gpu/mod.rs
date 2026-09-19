@@ -1,7 +1,7 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::Vec2;
+use noon_core::{Inset2DViewState, Vec2};
 use wgpu::util::DeviceExt;
 
 mod derived_display;
@@ -244,6 +244,13 @@ pub struct Camera2D {
     pub world_size: Vec2,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inset2DGpuView {
+    state: Inset2DViewState,
+    viewport: [f32; 4],
+    scissor: [u32; 4],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraError {
     InvalidWorldSize,
@@ -469,6 +476,9 @@ pub struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_bind_group_layout: wgpu::BindGroupLayout,
+    inset_camera_buffers: Vec<wgpu::Buffer>,
+    inset_camera_bind_groups: Vec<wgpu::BindGroup>,
+    inset_views: Vec<Inset2DGpuView>,
     camera: Camera2D,
     viewport_size: [u32; 2],
     target_format: wgpu::TextureFormat,
@@ -730,6 +740,9 @@ impl GpuRenderer {
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout: camera_layout,
+            inset_camera_buffers: Vec::new(),
+            inset_camera_bind_groups: Vec::new(),
+            inset_views: Vec::new(),
             camera,
             viewport_size,
             target_format,

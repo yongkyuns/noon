@@ -196,7 +196,11 @@ pub struct TextGlyphGpuRenderer {
     mask_pipeline_msaa: wgpu::RenderPipeline,
     color_pipeline_msaa: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
+    camera_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
+    inset_camera_buffers: Vec<wgpu::Buffer>,
+    inset_camera_bind_groups: Vec<wgpu::BindGroup>,
+    inset_cameras: Vec<TextCamera2D>,
     atlas_layout: wgpu::BindGroupLayout,
     mask_bind_groups: Vec<wgpu::BindGroup>,
     color_bind_groups: Vec<wgpu::BindGroup>,
@@ -308,7 +312,11 @@ impl TextGlyphGpuRenderer {
             mask_pipeline_msaa,
             color_pipeline_msaa,
             camera_buffer,
+            camera_layout,
             camera_bind_group,
+            inset_camera_buffers: Vec::new(),
+            inset_camera_bind_groups: Vec::new(),
+            inset_cameras: Vec::new(),
             atlas_layout,
             mask_bind_groups: Vec::new(),
             color_bind_groups: Vec::new(),
@@ -329,6 +337,43 @@ impl TextGlyphGpuRenderer {
             0,
             bytemuck::bytes_of(&self.camera.uniform()),
         );
+    }
+
+    pub(crate) fn set_inset_cameras(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cameras: &[TextCamera2D],
+    ) {
+        while self.inset_camera_buffers.len() < cameras.len() {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Noon inset text camera uniform"),
+                size: size_of::<TextCameraUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Noon inset text camera bind group"),
+                layout: &self.camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.inset_camera_buffers.push(buffer);
+            self.inset_camera_bind_groups.push(bind_group);
+        }
+        for (index, camera) in cameras.iter().copied().enumerate() {
+            if self.inset_cameras.get(index).copied() != Some(camera) {
+                queue.write_buffer(
+                    &self.inset_camera_buffers[index],
+                    0,
+                    bytemuck::bytes_of(&camera.uniform()),
+                );
+            }
+        }
+        self.inset_cameras.clear();
+        self.inset_cameras.extend_from_slice(cameras);
     }
 
     pub const fn camera(&self) -> TextCamera2D {
@@ -495,6 +540,16 @@ impl TextGlyphGpuRenderer {
         item: &PreparedTextItem,
         sample_count: u32,
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        self.draw_item_with_camera(pass, item, sample_count, &self.camera_bind_group)
+    }
+
+    fn draw_item_with_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera: &'a wgpu::BindGroup,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
         let PreparedTextItem::GlyphBatch {
             plane,
             page,
@@ -549,7 +604,7 @@ impl TextGlyphGpuRenderer {
         }
 
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(1, bind_group, &[]);
         pass.set_vertex_buffer(0, buffer.slice(..));
         pass.draw(0..6, instance_range.clone());
@@ -558,6 +613,20 @@ impl TextGlyphGpuRenderer {
             instances_drawn: instance_range.len(),
             deferred_items: 0,
         })
+    }
+
+    pub(crate) fn draw_item_with_inset_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera_index: usize,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        let camera = self
+            .inset_camera_bind_groups
+            .get(camera_index)
+            .expect("inset text camera was prepared before encoding");
+        self.draw_item_with_camera(pass, item, sample_count, camera)
     }
 
     pub fn draw_ordered_glyphs<'a>(

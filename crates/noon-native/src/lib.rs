@@ -486,6 +486,7 @@ impl NativeApp {
             return Ok(());
         }
         let camera = self.execution.camera()?;
+        let inset_views = self.execution.inset_2d_views()?;
         let acquired = {
             let gpu = self
                 .gpu
@@ -519,7 +520,14 @@ impl NativeApp {
         let viewport_bounds = camera
             .viewport_bounds(viewport_aspect)
             .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
-        let visibility = self.execution.query_viewport(viewport_bounds);
+        let mut view_bounds = vec![viewport_bounds];
+        view_bounds.extend(
+            inset_views
+                .iter()
+                .copied()
+                .filter_map(noon_core::Inset2DViewState::camera_bounds),
+        );
+        let visibility = self.execution.query_viewports(&view_bounds);
         let highlight = self.execution.session().pointer_selection_presentation();
         let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
         let force_full_redraw = self.force_full_redraw;
@@ -539,6 +547,10 @@ impl NativeApp {
             .expect("drawable native host must own GPU state");
         gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
         let metrics = gpu.text_metrics(camera)?;
+        gpu.preparer.set_inset_views_active(!inset_views.is_empty());
+        gpu.renderer
+            .set_inset_2d_views(&gpu.device, &gpu.queue, &mut gpu.text_state, &inset_views)
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         let derived = gpu
             .preparer
             .prepare_transient_presentations_visible(&publication, visibility.object_indices())

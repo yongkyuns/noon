@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
     mem::{size_of, size_of_val},
     sync::Arc,
@@ -34,8 +34,8 @@ use super::raster_image_gpu::{
 };
 use super::raster_image_prepare::{ImagePreparation, RasterImageFramePreparer};
 use super::{
-    path_batch_uses_polygon_coverage, push_upload_write, Camera2D, DrawStats, GpuRenderer,
-    RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
+    path_batch_uses_polygon_coverage, push_upload_write, Camera2D, CameraUniform, DrawStats,
+    GpuRenderer, Inset2DGpuView, RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
 };
 use crate::{
     FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive, VisibleRenderError,
@@ -953,6 +953,7 @@ pub struct RetainedFramePreparer {
     scratch_ready: bool,
     scratch_object_count: usize,
     geometry_only_classification: Option<bool>,
+    inset_views_active: bool,
     geometry_uses_source_indices: bool,
     scratch_slots: Vec<Option<usize>>,
     incremental_stats: RetainedFrameIncrementalStats,
@@ -1011,6 +1012,7 @@ impl Default for RetainedFramePreparer {
             scratch_ready: false,
             scratch_object_count: 0,
             geometry_only_classification: None,
+            inset_views_active: false,
             geometry_uses_source_indices: false,
             scratch_slots: Vec::new(),
             incremental_stats: RetainedFrameIncrementalStats::default(),
@@ -1048,6 +1050,14 @@ impl Default for RetainedFramePreparer {
 }
 
 impl RetainedFramePreparer {
+    /// Select mixed painter items while inset capture is active so displays can
+    /// be excluded without splitting coalesced geometry batches.
+    pub fn set_inset_views_active(&mut self, active: bool) {
+        if self.inset_views_active != active {
+            self.inset_views_active = active;
+            self.geometry_only_classification = None;
+        }
+    }
     pub fn prepare_transient_presentations_visible(
         &mut self,
         publication: &RendererPublication<'_>,
@@ -1587,7 +1597,7 @@ impl RetainedFramePreparer {
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
         }
-        if allow_geometry_only {
+        if allow_geometry_only && !self.inset_views_active {
             match self.geometry_only_classification {
                 Some(true) if self.can_prepare_geometry_only(frame, changes) => {
                     return self.prepare_geometry_only(
@@ -3128,6 +3138,14 @@ impl RetainedDrawStats {
     }
 }
 
+impl std::ops::AddAssign for RetainedDrawStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.images = self.images.saturating_add(rhs.images);
+        self.geometry += rhs.geometry;
+        self.text += rhs.text;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetainedDerivedDisplayError {
     MixedTextUnsupported,
@@ -3152,6 +3170,31 @@ pub struct RetainedTextGpuState {
     glyphs: TextGlyphGpuRenderer,
     last_uploaded_generation: Option<u64>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inset2DRenderError {
+    InvalidCamera(ObjectId),
+    DisplayOutsideViewport(ObjectId),
+}
+
+impl std::fmt::Display for Inset2DRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCamera(object) => write!(
+                formatter,
+                "inset camera {} has an invalid effective viewport",
+                object.get()
+            ),
+            Self::DisplayOutsideViewport(object) => write!(
+                formatter,
+                "inset display {} must remain fully inside the render viewport",
+                object.get()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Inset2DRenderError {}
 
 impl RetainedTextGpuState {
     pub fn new(
@@ -3178,6 +3221,105 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
     ) -> RetainedTextGpuState {
         RetainedTextGpuState::new(device, queue, self.target_format, self.camera)
+    }
+
+    /// Prepare alternate camera uniforms and pixel rectangles for active inset views.
+    /// Existing geometry, image and glyph uploads remain shared with the main pass.
+    pub fn set_inset_2d_views(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        text_state: &mut RetainedTextGpuState,
+        states: &[noon_core::Inset2DViewState],
+    ) -> Result<(), Inset2DRenderError> {
+        let surface = Vec2::new(self.viewport_size[0] as f32, self.viewport_size[1] as f32);
+        let main_min = self.camera.center - self.camera.world_size * 0.5;
+        let main_max = self.camera.center + self.camera.world_size * 0.5;
+        let mut views = Vec::with_capacity(states.len());
+        let mut cameras = Vec::with_capacity(states.len());
+        for state in states.iter().copied() {
+            let world_min = state.display_center - state.display_size * 0.5;
+            let world_max = state.display_center + state.display_size * 0.5;
+            let left = (world_min.x - main_min.x) / self.camera.world_size.x * surface.x;
+            let right = (world_max.x - main_min.x) / self.camera.world_size.x * surface.x;
+            let top = (main_max.y - world_max.y) / self.camera.world_size.y * surface.y;
+            let bottom = (main_max.y - world_min.y) / self.camera.world_size.y * surface.y;
+            if ![left, right, top, bottom].into_iter().all(f32::is_finite)
+                || left < 0.0
+                || top < 0.0
+                || right > surface.x
+                || bottom > surface.y
+                || right - left < 1.0
+                || bottom - top < 1.0
+            {
+                return Err(Inset2DRenderError::DisplayOutsideViewport(state.display));
+            }
+            let pixel_width = right - left;
+            let pixel_height = bottom - top;
+            let aspect = state.display_size.x / state.display_size.y;
+            let camera = Camera2D::new(
+                state.camera.center,
+                Vec2::new(state.camera.height * aspect, state.camera.height),
+            )
+            .map_err(|_| Inset2DRenderError::InvalidCamera(state.camera_frame))?;
+            let stroke_pixels = 0.5
+                * (state.display_stroke_width / self.camera.world_size.x * surface.x)
+                    .max(state.display_stroke_width / self.camera.world_size.y * surface.y);
+            let border = stroke_pixels.ceil().max(0.0) as u32;
+            let x = left.ceil() as u32 + border;
+            let y = top.ceil() as u32 + border;
+            let right = right.floor() as u32;
+            let bottom = bottom.floor() as u32;
+            let width = right.saturating_sub(x.saturating_add(border));
+            let height = bottom.saturating_sub(y.saturating_add(border));
+            if width == 0 || height == 0 {
+                return Err(Inset2DRenderError::DisplayOutsideViewport(state.display));
+            }
+            views.push(Inset2DGpuView {
+                state,
+                viewport: [left, top, pixel_width, pixel_height],
+                scissor: [x, y, width, height],
+            });
+            cameras.push(camera);
+        }
+
+        while self.inset_camera_buffers.len() < views.len() {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Noon inset geometry camera uniform"),
+                size: std::mem::size_of::<CameraUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Noon inset geometry camera bind group"),
+                layout: &self.camera_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.inset_camera_buffers.push(buffer);
+            self.inset_camera_bind_groups.push(bind_group);
+        }
+        for (index, (view, camera)) in views.iter().zip(cameras.iter()).enumerate() {
+            if self.inset_views.get(index).copied() != Some(*view) {
+                let viewport = [
+                    view.viewport[2].round().max(1.0) as u32,
+                    view.viewport[3].round().max(1.0) as u32,
+                ];
+                queue.write_buffer(
+                    &self.inset_camera_buffers[index],
+                    0,
+                    bytemuck::bytes_of(&camera.uniform(viewport)),
+                );
+            }
+        }
+        let text_cameras = cameras.into_iter().map(text_camera).collect::<Vec<_>>();
+        text_state
+            .glyphs
+            .set_inset_cameras(device, queue, &text_cameras);
+        self.inset_views = views;
+        Ok(())
     }
 
     pub fn upload_retained(
@@ -3419,7 +3561,7 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         options: super::FramePassOptions<'_>,
     ) -> Result<RetainedDrawStats, RetainedDrawError> {
-        if prepared.geometry_only {
+        if prepared.geometry_only && self.inset_views.is_empty() {
             return Ok(RetainedDrawStats {
                 images: 0,
                 geometry: self.encode_inner(encoder, view, &prepared.geometry, None, options),
@@ -3467,6 +3609,38 @@ impl GpuRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        let mut rendered_insets = HashSet::new();
+        let mut stats = self.draw_retained_items(
+            &mut pass,
+            prepared,
+            text_state,
+            sample_count,
+            &self.camera_bind_group,
+            None,
+            &HashSet::new(),
+            true,
+            &mut rendered_insets,
+        )?;
+        drop(pass);
+        if finalize {
+            stats.geometry += self.finalize_frame(encoder, view, overlay);
+        }
+        Ok(stats)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_retained_items<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &'a PreparedRetainedGpuFrame<'_>,
+        text_state: &'a RetainedTextGpuState,
+        sample_count: u32,
+        camera: &'a wgpu::BindGroup,
+        text_camera_index: Option<usize>,
+        excluded: &HashSet<ObjectId>,
+        render_insets: bool,
+        rendered_insets: &mut HashSet<ObjectId>,
+    ) -> Result<RetainedDrawStats, RetainedDrawError> {
         let mut stats = RetainedDrawStats::default();
         let mut images = prepared.image_draw.items().iter().peekable();
         for item in prepared.render_items {
@@ -3483,52 +3657,156 @@ impl GpuRenderer {
                 .is_some_and(|(image_rank, _)| **image_rank < item_rank)
             {
                 let (_, image) = images.next().expect("peeked image draw item");
-                if self.draw_retained_image(&mut pass, image, sample_count)? {
+                if !excluded.contains(&image.object_id())
+                    && self.draw_retained_image_with_camera(pass, image, sample_count, camera)?
+                {
                     stats.images += 1;
+                    if render_insets {
+                        stats += self.draw_inset_for_display(
+                            pass,
+                            prepared,
+                            text_state,
+                            sample_count,
+                            image.object_id(),
+                            rendered_insets,
+                        )?;
+                    }
                 }
+            }
+            if excluded.contains(&item.object_id()) {
+                continue;
             }
             match item {
                 RetainedRenderItem::Image { .. } => {
-                    if self.draw_retained_image(&mut pass, item, sample_count)? {
+                    if self.draw_retained_image_with_camera(pass, item, sample_count, camera)? {
                         stats.images += 1;
                     }
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
-                    stats.geometry += self.draw_retained_geometry_batch(
-                        &mut pass,
+                    stats.geometry += self.draw_retained_geometry_batch_with_camera(
+                        pass,
                         &prepared.geometry,
                         batch,
                         sample_count == 1,
+                        camera,
                     );
                 }
                 RetainedRenderItem::Glyph {
                     text_item_index, ..
                 } => {
-                    stats.text += text_state.glyphs.draw_item(
-                        &mut pass,
-                        &prepared.text.items[*text_item_index],
+                    stats.text += match text_camera_index {
+                        Some(index) => text_state.glyphs.draw_item_with_inset_camera(
+                            pass,
+                            &prepared.text.items[*text_item_index],
+                            sample_count,
+                            index,
+                        )?,
+                        None => text_state.glyphs.draw_item(
+                            pass,
+                            &prepared.text.items[*text_item_index],
+                            sample_count,
+                        )?,
+                    };
+                }
+            }
+            if render_insets {
+                stats += self.draw_inset_for_display(
+                    pass,
+                    prepared,
+                    text_state,
+                    sample_count,
+                    item.object_id(),
+                    rendered_insets,
+                )?;
+            }
+        }
+        for (_, image) in images {
+            if !excluded.contains(&image.object_id())
+                && self.draw_retained_image_with_camera(pass, image, sample_count, camera)?
+            {
+                stats.images += 1;
+                if render_insets {
+                    stats += self.draw_inset_for_display(
+                        pass,
+                        prepared,
+                        text_state,
                         sample_count,
+                        image.object_id(),
+                        rendered_insets,
                     )?;
                 }
             }
         }
-        for (_, image) in images {
-            if self.draw_retained_image(&mut pass, image, sample_count)? {
-                stats.images += 1;
-            }
-        }
-        drop(pass);
-        if finalize {
-            stats.geometry += self.finalize_frame(encoder, view, overlay);
-        }
         Ok(stats)
     }
 
-    fn draw_retained_image<'a>(
+    fn draw_inset_for_display<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &'a PreparedRetainedGpuFrame<'_>,
+        text_state: &'a RetainedTextGpuState,
+        sample_count: u32,
+        display: ObjectId,
+        rendered_insets: &mut HashSet<ObjectId>,
+    ) -> Result<RetainedDrawStats, RetainedDrawError> {
+        let Some((camera_index, inset)) = self
+            .inset_views
+            .iter()
+            .enumerate()
+            .find(|(_, inset)| inset.state.display == display)
+        else {
+            return Ok(RetainedDrawStats::default());
+        };
+        if !rendered_insets.insert(display) {
+            return Ok(RetainedDrawStats::default());
+        }
+        let mut excluded = HashSet::new();
+        if !inset.state.capture_own_display {
+            excluded.insert(display);
+        }
+        pass.set_viewport(
+            inset.viewport[0],
+            inset.viewport[1],
+            inset.viewport[2],
+            inset.viewport[3],
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(
+            inset.scissor[0],
+            inset.scissor[1],
+            inset.scissor[2],
+            inset.scissor[3],
+        );
+        let result = self.draw_retained_items(
+            pass,
+            prepared,
+            text_state,
+            sample_count,
+            &self.inset_camera_bind_groups[camera_index],
+            Some(camera_index),
+            &excluded,
+            false,
+            rendered_insets,
+        );
+        pass.set_viewport(
+            0.0,
+            0.0,
+            self.viewport_size[0] as f32,
+            self.viewport_size[1] as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(0, 0, self.viewport_size[0], self.viewport_size[1]);
+        result
+    }
+
+    fn draw_retained_image_with_camera<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         item: &RetainedRenderItem,
         sample_count: u32,
+        camera: &'a wgpu::BindGroup,
     ) -> Result<bool, RetainedDrawError> {
         let RetainedRenderItem::Image { object_index, .. } = item else {
             return Ok(false);
@@ -3538,19 +3816,20 @@ impl GpuRenderer {
             .as_ref()
             .ok_or(RasterImageDrawError::NotUploaded)?;
         images
-            .draw_if_resident(pass, &self.camera_bind_group, *object_index, sample_count)
+            .draw_if_resident(pass, camera, *object_index, sample_count)
             .map_err(Into::into)
     }
 
-    fn draw_retained_geometry_batch<'a>(
+    fn draw_retained_geometry_batch_with_camera<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
         batch: &OrderedRenderBatch,
         single_sample_analytics: bool,
+        camera: &'a wgpu::BindGroup,
     ) -> DrawStats {
         let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera, &[]);
         match batch.primitive {
             RenderPrimitive::Circle => {
                 pass.set_pipeline(if single_sample_analytics {

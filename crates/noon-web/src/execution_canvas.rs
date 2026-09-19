@@ -87,7 +87,8 @@ mod wasm {
     trait DirectLiveProgram: BrowserPointerTarget {
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue>;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
-        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery;
+        fn query_viewports(&mut self, bounds: &[Rect])
+            -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
         fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue>;
         fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
@@ -161,9 +162,18 @@ mod wasm {
             BrowserExecutionWakePlan::from_runtime(self.program.wake_state())
         }
 
-        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
-            let query = self.program.query_viewport(bounds);
-            self.program.session().renderer_viewport_query(query)
+        fn query_viewports(
+            &mut self,
+            bounds: &[Rect],
+        ) -> noon::integration::ExecutionViewportQuery {
+            let queries = bounds
+                .iter()
+                .copied()
+                .map(|bounds| self.program.query_viewport(bounds))
+                .collect::<Vec<_>>();
+            self.program
+                .session()
+                .renderer_viewport_query_union(queries)
         }
 
         fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
@@ -304,13 +314,16 @@ mod wasm {
             }
         }
 
-        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
+        fn query_viewports(
+            &mut self,
+            bounds: &[Rect],
+        ) -> noon::integration::ExecutionViewportQuery {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    let query = session.query_viewport(bounds);
+                    let query = session.query_viewports(bounds);
                     session.renderer_viewport_query(query)
                 }
-                DirectSourceAuthority::Program(program) => program.query_viewport(bounds),
+                DirectSourceAuthority::Program(program) => program.query_viewports(bounds),
             }
         }
 
@@ -1413,10 +1426,28 @@ mod wasm {
             let publication_context;
             let draw = {
                 let direct = &mut self.source;
-                let visibility = direct.query_viewport(Rect::new(
+                let inset_views = direct.session().inset_2d_views().map_err(js_error)?;
+                let mut view_bounds = vec![Rect::new(
                     camera.center - half_extent,
                     camera.center + half_extent,
-                ));
+                )];
+                view_bounds.extend(
+                    inset_views
+                        .iter()
+                        .copied()
+                        .filter_map(noon_core::Inset2DViewState::camera_bounds),
+                );
+                let visibility = direct.query_viewports(&view_bounds);
+                self.direct_preparer
+                    .set_inset_views_active(!inset_views.is_empty());
+                self.renderer
+                    .set_inset_2d_views(
+                        &self.device,
+                        &self.queue,
+                        &mut self.direct_text_gpu,
+                        &inset_views,
+                    )
+                    .map_err(js_error)?;
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
                 let derived = self

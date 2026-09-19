@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    SemanticNodeId, SemanticObjectState, SemanticSignalError, SemanticSignalState,
-    SemanticSignalValue, SemanticStore, SemanticStoreError, SourceIdentity,
+    SemanticNodeId, SemanticObjectRole, SemanticObjectState, SemanticSignalError,
+    SemanticSignalState, SemanticSignalValue, SemanticStore, SemanticStoreError, SourceIdentity,
+    StoredGeometry,
 };
 
 use super::{validate_object_content_resource, SemanticMutationTransactionError};
@@ -125,6 +126,22 @@ pub(super) fn preflight_add_node(
         return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
     }
     validate_object_content_resource(store, state.content, index)?;
+
+    if let SemanticObjectRole::Inset2DView(view) = state.role() {
+        if removed_nodes.contains(&view.camera_frame)
+            || !store
+                .semantic_object_state_checked(view.camera_frame)
+                .ok()
+                .is_some_and(|frame| {
+                    matches!(
+                        frame.content.geometry(),
+                        Some(StoredGeometry::Rectangle { .. })
+                    )
+                })
+        {
+            return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
+        }
+    }
 
     for binding in state.signal_bindings() {
         let signal = binding.signal();

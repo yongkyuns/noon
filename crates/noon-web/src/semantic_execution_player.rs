@@ -2264,6 +2264,7 @@ impl SemanticExecutionPlayer {
         let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
         #[cfg(not(any(target_arch = "wasm32", test)))]
         let pointer_refresh = false;
+        let inset_2d_views = self.session.inset_2d_views().map_err(|e| e.to_string())?;
         let publication = self.session.take_renderer_publication();
         let mut changes = publication.changes().clone();
         if changes.is_empty()
@@ -2358,6 +2359,7 @@ impl SemanticExecutionPlayer {
                 .map_err(|error| error.to_string())?;
             delta
         };
+        delta.retained.inset_2d_views = inset_2d_views;
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;

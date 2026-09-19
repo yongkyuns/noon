@@ -77,6 +77,10 @@ pub enum SemanticMutation {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
+    ReplaceRole {
+        object: SemanticTransactionNodeRef,
+        role: SemanticObjectRole,
+    },
     ReplaceContent {
         object: SemanticTransactionNodeRef,
         content: SemanticObjectContent,
@@ -164,7 +168,15 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
+            | Self::ReplaceRole { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
+            Self::ReplaceRole { object, role } => {
+                let mut references = vec![*object];
+                if let SemanticObjectRole::Inset2DView(view) = role {
+                    references.push(view.camera_frame.into());
+                }
+                references
+            }
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
@@ -246,6 +258,7 @@ impl SemanticMutation {
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
+            Self::ReplaceRole { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -287,6 +300,7 @@ pub(super) enum SemanticMutationKey {
         property: SemanticObjectProperty,
     },
     ObjectContent(SemanticTransactionNodeRef),
+    ObjectRole(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
@@ -326,6 +340,9 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    ObjectRole {
         object: SemanticNodeId,
     },
     ObjectStyle {
@@ -491,6 +508,18 @@ impl SemanticMutationTransaction {
     }
 
     /// Replace only the authored content reference/value of one semantic object.
+    pub fn replace_role(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        role: SemanticObjectRole,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ReplaceRole {
+            object: object.into(),
+            role,
+        });
+        self
+    }
+
     pub fn replace_content(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
@@ -1684,6 +1713,72 @@ impl SemanticMutationTransaction {
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::ReplaceRole { object, role } => {
+                    if let SemanticObjectRole::Inset2DView(view) = role {
+                        if object.existing() == Some(view.camera_frame)
+                            || removed_nodes.contains(&view.camera_frame)
+                        {
+                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                                index,
+                            });
+                        }
+                        let frame = catalog.staged_object_state(
+                            &mut staged_objects,
+                            &mut staged_object_order,
+                            view.camera_frame.into(),
+                            index,
+                        )?;
+                        if !matches!(
+                            frame.content.geometry(),
+                            Some(StoredGeometry::Rectangle { .. })
+                        ) {
+                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                                index,
+                            });
+                        }
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    // Inset activation is the only mutable role domain currently
+                    // admitted. Camera and Arrow/coordinate declarations retain
+                    // their existing dedicated construction invariants.
+                    if !matches!(
+                        role,
+                        SemanticObjectRole::Ordinary | SemanticObjectRole::Inset2DView(_)
+                    ) || !matches!(
+                        state.role(),
+                        SemanticObjectRole::Ordinary | SemanticObjectRole::Inset2DView(_)
+                    ) || !role.is_valid()
+                        || object.existing().is_some_and(|object| {
+                            !store
+                                .semantic_graph_owners_for_invariant_target(object)
+                                .is_empty()
+                        })
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    if matches!(role, SemanticObjectRole::Inset2DView(_))
+                        && !matches!(
+                            state.content.geometry(),
+                            Some(StoredGeometry::Rectangle { .. })
+                        )
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let did_change = state.role() != *role;
+                    if did_change {
+                        state.set_role(role.clone());
                     }
                     changed.push(did_change);
                 }

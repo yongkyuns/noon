@@ -223,6 +223,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
+                | SemanticMutationImpact::ObjectRole { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }

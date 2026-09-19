@@ -126,6 +126,31 @@ impl std::hash::Hash for SemanticArrowShaftRole {
     }
 }
 
+/// Authoritative pairing for one retained 2D inset view.
+///
+/// The display remains an ordinary semantic rectangle. This role only identifies
+/// the ordinary frame whose effective runtime transform supplies the inset camera
+/// and whether the display may recursively capture itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticInset2DViewRole {
+    pub camera_frame: SemanticNodeId,
+    pub capture_own_display: bool,
+}
+
+impl SemanticInset2DViewRole {
+    pub const fn new(camera_frame: SemanticNodeId) -> Self {
+        Self {
+            camera_frame,
+            capture_own_display: false,
+        }
+    }
+
+    pub const fn capture_own_display(mut self, capture: bool) -> Self {
+        self.capture_own_display = capture;
+        self
+    }
+}
+
 /// Scene-level role carried by an ordinary semantic object.
 ///
 /// Roles describe how shared semantic scene state interprets an object; they do
@@ -139,6 +164,7 @@ pub enum SemanticObjectRole {
     #[default]
     Ordinary,
     Camera2D,
+    Inset2DView(SemanticInset2DViewRole),
     ArrowShaft(SemanticArrowShaftRole),
     ArrowEndTip,
     ArrowStartTip,
@@ -154,7 +180,11 @@ impl SemanticObjectRole {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
             Self::FunctionPlot(range) => range.is_valid(),
-            Self::Ordinary | Self::Camera2D | Self::ArrowEndTip | Self::ArrowStartTip => true,
+            Self::Ordinary
+            | Self::Camera2D
+            | Self::Inset2DView(_)
+            | Self::ArrowEndTip
+            | Self::ArrowStartTip => true,
         }
     }
 }
