@@ -212,6 +212,10 @@ pub use noon_geometry::{
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
     DEFAULT_VECTOR_FIELD_STEP,
 };
+pub use noon_geometry::{
+    manim_default_vector_field_ranges_2d, StaticVectorFieldError, VectorFieldAxis,
+    VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+};
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
 pub use plot_authoring::PlotAuthoringError;
