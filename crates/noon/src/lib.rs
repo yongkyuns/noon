@@ -208,13 +208,9 @@ pub use noon_core::{
 };
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 pub use noon_geometry::{
-    PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
-    VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
-    DEFAULT_VECTOR_FIELD_STEP,
-};
-pub use noon_geometry::{
-    manim_default_vector_field_ranges_2d, StaticVectorFieldError, VectorFieldAxis,
-    VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+    manim_default_vector_field_ranges_2d, PlotPreparationError, PlotSamplingOptions,
+    PlotSamplingPlan, StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange,
+    VectorFieldPoint, VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
