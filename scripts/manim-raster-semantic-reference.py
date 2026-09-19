@@ -21,8 +21,10 @@ import numpy as np
 from manim import config, tempconfig
 from manim.camera.camera import Camera
 from manim.camera.moving_camera import MovingCamera
+from manim.camera.multi_camera import MultiCamera
 from manim.renderer.cairo_renderer import CairoRenderer
 from manim.scene.moving_camera_scene import MovingCameraScene
+from manim.scene.zoomed_scene import ZoomedScene
 
 PINNED_MANIM_VERSION = "0.21.0"
 CAIRO_STROKE_WIDTH_SCALE = 0.01
@@ -192,9 +194,13 @@ def _render_fixture(
 ) -> dict[str, Any]:
     scene_class = getattr(module, fixture["scene"])
     # A supplied renderer bypasses Scene's normal camera-class construction. Preserve
-    # that contract explicitly so MovingCameraScene uses a real MovingCamera while
-    # the semantic oracle still intercepts frame materialization.
-    camera_class = MovingCamera if issubclass(scene_class, MovingCameraScene) else Camera
+    # that contract explicitly, including ZoomedScene's MultiCamera, while the
+    # semantic oracle still intercepts frame materialization.
+    camera_class = (
+        MultiCamera if issubclass(scene_class, ZoomedScene)
+        else MovingCamera if issubclass(scene_class, MovingCameraScene)
+        else Camera
+    )
     renderer = SemanticRenderer(camera_class=camera_class)
     scene = scene_class(renderer=renderer)
     scene.setup()
