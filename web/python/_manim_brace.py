@@ -11,6 +11,10 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 
 
+_DEFAULT_FONT_SIZE = 48.0
+_BRACE_TIP_ANCHOR_INDEX = 7
+
+
 def _require_geometry_host(name: str) -> None:
     if _shared._create_geometry_handle is None:
         raise RuntimeError(f"{name} requires the shared Rust authoring host")
@@ -65,6 +69,43 @@ def _finish_candidate(
     _shared._attach_geometry_options(owner, candidate, name)
 
 
+def _required_text_constructor(name: str, feature: str):
+    try:
+        constructor = getattr(_base, name)
+    except AttributeError as error:
+        raise NotImplementedError(
+            f"{feature} requires Manim-compatible {name} support from the retained text layer"
+        ) from error
+    if not callable(constructor):
+        raise TypeError(f"{name} must be callable")
+    return constructor
+
+
+def _explicit_label_constructor(label_constructor: object | None):
+    if label_constructor is None:
+        return _required_text_constructor("MathTex", "BraceLabel default label construction")
+    if not callable(label_constructor):
+        raise TypeError("label_constructor must be callable")
+    return label_constructor
+
+
+def _new_label(
+    label_constructor: object,
+    text: object,
+    font_size: float,
+    extra_kwargs: dict[str, Any] | None = None,
+):
+    constructor = label_constructor
+    kwargs = {} if extra_kwargs is None else dict(extra_kwargs)
+    if isinstance(text, (tuple, list)):
+        label = constructor(*text, font_size=font_size, **kwargs)
+    else:
+        label = constructor(str(text), font_size=font_size, **kwargs)
+    if not isinstance(label, _base.Mobject):
+        raise TypeError("label_constructor must return a Mobject")
+    return label
+
+
 class Brace(_compat.VMobject):
     """ManimCE v0.21 Brace whose path/layout policy is owned by shared Rust."""
 
@@ -107,6 +148,57 @@ class Brace(_compat.VMobject):
         self.buff = buff_value
         self.sharpness = sharpness_value
         self.direction = direction_value
+
+    def get_tip(self) -> _base.Vec2:
+        """Return the pinned ManimCE v0.21 brace-tip anchor."""
+        # Cairo's Brace.get_tip() returns points[28] == the eighth anchor in
+        # the canonical cubic path. Noon's anchors come from the Rust-owned
+        # retained VectorPath query, so Python owns only the class-specific index.
+        anchors = self.get_anchors()
+        if len(anchors) <= _BRACE_TIP_ANCHOR_INDEX:
+            raise RuntimeError("Brace path does not contain the canonical tip anchor")
+        return anchors[_BRACE_TIP_ANCHOR_INDEX]
+
+    def get_direction(self) -> _base.Vec2:
+        """Return the normalized direction from brace center to brace tip."""
+        vector = self.get_tip() - self.get_center()
+        return vector.normalized()
+
+    def put_at_tip(
+        self,
+        mob: _base.Mobject,
+        use_next_to: bool = True,
+        **kwargs: Any,
+    ) -> Brace:
+        """Place ``mob`` at the brace tip using ordinary retained layout operations."""
+        if not isinstance(mob, _base.Mobject):
+            raise TypeError("Brace.put_at_tip expects a Mobject")
+        if use_next_to:
+            direction = self.get_direction()
+            rounded = _base.Vec2(round(direction.x), round(direction.y))
+            mob.next_to(self.get_tip(), rounded, **kwargs)
+        else:
+            mob.move_to(self.get_tip())
+            buff = _shared._ir._finite_number(
+                "buff", kwargs.get("buff", _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)
+            )
+            shift_distance = mob.width / 2.0 + buff
+            mob.shift(self.get_direction() * shift_distance)
+        return self
+
+    def get_text(self, *text: str, **kwargs: Any):
+        """Construct upstream ``Tex`` at the tip once retained Tex is available."""
+        constructor = _required_text_constructor("Tex", "Brace.get_text")
+        label = constructor(*text)
+        self.put_at_tip(label, **kwargs)
+        return label
+
+    def get_tex(self, *tex: str, **kwargs: Any):
+        """Construct upstream ``MathTex`` at the tip once retained MathTex is available."""
+        constructor = _required_text_constructor("MathTex", "Brace.get_tex")
+        label = constructor(*tex)
+        self.put_at_tip(label, **kwargs)
+        return label
 
 
 class BraceBetweenPoints(Brace):
@@ -157,3 +249,113 @@ class BraceBetweenPoints(Brace):
         self.buff = buff_value
         self.sharpness = sharpness_value
         self.direction = direction_value
+
+
+class BraceLabel(_compat.VGroup):
+    """Brace plus label as an ordinary semantic family.
+
+    Noon's retained B4 layer does not yet expose ManimCE ``MathTex``. Therefore
+    the upstream default constructor is fail-closed until that dependency lands;
+    callers may already use an explicit retained label constructor such as ``Text``.
+    """
+
+    def __init__(
+        self,
+        obj: _base.Mobject,
+        text: object,
+        brace_direction: object = _base.DOWN,
+        label_constructor: object | None = None,
+        font_size: float = _DEFAULT_FONT_SIZE,
+        buff: float = 0.2,
+        brace_config: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        constructor = _explicit_label_constructor(label_constructor)
+        font_size_value = _shared._ir._positive_number("font_size", font_size)
+        group_options = dict(kwargs)
+        z_index = _shared._ir._finite_number("z_index", group_options.pop("z_index", 0.0))
+        if group_options:
+            unsupported = ", ".join(sorted(group_options))
+            raise NotImplementedError(
+                f"unsupported BraceLabel composite option(s): {unsupported}"
+            )
+        if brace_config is None:
+            brace_options: dict[str, Any] = {}
+        elif isinstance(brace_config, dict):
+            brace_options = dict(brace_config)
+        else:
+            raise TypeError("brace_config must be a dict or None")
+
+        self.label_constructor = constructor
+        self.brace_direction = _base._as_vec2(brace_direction)
+        self.brace = Brace(
+            obj,
+            direction=self.brace_direction,
+            buff=buff,
+            **brace_options,
+        )
+        self.label = _new_label(constructor, text, font_size_value)
+        self.brace.put_at_tip(self.label)
+        super().__init__(self.brace, self.label, z_index=z_index)
+
+    def creation_anim(self, label_anim=None, brace_anim=None):
+        if label_anim is None:
+            label_anim = getattr(_base, "FadeIn")
+        if brace_anim is None:
+            brace_anim = getattr(_base, "GrowFromCenter")
+        animation_group = getattr(_base, "AnimationGroup")
+        return animation_group(brace_anim(self.brace), label_anim(self.label))
+
+    def shift_brace(self, obj: _base.Mobject, **kwargs: Any) -> BraceLabel:
+        if isinstance(obj, list):
+            obj = _compat.VGroup(*obj)
+        old_brace = self.brace
+        self.remove(old_brace, self.label)
+        self.brace = Brace(obj, direction=self.brace_direction, **kwargs)
+        self.brace.put_at_tip(self.label)
+        self.add(self.brace, self.label)
+        return self
+
+    def change_label(self, *text: str, **kwargs: Any) -> BraceLabel:
+        old_label = self.label
+        self.remove(old_label)
+        label = self.label_constructor(*text, **kwargs)
+        if not isinstance(label, _base.Mobject):
+            raise TypeError("label_constructor must return a Mobject")
+        self.label = label
+        self.brace.put_at_tip(self.label)
+        self.add(self.label)
+        return self
+
+    def change_brace_label(
+        self,
+        obj: _base.Mobject,
+        *text: str,
+        **kwargs: Any,
+    ) -> BraceLabel:
+        self.shift_brace(obj)
+        self.change_label(*text, **kwargs)
+        return self
+
+
+class BraceText(BraceLabel):
+    """Brace plus retained native ``Text`` as an ordinary semantic family."""
+
+    def __init__(
+        self,
+        obj: _base.Mobject,
+        text: str,
+        label_constructor: object | None = None,
+        **kwargs: Any,
+    ) -> None:
+        constructor = (
+            _required_text_constructor("Text", "BraceText")
+            if label_constructor is None
+            else label_constructor
+        )
+        super().__init__(
+            obj,
+            text,
+            label_constructor=constructor,
+            **kwargs,
+        )
