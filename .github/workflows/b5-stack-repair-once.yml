@@ -22,15 +22,14 @@ jobs:
       REPAIR_REF: refs/heads/codex/b5-stack-qualification
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 2
       - name: Verify immutable inputs and prepare four-file repair
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/codex/b5-stack-validation-repair
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$REPAIR_PARENT"
+          git fetch --no-tags --depth=1 origin "$REPAIR_PARENT"
+          git diff --exit-code "$REPAIR_PARENT" HEAD -- . ':!.github/workflows/b5-stack-repair-once.yml'
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
@@ -61,29 +60,25 @@ jobs:
           old = sources[name][start:end]
           if old.count('fn text_artifact_state(') != 1 or old.count('import_compiled_text_resource(') != 1:
               raise RuntimeError('unexpected text forwarding helper structure')
-          new = '''    let (transform, style) = text_artifact_presentation(
-              text.authored_transform(),
-              text.presentation.color,
-              text.presentation.opacity,
-          )?;
-          let handle = store
-              .borrow_mut()
-              .import_compiled_text_resource(
-                  identity,
-                  artifact.resource.as_ref().clone(),
-                  artifact.fonts.as_ref(),
-                  artifact.geometry.as_ref(),
-              )
-              .map_err(TextAuthoringError::Import)?;
-          Ok(semantic_text_state(handle, transform, style))
-          }
-          '''
-          # The string above is indented by four fewer spaces than Rust's body
-          # after YAML block removal. Restore normal Rust indentation explicitly.
-          lines = new.splitlines()
-          for index in range(1, len(lines) - 1):
-              lines[index] = '    ' + lines[index]
-          new = '\n'.join(lines) + '\n'
+          new = '\n'.join([
+              '    let (transform, style) = text_artifact_presentation(',
+              '        text.authored_transform(),',
+              '        text.presentation.color,',
+              '        text.presentation.opacity,',
+              '    )?;',
+              '    let handle = store',
+              '        .borrow_mut()',
+              '        .import_compiled_text_resource(',
+              '            identity,',
+              '            artifact.resource.as_ref().clone(),',
+              '            artifact.fonts.as_ref(),',
+              '            artifact.geometry.as_ref(),',
+              '        )',
+              '        .map_err(TextAuthoringError::Import)?;',
+              '    Ok(semantic_text_state(handle, transform, style))',
+              '}',
+              '',
+          ])
           replace(name, old, new)
 
           for name in ('crates/noon-web/src/canonical_authoring_scene.rs',
@@ -97,7 +92,7 @@ jobs:
           replace(name, '    "noon-implicit-plotting",\n',
                   '    "noon-implicit-plotting",\n    "noon-area-helpers",\n')
           marker = 'console.log("✓ Noon-authored Manim-compatible gallery examples");'
-          checks = '''const areaEntry = readyEntries.find((entry) => entry.id === "noon-area-helpers");
+          checks = r'''const areaEntry = readyEntries.find((entry) => entry.id === "noon-area-helpers");
           assert.ok(areaEntry, "area helpers must be a ready compatibility example");
           assert.equal(areaEntry.parity_status, "candidate");
           assert.equal(areaEntry.parity_fixture, "area-helpers");
@@ -110,7 +105,6 @@ jobs:
           '''
           replace(name, marker, checks + '\n' + marker)
 
-          # Validate all inputs/replacements before changing any source file.
           for name, source in sources.items():
               Path(name).write_text(source, encoding='utf-8')
           PY
@@ -127,15 +121,18 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-cargo-sources-
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-      - name: Format only the edited Rust sources
+        with:
+          version: v0.16.0
+      - name: Use repository formatting configuration
         run: |
-          rustfmt --edition 2024 --config skip_children=true crates/noon/src/text_authoring/semantic/objects.rs crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs
+          cargo fmt --all
           cargo fmt --all -- --check
       - name: Publish only the intended source repair to a new branch
         shell: bash
         run: |
           set -euo pipefail
           git add crates/noon/src/text_authoring/semantic/objects.rs crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs web/manim-compatibility-gallery.test.mjs
+          git diff --exit-code
           git diff --cached --check
           tree=$(git write-tree)
           git config user.name 'github-actions[bot]'
@@ -145,8 +142,6 @@ jobs:
           test -z "$(git diff --name-only "$REPAIR_PARENT" "$repair" -- .github)"
           git diff --stat "$REPAIR_PARENT" "$repair"
           git diff "$REPAIR_PARENT" "$repair"
-          # Empty expected old ref is create-only: a concurrent branch creation
-          # fails instead of overwriting any existing branch or other agent.
           git push --force-with-lease="$REPAIR_REF:" origin "$repair:$REPAIR_REF"
           git checkout --detach "$repair"
           echo "Repair commit: $repair" | tee -a "$GITHUB_STEP_SUMMARY"
