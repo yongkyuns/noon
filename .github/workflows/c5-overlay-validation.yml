@@ -35,6 +35,8 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-sources-
       - name: Use sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Install virtual display and software Vulkan
         run: |
           sudo apt-get update
@@ -49,12 +51,13 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/noon-c5-overlay" 321f6b661c467a92b47ae9c4b34e5e020fa92efb
           cd "$RUNNER_TEMP/noon-c5-overlay"
           git apply "$RUNNER_TEMP/c5-overlay.patch"
+          cp .github/workflows/native-host-smoke.yml "$GITHUB_WORKSPACE/proof/proposed-native-host-smoke.yml"
+          git restore .github/workflows/native-host-smoke.yml
           cargo fmt --all
-          git add crates .github/workflows/native-host-smoke.yml
+          git add crates
           git diff --cached --check
           git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: render transient selection overlays in the native host'
           branch="staging/c5-selection-overlay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          git push origin "HEAD:refs/heads/$branch"
           {
             echo "branch=$branch"
             git rev-parse HEAD 'HEAD^{tree}'
@@ -62,6 +65,7 @@ jobs:
           } | tee "$GITHUB_WORKSPACE/proof/identity.txt"
           git archive HEAD | gzip > "$GITHUB_WORKSPACE/proof/source.tar.gz"
           git diff 321f6b661c467a92b47ae9c4b34e5e020fa92efb > "$GITHUB_WORKSPACE/proof/formatted.patch"
+          git push origin "HEAD:refs/heads/$branch"
       - name: Focused overlay and selection tests
         shell: bash
         run: |
