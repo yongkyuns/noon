@@ -106,6 +106,13 @@ impl AnimationAdmissions {
     }
 }
 
+/// Mutable transaction state shared while recursively staging a composition.
+struct CompositionStaging<'a> {
+    declaration: &'a mut SemanticMutationTransaction,
+    admitted: &'a mut AnimationAdmissions,
+    removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+}
+
 fn stage_animation_admissions(
     store: &SemanticStore,
     root: SemanticNodeId,
@@ -1640,9 +1647,12 @@ impl ExecutionSession {
             store,
             root,
             request,
-            &mut declaration,
-            &mut admitted,
-            &mut removals,
+            CompositionStaging {
+                declaration: &mut declaration,
+                admitted: &mut admitted,
+                removals: &mut removals,
+            },
+            false,
         )?;
         stage_animation_admissions(store, root, &admitted.ordered, &mut declaration)?;
         self.declare_and_activate_prepared_animation(
@@ -1715,10 +1725,14 @@ impl ExecutionSession {
         store: &SemanticStore,
         root: SemanticNodeId,
         request: &SemanticCompositionRequest,
-        declaration: &mut SemanticMutationTransaction,
-        admitted: &mut AnimationAdmissions,
-        removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+        staging: CompositionStaging<'_>,
+        reuse_compatible_admission: bool,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let CompositionStaging {
+            declaration,
+            admitted,
+            removals,
+        } = staging;
         let admit = |target: SemanticNodeId,
                      admitted: &mut AnimationAdmissions|
          -> Result<(), ExecutionSessionAnimationError> {
@@ -1774,7 +1788,9 @@ impl ExecutionSession {
                 complete_priority,
                 options,
             } => {
-                admit(*source, admitted)?;
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*source).into())) {
+                    admit(*source, admitted)?;
+                }
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -1934,9 +1950,12 @@ impl ExecutionSession {
                             store,
                             root,
                             &expanded,
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            false,
                         )
                     }
                     Err(error) => {
@@ -2060,9 +2079,12 @@ impl ExecutionSession {
                                     .rate_func(RateFunction::Linear)
                                     .introducer(introducer),
                             },
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            false,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -2341,7 +2363,9 @@ impl ExecutionSession {
             }
             SemanticCompositionRequest::Create { target, options } => {
                 self.require_create_target(store, *target)?;
-                admit(*target, admitted)?;
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
                 Ok(declaration.create_create_animation(*target, *options))
             }
             SemanticCompositionRequest::Uncreate { target, options } => {
@@ -2385,16 +2409,83 @@ impl ExecutionSession {
                         error: ExecutionSessionCreateError::EmptyParallel,
                     });
                 }
+                // A content-morph Transform and Create own disjoint morph and reveal
+                // drivers. Manim permits those two children to share one detached
+                // source in a Parallel play, so membership is admitted once while both
+                // animations retain their own semantic identities. Competing Create
+                // introductions remain an atomic preflight error.
+                let mut introductions = HashMap::<SemanticNodeId, usize>::new();
+                let mut morphs = HashMap::<SemanticNodeId, usize>::new();
+                let mut occurrences = HashMap::<SemanticNodeId, usize>::new();
+                if *kind == SemanticAnimationCompositionKind::Parallel {
+                    for child in children {
+                        match child {
+                            SemanticCompositionRequest::Create { target, .. } => {
+                                *introductions.entry(*target).or_default() += 1;
+                                *occurrences.entry(*target).or_default() += 1;
+                            }
+                            SemanticCompositionRequest::TransformTo {
+                                source,
+                                target_state,
+                                ..
+                            } => {
+                                let source_content = store
+                                    .semantic_object_state_checked(*source)
+                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                                        target: *source,
+                                        error,
+                                    })?
+                                    .content;
+                                let target_content = store
+                                    .semantic_object_state_checked(*target_state)
+                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                                        target: *target_state,
+                                        error,
+                                    })?
+                                    .content;
+                                if source_content != target_content {
+                                    *morphs.entry(*source).or_default() += 1;
+                                }
+                                *occurrences.entry(*source).or_default() += 1;
+                            }
+                            _ => {
+                                if let Some(target) = child.existing_animation_mobject() {
+                                    *occurrences.entry(target).or_default() += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut compatible = HashSet::new();
+                for (&target, &count) in &introductions {
+                    let valid = count == 1
+                        && morphs.get(&target) == Some(&1)
+                        && occurrences.get(&target) == Some(&2);
+                    if valid {
+                        compatible.insert(target);
+                    } else if occurrences.get(&target).copied().unwrap_or_default() > 1 {
+                        return Err(ExecutionSessionAnimationError::CreateTarget {
+                            target,
+                            error: ExecutionSessionCreateError::DuplicateTarget,
+                        });
+                    }
+                }
                 let children = children
                     .iter()
                     .map(|child| {
+                        let reuse_admission = child
+                            .existing_animation_mobject()
+                            .is_some_and(|target| compatible.contains(&target));
                         self.stage_composition_request(
                             store,
                             root,
                             child,
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            reuse_admission,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;

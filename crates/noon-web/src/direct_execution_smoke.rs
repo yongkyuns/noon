@@ -37,6 +37,15 @@ pub async fn create_direct_filled_path_transform_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Concurrent morph and reveal use one retained path resource and scalar runtime rows.
+#[wasm_bindgen(js_name = createDirectMorphRevealRenderer)]
+pub async fn create_direct_morph_reveal_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::renderer_fixtures::morph_reveal().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Analytic and vector-path Create endpoints use the same typed native scene.
 #[wasm_bindgen(js_name = createDirectCreateShapesRenderer)]
 pub async fn create_direct_create_shapes_renderer(

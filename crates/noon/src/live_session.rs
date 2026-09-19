@@ -4664,6 +4664,48 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn create_only_shares_detached_admission_with_point_morph_driver() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let target = square.target_editor().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = square.integration_store().borrow().len();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::Create {
+                    target: &square,
+                    options: linear(0.2),
+                },
+                AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &square,
+                    &target,
+                    linear(0.2),
+                )),
+            ],
+        };
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new());
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: crate::ExecutionSessionCreateError::DuplicateTarget,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
     fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
         let mut scene = Scene::new();
         let fading = scene.circle(1.0).unwrap();

@@ -105,6 +105,58 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// One retained path concurrently follows point correspondence and Create reveal.
+/// Pair: `web/python/examples/ordinary_morph_reveal.py`.
+pub fn morph_reveal() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let source = VectorPath::new()
+        .move_to(Vec2::new(-2.4, -0.8))
+        .cubic_to(
+            Vec2::new(-2.0, 2.5),
+            Vec2::new(0.8, -2.4),
+            Vec2::new(1.0, 0.2),
+        )
+        .line_to(Vec2::new(2.4, 1.0));
+    let target = VectorPath::new()
+        .move_to(Vec2::new(-2.4, -0.8))
+        .cubic_to(
+            Vec2::new(-0.5, -2.6),
+            Vec2::new(0.4, 2.8),
+            Vec2::new(1.0, 0.2),
+        )
+        .line_to(Vec2::new(2.0, -1.4));
+    let shape = scene
+        .path(source, style(None, BLUE, 0.09))
+        .map_err(|error| error.to_string())?;
+    let target = scene
+        .path(target, style(None, PINK, 0.09))
+        .map_err(|error| error.to_string())?;
+    let options = AnimationOptions::new()
+        .run_time(3.0)
+        .rate_func(RateFunction::Linear);
+    let request = AnimationCompositionRequest::Composition {
+        kind: crate::SemanticAnimationCompositionKind::Parallel,
+        children: vec![
+            AnimationCompositionRequest::Create {
+                target: &shape,
+                options,
+            },
+            AnimationCompositionRequest::TransformTo(TransformToRequest::point_correspondence(
+                &shape, &target, options,
+            )),
+        ],
+        options: AnimationOptions::new(),
+    };
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
 /// Pair: `web/python/examples/ordinary_create_shapes.py`.
 pub fn create_shapes() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
@@ -276,6 +328,7 @@ mod tests {
                 1,
             ),
             (create_shapes, 4),
+            (morph_reveal, 1),
             (|| morph_stress(96), 96),
         ] {
             let mut forward = build().unwrap();
@@ -290,5 +343,19 @@ mod tests {
                 assert!(forward.take_frame_changes().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn morph_reveal_fixture_publishes_two_independent_exact_driver_rows() {
+        let mut session = morph_reveal().unwrap();
+        session.seek(1.5).unwrap();
+        assert_eq!(session.frame().objects.len(), 1);
+        assert!((session.frame().morph(0) - 0.5).abs() < 1.0e-6);
+        assert!((session.frame().reveal(0) - 0.5).abs() < 1.0e-6);
+        let midpoint = session.frame().clone();
+
+        session.seek(0.25).unwrap();
+        session.seek(1.5).unwrap();
+        assert_eq!(session.frame(), &midpoint);
     }
 }

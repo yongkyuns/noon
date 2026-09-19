@@ -1654,13 +1654,18 @@ def _build_canonical_composition_candidate(
     tracker_associations: list[_reactive.ValueTracker] = []
     completed_families: list[object] = []
     next_object_id = self._next_object_id
+    reserved_targets: dict[str, object] = {}
 
     def reserve(target: _base.Mobject):
         nonlocal next_object_id
+        key = _semantic_wrapper_key(target)
+        if key in reserved_targets:
+            return reserved_targets[key]
         reservation = _reserve_typed_binding(
             target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
         )
         reservations.append((target, reservation))
+        reserved_targets[key] = reservation
         if not reservation.reuse_existing_identity:
             next_object_id += 1
         return reservation

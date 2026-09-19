@@ -267,17 +267,16 @@ pub fn effective_path_query(
         AuthoringError::Unsupported(UnsupportedAuthoringOperation::PathQueryContent),
     )?;
     if let Some(target) = path.morph_target() {
-        // Retained morph meshes currently use flattened sample progress for reveal.
-        // Do not report different curve-parameter geometry here.
-        if observed.reveal != 1.0 {
-            return Err(unsupported());
-        }
-        path = noon_geometry::interpolate_path_preserving_order(&path, target, observed.morph)
-            .map_err(AuthoringError::MorphQuery)?;
+        path = noon_geometry::interpolate_revealed_path_preserving_order(
+            &path,
+            target,
+            observed.morph,
+            observed.reveal,
+        )
+        .map_err(AuthoringError::MorphQuery)?;
     } else if observed.morph != 0.0 {
         return Err(unsupported());
-    }
-    if observed.reveal != 1.0 {
+    } else if observed.reveal != 1.0 {
         path = noon_geometry::authored_partial_path(&path, 0.0, observed.reveal);
     }
     let state = store

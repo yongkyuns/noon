@@ -6,8 +6,36 @@ pub(super) fn plan(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<MorphPlan, MorphError> {
+    Ok(plan_with_authored_progress(source, target, options)?.plan)
+}
+
+/// Ordered morph samples together with their authored global curve parameters.
+/// The progress rows belong to preparation, not a frame, and let retained meshes
+/// preserve VMobject partial-path semantics regardless of adaptive sample counts.
+pub(crate) struct AuthoredProgressMorphPlan {
+    pub plan: MorphPlan,
+    pub contours: Vec<AuthoredContourProgress>,
+}
+
+pub(crate) struct AuthoredContourProgress {
+    pub point_progress: Vec<f32>,
+    pub end_progress: f32,
+}
+
+pub(crate) fn plan_with_authored_progress(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<AuthoredProgressMorphPlan, MorphError> {
     let pairs = aligned_contours(source, target)?;
+    let total_curves = pairs
+        .iter()
+        .map(|(source, _)| source.curves.len())
+        .sum::<usize>()
+        .max(1);
     let mut contours = Vec::with_capacity(pairs.len());
+    let mut progress_contours = Vec::with_capacity(pairs.len());
+    let mut global_curve = 0_usize;
     for (source, target) in pairs {
         let samples = options.samples_per_contour.div_ceil(source.curves.len());
         let minimum_depth = samples.clamp(1, 1 << 16).next_power_of_two().ilog2();
@@ -16,11 +44,15 @@ pub(super) fn plan(
             target_points: Vec::new(),
             closed: source.closed,
         };
+        let mut point_progress = Vec::new();
         let endpoints = (
             source.curves.last().unwrap()[3],
             target.curves.last().unwrap()[3],
         );
-        for (a, b) in source.curves.into_iter().zip(target.curves) {
+        let curve_count = source.curves.len();
+        for (curve, (a, b)) in source.curves.into_iter().zip(target.curves).enumerate() {
+            let start_progress = (global_curve + curve) as f32 / total_curves as f32;
+            let end_progress = (global_curve + curve + 1) as f32 / total_curves as f32;
             flatten_pair(
                 a,
                 b,
@@ -28,17 +60,31 @@ pub(super) fn plan(
                 minimum_depth,
                 0,
                 &mut result,
+                &mut point_progress,
+                start_progress,
+                end_progress,
             );
         }
+        let end_progress = (global_curve + curve_count) as f32 / total_curves as f32;
         if !result.closed {
             // flatten_pair records each interval's start. Preserve the final
             // endpoint for open contours without duplicating a closed seam.
             result.source_points.push(endpoints.0);
             result.target_points.push(endpoints.1);
+            point_progress.push(end_progress);
         }
+        debug_assert_eq!(result.source_points.len(), point_progress.len());
         contours.push(result);
+        progress_contours.push(AuthoredContourProgress {
+            point_progress,
+            end_progress,
+        });
+        global_curve += curve_count;
     }
-    Ok(MorphPlan { contours })
+    Ok(AuthoredProgressMorphPlan {
+        plan: MorphPlan { contours },
+        contours: progress_contours,
+    })
 }
 
 fn aligned_contours(
@@ -168,16 +214,41 @@ fn flatten_pair(
     minimum: u32,
     depth: u32,
     output: &mut MorphContourPlan,
+    point_progress: &mut Vec<f32>,
+    start_progress: f32,
+    end_progress: f32,
 ) {
     if depth == 16 || (depth >= minimum && flat(a, tolerance) && flat(b, tolerance)) {
         output.source_points.push(a[0]);
         output.target_points.push(b[0]);
+        point_progress.push(start_progress);
         return;
     }
     let (a0, a1) = split(a);
     let (b0, b1) = split(b);
-    flatten_pair(a0, b0, tolerance, minimum, depth + 1, output);
-    flatten_pair(a1, b1, tolerance, minimum, depth + 1, output);
+    let middle_progress = (start_progress + end_progress) * 0.5;
+    flatten_pair(
+        a0,
+        b0,
+        tolerance,
+        minimum,
+        depth + 1,
+        output,
+        point_progress,
+        start_progress,
+        middle_progress,
+    );
+    flatten_pair(
+        a1,
+        b1,
+        tolerance,
+        minimum,
+        depth + 1,
+        output,
+        point_progress,
+        middle_progress,
+        end_progress,
+    );
 }
 
 #[cfg(test)]
