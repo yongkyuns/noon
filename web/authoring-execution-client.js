@@ -272,11 +272,11 @@ export class AuthoringExecutionClient {
   }
 
   async setNativeStateInput(source, value) {
-    return this.#withStablePlayer((player) => player.setNativeStateInput(source, value));
+    return this.#withInputPlayer((player) => player.setNativeStateInput(source, value));
   }
 
   async emitNativeEvent(source) {
-    return this.#withStablePlayer((player) => player.emitNativeEvent(source));
+    return this.#withInputPlayer((player) => player.emitNativeEvent(source));
   }
 
   async restartPlayback() {
@@ -374,6 +374,15 @@ export class AuthoringExecutionClient {
     }
   }
 
+  // Queries may retry after recovery; input must remain bound to one endpoint.
+  #withInputPlayer(operation) {
+    if (this.#transition !== null) {
+      throw new Error("native input is unavailable during an execution transition");
+    }
+    this.#requireStarted();
+    return operation(this.#player);
+  }
+
   async #withStablePlayer(operation) {
     for (;;) {
       if (this.#transition !== null) {
@@ -444,11 +453,20 @@ export class AuthoringExecutionClient {
         typeof globalThis.window?.addEventListener !== "function") {
       return;
     }
-    this.#pointerAbortController = new AbortController();
-    const { signal } = this.#pointerAbortController;
+    const controller = new AbortController();
+    this.#pointerAbortController = controller;
+    const { signal } = controller;
+    const canvas = this.#canvas;
+    const player = this.#player;
+    const generation = this.#lifecycleGeneration;
+    let previousDelivery = Promise.resolve();
+    const report = (error) => {
+      if (this.#onRecoverableError !== null) this.#onRecoverableError(error);
+      else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
+    };
     const submit = (kind, event = null) => {
-      if (this.#player === null || this.#transition !== null) return;
-      const rect = this.#canvas.getBoundingClientRect();
+      if (signal.aborted || this.#player !== player || this.#transition !== null) return;
+      const rect = canvas.getBoundingClientRect();
       const positioned = event !== null;
       const input = {
         kind,
@@ -463,8 +481,28 @@ export class AuthoringExecutionClient {
         alt: event?.altKey === true,
         meta: event?.metaKey === true,
       };
-      void this.#withStablePlayer((player) => player.submitBrowserPointerInput(input))
-        .catch((error) => this.#onRecoverableError?.(error));
+      const preceding = previousDelivery;
+      const delivery = player.submitBrowserPointerInput(input);
+      previousDelivery = delivery;
+      void delivery.catch(async (error) => {
+        // A DOM source cannot wait for capacity. Fault this collector once,
+        // report the loss of delivery, then attempt one ordered cancellation.
+        // Retain only the preceding promise, not a second event/retry queue.
+        if (signal.aborted) return;
+        controller.abort();
+        report(error);
+        await preceding.catch(() => {});
+        if (this.#pointerAbortController !== controller || this.#player !== player ||
+            this.#lifecycleGeneration !== generation || this.#transition !== null) return;
+        try {
+          await player.submitBrowserPointerInput({
+            kind: "cancel", view_revision: input.view_revision,
+            surface_x: null, surface_y: null,
+          });
+        } catch (cancellationError) {
+          report(cancellationError);
+        }
+      });
     };
     this.#canvas.addEventListener("pointermove", (event) => submit("move", event), { signal });
     this.#canvas.addEventListener("pointerdown", (event) => submit("press", event), { signal });

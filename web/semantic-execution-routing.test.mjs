@@ -456,3 +456,171 @@ test("cancelled shared preparation cannot roll back a replacement startup genera
     await Promise.all([nextPrepare, nextStart]);
   }
 });
+
+
+const { MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const observeInputResult = promise => promise.then(value => ({ value }), error => ({ error }));
+const inputTurn = () => new Promise(resolve => setImmediate(resolve));
+
+async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(canvas, callbacks);
+  t.after(() => client.terminate());
+  const render = await prepare(client);
+  const started = client.startSemanticExecution({ contextId: "original" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  replyRender(render, "start_engine", "engine_started");
+  await started;
+  authoring.autoRespond = false;
+  return { client, authoring, render, engine: authoring.attachments.at(-1).controlPort.peer };
+}
+
+for (const [type, submit] of [
+  ["native_state_input", client => client.setNativeStateInput({ kind: "control", name: "gain" }, { kind: "scalar", value: 0.7 })],
+  ["native_event", client => client.emitNativeEvent({ kind: "wheel" })],
+]) {
+  test(`a ${type} is never automatically retried on a replacement scene`, async t => {
+    const { client, engine, render } = await startInputClient(t);
+    const outcome = observeInputResult(submit(client));
+    await inputTurn();
+    assert.equal(engine.messages.filter(message => message.type === type).length, 1);
+    const replacement = new FakeSemanticAuthoringClient();
+    const switching = client.reconcileSemanticExecution(
+      { contextId: "replacement" }, { authoringClient: replacement },
+    );
+    await waitForRequest(render, "rebuild_engine");
+    replyRender(render, "rebuild_engine", "engine_rebuilt");
+    await switching;
+    assert.match((await outcome).error?.message ?? "", /transition/);
+    const newEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(newEngine.messages.filter(message => message.type === type).length, 0);
+  });
+}
+
+test("native input submitted during a scene transition is rejected rather than queued for its successor", async t => {
+  const { client, render } = await startInputClient(t);
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "replacement" }, { authoringClient: replacement },
+  );
+  const during = observeInputResult(client.emitNativeEvent({ kind: "wheel" }));
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  assert.match((await during).error?.message ?? "", /transition/);
+  assert.equal(replacement.attachments.at(-1).controlPort.peer.messages.some(message => message.type === "native_event"), false);
+});
+
+function pointerCanvas(t) {
+  const target = new EventTarget();
+  const win = new EventTarget();
+  const previous = globalThis.window;
+  win.devicePixelRatio = 1;
+  globalThis.window = win;
+  t.after(() => { globalThis.window = previous; });
+  const canvas = new FakeCanvas();
+  const listeners = new Map();
+  canvas.getBoundingClientRect = () => ({ left: 10, top: 20, width: 640, height: 360 });
+  canvas.addEventListener = (type, listener, options) => {
+    listeners.set(type, listener);
+    target.addEventListener(type, listener, options);
+  };
+  return { canvas, listeners, emit(type, values = {}) {
+    const event = new Event(type);
+    Object.assign(event, { clientX: 110, clientY: 220, button: 0, ...values });
+    target.dispatchEvent(event);
+  } };
+}
+
+test("DOM pointer rejection retires its collector and never replays an occurrence on a replacement", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { client, engine, render } = await startInputClient(t, dom.canvas, {
+    onRecoverableError: error => errors.push(error),
+  });
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, 1);
+  const retiredListener = dom.listeners.get("pointerdown");
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  await inputTurn();
+  // Even an already-queued callback cannot address the successor's canvas/session.
+  retiredListener({ clientX: 9, clientY: 9, button: 0 });
+  await inputTurn();
+  const next = replacement.attachments.at(-1).controlPort.peer;
+  assert.equal(next.messages.some(message => message.type === "browser_pointer_input"), false);
+  assert.equal(errors.length, 1, "retired input rejection must be surfaced once");
+});
+
+test("DOM pointer overflow is bounded, surfaced, and cancelled in order without replay", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: error => errors.push(error) });
+  for (let i = 0; i < 1000; i += 1) dom.emit(i === 0 ? "pointerdown" : "pointermove", { clientX: i });
+  await inputTurn();
+  const accepted = engine.messages.filter(message => message.type === "browser_pointer_input");
+  assert.equal(accepted.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+  assert.equal(errors.length, 1, "one overflow faults the collector, not 936 retry tasks");
+  assert.match(errors[0].message, /native input.*full/i);
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+  for (const message of accepted) engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
+  await inputTurn();
+  const cancellation = engine.messages.filter(message => message.type === "browser_pointer_input").at(-1);
+  assert.equal(cancellation.kind, "cancel");
+  assert.equal(cancellation.surface_x, null);
+  assert.equal(cancellation.view_revision, accepted[0].view_revision);
+  engine.emitMessage(envelope("noon.engine", cancellation.type, { requestId: cancellation.requestId }));
+  await inputTurn();
+  dom.emit("pointerdown");
+  assert.equal(errors.length, 1);
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
+});
+
+
+test("DOM overflow cleanup never cancels the replacement session after old requests settle", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { client, render } = await startInputClient(t, dom.canvas, { onRecoverableError: error => errors.push(error) });
+  for (let i = 0; i <= MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) dom.emit("pointermove");
+  await inputTurn();
+  assert.equal(errors.length, 1);
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  await inputTurn();
+  const next = replacement.attachments.at(-1).controlPort.peer;
+  assert.equal(next.messages.some(message => message.type === "browser_pointer_input"), false);
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(next.messages.filter(message => message.type === "browser_pointer_input").length, 1);
+  assert.equal(next.messages.find(message => message.type === "browser_pointer_input").kind, "press");
+});
+
+test("DOM input failure remains visible without a recoverable-error callback", async t => {
+  const dom = pointerCanvas(t);
+  const warnings = [];
+  const oldWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  t.after(() => { console.warn = oldWarn; });
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  await inputTurn();
+  const sent = engine.messages.find(message => message.type === "browser_pointer_input");
+  engine.emitMessage(envelope("noon.engine", "error", { requestId: sent.requestId, message: "position rejected" }));
+  await inputTurn();
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0][0], /pointer collection stopped/);
+  assert.match(warnings[0][1].message, /position rejected/);
+  const cancel = engine.messages.find(message => message.kind === "cancel");
+  assert.ok(cancel);
+  engine.emitMessage(envelope("noon.engine", cancel.type, { requestId: cancel.requestId }));
+  await inputTurn();
+});
