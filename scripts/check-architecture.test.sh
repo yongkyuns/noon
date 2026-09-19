@@ -87,6 +87,11 @@ fn prepare(changes: Changes) {
         .then(FrameChanges::default);
 }
 pub fn encode_retained_with_transient_presentations(&self) {}
+pub fn encode_retained_with_transient_presentations_and_overlay(&self) {
+    self.encode_retained_derived_inner();
+    self.encode_retained_inner();
+}
+pub fn encode_retained(&self) {}
 ''')
     (gpu / 'derived_display.rs').write_text('pub fn upload_transient() {}\n')
     (root / 'crates/noon-render-wgpu/src/render_order.rs').write_text('pub fn prepare_transient() {}\n')
@@ -156,6 +161,26 @@ fn draw(renderer: Renderer) { renderer.encode_retained_with_transient_presentati
                 path.unlink()
             else:
                 path.write_bytes(original)
+
+    # Exercise overlay delegation through the complete entrypoint as well as the
+    # standalone ratchet. Keep the clean fixture valid; only each mutation fails.
+    retained = gpu / 'retained_text.rs'
+    original = retained.read_text()
+    overlay_cases = [
+        ('missing overlay entry', 'pub fn encode_retained_with_transient_presentations_and_overlay(', 'pub fn removed_overlay(', 'explicit overlay renderer entry point disappeared'),
+        ('overlay transient bypass', 'self.encode_retained_derived_inner();', 'self.bypass_scene_encoding();', 'overlay entry bypasses shared transient scene encoding'),
+        ('overlay mixed bypass', 'self.encode_retained_inner();', 'self.bypass_scene_encoding();', 'overlay entry bypasses shared mixed scene encoding'),
+    ]
+    for label, before, after, diagnostic in overlay_cases:
+        assert original.count(before) == 1, (label, 'fixture mutation must match exactly once')
+        for staged in (False, True):
+            retained.write_text(original.replace(before, after))
+            if staged:
+                git(root, 'add', '--', str(retained.relative_to(root)))
+            gate(label + (' staged' if staged else ' working tree'), 1, diagnostic)
+            git(root, 'reset', '-q', 'HEAD', '--', str(retained.relative_to(root)))
+            retained.write_text(original)
+    gate('clean overlay fixture restored', contains='architecture gate passed')
 
     manifest = root / 'crates/noon-core/Cargo.toml'
     original = manifest.read_bytes()
