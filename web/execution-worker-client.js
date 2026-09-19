@@ -21,6 +21,9 @@ const EXECUTION_MODE_SEMANTIC = "semantic";
 const SEMANTIC_PACING_REALTIME = "realtime";
 const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
+// Producer reservations bound promises and messages even before ready() settles.
+// The engine retains its own bounded control queue; this is not another queue.
+export const MAX_IN_FLIGHT_NATIVE_INPUTS = 64;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "execution worker client was terminated during an asynchronous operation";
 
@@ -43,6 +46,7 @@ export class ExecutionWorkerClient {
   #preparedStartReservation = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
+  #nativeInputsInFlight = 0;
   #session = 0;
   #loopDurationSeconds = 4;
   #transportMode = null;
@@ -551,13 +555,20 @@ export class ExecutionWorkerClient {
   // Forward one normalized semantic native-state sample to the canonical session.
   async setNativeStateInput(source, value) {
     this.#requireStarted();
-    return this.#requestEngine("native_state_input", { source, value });
+    return this.#requestNativeInput("native_state_input", { source, value });
+  }
+
+  // Forward one occurrence-local browser pointer record. Surface coordinates
+  // remain CSS pixels; Rust converts them against the current camera/publication.
+  async submitBrowserPointerInput(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("browser_pointer_input", input);
   }
 
   // Forward one normalized semantic native-event source to the canonical session.
   async emitNativeEvent(source) {
     this.#requireStarted();
-    return this.#requestEngine("native_event", { source });
+    return this.#requestNativeInput("native_event", { source });
   }
 
   async state() {
@@ -678,6 +689,38 @@ export class ExecutionWorkerClient {
     this.#fatalOwner = null;
   }
 
+  // Input is occurrence-bound: reserve before yielding, snapshot at admission,
+  // and never migrate a delayed delivery to a replacement endpoint. A rejected
+  // acknowledgement is not permission to repeat an externally observed edge.
+  async #requestNativeInput(type, payload) {
+    this.#requireStarted();
+    if (this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
+      throw new Error("native input requires a stable, non-transitioning execution endpoint");
+    }
+    if (this.#nativeInputsInFlight >= MAX_IN_FLIGHT_NATIVE_INPUTS) {
+      throw new Error("native input in-flight capacity is full; wait for acknowledgement before retrying");
+    }
+    const worker = this.#engineWorker;
+    const ready = this.#ready;
+    const generation = this.#lifecycleGeneration;
+    this.#nativeInputsInFlight += 1;
+    try {
+      // This copy belongs to the genuine worker boundary, not the Rust engine.
+      const snapshot = structuredClone(payload);
+      await ready;
+      if (worker !== this.#engineWorker || ready !== this.#ready ||
+          generation !== this.#lifecycleGeneration ||
+          this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
+        throw new Error("native input belongs to a retired or transitioning execution endpoint");
+      }
+      return await this.#request(worker, "engine", engineEnvelope, type, snapshot);
+    } finally {
+      // Do not reset this counter on restart: old reservations still own their
+      // releases, and cannot decrement a new generation's independent counter.
+      this.#nativeInputsInFlight -= 1;
+    }
+  }
+
   async #requestEngine(type, payload, transfer = []) {
     await this.ready();
     return this.#request(
@@ -709,11 +752,16 @@ export class ExecutionWorkerClient {
     }
     const requestId = this.#nextRequestIds[owner];
     this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
-    const result = new Promise((resolve, reject) => {
-      this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
+    return new Promise((resolve, reject) => {
+      const key = `${owner}:${requestId}`;
+      this.#pending.set(key, { resolve, reject });
+      try {
+        worker.postMessage(envelopeFactory(type, { ...payload, requestId }), transfer);
+      } catch (error) {
+        this.#pending.delete(key);
+        reject(error);
+      }
     });
-    worker.postMessage(envelopeFactory(type, { requestId, ...payload }), transfer);
-    return result;
   }
 
   #workerReady(worker, channel, owner) {
@@ -1001,19 +1049,19 @@ export class ExecutionWorkerClient {
 
 function engineEnvelope(type, payload = {}) {
   return {
+    ...payload,
     channel: ENGINE_CHANNEL,
     protocolVersion: ENGINE_PROTOCOL_VERSION,
     type,
-    ...payload,
   };
 }
 
 function renderEnvelope(type, payload = {}) {
   return {
+    ...payload,
     channel: RENDER_CHANNEL,
     protocolVersion: RENDER_PROTOCOL_VERSION,
     type,
-    ...payload,
   };
 }
 

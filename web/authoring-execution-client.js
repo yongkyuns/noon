@@ -1,4 +1,5 @@
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
+import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 export const SEMANTIC_PACING_REALTIME = "realtime";
@@ -29,6 +30,11 @@ export class AuthoringExecutionClient {
   #onError;
   #onRecoverableError;
   #resizeObserver = null;
+  #pointerAbortController = null;
+  #pointerViewRevision = 0;
+  #pointerSourceSequence = 0;
+  #pointerCollector = null;
+  #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
 
@@ -159,6 +165,7 @@ export class AuthoringExecutionClient {
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
       this.#resizeCurrentCanvas();
+      this.#attachPointerInput();
       return ready;
     } catch (error) {
       if (this.#preparedPlayer === player) {
@@ -198,6 +205,7 @@ export class AuthoringExecutionClient {
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
+      this.#attachPointerInput();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -268,11 +276,11 @@ export class AuthoringExecutionClient {
   }
 
   async setNativeStateInput(source, value) {
-    return this.#withStablePlayer((player) => player.setNativeStateInput(source, value));
+    return this.#withInputPlayer((player) => player.setNativeStateInput(source, value));
   }
 
   async emitNativeEvent(source) {
-    return this.#withStablePlayer((player) => player.emitNativeEvent(source));
+    return this.#withInputPlayer((player) => player.emitNativeEvent(source));
   }
 
   async restartPlayback() {
@@ -298,6 +306,7 @@ export class AuthoringExecutionClient {
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
         this.#resizeCurrentCanvas();
+        this.#attachPointerInput();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -312,13 +321,27 @@ export class AuthoringExecutionClient {
   resize(width, height, devicePixelRatio = 1) {
     if (this.#transition !== null) return;
     this.#requireStarted();
+    this.#resizeViewport(width, height, devicePixelRatio);
+  }
+
+  #resizeViewport(width, height, devicePixelRatio) {
     this.#player.resize(width, height, devicePixelRatio);
+    const viewport = [width, height, devicePixelRatio];
+    if (this.#pointerViewport === null || viewport.some((value, i) => value !== this.#pointerViewport[i])) {
+      this.#advancePointerView();
+      this.#pointerViewport = viewport;
+      this.#pointerCollector?.invalidateView();
+    }
   }
 
   terminate() {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+    this.#pointerAbortController?.abort();
+    this.#pointerAbortController = null;
+    this.#pointerCollector = null;
+    this.#pointerViewport = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
     preparedPlayer?.terminate();
@@ -365,6 +388,15 @@ export class AuthoringExecutionClient {
         this.#transition = null;
       }
     }
+  }
+
+  // Queries may retry after recovery; input must remain bound to one endpoint.
+  #withInputPlayer(operation) {
+    if (this.#transition !== null) {
+      throw new Error("native input is unavailable during an execution transition");
+    }
+    this.#requireStarted();
+    return operation(this.#player);
   }
 
   async #withStablePlayer(operation) {
@@ -423,7 +455,75 @@ export class AuthoringExecutionClient {
       return;
     }
     const scale = window.devicePixelRatio || 1;
-    this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+    this.#resizeViewport(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+  }
+
+  #advancePointerView() {
+    if (this.#pointerViewRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("browser pointer view revision exhausted");
+    }
+    this.#pointerViewRevision += 1;
+  }
+
+  #attachPointerInput() {
+    this.#pointerAbortController?.abort();
+    this.#pointerAbortController = null;
+    this.#pointerCollector = null;
+    // Headless contract tests intentionally use a minimal canvas double. Pointer
+    // collection is a DOM capability, not a startup requirement.
+    if (typeof this.#canvas.addEventListener !== "function" ||
+        typeof this.#canvas.getBoundingClientRect !== "function" ||
+        typeof globalThis.window?.addEventListener !== "function") {
+      return;
+    }
+    const controller = new AbortController();
+    this.#pointerAbortController = controller;
+    const { signal } = controller;
+    const canvas = this.#canvas;
+    const player = this.#player;
+    const generation = this.#lifecycleGeneration;
+    let previousDelivery = Promise.resolve();
+    const report = (error) => {
+      if (this.#onRecoverableError !== null) this.#onRecoverableError(error);
+      else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
+    };
+    let lastInput = null;
+    const fault = async (error, preceding = previousDelivery) => {
+      if (signal.aborted) return;
+      controller.abort();
+      report(error);
+      await preceding.catch(() => {});
+      if (lastInput === null || this.#pointerAbortController !== controller || this.#player !== player ||
+          this.#lifecycleGeneration !== generation || this.#transition !== null) return;
+      try {
+        await player.submitBrowserPointerInput({
+          kind: "cancel", source_id: lastInput.source_id, pointer_id: lastInput.pointer_id,
+          view_revision: lastInput.view_revision, surface_x: null, surface_y: null,
+        });
+      } catch (cancellationError) { report(cancellationError); }
+    };
+    const submit = input => {
+      if (signal.aborted || this.#player !== player || this.#transition !== null) return;
+      lastInput = input;
+      const preceding = previousDelivery;
+      const delivery = player.submitBrowserPointerInput(input);
+      previousDelivery = delivery;
+      void delivery.catch(error => fault(error, preceding));
+    };
+    this.#pointerCollector = attachBrowserPointerInput(canvas, {
+      signal,
+      isCurrent: () => this.#player === player && this.#transition === null,
+      send: submit,
+      allocateSource: () => {
+        if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
+          throw new Error("browser pointer source sequence exhausted");
+        }
+        return ++this.#pointerSourceSequence;
+      },
+      viewRevision: () => this.#pointerViewRevision,
+      advanceView: () => this.#advancePointerView(),
+      onError: error => { void fault(error); },
+    });
   }
 
   #assertLifecycleCurrent(generation, terminateCandidate = null) {

@@ -10,7 +10,7 @@ globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
-const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+const { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
 const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
 
@@ -410,4 +410,162 @@ test("render constructor failure rolls back transferred canvas and semantic star
   const { ready } = await finishStartup(retry, authoring, offset);
   assert.equal(ready.session, 1, "no session was published by failed render preparation");
   client.terminate();
+});
+
+
+const observeResult = (promise) => promise.then(
+  value => ({ value }), error => ({ error }),
+);
+
+function nativeInputCall(client, index) {
+  switch (index % 3) {
+    case 0: return client.setNativeStateInput(
+      { kind: "control", name: "gain" }, { kind: "scalar", value: index },
+    );
+    case 1: return client.emitNativeEvent({ kind: "control_commit", name: `edge-${index}` });
+    default: return client.submitBrowserPointerInput({
+      kind: "move", surface_x: index, surface_y: 0,
+      viewport_width: 800, viewport_height: 400, view_revision: 1,
+    });
+  }
+}
+
+test("native input bounds reservations before readiness and leaves control requests available", async () => {
+  const { client, engine } = await startClient();
+  const count = MAX_IN_FLIGHT_NATIVE_INPUTS;
+  const results = [];
+  try {
+    // Same-turn submission exercises reservations before the first ready() await.
+    for (let i = 0; i < count; i += 1) results.push(observeResult(nativeInputCall(client, i)));
+    const excess = observeResult(nativeInputCall(client, count));
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = engine.messages.filter(message => /^(native_|browser_pointer)/.test(message.type));
+    assert.equal(sent.length, count, "overflow must not allocate a request or post a message");
+    assert.match((await excess).error?.message ?? "", /native input.*full/i);
+    assert.equal(client.diagnostics.engine.nextRequestId, count);
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+
+    const state = client.state();
+    const stateRequest = await waitForRequest(engine, "state");
+    engine.emitMessage(engineMessage("state", { requestId: stateRequest.requestId, time: 0 }));
+    await state;
+    engine.emitMessage(engineMessage(sent[0].type, { requestId: sent[0].requestId, time: 0 }));
+    assert.ok((await results[0]).value);
+    results.push(observeResult(nativeInputCall(client, count + 1)));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+  } finally {
+    client.terminate();
+    await Promise.all(results);
+  }
+  assert.equal(client.diagnostics.engine.pendingRequests, 0);
+});
+
+test("native input snapshots occurrence data before its readiness await", async () => {
+  const { client, engine } = await startClient();
+  const input = { kind: "press", surface_x: 10, surface_y: 20, button: 0, view_revision: 3 };
+  const expected = { ...input };
+  const outcome = observeResult(client.submitBrowserPointerInput(input));
+  input.surface_x = 90;
+  input.kind = "release";
+  input.button = 2;
+  try {
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    const { channel, protocolVersion, requestId, type, ...body } = sent;
+    assert.deepEqual(body, expected);
+    engine.emitMessage(engineMessage(type, { requestId, time: 0 }));
+    assert.ok((await outcome).value);
+  } finally { client.terminate(); await outcome; }
+});
+
+test("native input transport metadata cannot override its issued request identity", async () => {
+  const { client, engine } = await startClient();
+  const outcome = observeResult(client.submitBrowserPointerInput({
+    kind: "move", surface_x: 1, surface_y: 2,
+    channel: "wrong", protocolVersion: 77, requestId: 987, type: "seek", time: 3,
+  }));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = engine.messages.at(-1);
+    assert.equal(sent.channel, "noon.engine");
+    assert.equal(sent.protocolVersion, 1);
+    assert.equal(sent.type, "browser_pointer_input");
+    assert.equal(sent.requestId, 0);
+    engine.emitMessage(engineMessage(sent.type, { requestId: 0 }));
+    assert.ok((await outcome).value);
+  } finally { client.terminate(); await outcome; }
+});
+
+test("native input releases capacity and pending requests after synchronous post failures", async () => {
+  const { client, engine } = await startClient();
+  const post = engine.postMessage.bind(engine);
+  engine.postMessage = message => {
+    if (message.type === "native_event") throw new Error("cannot clone input");
+    post(message);
+  };
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS * 2; i += 1) {
+      await assert.rejects(client.emitNativeEvent({ kind: "wheel" }), /cannot clone input/);
+      assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    }
+  } finally { client.terminate(); }
+});
+
+test("native input cannot cross a scene switch during its readiness await", async () => {
+  const { client, engine: oldEngine, render } = await startClient();
+  const input = observeResult(client.submitBrowserPointerInput({ kind: "cancel", view_revision: 1 }));
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.switchToSemanticExecution("replacement", replacement);
+  try {
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    replyRender(render, rebuild, "engine_rebuilt");
+    await switching;
+    assert.match((await input).error?.message ?? "", /retired|transition/i);
+    const newEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(oldEngine.messages.some(message => message.type === "browser_pointer_input"), false);
+    assert.equal(newEngine.messages.some(message => message.type === "browser_pointer_input"), false);
+  } finally { client.terminate(); await input; }
+});
+
+test("native input releases every reservation after remote rejection and termination", async () => {
+  const { client, engine, authoring } = await startClient();
+  const count = MAX_IN_FLIGHT_NATIVE_INPUTS;
+  let outcomes = Array.from({ length: count }, (_, i) => observeResult(nativeInputCall(client, i)));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    for (const message of engine.messages) {
+      engine.emitMessage(engineMessage("error", { requestId: message.requestId, message: "input rejected" }));
+    }
+    assert.ok((await Promise.all(outcomes)).every(result => result.error));
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    outcomes = Array.from({ length: count }, (_, i) => observeResult(nativeInputCall(client, i)));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+    client.terminate({ preserveHostConfiguration: true });
+    assert.ok((await Promise.all(outcomes)).every(result => result.error));
+    const offset = FakeWorker.instances.length;
+    const restarting = client.restart();
+    const { engine: restarted } = await finishStartup(restarting, authoring, offset);
+    const input = observeResult(client.emitNativeEvent({ kind: "wheel" }));
+    const sent = await waitForRequest(restarted, "native_event");
+    restarted.emitMessage(engineMessage(sent.type, { requestId: sent.requestId }));
+    assert.ok((await input).value);
+  } finally { client.terminate(); await Promise.all(outcomes); }
+});
+
+
+test("uncloneable native input releases its reservation without allocating a transport ID", async () => {
+  const { client, engine } = await startClient();
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS * 2; i += 1) {
+      await assert.rejects(client.submitBrowserPointerInput({ kind: "move", invalid: () => {} }));
+    }
+    assert.equal(client.diagnostics.engine.nextRequestId, 0);
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    assert.equal(engine.messages.length, 0);
+    const accepted = observeResult(client.emitNativeEvent({ kind: "wheel" }));
+    const message = await waitForRequest(engine, "native_event");
+    engine.emitMessage(engineMessage(message.type, { requestId: message.requestId }));
+    assert.ok((await accepted).value);
+  } finally { client.terminate(); }
 });

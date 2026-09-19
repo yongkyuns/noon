@@ -1,6 +1,8 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
+#[cfg(any(target_arch = "wasm32", test))]
+mod pointer_input;
 use crate::authoring_error::AuthoringFailure;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
@@ -18,6 +20,8 @@ use noon_core::{
     NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
     Vec2,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use pointer_input::{BrowserPointerBinding, BrowserPointerInputWire};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -135,6 +139,11 @@ pub struct SemanticExecutionPlayer {
     /// boundary. Returning and re-leasing this player preserves the sequence.
     #[cfg(any(target_arch = "wasm32", test))]
     next_native_event_sequence: u64,
+    /// Browser control-port pointer binding. The DOM adapter supplies CSS-pixel
+    /// surface coordinates and a monotonically changing view revision; the
+    /// shared session remains the admission/publication authority.
+    #[cfg(any(target_arch = "wasm32", test))]
+    browser_pointer_binding: Option<BrowserPointerBinding>,
 }
 
 /// A host continuation receipt retains its endpoint after completion for renderer
@@ -291,6 +300,8 @@ impl SemanticExecutionPlayer {
             live_wake_clock: BrowserExecutionWakeClock::default(),
             #[cfg(any(target_arch = "wasm32", test))]
             next_native_event_sequence: 0,
+            #[cfg(any(target_arch = "wasm32", test))]
+            browser_pointer_binding: None,
         })
     }
 
@@ -323,6 +334,7 @@ impl SemanticExecutionPlayer {
             live_segment: None,
             live_wake_clock: BrowserExecutionWakeClock::default(),
             next_native_event_sequence: 0,
+            browser_pointer_binding: None,
         })
     }
 
@@ -2927,6 +2939,17 @@ impl SemanticExecutionPlayer {
         let input: NativeStateInputWire = serde_json::from_str(json)
             .map_err(|error| format!("invalid native state input JSON: {error}"))?;
         self.set_native_state_input(input.source, input.value.into())
+    }
+
+    /// Decode one contextual browser pointer occurrence at the genuine worker
+    /// control-port boundary. Coordinates are CSS pixels relative to the content
+    /// viewport; conversion and admission happen against one session publication.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
+    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<(), String> {
+        let input: BrowserPointerInputWire = serde_json::from_str(json)
+            .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
+        self.submit_browser_pointer_input(input)
     }
 
     /// Decode one ordered native event at the genuine worker control-port boundary.
