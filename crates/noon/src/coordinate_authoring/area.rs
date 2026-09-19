@@ -33,13 +33,11 @@ pub(crate) fn axes_area(
     Ok(options)
 }
 
-pub(crate) fn prepare_riemann_paths(
-    frame: AxesFrame,
+pub(crate) fn riemann_sample_inputs(
     graph: &Mobject,
-    graph_path: &PathQuery,
-    bounded: Option<(&Mobject, &PathQuery)>,
-    options: RiemannRectangleOptions,
-) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+    bounded: Option<&Mobject>,
+    options: &RiemannRectangleOptions,
+) -> Result<(Vec<f64>, Vec<f64>), CoordinateAuthoringError> {
     if !options.dx.is_finite() || options.dx <= 0.0 || !options.width_scale_factor.is_finite() {
         return Err(CoordinateAuthoringError::InvalidOptions(
             "invalid Riemann rectangle dimensions",
@@ -49,16 +47,82 @@ pub(crate) fn prepare_riemann_paths(
         options.x_range.unwrap_or(graph_range(graph)?),
         graph_range(graph)?,
     )?;
-    if let Some((bound, _)) = bounded {
+    if let Some(bound) = bounded {
         interval = clip_interval(interval, graph_range(bound)?)?;
     }
     let plan = riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;
-    // The shared plot planner appends one exact terminal endpoint separately
-    // from arange's samples. Only that appended endpoint is not a rectangle.
-    // Do not filter rounded regular samples: NumPy may repeat them or round
-    // them onto/past the nominal end of its half-open input interval.
-    let samples = &plan.parameters()[..plan.parameters().len() - 1];
-    let colors = crate::color_gradient(&options.colors, samples.len())?;
+    let starts = plan.parameters()[..plan.parameters().len() - 1].to_vec();
+    let sample_xs = starts
+        .iter()
+        .map(|&x| match options.sample {
+            RiemannSample::Left => x,
+            RiemannSample::Right => x + options.dx,
+            RiemannSample::Center => x + options.dx * 0.5,
+        })
+        .collect();
+    Ok((starts, sample_xs))
+}
+
+pub(crate) fn prepare_riemann_paths(
+    frame: AxesFrame,
+    graph: &Mobject,
+    graph_path: &PathQuery,
+    bounded: Option<(&Mobject, &PathQuery)>,
+    options: RiemannRectangleOptions,
+) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+    let (starts, sample_xs) =
+        riemann_sample_inputs(graph, bounded.map(|(object, _)| object), &options)?;
+    let top_values = sample_xs
+        .iter()
+        .map(|&x| graph_y_at(frame, graph_path, x))
+        .collect::<Result<Vec<_>, _>>()?;
+    let baseline_values = bounded
+        .map(|(_, path)| {
+            starts
+                .iter()
+                .map(|&x| graph_y_at(frame, path, x))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    prepare_riemann_paths_with_values(
+        frame,
+        graph,
+        bounded.map(|(object, _)| object),
+        options,
+        &starts,
+        &sample_xs,
+        &top_values,
+        baseline_values.as_deref(),
+    )
+}
+
+pub(crate) fn prepare_riemann_paths_with_values(
+    frame: AxesFrame,
+    graph: &Mobject,
+    bounded: Option<&Mobject>,
+    options: RiemannRectangleOptions,
+    starts: &[f64],
+    sample_xs: &[f64],
+    top_values: &[f64],
+    baseline_values: Option<&[f64]>,
+) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+    if starts.len() != sample_xs.len()
+        || starts.len() != top_values.len()
+        || baseline_values.is_some_and(|values| values.len() != starts.len())
+        || top_values.iter().any(|value| !value.is_finite())
+        || baseline_values.is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+    {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "Riemann callback values must match the Rust sample plan and be finite",
+        ));
+    }
+    let (planned_starts, planned_sample_xs) = riemann_sample_inputs(graph, bounded, &options)?;
+    if planned_starts != starts || planned_sample_xs != sample_xs {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "Riemann callback positions do not match the Rust sample plan",
+        ));
+    }
+    let colors = crate::color_gradient(&options.colors, starts.len())?;
     let style = SemanticStyle {
         fill_opacity: options.fill_opacity,
         stroke: Some(SemanticPaint::Solid(options.stroke_color)),
@@ -72,25 +136,16 @@ pub(crate) fn prepare_riemann_paths(
         || !(0.0..=1.0).contains(&options.fill_opacity)
         || options.stroke_width < 0.0
     {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "invalid Riemann paint",
-        ));
+        return Err(CoordinateAuthoringError::InvalidOptions("invalid Riemann paint"));
     }
     let mut paths = Vec::new();
-    paths
-        .try_reserve_exact(samples.len())
-        .map_err(|_| CoordinateError::AllocationFailed)?;
-    for (index, &x) in samples.iter().enumerate() {
-        let sample_x = match options.sample {
-            RiemannSample::Left => x,
-            RiemannSample::Right => x + options.dx,
-            RiemannSample::Center => x + options.dx * 0.5,
-        };
-        let top = graph_y_at(frame, graph_path, sample_x)?;
-        let baseline = bounded.map_or(
-            Ok(noon_geometry::origin_shift(frame.y().range())),
-            |(_, path)| graph_y_at(frame, path, x),
-        )?;
+    paths.try_reserve_exact(starts.len()).map_err(|_| CoordinateError::AllocationFailed)?;
+    for (index, (&x, &sample_x)) in starts.iter().zip(sample_xs).enumerate() {
+        let top = top_values[index];
+        let baseline = baseline_values.map_or(
+            noon_geometry::origin_shift(frame.y().range()),
+            |values| values[index],
+        );
         let width_end = x + options.dx * options.width_scale_factor;
         let bottom_left = frame.coords_to_point(x, baseline)?;
         let bottom_right = frame.coords_to_point(width_end, baseline)?;
@@ -100,18 +155,12 @@ pub(crate) fn prepare_riemann_paths(
         let min_y = bottom_left[1].min(bottom_right[1]).min(graph_point[1]);
         let max_y = bottom_left[1].max(bottom_right[1]).max(graph_point[1]);
         let mut color = colors[index];
-        // Path samples are retained as f32 scene coordinates. A height below
-        // their precision is zero for signed paint classification; otherwise
-        // bisection noise can invert an exactly flat rectangle.
         let height_precision =
             4.0 * f64::from(f32::EPSILON) * graph_point[1].abs().max(bottom_left[1].abs()).max(1.0)
                 / frame.y().unit_size();
         if top < baseline - height_precision && options.show_signed_area {
             color = noon_core::Color::rgba(
-                1.0 - color.red,
-                1.0 - color.green,
-                1.0 - color.blue,
-                color.alpha,
+                1.0 - color.red, 1.0 - color.green, 1.0 - color.blue, color.alpha,
             );
         }
         let mut style = style.clone();
@@ -119,15 +168,9 @@ pub(crate) fn prepare_riemann_paths(
         if options.blend {
             style.stroke = Some(SemanticPaint::Solid(color));
         }
-        paths.push((
-            closed_path(&[
-                [max_x, max_y],
-                [min_x, max_y],
-                [min_x, min_y],
-                [max_x, min_y],
-            ])?,
-            style,
-        ));
+        paths.push((closed_path(&[
+            [max_x, max_y], [min_x, max_y], [min_x, min_y], [max_x, min_y],
+        ])?, style));
     }
     Ok(paths)
 }
