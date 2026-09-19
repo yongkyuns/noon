@@ -1,0 +1,72 @@
+name: C2 input wake regression
+on:
+  push:
+    branches: [work/c2-input-wake-fix]
+    paths:
+      - .github/workflows/c2-input-wake-fix.yml
+permissions:
+  contents: write
+jobs:
+  reproduce-and-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify source and add regression coverage
+        run: |
+          test "$(git hash-object web/semantic-engine-endpoint.js)" = d7273f1eb475e2bd211dcdee44a963a2eada9564
+          test "$(git hash-object web/semantic-engine-endpoint.test.mjs)" = 1709300afc733a2f23574270f714960cea8bc5e7
+          cat .github/c2-input-wake-test-addition.mjs >> web/semantic-engine-endpoint.test.mjs
+      - name: Prove all six wake cases fail before the production fix
+        run: |
+          set +e
+          node --test --test-name-pattern='native input preserves active continuation wake' web/semantic-engine-endpoint.test.mjs > /tmp/c2-before.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/c2-before.log
+          test "$result" = 1
+          grep -q '# fail 6' /tmp/c2-before.log
+          test "$(grep -c 'error:.*input must not replace an active segment wake with idle' /tmp/c2-before.log)" = 6
+      - name: Keep input wake projection on the active Rust owner
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('web/semantic-engine-endpoint.js')
+          text = path.read_text()
+          old = '''            if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
+                      else observeExecutionWake(performance.now());
+                      break;'''
+          new = '''            // Live driving pauses the ordinary playback clock. Native input
+                      // must retain the active segment's Rust-derived wake, including
+                      // pure-wait deadlines, rather than accidentally publishing idle.
+                      if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
+                      else if (continuationActive) observeContinuationWake(performance.now());
+                      else observeExecutionWake(performance.now());
+                      break;'''
+          assert text.count(old) == 1, text.count(old)
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Run all endpoint tests after the fix
+        run: node --test web/semantic-engine-endpoint.test.mjs | tee /tmp/c2-after.log
+      - name: Run adjacent lifecycle and wake regressions
+        run: |
+          node --test web/execution-worker-client.test.mjs web/semantic-execution-routing.test.mjs web/direct-execution-wake-driver.test.mjs
+          git diff --check
+      - name: Publish only tested source and regression coverage
+        run: |
+          git rm .github/c2-input-wake-test-addition.mjs .github/workflows/c2-input-wake-fix.yml
+          git add web/semantic-engine-endpoint.js web/semantic-engine-endpoint.test.mjs
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: preserve active continuation wakes after native input'
+          git push origin HEAD:refs/heads/work/c2-input-wake-fix
+          git archive --format=tar.gz -o /tmp/c2-fixed-source.tar.gz HEAD
+          git rev-parse HEAD HEAD^{tree} > /tmp/c2-source-identity.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c2-input-wake-proof
+          path: |
+            /tmp/c2-before.log
+            /tmp/c2-after.log
+            /tmp/c2-source-identity.txt
+            /tmp/c2-fixed-source.tar.gz
+          retention-days: 7
