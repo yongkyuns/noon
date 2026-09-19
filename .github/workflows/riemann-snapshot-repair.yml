@@ -24,20 +24,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          fetch-depth: 30
       - name: Apply source repair without changing an active branch
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/codex/b5-riemann-snapshot-repair
-          for part in core web tests; do
+          git cat-file -e "$STACK_BASE^{commit}"
+          for part in core web tests smoke; do
             git show "$GITHUB_SHA:.github/riemann-repair-$part.py" > "/tmp/riemann-repair-$part.py"
             python3 -m py_compile "/tmp/riemann-repair-$part.py"
           done
           git checkout --detach "$SOURCE_HEAD"
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
-          for part in core web tests; do python3 "/tmp/riemann-repair-$part.py"; done
+          for part in core web tests smoke; do python3 "/tmp/riemann-repair-$part.py"; done
           git diff --check
+          node --input-type=module --check < web/plotting-smoke.js
           PYTHONPATH=web/python python3 -m unittest discover -s web/python -p test_manim_riemann_plan.py -v
       - name: Use repository-pinned Rust
         run: rustup install
@@ -70,6 +72,7 @@ jobs:
               'crates/noon/src/coordinate_authoring/area/tests.rs',
               'web/python/_manim_plotting.py',
               'web/python/test_manim_riemann_plan.py',
+              'web/plotting-smoke.js',
           }
           changed = set(subprocess.check_output(['git','diff','--name-only'], text=True).splitlines())
           changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'], text=True).splitlines())
