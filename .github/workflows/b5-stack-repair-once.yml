@@ -1,0 +1,156 @@
+# Disposable runner branch for #1677. The published repair has the original
+# parent and exactly four source/test changes; this workflow is not published.
+name: B5 stack repair preparation
+on:
+  push:
+    branches: [codex/b5-stack-validation-repair]
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: github.repository == 'yongkyuns/noon'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: true
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      REPAIR_PARENT: 955a570c77df1518216bd4911d70ba85f922093e
+      REPAIR_REF: refs/heads/codex/b5-stack-qualification
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - name: Verify immutable inputs and prepare four-file repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/codex/b5-stack-validation-repair
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$REPAIR_PARENT"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              'crates/noon/src/text_authoring/semantic/objects.rs': '757dd1744bf06d2363533d885ff64bac7da09244',
+              'crates/noon-web/src/canonical_authoring_scene.rs': '85c3dd31bbd5424e74837d606d64a0ae49e6d8e3',
+              'crates/noon-web/src/semantic_execution_player.rs': '440836bdd5e3245cf29e21d3d4a0a2127a4a63a3',
+              'web/manim-compatibility-gallery.test.mjs': 'a9dd9e6744eb9e2c3890d8e14f064500fb04b19b',
+          }
+          sources = {}
+          for name, sha in expected.items():
+              data = Path(name).read_bytes()
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              if actual != sha:
+                  raise RuntimeError(f'{name}: source changed; refusing repair')
+              sources[name] = data.decode('utf-8')
+
+          def replace(name, old, new):
+              if sources[name].count(old) != 1:
+                  raise RuntimeError(f'{name}: replacement is not unique')
+              sources[name] = sources[name].replace(old, new, 1)
+
+          name = 'crates/noon/src/text_authoring/semantic/objects.rs'
+          replace(name, '#[cfg(feature = "typst")]\nuse noon_core::GeometryResourceArena;\n', '')
+          start = sources[name].index('    text_artifact_state(\n')
+          end = sources[name].index('\nfn text_artifact_presentation(', start)
+          old = sources[name][start:end]
+          if old.count('fn text_artifact_state(') != 1 or old.count('import_compiled_text_resource(') != 1:
+              raise RuntimeError('unexpected text forwarding helper structure')
+          new = '''    let (transform, style) = text_artifact_presentation(
+              text.authored_transform(),
+              text.presentation.color,
+              text.presentation.opacity,
+          )?;
+          let handle = store
+              .borrow_mut()
+              .import_compiled_text_resource(
+                  identity,
+                  artifact.resource.as_ref().clone(),
+                  artifact.fonts.as_ref(),
+                  artifact.geometry.as_ref(),
+              )
+              .map_err(TextAuthoringError::Import)?;
+          Ok(semantic_text_state(handle, transform, style))
+          }
+          '''
+          # The string above is indented by four fewer spaces than Rust's body
+          # after YAML block removal. Restore normal Rust indentation explicitly.
+          lines = new.splitlines()
+          for index in range(1, len(lines) - 1):
+              lines[index] = '    ' + lines[index]
+          new = '\n'.join(lines) + '\n'
+          replace(name, old, new)
+
+          for name in ('crates/noon-web/src/canonical_authoring_scene.rs',
+                       'crates/noon-web/src/semantic_execution_player.rs'):
+              replace(name, '    pub(crate) fn live_create_path_family(\n',
+                      '    #[cfg(target_arch = "wasm32")]\n    pub(crate) fn live_create_path_family(\n')
+
+          name = 'web/manim-compatibility-gallery.test.mjs'
+          replace(name, 'assert.equal(gallery.examples.length, 23);',
+                  'assert.equal(gallery.examples.length, 24);')
+          replace(name, '    "noon-implicit-plotting",\n',
+                  '    "noon-implicit-plotting",\n    "noon-area-helpers",\n')
+          marker = 'console.log("✓ Noon-authored Manim-compatible gallery examples");'
+          checks = '''const areaEntry = readyEntries.find((entry) => entry.id === "noon-area-helpers");
+          assert.ok(areaEntry, "area helpers must be a ready compatibility example");
+          assert.equal(areaEntry.parity_status, "candidate");
+          assert.equal(areaEntry.parity_fixture, "area-helpers");
+          assert.equal(areaEntry.category, "manim-compatible/plotting");
+          const areaSource = await readFile(new URL(`./${areaEntry.path}`, import.meta.url), "utf8");
+          assert.match(areaSource, /Axes\(/, "area gallery example must construct Axes");
+          assert.match(areaSource, /\.get_area\(/, "area gallery example must construct a shaded area");
+          assert.match(areaSource, /\.get_riemann_rectangles\(/, "area gallery example must construct Riemann rectangles");
+          assert.match(areaSource, /input_sample_type="center"/, "area gallery example must exercise midpoint sampling");
+          '''
+          replace(name, marker, checks + '\n' + marker)
+
+          # Validate all inputs/replacements before changing any source file.
+          for name, source in sources.items():
+              Path(name).write_text(source, encoding='utf-8')
+          PY
+          git rm .github/workflows/b5-stack-repair-once.yml
+          git diff --check
+          node --test web/manim-compatibility-gallery.test.mjs
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      - name: Format only the edited Rust sources
+        run: |
+          rustfmt --edition 2024 --config skip_children=true crates/noon/src/text_authoring/semantic/objects.rs crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs
+          cargo fmt --all -- --check
+      - name: Publish only the intended source repair to a new branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add crates/noon/src/text_authoring/semantic/objects.rs crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs web/manim-compatibility-gallery.test.mjs
+          git diff --cached --check
+          tree=$(git write-tree)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          repair=$(git commit-tree "$tree" -p "$REPAIR_PARENT" -m 'fix: repair B4/B5 stack qualification without lint exemptions')
+          test "$(git diff --name-only "$REPAIR_PARENT" "$repair" | wc -l)" -eq 4
+          test -z "$(git diff --name-only "$REPAIR_PARENT" "$repair" -- .github)"
+          git diff --stat "$REPAIR_PARENT" "$repair"
+          git diff "$REPAIR_PARENT" "$repair"
+          # Empty expected old ref is create-only: a concurrent branch creation
+          # fails instead of overwriting any existing branch or other agent.
+          git push --force-with-lease="$REPAIR_REF:" origin "$repair:$REPAIR_REF"
+          git checkout --detach "$repair"
+          echo "Repair commit: $repair" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Validate the actual published repair with the repository fast gate
+        run: |
+          git rev-parse HEAD
+          bash scripts/check.sh fast "$REPAIR_PARENT"
