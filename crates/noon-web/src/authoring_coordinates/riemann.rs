@@ -2,6 +2,23 @@
 use super::*;
 
 #[wasm_bindgen]
+pub struct WasmRiemannSamplePlan {
+    starts: Vec<f64>,
+    samples: Vec<f64>,
+}
+
+#[wasm_bindgen]
+impl WasmRiemannSamplePlan {
+    pub fn starts(&self) -> Vec<f64> {
+        self.starts.clone()
+    }
+
+    pub fn samples(&self) -> Vec<f64> {
+        self.samples.clone()
+    }
+}
+
+#[wasm_bindgen]
 pub struct WasmRiemannRectangleOptions {
     options: RiemannRectangleOptions,
 }
@@ -61,6 +78,21 @@ impl WasmCoordinateOptions {
 
 #[wasm_bindgen]
 impl WasmRiemannRectangleOptions {
+    #[wasm_bindgen(js_name = samplePlan)]
+    pub fn sample_plan(
+        &self,
+        graph: &WasmAuthoringMobjectHandle,
+        bounded_graph: &WasmAuthoringMobjectHandle,
+        has_bounded_graph: bool,
+    ) -> Result<WasmRiemannSamplePlan, JsValue> {
+        let bounded = has_bounded_graph.then(|| bounded_graph.semantic_mobject());
+        let (starts, samples) =
+            ManimAxes::riemann_sample_inputs(graph.semantic_mobject(), bounded, &self.options)
+                .map_err(coordinate_failure)
+                .map_err(js_error)?;
+        Ok(WasmRiemannSamplePlan { starts, samples })
+    }
+
     #[wasm_bindgen(js_name = setPaint)]
     pub fn set_paint(
         &mut self,
@@ -121,6 +153,36 @@ impl WasmAuthoringFamilyHandle {
     }
 }
 
+    #[wasm_bindgen(js_name = riemannRectanglesFromValues)]
+    pub fn riemann_rectangles_from_values(
+        &self,
+        graph: &WasmAuthoringMobjectHandle,
+        options: WasmRiemannRectangleOptions,
+        bounded_graph: &WasmAuthoringMobjectHandle,
+        has_bounded_graph: bool,
+        starts: &[f64],
+        samples: &[f64],
+        top_values: &[f64],
+        baseline_values: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let axes = ManimAxes::from_family(self.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let bounded = has_bounded_graph.then(|| bounded_graph.semantic_mobject());
+        axes.get_riemann_rectangles_with_values(
+            graph.semantic_mobject(),
+            options.into_options(bounded.map(|object| object.node_id())),
+            starts,
+            samples,
+            top_values,
+            has_bounded_graph.then_some(baseline_values),
+        )
+        .map(WasmAuthoringFamilyHandle::from_semantic_family)
+        .map_err(coordinate_failure)
+        .map_err(js_error)
+    }
+}
+
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveEffectiveRiemannRectangles)]
@@ -165,6 +227,48 @@ impl CanonicalAuthoringSceneContext {
                 .as_ref()
                 .map(|(object, path)| (*object, &path.value)),
             options.into_options(bounded.as_ref().map(|(object, _)| object.node_id())),
+        )
+        .map_err(coordinate_failure)
+        .map_err(js_error)?;
+        self.publish_live_path_family(paths)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveEffectiveRiemannRectanglesFromValues)]
+    pub fn live_effective_riemann_rectangles_from_values(
+        &mut self,
+        axes: &WasmAuthoringFamilyHandle,
+        graph: &WasmAuthoringMobjectHandle,
+        options: WasmRiemannRectangleOptions,
+        bounded_graph: &WasmAuthoringMobjectHandle,
+        has_bounded_graph: bool,
+        starts: &[f64],
+        samples: &[f64],
+        top_values: &[f64],
+        baseline_values: &[f64],
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let axes_object = ManimAxes::from_family(axes.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let frame = AxesFrame::new(
+            self.coordinate_line_frame(
+                &axes_object.x_axis().map_err(coordinate_failure).map_err(js_error)?,
+            )?,
+            self.coordinate_line_frame(
+                &axes_object.y_axis().map_err(coordinate_failure).map_err(js_error)?,
+            )?,
+        );
+        let bounded = has_bounded_graph.then(|| bounded_graph.semantic_mobject());
+        let paths = ManimAxes::riemann_rectangle_paths_with_values(
+            frame,
+            graph.semantic_mobject(),
+            bounded,
+            options.into_options(bounded.map(|object| object.node_id())),
+            starts,
+            samples,
+            top_values,
+            has_bounded_graph.then_some(baseline_values),
         )
         .map_err(coordinate_failure)
         .map_err(js_error)?;
