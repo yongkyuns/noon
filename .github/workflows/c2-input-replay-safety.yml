@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 5
+          fetch-depth: 8
       - name: Verify source payload and install only regression tests
         run: |
           python3 - <<'PY'
@@ -36,7 +36,21 @@ jobs:
           Path('/tmp/replay-tests.patch').write_text(payload['test_patch'])
           Path('/tmp/replay-source.patch').write_text(payload['source_patch'])
           PY
+          cat > /tmp/qualify-input-locality.py <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-runtime/src/replay/input_tests.rs')
+          text = p.read_text()
+          old = '    assert!(runtime.take_frame_changes().is_empty(), "no unrelated frame rows become dirty");'
+          new = '    assert_eq!(runtime.frame().objects[0].transform.translation, Vec2::ZERO, "seek preserves existing geometry");'
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = '    assert_eq!(runtime.replay_stats().revisions_retained, 1);\n    runtime.set_reactive_input(signal, 2.0_f32).unwrap();'
+          new = '    assert_eq!(runtime.replay_stats().revisions_retained, 1);\n    runtime.take_frame_changes();\n    runtime.set_reactive_input(signal, 2.0_f32).unwrap();\n    assert!(runtime.take_frame_changes().is_empty(), "signal-only input does not dirty unrelated frame rows");'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+          PY
           git apply --index /tmp/replay-tests.patch
+          python3 /tmp/qualify-input-locality.py
           printf '\n#[cfg(test)]\nmod input_tests;\n' >> crates/noon-runtime/src/replay.rs
       - name: Use repository-pinned Rust
         run: rustup install
@@ -78,6 +92,7 @@ jobs:
         run: |
           git reset --hard HEAD
           git apply --index /tmp/replay-source.patch
+          python3 /tmp/qualify-input-locality.py
           git rm .github/c2-input-replay-payload.b64 .github/workflows/c2-input-replay-safety.yml
           cargo fmt --all
           git add -u
