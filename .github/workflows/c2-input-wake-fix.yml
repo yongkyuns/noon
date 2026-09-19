@@ -26,7 +26,7 @@ jobs:
           cat /tmp/c2-before.log
           test "$result" = 1
           grep -q '# fail 6' /tmp/c2-before.log
-          test "$(grep -c 'error:.*input must not replace an active segment wake with idle' /tmp/c2-before.log)" = 6
+          test "$(grep -c 'input must not replace an active segment wake with idle' /tmp/c2-before.log)" = 6
       - name: Keep input wake projection on the active Rust owner
         run: |
           python3 - <<'PY'
