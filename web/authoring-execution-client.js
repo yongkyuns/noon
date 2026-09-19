@@ -1,4 +1,5 @@
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
+import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 export const SEMANTIC_PACING_REALTIME = "realtime";
@@ -31,6 +32,9 @@ export class AuthoringExecutionClient {
   #resizeObserver = null;
   #pointerAbortController = null;
   #pointerViewRevision = 0;
+  #pointerSourceSequence = 0;
+  #pointerCollector = null;
+  #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
 
@@ -317,7 +321,17 @@ export class AuthoringExecutionClient {
   resize(width, height, devicePixelRatio = 1) {
     if (this.#transition !== null) return;
     this.#requireStarted();
+    this.#resizeViewport(width, height, devicePixelRatio);
+  }
+
+  #resizeViewport(width, height, devicePixelRatio) {
     this.#player.resize(width, height, devicePixelRatio);
+    const viewport = [width, height, devicePixelRatio];
+    if (this.#pointerViewport === null || viewport.some((value, i) => value !== this.#pointerViewport[i])) {
+      this.#advancePointerView();
+      this.#pointerViewport = viewport;
+      this.#pointerCollector?.invalidateView();
+    }
   }
 
   terminate() {
@@ -326,6 +340,8 @@ export class AuthoringExecutionClient {
     this.#resizeObserver = null;
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
+    this.#pointerCollector = null;
+    this.#pointerViewport = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
     preparedPlayer?.terminate();
@@ -439,13 +455,20 @@ export class AuthoringExecutionClient {
       return;
     }
     const scale = window.devicePixelRatio || 1;
-    this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+    this.#resizeViewport(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+  }
+
+  #advancePointerView() {
+    if (this.#pointerViewRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("browser pointer view revision exhausted");
+    }
     this.#pointerViewRevision += 1;
   }
 
   #attachPointerInput() {
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
+    this.#pointerCollector = null;
     // Headless contract tests intentionally use a minimal canvas double. Pointer
     // collection is a DOM capability, not a startup requirement.
     if (typeof this.#canvas.addEventListener !== "function" ||
@@ -464,52 +487,43 @@ export class AuthoringExecutionClient {
       if (this.#onRecoverableError !== null) this.#onRecoverableError(error);
       else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
     };
-    const submit = (kind, event = null) => {
+    let lastInput = null;
+    const fault = async (error, preceding = previousDelivery) => {
+      if (signal.aborted) return;
+      controller.abort();
+      report(error);
+      await preceding.catch(() => {});
+      if (lastInput === null || this.#pointerAbortController !== controller || this.#player !== player ||
+          this.#lifecycleGeneration !== generation || this.#transition !== null) return;
+      try {
+        await player.submitBrowserPointerInput({
+          kind: "cancel", source_id: lastInput.source_id, pointer_id: lastInput.pointer_id,
+          view_revision: lastInput.view_revision, surface_x: null, surface_y: null,
+        });
+      } catch (cancellationError) { report(cancellationError); }
+    };
+    const submit = input => {
       if (signal.aborted || this.#player !== player || this.#transition !== null) return;
-      const rect = canvas.getBoundingClientRect();
-      const positioned = event !== null;
-      const input = {
-        kind,
-        surface_x: positioned ? event.clientX - rect.left : null,
-        surface_y: positioned ? event.clientY - rect.top : null,
-        viewport_width: positioned ? rect.width : null,
-        viewport_height: positioned ? rect.height : null,
-        button: positioned && (kind === "press" || kind === "release") ? event.button : null,
-        view_revision: this.#pointerViewRevision,
-        shift: event?.shiftKey === true,
-        control: event?.ctrlKey === true,
-        alt: event?.altKey === true,
-        meta: event?.metaKey === true,
-      };
+      lastInput = input;
       const preceding = previousDelivery;
       const delivery = player.submitBrowserPointerInput(input);
       previousDelivery = delivery;
-      void delivery.catch(async (error) => {
-        // A DOM source cannot wait for capacity. Fault this collector once,
-        // report the loss of delivery, then attempt one ordered cancellation.
-        // Retain only the preceding promise, not a second event/retry queue.
-        if (signal.aborted) return;
-        controller.abort();
-        report(error);
-        await preceding.catch(() => {});
-        if (this.#pointerAbortController !== controller || this.#player !== player ||
-            this.#lifecycleGeneration !== generation || this.#transition !== null) return;
-        try {
-          await player.submitBrowserPointerInput({
-            kind: "cancel", view_revision: input.view_revision,
-            surface_x: null, surface_y: null,
-          });
-        } catch (cancellationError) {
-          report(cancellationError);
-        }
-      });
+      void delivery.catch(error => fault(error, preceding));
     };
-    this.#canvas.addEventListener("pointermove", (event) => submit("move", event), { signal });
-    this.#canvas.addEventListener("pointerdown", (event) => submit("press", event), { signal });
-    this.#canvas.addEventListener("pointerup", (event) => submit("release", event), { signal });
-    this.#canvas.addEventListener("pointercancel", () => submit("cancel"), { signal });
-    this.#canvas.addEventListener("pointerleave", () => submit("cancel"), { signal });
-    window.addEventListener("blur", () => submit("focus_lost"), { signal });
+    this.#pointerCollector = attachBrowserPointerInput(canvas, {
+      signal,
+      isCurrent: () => this.#player === player && this.#transition === null,
+      send: submit,
+      allocateSource: () => {
+        if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
+          throw new Error("browser pointer source sequence exhausted");
+        }
+        return ++this.#pointerSourceSequence;
+      },
+      viewRevision: () => this.#pointerViewRevision,
+      advanceView: () => this.#advancePointerView(),
+      onError: error => { void fault(error); },
+    });
   }
 
   #assertLifecycleCurrent(generation, terminateCandidate = null) {
