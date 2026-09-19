@@ -162,7 +162,7 @@ pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
     ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, RiemannRectangleOptions,
-    RiemannSample,
+    RiemannRectanglePlan, RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
