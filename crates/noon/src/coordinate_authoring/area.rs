@@ -33,34 +33,197 @@ pub(crate) fn axes_area(
     Ok(options)
 }
 
-pub(crate) fn riemann_sample_inputs(
-    graph: &Mobject,
-    bounded: Option<&Mobject>,
-    options: &RiemannRectangleOptions,
-) -> Result<(Vec<f64>, Vec<f64>), CoordinateAuthoringError> {
-    if !options.dx.is_finite() || options.dx <= 0.0 || !options.width_scale_factor.is_finite() {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "invalid Riemann rectangle dimensions",
-        ));
+/// Immutable preparation for one Riemann request. All coordinate/path reads and
+/// interval/paint validation happen before host evaluation. Returned scalar
+/// values cannot replace the Rust-owned partition or trigger a second snapshot.
+/// This is disposable authoring data, not a scene cache or a runtime subscription.
+pub struct RiemannRectanglePlan {
+    store: Rc<RefCell<SemanticStore>>,
+    frame: AxesFrame,
+    partition: noon_geometry::PlotSamplingPlan,
+    graph_path: PathQuery,
+    bounded_path: Option<PathQuery>,
+    options: RiemannRectangleOptions,
+    colors: Vec<noon_core::Color>,
+    style: SemanticStyle,
+}
+
+impl RiemannRectanglePlan {
+    /// Integration entry point. The caller must capture all operands from the
+    /// same authored state or effective publication, without interleaved callbacks.
+    pub fn from_snapshot(
+        frame: AxesFrame,
+        graph: &Mobject,
+        graph_path: &PathQuery,
+        bounded: Option<(&Mobject, &PathQuery)>,
+        options: RiemannRectangleOptions,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        if !options.dx.is_finite() || options.dx <= 0.0 || !options.width_scale_factor.is_finite() {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "invalid Riemann rectangle dimensions",
+            ));
+        }
+        if let Some((bound, _)) = bounded {
+            graph.require_same_store(bound)?;
+        }
+        let range = graph_range(graph)?;
+        let mut interval = clip_interval(options.x_range.unwrap_or(range), range)?;
+        if let Some((bound, _)) = bounded {
+            interval = clip_interval(interval, graph_range(bound)?)?;
+        }
+        let partition =
+            riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;
+        let style = SemanticStyle {
+            fill_opacity: options.fill_opacity,
+            stroke: Some(SemanticPaint::Solid(options.stroke_color)),
+            stroke_width: options.stroke_width * 0.01,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            stroke_cap: StrokeCap::Butt,
+            stroke_join: StrokeJoin::Miter,
+            ..Default::default()
+        };
+        if !style.is_finite()
+            || !(0.0..=1.0).contains(&options.fill_opacity)
+            || options.stroke_width < 0.0
+        {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "invalid Riemann paint",
+            ));
+        }
+        let colors = crate::color_gradient(&options.colors, partition.parameters().len() - 1)?;
+        let plan = Self {
+            store: Rc::clone(graph.integration_store()),
+            frame,
+            partition,
+            graph_path: graph_path.clone(),
+            bounded_path: bounded.map(|(_, path)| path.clone()),
+            options,
+            colors,
+            style,
+        };
+        // Reject unrepresentable requested inputs before invoking a host callback.
+        for (&x, sample) in plan.starts().iter().zip(plan.samples()) {
+            if !sample.is_finite()
+                || !(x + plan.options.dx * plan.options.width_scale_factor).is_finite()
+            {
+                return Err(CoordinateAuthoringError::InvalidOptions(
+                    "nonfinite Riemann sample",
+                ));
+            }
+        }
+        Ok(plan)
     }
-    let mut interval = clip_interval(
-        options.x_range.unwrap_or(graph_range(graph)?),
-        graph_range(graph)?,
-    )?;
-    if let Some(bound) = bounded {
-        interval = clip_interval(interval, graph_range(bound)?)?;
+
+    /// Half-open arange samples. Only the separately appended terminal endpoint
+    /// is excluded; rounded endpoints and repeated regular samples are preserved.
+    pub fn starts(&self) -> &[f64] {
+        &self.partition.parameters()[..self.partition.parameters().len() - 1]
     }
-    let plan = riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;
-    let starts = plan.parameters()[..plan.parameters().len() - 1].to_vec();
-    let sample_xs = starts
-        .iter()
-        .map(|&x| match options.sample {
+
+    /// Top-function inputs. A bounded function instead receives `starts()`.
+    pub fn samples(&self) -> impl ExactSizeIterator<Item = f64> + '_ {
+        self.starts().iter().map(|&x| match self.options.sample {
             RiemannSample::Left => x,
-            RiemannSample::Right => x + options.dx,
-            RiemannSample::Center => x + options.dx * 0.5,
+            RiemannSample::Right => x + self.options.dx,
+            RiemannSample::Center => x + self.options.dx * 0.5,
         })
-        .collect();
-    Ok((starts, sample_xs))
+    }
+
+    /// Each optional value set independently selects exact callback evaluation.
+    /// None selects the captured retained-path fallback (or the unbounded axis).
+    /// No semantic or runtime state is read again after this plan was captured.
+    pub fn paths(
+        &self,
+        top_values: Option<&[f64]>,
+        baseline_values: Option<&[f64]>,
+    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+        if baseline_values.is_some() && self.bounded_path.is_none() {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "unbounded Riemann plan has no lower graph",
+            ));
+        }
+        for values in [top_values, baseline_values].into_iter().flatten() {
+            if values.len() != self.starts().len() || values.iter().any(|value| !value.is_finite())
+            {
+                return Err(CoordinateAuthoringError::InvalidOptions(
+                    "Riemann callback values must match the Rust plan and be finite",
+                ));
+            }
+        }
+        let mut paths = Vec::new();
+        paths
+            .try_reserve_exact(self.starts().len())
+            .map_err(|_| CoordinateError::AllocationFailed)?;
+        for (index, (&x, sample_x)) in self.starts().iter().zip(self.samples()).enumerate() {
+            let top = match top_values {
+                Some(values) => values[index],
+                None => graph_y_at(self.frame, &self.graph_path, sample_x)?,
+            };
+            let baseline = match (baseline_values, self.bounded_path.as_ref()) {
+                (Some(values), _) => values[index],
+                (None, Some(path)) => graph_y_at(self.frame, path, x)?,
+                (None, None) => noon_geometry::origin_shift(self.frame.y().range()),
+            };
+            let bottom_left = self.frame.coords_to_point(x, baseline)?;
+            let bottom_right = self.frame.coords_to_point(
+                x + self.options.dx * self.options.width_scale_factor,
+                baseline,
+            )?;
+            let graph_point = self.frame.coords_to_point(sample_x, top)?;
+            let min_x = bottom_left[0].min(bottom_right[0]).min(graph_point[0]);
+            let max_x = bottom_left[0].max(bottom_right[0]).max(graph_point[0]);
+            let min_y = bottom_left[1].min(bottom_right[1]).min(graph_point[1]);
+            let max_y = bottom_left[1].max(bottom_right[1]).max(graph_point[1]);
+            let mut color = self.colors[index];
+            // Only retained f32 path queries need a bisection-noise allowance.
+            // Exact scalar results must preserve genuinely small negative areas.
+            let retained_height =
+                top_values.is_none() || (self.bounded_path.is_some() && baseline_values.is_none());
+            let height_precision = if retained_height {
+                4.0 * f64::from(f32::EPSILON)
+                    * graph_point[1].abs().max(bottom_left[1].abs()).max(1.0)
+                    / self.frame.y().unit_size()
+            } else {
+                0.0
+            };
+            if top < baseline - height_precision && self.options.show_signed_area {
+                color = noon_core::Color::rgba(
+                    1.0 - color.red,
+                    1.0 - color.green,
+                    1.0 - color.blue,
+                    color.alpha,
+                );
+            }
+            let mut style = self.style.clone();
+            style.fill = Some(SemanticPaint::Solid(color));
+            if self.options.blend {
+                style.stroke = Some(SemanticPaint::Solid(color));
+            }
+            paths.push((
+                closed_path(&[
+                    [max_x, max_y],
+                    [min_x, max_y],
+                    [min_x, min_y],
+                    [max_x, min_y],
+                ])?,
+                style,
+            ));
+        }
+        Ok(paths)
+    }
+
+    /// Cold authoring publication into the originating store. Live integrations
+    /// use `paths()` with their existing Scene/LiveSession family transaction.
+    pub fn publish(
+        &self,
+        top_values: Option<&[f64]>,
+        baseline_values: Option<&[f64]>,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        publish_path_family(
+            Rc::clone(&self.store),
+            self.paths(top_values, baseline_values)?,
+        )
+    }
 }
 
 pub(crate) fn prepare_riemann_paths(
@@ -70,109 +233,8 @@ pub(crate) fn prepare_riemann_paths(
     bounded: Option<(&Mobject, &PathQuery)>,
     options: RiemannRectangleOptions,
 ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
-    let (starts, sample_xs) =
-        riemann_sample_inputs(graph, bounded.map(|(object, _)| object), &options)?;
-    let top_values = sample_xs
-        .iter()
-        .map(|&x| graph_y_at(frame, graph_path, x))
-        .collect::<Result<Vec<_>, _>>()?;
-    let baseline_values = bounded
-        .map(|(_, path)| {
-            starts
-                .iter()
-                .map(|&x| graph_y_at(frame, path, x))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?;
-    prepare_riemann_paths_with_values(
-        frame,
-        graph,
-        bounded.map(|(object, _)| object),
-        options,
-        &starts,
-        &sample_xs,
-        &top_values,
-        baseline_values.as_deref(),
-    )
-}
-
-pub(crate) fn prepare_riemann_paths_with_values(
-    frame: AxesFrame,
-    graph: &Mobject,
-    bounded: Option<&Mobject>,
-    options: RiemannRectangleOptions,
-    starts: &[f64],
-    sample_xs: &[f64],
-    top_values: &[f64],
-    baseline_values: Option<&[f64]>,
-) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
-    if starts.len() != sample_xs.len()
-        || starts.len() != top_values.len()
-        || baseline_values.is_some_and(|values| values.len() != starts.len())
-        || top_values.iter().any(|value| !value.is_finite())
-        || baseline_values.is_some_and(|values| values.iter().any(|value| !value.is_finite()))
-    {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "Riemann callback values must match the Rust sample plan and be finite",
-        ));
-    }
-    let (planned_starts, planned_sample_xs) = riemann_sample_inputs(graph, bounded, &options)?;
-    if planned_starts != starts || planned_sample_xs != sample_xs {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "Riemann callback positions do not match the Rust sample plan",
-        ));
-    }
-    let colors = crate::color_gradient(&options.colors, starts.len())?;
-    let style = SemanticStyle {
-        fill_opacity: options.fill_opacity,
-        stroke: Some(SemanticPaint::Solid(options.stroke_color)),
-        stroke_width: options.stroke_width * 0.01,
-        stroke_width_mode: StrokeWidthMode::ScreenSpace,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        ..Default::default()
-    };
-    if !style.is_finite()
-        || !(0.0..=1.0).contains(&options.fill_opacity)
-        || options.stroke_width < 0.0
-    {
-        return Err(CoordinateAuthoringError::InvalidOptions("invalid Riemann paint"));
-    }
-    let mut paths = Vec::new();
-    paths.try_reserve_exact(starts.len()).map_err(|_| CoordinateError::AllocationFailed)?;
-    for (index, (&x, &sample_x)) in starts.iter().zip(sample_xs).enumerate() {
-        let top = top_values[index];
-        let baseline = baseline_values.map_or(
-            noon_geometry::origin_shift(frame.y().range()),
-            |values| values[index],
-        );
-        let width_end = x + options.dx * options.width_scale_factor;
-        let bottom_left = frame.coords_to_point(x, baseline)?;
-        let bottom_right = frame.coords_to_point(width_end, baseline)?;
-        let graph_point = frame.coords_to_point(sample_x, top)?;
-        let min_x = bottom_left[0].min(bottom_right[0]).min(graph_point[0]);
-        let max_x = bottom_left[0].max(bottom_right[0]).max(graph_point[0]);
-        let min_y = bottom_left[1].min(bottom_right[1]).min(graph_point[1]);
-        let max_y = bottom_left[1].max(bottom_right[1]).max(graph_point[1]);
-        let mut color = colors[index];
-        let height_precision =
-            4.0 * f64::from(f32::EPSILON) * graph_point[1].abs().max(bottom_left[1].abs()).max(1.0)
-                / frame.y().unit_size();
-        if top < baseline - height_precision && options.show_signed_area {
-            color = noon_core::Color::rgba(
-                1.0 - color.red, 1.0 - color.green, 1.0 - color.blue, color.alpha,
-            );
-        }
-        let mut style = style.clone();
-        style.fill = Some(SemanticPaint::Solid(color));
-        if options.blend {
-            style.stroke = Some(SemanticPaint::Solid(color));
-        }
-        paths.push((closed_path(&[
-            [max_x, max_y], [min_x, max_y], [min_x, min_y], [max_x, min_y],
-        ])?, style));
-    }
-    Ok(paths)
+    RiemannRectanglePlan::from_snapshot(frame, graph, graph_path, bounded, options)?
+        .paths(None, None)
 }
 
 /// Reuse the existing bounded NumPy-compatible plot sample planner. Its extra

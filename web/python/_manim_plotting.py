@@ -363,7 +363,7 @@ class Axes(_compat.Group):
                                stroke_color=_base.BLACK, fill_opacity=1,
                                color=(_base.BLUE, _base.GREEN), show_signed_area=True,
                                bounded_graph=None, blend=False, width_scale_factor=1.001):
-        """Publish one live Rust-owned rectangle family from effective snapshots."""
+        """Sample original scalar callables against one Rust-captured snapshot."""
         context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
         sample = {"left": 0, "right": 1, "center": 2}.get(input_sample_type)
         if sample is None:
@@ -371,6 +371,14 @@ class Axes(_compat.Group):
         colors = color if isinstance(color, (tuple, list)) else (color,)
         colors = [_compat._as_color("Riemann color", value) for value in colors]
         stroke_color = _compat._as_color("Riemann stroke color", stroke_color)
+        bounded = graph if bounded_graph is None else bounded_graph
+        graph_handle, bounded_handle = graph._semantic_handle, bounded._semantic_handle
+        if context is None:
+            prepare = self._semantic_family_handle.riemannSamplePlan
+            prepare_args = (graph_handle,)
+        else:
+            prepare = context.liveEffectiveRiemannSamplePlan
+            prepare_args = (self._semantic_family_handle, graph_handle)
         options = engine_call(_coordinate_options.riemann, _array(() if x_range is None else x_range),
                               float(dx), sample, float(width_scale_factor))
         try:
@@ -380,45 +388,23 @@ class Axes(_compat.Group):
         except BaseException:
             options.free()
             raise
-        bounded = graph if bounded_graph is None else bounded_graph
-        function = getattr(graph, "underlying_function", None)
-        bounded_function = (None if bounded_graph is None else
-                            getattr(bounded_graph, "underlying_function", None))
-        if function is not None and (bounded_graph is None or bounded_function is not None):
-            plan = engine_call(
-                options.samplePlan, graph._semantic_handle, bounded._semantic_handle,
-                bounded_graph is not None,
-            )
-            try:
-                starts = tuple(float(x) for x in engine_call(plan.starts))
-                samples = tuple(float(x) for x in engine_call(plan.samples))
-            finally:
-                plan.free()
-            top_values = _array(function(x) for x in samples)
-            baseline_values = _array(() if bounded_function is None else
-                                     (bounded_function(x) for x in starts))
-            if context is None:
-                handle = engine_call(
-                    self._semantic_family_handle.riemannRectanglesFromValues,
-                    graph._semantic_handle, options, bounded._semantic_handle,
-                    bounded_graph is not None, _array(starts), _array(samples),
-                    top_values, baseline_values,
-                )
-            else:
-                handle = engine_call(
-                    context.liveEffectiveRiemannRectanglesFromValues,
-                    self._semantic_family_handle, graph._semantic_handle, options,
-                    bounded._semantic_handle, bounded_graph is not None,
-                    _array(starts), _array(samples), top_values, baseline_values,
-                )
-        elif context is None:
-            handle = engine_call(self._semantic_family_handle.riemannRectangles,
-                                 graph._semantic_handle, options, bounded._semantic_handle,
-                                 bounded_graph is not None)
-        else:
-            handle = engine_call(context.liveEffectiveRiemannRectangles, self._semantic_family_handle,
-                                 graph._semantic_handle, options, bounded._semantic_handle,
-                                 bounded_graph is not None)
+        plan = engine_call(prepare, *prepare_args, options, bounded_handle,
+                           bounded_graph is not None)
+        with _owned(plan):
+            function = getattr(graph, "underlying_function", None)
+            bounded_function = (None if bounded_graph is None else
+                                getattr(bounded_graph, "underlying_function", None))
+            top_values, baseline_values = [], []
+            # Preserve per-rectangle top-then-lower invocation order. Each graph
+            # independently uses its callable or the captured Rust path fallback.
+            for x, sample_x in zip(engine_call(plan.starts), engine_call(plan.samples), strict=True):
+                if function is not None:
+                    top_values.append(float(function(float(sample_x))))
+                if bounded_function is not None:
+                    baseline_values.append(float(bounded_function(float(x))))
+            values = (_array(top_values), _array(baseline_values))
+            handle = (engine_call(plan.publish, *values) if context is None else
+                      engine_call(context.livePublishRiemannPlan, plan, *values))
         members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
         return _family(object.__new__(_compat.VGroup), handle, members)
 
@@ -525,8 +511,8 @@ def _points(points):
 def _evaluate(plan, function, use_smoothing, *, parametric):
     with _owned(plan):
         parameters = engine_call(plan.parameters)
-        # This is the only host function evaluation. No callback is retained in
-        # the returned curve or invoked during deterministic playback.
+        # Construction evaluates once. Scalar callable identity may be retained
+        # for explicit Riemann queries, never for deterministic frame playback.
         if parametric:
             values = _points(function(float(t)) for t in parameters)
             return engine_call(plan.parametricSamples, values, bool(use_smoothing))

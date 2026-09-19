@@ -10,7 +10,54 @@ function near(actual, expected, label) {
   }
 }
 
+function qualifyExactRiemannPlan() {
+  const store = new WasmAuthoringStore();
+  let axes, frame, plot, graph, plan;
+  const check = (values, expected) => {
+    const rectangles = plan.publish(values, []);
+    let members = [];
+    try {
+      members = Array.from(rectangles.directMobjects());
+      if (members.length !== 4) throw new Error("exact Riemann plan lost rectangles");
+      for (const [index, member] of members.entries()) {
+        const path = member.pathQuery();
+        try {
+          near(Array.from(path.start()), [-0.5 + index * 0.5, expected[index]],
+            "exact scalar rectangle geometry");
+        } finally { path.free(); }
+      }
+    } finally { members.forEach(member => member.free()); rectangles.free(); }
+  };
+  try {
+    const options = WasmCoordinateOptions.axes([-1, 1, 1], [-1, 1, 1], 2, 2);
+    options.setTicks(false, 0.1, true);
+    axes = store.createCoordinates(options);
+    frame = axes.axesFrame();
+    plot = frame.plotPlan([-1, 1, 1], [], undefined, undefined);
+    graph = store.createManimGeometry(plot.functionSamples([1, 0, 1], false));
+    plan = axes.riemannSamplePlan(graph,
+      WasmCoordinateOptions.riemann([-1, 1], 0.5, 2, 1), graph, false);
+    near(Array.from(plan.starts()), [-1, -0.5, 0, 0.5], "Riemann starts");
+    near(Array.from(plan.samples()), [-0.75, -0.25, 0.25, 0.75], "Riemann midpoint samples");
+    const exact = Array.from(plan.samples(), x => x * x);
+    check(exact, [0.5625, 0.0625, 0.0625, 0.5625]);
+    // The fallback is observably different; invoking a callback without using
+    // its returned values cannot satisfy this geometry oracle.
+    check([], [0.75, 0.25, 0.25, 0.75]);
+    for (const invalid of [[1], [1, 1, 1, 1, 1], [NaN, 0, 0, 0], [Infinity, 0, 0, 0]]) {
+      let rejected = false;
+      try { const unexpected = plan.publish(invalid, []); unexpected.free(); }
+      catch (error) { rejected = error.category === "invalid_input"; }
+      if (!rejected) throw new Error("invalid Riemann values escaped typed validation");
+    }
+    check(exact, [0.5625, 0.0625, 0.0625, 0.5625]);
+  } finally {
+    plan?.free(); graph?.free(); plot?.free(); frame?.free(); axes?.free(); store.free();
+  }
+}
+
 function directWasmPreparation() {
+  qualifyExactRiemannPlan();
   const store = new WasmAuthoringStore();
   const axes = store.createCoordinates(WasmCoordinateOptions.axes([2, 6, 1], [-6, -2, 1], 8, 4));
   const frame = axes.axesFrame();
@@ -174,6 +221,66 @@ class PlottingQualification(Scene):
             for rectangle, x in zip(partitions.submobjects, expected):
                 near(rectangle.get_start(), (x, 0))
 
+        # Keep this oracle axis-aligned so physical rectangle corners, not
+        # merely callback counts, distinguish exact values from interpolation.
+        sample_axes = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, include_ticks=False)
+        sample_calls = []
+        def quadratic(x):
+            sample_calls.append(x)
+            return x*x
+        sample_graph = sample_axes.plot(quadratic, [-1, 1, 1], use_smoothing=False)
+        midpoint_values = (0.5625, 0.0625, 0.0625, 0.5625)
+        def rectangles_on_sample_axes(graph, bound=None):
+            return sample_axes.get_riemann_rectangles(
+                graph, [-1, 1], dx=0.5, input_sample_type="center",
+                bounded_graph=bound, width_scale_factor=1)
+        def check_sample_rectangles(rectangles, values, offset=(0, 0)):
+            assert len(rectangles.submobjects) == 4
+            for index, (rectangle, value) in enumerate(zip(rectangles.submobjects, values)):
+                near(rectangle.get_start(), (-0.5 + index*0.5 + offset[0], value + offset[1]))
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+        assert sample_calls == [-1, 0, 1, -0.75, -0.25, 0.25, 0.75], sample_calls
+        lower_graph = sample_axes.plot(lambda x: -0.25, [-1, 1, 1], use_smoothing=False)
+        del lower_graph.underlying_function
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph, lower_graph), midpoint_values)
+        del sample_graph.underlying_function
+        lower_graph.underlying_function = lambda x: -0.25
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph, lower_graph), (0.75, 0.25, 0.25, 0.75))
+        sample_graph.underlying_function = quadratic
+        callback_failure = RuntimeError("Riemann scalar callback failed")
+        def failing_sample(x):
+            raise callback_failure
+        sample_graph.underlying_function = failing_sample
+        try:
+            rectangles_on_sample_axes(sample_graph)
+        except RuntimeError as caught:
+            assert caught is callback_failure
+        else:
+            raise AssertionError("Riemann callback failure was swallowed")
+        sample_graph.underlying_function = lambda x: float('nan')
+        try:
+            rectangles_on_sample_axes(sample_graph)
+        except NoonValueError:
+            pass
+        else:
+            raise AssertionError("nonfinite Riemann scalar was accepted")
+        sample_graph.underlying_function = quadratic
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+
+        # A callable is arbitrary host code: moving an axis while evaluating it
+        # must not change the immutable coordinate snapshot captured at entry.
+        moved = []
+        def moving_sample(x):
+            if not moved:
+                sample_axes.shift(UP)
+                moved.append(True)
+            return x*x
+        sample_graph.underlying_function = moving_sample
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+        near(sample_axes.c2p(0, 0), (0, 1))
+        sample_axes.shift(DOWN)
+        sample_graph.underlying_function = quadratic
+
         # Extreme parameter values may still map to ordinary visible geometry.
         # The callback must see both exact endpoints, once each, in that order.
         endpoint_visits = []
@@ -276,8 +383,15 @@ class PlottingQualification(Scene):
             raise AssertionError("invalid coordinate range was accepted")
 
         sentinel = Dot((4, 2), color=GREEN)
+        sample_calls_before_play = len(sample_calls)
+        self.add(sample_axes, sample_graph)
         self.add(axes, data, sentinel)
         self.play(Create(curve), run_time=0.2, rate_func=linear)
+        assert len(sample_calls) == sample_calls_before_play, "static playback invoked a graph callable"
+        live_rectangles = rectangles_on_sample_axes(sample_graph)
+        self.add(live_rectangles)
+        check_sample_rectangles(live_rectangles, midpoint_values)
+        self.remove(live_rectangles, sample_axes, sample_graph)
         origin = axes.c2p(0, 0)
         self.play(axes.animate.shift(RIGHT), run_time=0.2, rate_func=linear)
         near(axes.c2p(0, 0), origin + RIGHT)

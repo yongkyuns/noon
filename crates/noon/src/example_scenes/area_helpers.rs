@@ -12,11 +12,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         8.0,
         5.0,
     ))?;
-    let mut graph = axes.plot(|x| 0.25 * x * x - 0.5, Some(&[-3.0, 3.0, 0.25]), false)?;
+    let function = |x: f64| 0.25 * x * x - 0.5;
+    let mut graph = axes.plot(function, Some(&[-3.0, 3.0, 0.25]), false)?;
     graph.set_color(BLUE.red.into(), BLUE.green.into(), BLUE.blue.into(), 1.0)?;
     let mut area = axes.get_area(&graph, Some([-2.0, 0.0]), None)?;
     area.set_color(GREEN.red.into(), GREEN.green.into(), GREEN.blue.into(), 1.0)?;
-    let rectangles = axes.get_riemann_rectangles(
+    let plan = axes.riemann_plan(
         &graph,
         RiemannRectangleOptions {
             x_range: Some([0.0, 2.0]),
@@ -25,6 +26,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             ..Default::default()
         },
     )?;
+    let values = plan.samples().map(function).collect::<Vec<_>>();
+    let rectangles = plan.publish(Some(&values), None)?;
     let mut title = scene.text(Text::new("Area and Riemann rectangles").with_font_size(28.0))?;
     title.shift(0.0, 3.0)?;
     let mut caption = scene.text(
