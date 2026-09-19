@@ -4,7 +4,7 @@ on:
     branches: [validation/c5-selection-overlay-20260919]
     paths: [.github/workflows/c5-overlay-validation.yml]
 permissions:
-  contents: write
+  contents: read
 jobs:
   qualify:
     runs-on: ubuntu-latest
@@ -20,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: 8adfab7703085277feec0adda5ca0c6f733c5086
           fetch-depth: 0
       - name: Use repository-pinned Rust
         run: |
@@ -42,74 +43,52 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
-      - name: Prepare code-only candidate
+      - name: Retain exact source identity
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/proof"
-          cat .ci-overlay-patch-1.b64 .ci-overlay-patch-2.b64 | base64 -d | xz -d > "$RUNNER_TEMP/c5-overlay.patch"
-          echo "a5b181f4ac626bb412543b30ac423a9f294d87d87ff8ff0716396c0ab2735278  $RUNNER_TEMP/c5-overlay.patch" | sha256sum --check
-          git worktree add --detach "$RUNNER_TEMP/noon-c5-overlay" 321f6b661c467a92b47ae9c4b34e5e020fa92efb
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          git apply "$RUNNER_TEMP/c5-overlay.patch"
-          git apply "$GITHUB_WORKSPACE/.ci-overlay-corrections.patch"
-          cp .github/workflows/native-host-smoke.yml "$GITHUB_WORKSPACE/proof/proposed-native-host-smoke.yml"
-          git restore .github/workflows/native-host-smoke.yml
-          cargo fmt --all
-          git add crates scripts/transient-presentation-ratchet.sh
-          git diff --cached --check
-          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: render transient selection overlays in the native host'
-          branch="staging/c5-selection-overlay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          {
-            echo "branch=$branch"
-            git rev-parse HEAD 'HEAD^{tree}'
-            git diff --stat 321f6b661c467a92b47ae9c4b34e5e020fa92efb
-          } | tee "$GITHUB_WORKSPACE/proof/identity.txt"
-          git archive HEAD | gzip > "$GITHUB_WORKSPACE/proof/source.tar.gz"
-          git diff 321f6b661c467a92b47ae9c4b34e5e020fa92efb > "$GITHUB_WORKSPACE/proof/formatted.patch"
-          git push origin "HEAD:refs/heads/$branch"
-      - name: Focused overlay and selection tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          cargo test -p noon-render-wgpu --all-features --lib gpu::overlay::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/renderer-overlay.log"
-          cargo test -p noon-native --all-features --lib selection_overlay::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/native-overlay.log"
-          cargo test -p noon --all-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/selection.log"
-          cargo test -p noon --all-features --lib execution_session::input::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/input.log"
-          cargo test -p noon --all-features --lib execution_session::picking::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/picking.log"
-      - name: Architecture and complete fast gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          bash scripts/check.sh fast 321f6b661c467a92b47ae9c4b34e5e020fa92efb 2>&1 | tee "$GITHUB_WORKSPACE/proof/fast.log"
-      - name: Direct Rust WASM compile
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$GITHUB_WORKSPACE/proof/wasm.log"
+          mkdir -p proof
+          test "$(git rev-parse HEAD)" = 8adfab7703085277feec0adda5ca0c6f733c5086
+          git diff --exit-code
+          git rev-parse HEAD 'HEAD^{tree}' | tee proof/identity.txt
+          git archive HEAD | gzip > proof/source.tar.gz
+          git diff 321f6b661c467a92b47ae9c4b34e5e020fa92efb > proof/formatted.patch
       - name: Real selection pixels and export isolation
         shell: bash
         env:
           NOON_SELECTION_PROOF_DIR: ${{ github.workspace }}/proof/pixels
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          cargo test -p noon --all-features --test selection_overlay_raster -- --include-ignored --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/raster.log"
+          cargo test -p noon --all-features --test selection_overlay_raster -- --include-ignored --nocapture 2>&1 | tee proof/raster.log
       - name: Native surface click selection and clear
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native --all-features --lib native_surface_smoke_presents_paused_click_selection_and_clear -- --ignored --nocapture --test-threads=1 2>&1 | tee "$GITHUB_WORKSPACE/proof/native-surface.log"
+          xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native --all-features --lib native_surface_smoke_presents_paused_click_selection_and_clear -- --ignored --nocapture --test-threads=1 2>&1 | tee proof/native-surface.log
+      - name: Focused overlay and selection tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --lib gpu::overlay::tests -- --nocapture 2>&1 | tee proof/renderer-overlay.log
+          cargo test -p noon-native --all-features --lib selection_overlay::tests -- --nocapture 2>&1 | tee proof/native-overlay.log
+          cargo test -p noon --all-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee proof/selection.log
+          cargo test -p noon --all-features --lib execution_session::input::tests -- --nocapture 2>&1 | tee proof/input.log
+          cargo test -p noon --all-features --lib execution_session::picking::tests -- --nocapture 2>&1 | tee proof/picking.log
+      - name: Architecture and complete fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast 321f6b661c467a92b47ae9c4b34e5e020fa92efb 2>&1 | tee proof/fast.log
+      - name: Direct Rust WASM compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee proof/wasm.log
       - name: JavaScript regressions
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/noon-c5-overlay"
-          node --test web/*.test.mjs 2>&1 | tee "$GITHUB_WORKSPACE/proof/js.log"
+          node --test web/*.test.mjs 2>&1 | tee proof/js.log
       - name: Retain source and executable evidence
         if: always()
         uses: actions/upload-artifact@v7
