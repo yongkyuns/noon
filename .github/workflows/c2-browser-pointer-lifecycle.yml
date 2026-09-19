@@ -1,0 +1,74 @@
+name: C2 browser pointer lifecycle validation
+on:
+  push:
+    branches: [work/c2-browser-pointer-lifecycle]
+    paths:
+      - .github/workflows/c2-browser-pointer-lifecycle.yml
+      - .github/c2-pointer-part*
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 80
+      - name: Apply locally tested source and remove temporary tooling
+        run: |
+          cat .github/c2-pointer-part{0,1,2,3} > /tmp/c2-pointer.patch.gz
+          test "$(git hash-object /tmp/c2-pointer.patch.gz)" = 4470f649e65221d3c62c643b87ec7b9e8d7adb44
+          gzip -dc /tmp/c2-pointer.patch.gz > /tmp/c2-pointer.patch
+          git apply /tmp/c2-pointer.patch
+          git rm .github/c2-pointer-part{0,1,2,3} .github/workflows/c2-browser-pointer-lifecycle.yml
+          git diff --check
+      - name: Use repository-pinned Rust
+        run: rustup show active-toolchain
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: c2-pointer-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format Rust source
+        run: cargo fmt --all
+      - name: Exercise the actual browser pointer Rust boundary
+        run: |
+          cargo test -p noon-web --lib semantic_execution_player::pointer_input::tests -- --nocapture 2>&1 | tee /tmp/c2-pointer-rust.log
+          grep '10 passed; 0 failed' /tmp/c2-pointer-rust.log
+      - name: Repository fast validation
+        run: bash scripts/check.sh fast f202eb214a598d5213489949ed8bff4bfdbe66cc 2>&1 | tee /tmp/c2-pointer-fast.log
+      - name: Direct WASM compile
+        run: cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c2-pointer-wasm.log
+      - name: All browser JavaScript regressions
+        run: node --test web/*.test.mjs 2>&1 | tee /tmp/c2-pointer-node.log
+      - name: Complete web preflight
+        run: NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/c2-pointer-preflight.log 2>&1 || { tail -120 /tmp/c2-pointer-preflight.log; exit 1; }
+      - name: Publish only validated source and tests
+        run: |
+          git add crates/noon-web/src/semantic_execution_player.rs crates/noon-web/src/semantic_execution_player/pointer_input.rs crates/noon-web/src/semantic_execution_player/pointer_input/tests.rs web/authoring-execution-client.js web/browser-pointer-input.js web/semantic-execution-routing.test.mjs
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Qualify browser pointer identity and view lifecycle'
+          git rev-parse HEAD HEAD^{tree} > /tmp/c2-pointer-identity.txt
+          git archive --format=tar.gz HEAD > /tmp/c2-pointer-source.tar.gz
+          git push origin HEAD:refs/heads/work/c2-browser-pointer-lifecycle
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c2-browser-pointer-lifecycle-proof
+          path: |
+            /tmp/c2-pointer-*.log
+            /tmp/c2-pointer-identity.txt
+            /tmp/c2-pointer-source.tar.gz
+          retention-days: 7
