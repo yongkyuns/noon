@@ -510,6 +510,47 @@ impl ManimAxes {
         area::publish_path_family(Rc::clone(self.family.integration_store()), paths)
     }
 
+    /// Rust-owned callback input plan. Frontends evaluate only these x values.
+    pub fn riemann_sample_inputs(
+        graph: &Mobject,
+        bounded: Option<&Mobject>,
+        options: &RiemannRectangleOptions,
+    ) -> Result<(Vec<f64>, Vec<f64>), CoordinateAuthoringError> {
+        area::riemann_sample_inputs(graph, bounded, options)
+    }
+
+    /// Cold authored-function path. All callback values are validated against
+    /// the Rust plan before any geometry resource or family is published.
+    pub fn get_riemann_rectangles_with_values(
+        &self,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+        starts: &[f64],
+        sample_xs: &[f64],
+        top_values: &[f64],
+        baseline_values: Option<&[f64]>,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        let bounded = options
+            .bounded_graph
+            .map(|id| Mobject::from_node(Rc::clone(self.family.integration_store()), id))
+            .transpose()?;
+        if let Some(ref bound) = bounded {
+            self.require_graph_store(bound)?;
+        }
+        let paths = area::prepare_riemann_paths_with_values(
+            self.authored_frame()?,
+            graph,
+            bounded.as_ref(),
+            options,
+            starts,
+            sample_xs,
+            top_values,
+            baseline_values,
+        )?;
+        area::publish_path_family(Rc::clone(self.family.integration_store()), paths)
+    }
+
     fn require_graph_store(&self, graph: &Mobject) -> Result<(), CoordinateAuthoringError> {
         if !Rc::ptr_eq(self.family.integration_store(), graph.integration_store()) {
             return Err(AuthoringError::ForeignStore.into());
@@ -707,6 +748,22 @@ impl ManimAxes {
         options: RiemannRectangleOptions,
     ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
         area::prepare_riemann_paths(frame, graph, graph_path, bounded, options)
+    }
+
+    /// Shared value-based geometry path used by the host callback fast path.
+    pub fn riemann_rectangle_paths_with_values(
+        frame: AxesFrame,
+        graph: &Mobject,
+        bounded: Option<&Mobject>,
+        options: RiemannRectangleOptions,
+        starts: &[f64],
+        sample_xs: &[f64],
+        top_values: &[f64],
+        baseline_values: Option<&[f64]>,
+    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+        area::prepare_riemann_paths_with_values(
+            frame, graph, bounded, options, starts, sample_xs, top_values, baseline_values,
+        )
     }
 }
 
