@@ -2,9 +2,9 @@
 
 mod authoring_arc;
 #[cfg(target_arch = "wasm32")]
-mod authoring_vector_field_defaults;
-#[cfg(target_arch = "wasm32")]
 mod authoring_arrow;
+#[cfg(target_arch = "wasm32")]
+mod authoring_vector_field_defaults;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow_endpoints;
 #[cfg(target_arch = "wasm32")]
