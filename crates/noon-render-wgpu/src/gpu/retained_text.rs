@@ -3337,27 +3337,57 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> Result<RetainedDrawStats, RetainedDerivedDisplayError> {
+        self.encode_retained_derived_inner(
+            encoder,
+            view,
+            prepared,
+            derived,
+            super::FramePassOptions::new(clear_color, query_set),
+        )
+    }
+
+    fn encode_retained_derived_inner(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        derived: &crate::PreparedDerivedDisplay,
+        options: super::FramePassOptions<'_>,
+    ) -> Result<RetainedDrawStats, RetainedDerivedDisplayError> {
         if !prepared.geometry_only {
             return Err(RetainedDerivedDisplayError::MixedTextUnsupported);
         }
-        let geometry = match query_set {
-            Some(queries) => self.encode_with_derived_profiled(
-                encoder,
-                view,
-                &prepared.geometry,
-                derived,
-                clear_color,
-                queries,
-            ),
-            None => {
-                self.encode_with_derived(encoder, view, &prepared.geometry, derived, clear_color)
-            }
-        };
+        let geometry = self.encode_inner(encoder, view, &prepared.geometry, Some(derived), options);
         Ok(RetainedDrawStats {
             images: 0,
             geometry,
             text: TextGpuDrawStats::default(),
         })
+    }
+
+    /// Explicit interactive presentation. Overlay draws contribute to geometry
+    /// draw totals, but never to authored membership, stable slots or painter order.
+    /// The optional GPU timestamps still measure the scene pass, not the overlay.
+    pub fn encode_interactive_retained(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        frame: InteractiveRetainedFrame<'_, '_>,
+        clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
+    ) -> Result<RetainedDrawStats, InteractiveDrawError> {
+        let options = super::FramePassOptions {
+            clear_color,
+            query_set,
+            overlay: Some(frame.overlay),
+        };
+        if let Some(derived) = frame.transient.filter(|value| !value.slots.is_empty()) {
+            self.encode_retained_derived_inner(encoder, view, frame.prepared, derived, options)
+                .map_err(InteractiveDrawError::Transient)
+        } else {
+            self.encode_retained_inner(encoder, view, frame.prepared, frame.text, options)
+                .map_err(InteractiveDrawError::Scene)
+        }
     }
 
     /// Encode the normal retained painter-order pass, optionally recording its
@@ -3371,22 +3401,35 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> Result<RetainedDrawStats, RetainedDrawError> {
+        self.encode_retained_inner(
+            encoder,
+            view,
+            prepared,
+            text_state,
+            super::FramePassOptions::new(clear_color, query_set),
+        )
+    }
+
+    fn encode_retained_inner(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        text_state: &RetainedTextGpuState,
+        options: super::FramePassOptions<'_>,
+    ) -> Result<RetainedDrawStats, RetainedDrawError> {
         if prepared.geometry_only {
             return Ok(RetainedDrawStats {
                 images: 0,
-                geometry: match query_set {
-                    Some(queries) => self.encode_profiled(
-                        encoder,
-                        view,
-                        &prepared.geometry,
-                        clear_color,
-                        queries,
-                    ),
-                    None => self.encode(encoder, view, &prepared.geometry, clear_color),
-                },
+                geometry: self.encode_inner(encoder, view, &prepared.geometry, None, options),
                 text: TextGpuDrawStats::default(),
             });
         }
+        let super::FramePassOptions {
+            clear_color,
+            query_set,
+            overlay,
+        } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = retained_sample_count(prepared.render_items);
         let color_attachments = if sample_count == 1 {
@@ -3473,6 +3516,7 @@ impl GpuRenderer {
             }
         }
         drop(pass);
+        stats.geometry += self.encode_overlay(encoder, view, overlay);
         self.presentation.encode_present(encoder, view);
         Ok(stats)
     }
@@ -5093,3 +5137,27 @@ impl GpuRenderer {
         )
     }
 }
+
+/// Borrowed presentation inputs, not another scene or transport representation.
+/// Supply an overlay only at a deliberate interactive render boundary.
+pub struct InteractiveRetainedFrame<'a, 'frame> {
+    pub prepared: &'a PreparedRetainedGpuFrame<'frame>,
+    pub text: &'a RetainedTextGpuState,
+    pub transient: Option<&'a crate::PreparedDerivedDisplay>,
+    pub overlay: &'a super::OverlayGpuState,
+}
+
+#[derive(Debug)]
+pub enum InteractiveDrawError {
+    Scene(RetainedDrawError),
+    Transient(RetainedDerivedDisplayError),
+}
+impl std::fmt::Display for InteractiveDrawError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scene(error) => error.fmt(f),
+            Self::Transient(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for InteractiveDrawError {}
