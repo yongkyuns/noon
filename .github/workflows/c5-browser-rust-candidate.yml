@@ -1,0 +1,73 @@
+name: C5 browser Rust candidate qualification
+on:
+  push:
+    branches: [validation/c5-browser-rust-20260919]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Apply the explicit candidate to its exact base in an isolated worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          echo '35ca9f741847a087498ada9c1222ae80d4be2bffc91f1d567a3f9ebe45025497  .github/qualification/c5-browser-rust.patch' | sha256sum -c -
+          git worktree add --detach "$RUNNER_TEMP/noon-c5-browser" 7261c1ebf35eba91ae6efd8436b822a9c887bf2c
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          test "$(git rev-parse HEAD^{tree})" = 046f45fe0ba0123b78ff95838ee0d66617e80f22
+          git apply --check "$GITHUB_WORKSPACE/.github/qualification/c5-browser-rust.patch"
+          git apply "$GITHUB_WORKSPACE/.github/qualification/c5-browser-rust.patch"
+          git add crates/noon-web
+          git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/unformatted.patch"
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/proof/base.txt"
+          git write-tree > "$GITHUB_WORKSPACE/proof/unformatted-tree.txt"
+      - name: Use repository-pinned Rust and format the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$GITHUB_WORKSPACE/proof/rustc.txt"
+          cargo fmt --all
+          git add crates/noon-web
+          git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/formatted.patch"
+          git write-tree > "$GITHUB_WORKSPACE/proof/formatted-tree.txt"
+      - name: Execute shared selection transport and input regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/transport-tests.log"
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/selection-tests.log"
+      - name: Run repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          bash scripts/check.sh fast 7261c1ebf35eba91ae6efd8436b822a9c887bf2c 2>&1 | tee "$GITHUB_WORKSPACE/proof/fast.log"
+      - name: Compile both renderer-less and renderer-enabled WASM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$GITHUB_WORKSPACE/proof/wasm-no-renderer.log"
+          cargo check -p noon-web --target wasm32-unknown-unknown 2>&1 | tee "$GITHUB_WORKSPACE/proof/wasm-renderer.log"
+      - name: Retain exact candidate and executable logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-browser-rust-candidate-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
