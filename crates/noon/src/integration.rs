@@ -34,6 +34,7 @@ pub use crate::execution_session::{
     EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
     StructuralPublicationStats,
 };
+pub use crate::execution_session::{NativePointerClick, NativePointerSelection};
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 pub use crate::host_callbacks::{

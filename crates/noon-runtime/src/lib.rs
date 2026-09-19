@@ -284,6 +284,13 @@ impl SceneInstance {
         &self.changes
     }
 
+    /// Request presentation-only work without changing authored/runtime state,
+    /// spatial invalidation or publication identity. Existing row changes remain.
+    /// Used by explicit interactive hosts for transient session decoration.
+    pub fn request_presentation_redraw(&mut self) {
+        self.changes.presentation_redraw = true;
+    }
+
     /// Consume one renderer publication atomically with its accumulated changes.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();

@@ -20,6 +20,7 @@ pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionInputError {
+    InvalidSelectionTolerance,
     PointerNotConfigured,
     ForeignPointerRuntime,
     StalePointerBinding,
@@ -55,6 +56,7 @@ pub enum ExecutionSessionInputError {
 impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidSelectionTolerance => formatter.write_str("selection motion tolerance must be finite and nonnegative"),
             Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
             Self::StalePointerBinding => formatter.write_str("pointer binding has been replaced"),
@@ -151,9 +153,24 @@ pub struct NativePointerInputPublication {
     input: NativePointerInput,
     previous: PublicationContext,
     current: PublicationContext,
+    selection_click: Option<super::NativePointerClick>,
+    selection_query: Option<super::PointerFillQuery>,
+    selection_changed: bool,
 }
 
 impl NativePointerInputPublication {
+    /// A click is emitted once by successful input admission, never by DOM click.
+    pub const fn selection_click(self) -> Option<super::NativePointerClick> {
+        self.selection_click
+    }
+    /// Candidate work performed for the opt-in selection tool before publication.
+    pub const fn selection_query(self) -> Option<super::PointerFillQuery> {
+        self.selection_query
+    }
+    pub const fn selection_changed(self) -> bool {
+        self.selection_changed
+    }
+
     pub const fn input(self) -> NativePointerInput {
         self.input
     }
@@ -199,10 +216,11 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Future interaction consumers must extend input interest at the same owner.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        !self
-            .reactive_projection
-            .native_state_targets(&NativeStateSource::PointerPosition)
-            .is_empty()
+        self.pointer_selection.enabled()
+            || !self
+                .reactive_projection
+                .native_state_targets(&NativeStateSource::PointerPosition)
+                .is_empty()
             || (0..=u8::MAX).any(|button| {
                 !self
                     .reactive_projection
@@ -248,6 +266,7 @@ impl ExecutionSession {
             generation,
         });
         self.pointer_input.next_generation = generation.checked_add(1);
+        self.pointer_selection.cancel_gesture();
         self.native_pointer_input_token()
     }
 
@@ -283,14 +302,32 @@ impl ExecutionSession {
     /// Cancellation has no coordinates and may clear buttons after frame advance,
     /// but still requires the same runtime, pointer and binding generation.
     /// Native event subscribers observe every accepted down/up occurrence; cancel
-    /// is never projected into a successful release. Picking/click/drag policy is
-    /// intentionally not implemented here.
+    /// is never projected into a successful release. An enabled selection tool
+    /// stages picking/recognition before publication and commits only on success.
+    /// A rejected occurrence from the current binding disarms click recognition
+    /// (motion evidence may be missing), but changes neither accepted button state,
+    /// selection, native values nor sequence. Foreign bindings cannot disarm it.
     pub fn submit_native_pointer_input(
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
-        let previous = self.preflight_native_pointer_input(token, input)?;
+        let previous = match self.preflight_native_pointer_input(token, input) {
+            Ok(previous) => previous,
+            Err(error) => {
+                if token.runtime == self.runtime_identity()
+                    && self.pointer_input.binding.is_some_and(|binding| {
+                        binding.generation == token.generation && binding.pointer == input.pointer()
+                    })
+                {
+                    self.pointer_selection.reject_occurrence();
+                }
+                return Err(error);
+            }
+        };
+        let selection = self.prepare_native_pointer_selection(token, input)?;
+        let selection_click = selection.click;
+        let selection_query = selection.query;
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -304,13 +341,20 @@ impl ExecutionSession {
             self.append_native_event_inputs(&event, &mut inputs);
         }
         if !inputs.is_empty() {
-            self.apply_reactive_input_batch(inputs)?;
+            if let Err(error) = self.apply_reactive_input_batch(inputs) {
+                self.pointer_selection.reject_occurrence();
+                return Err(error);
+            }
         }
         self.last_native_event_sequence = Some(input.sequence());
+        let selection_changed = self.commit_native_pointer_selection(selection);
         Ok(NativePointerInputPublication {
             input,
             previous,
             current: self.publication_context(),
+            selection_click,
+            selection_query,
+            selection_changed,
         })
     }
 
