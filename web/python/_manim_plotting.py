@@ -321,7 +321,9 @@ class Axes(_compat.Group):
             plan = engine_call(frame.plotPlan, _array(() if x_range is None else x_range),
                                _array(discontinuities), None if dt is None else float(dt), None)
         options = _evaluate(plan, function, use_smoothing, parametric=False)
-        return _curve(object.__new__(FunctionGraph), options, color, kwargs)
+        graph = _curve(object.__new__(FunctionGraph), options, color, kwargs)
+        graph.underlying_function = function
+        return graph
 
     def plot_samples(self, points, *, color=None, **kwargs):
         """Noon extension: preserve data order and repeated x values as a polyline."""
@@ -379,7 +381,37 @@ class Axes(_compat.Group):
             options.free()
             raise
         bounded = graph if bounded_graph is None else bounded_graph
-        if context is None:
+        function = getattr(graph, "underlying_function", None)
+        bounded_function = (None if bounded_graph is None else
+                            getattr(bounded_graph, "underlying_function", None))
+        if function is not None and (bounded_graph is None or bounded_function is not None):
+            plan = engine_call(
+                options.samplePlan, graph._semantic_handle, bounded._semantic_handle,
+                bounded_graph is not None,
+            )
+            try:
+                starts = tuple(float(x) for x in engine_call(plan.starts))
+                samples = tuple(float(x) for x in engine_call(plan.samples))
+            finally:
+                plan.free()
+            top_values = _array(function(x) for x in samples)
+            baseline_values = _array(() if bounded_function is None else
+                                     (bounded_function(x) for x in starts))
+            if context is None:
+                handle = engine_call(
+                    self._semantic_family_handle.riemannRectanglesFromValues,
+                    graph._semantic_handle, options, bounded._semantic_handle,
+                    bounded_graph is not None, _array(starts), _array(samples),
+                    top_values, baseline_values,
+                )
+            else:
+                handle = engine_call(
+                    context.liveEffectiveRiemannRectanglesFromValues,
+                    self._semantic_family_handle, graph._semantic_handle, options,
+                    bounded._semantic_handle, bounded_graph is not None,
+                    _array(starts), _array(samples), top_values, baseline_values,
+                )
+        elif context is None:
             handle = engine_call(self._semantic_family_handle.riemannRectangles,
                                  graph._semantic_handle, options, bounded._semantic_handle,
                                  bounded_graph is not None)
@@ -535,6 +567,7 @@ class FunctionGraph(_compat.VMobject):
                            None if dt is None else float(dt), None)
         options = _evaluate(plan, function, use_smoothing, parametric=False)
         _curve(self, options, color, kwargs)
+        self.underlying_function = function
 
 
 __all__ = ["NumberLine", "Axes", "FunctionGraph", "ParametricFunction"]
