@@ -520,14 +520,22 @@ function pointerCanvas(t) {
   t.after(() => { globalThis.window = previous; });
   const canvas = new FakeCanvas();
   const listeners = new Map();
-  canvas.getBoundingClientRect = () => ({ left: 10, top: 20, width: 640, height: 360 });
+  const rect = { left: 10, top: 20, width: 640, height: 360 };
+  canvas.getBoundingClientRect = () => ({ ...rect });
   canvas.addEventListener = (type, listener, options) => {
     listeners.set(type, listener);
     target.addEventListener(type, listener, options);
   };
-  return { canvas, listeners, emit(type, values = {}) {
+  let buttons = 0;
+  return { canvas, listeners, rect, win, emit(type, values = {}) {
+    if (type === "pointerdown") buttons = 1;
+    if (type === "pointerup" || type === "pointercancel") buttons = 0;
     const event = new Event(type);
-    Object.assign(event, { clientX: 110, clientY: 220, button: 0, ...values });
+    Object.assign(event, {
+      clientX: 110, clientY: 220,
+      button: type === "pointermove" ? -1 : 0, buttons,
+      pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
+    });
     target.dispatchEvent(event);
   } };
 }
@@ -623,4 +631,146 @@ test("DOM input failure remains visible without a recoverable-error callback", a
   assert.ok(cancel);
   engine.emitMessage(envelope("noon.engine", cancel.type, { requestId: cancel.requestId }));
   await inputTurn();
+});
+
+
+const pointerMessages = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
+
+test("DOM selection preserves pointer identity and ignores foreign release or cancellation", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown", { pointerId: 7, pointerType: "touch" });
+  dom.emit("pointerdown", { pointerId: 8, pointerType: "touch", isPrimary: false });
+  dom.emit("pointermove", { pointerId: 9, pointerType: "pen", buttons: 1 });
+  dom.emit("pointerup", { pointerId: 9, pointerType: "pen" });
+  dom.emit("pointercancel", { pointerId: 8, isPrimary: false });
+  dom.emit("pointerleave", { pointerId: 9 });
+  dom.emit("pointerup", { pointerId: 7, pointerType: "touch" });
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "release"]);
+  assert.ok(messages.every(message => message.pointer_id === 7));
+  assert.equal(messages[0].source_id, messages[1].source_id);
+});
+
+test("recycled touch pointer IDs receive a new source lifetime", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  for (let i = 0; i < 2; i += 1) {
+    dom.emit("pointerdown", { pointerId: 31, pointerType: "touch" });
+    dom.emit("pointerup", { pointerId: 31, pointerType: "touch" });
+    dom.emit("lostpointercapture", { pointerId: 31, pointerType: "touch" });
+  }
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "release", "press", "release"]);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+  assert.equal(messages[2].pointer_id, 31);
+});
+
+test("explicit resize cancels pressed input immediately and suppresses its late release", async t => {
+  const dom = pointerCanvas(t);
+  const { client, engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  client.resize(800, 450, 2);
+  dom.rect.width = 800;
+  dom.rect.height = 450;
+  dom.emit("pointerup");
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "cancel", "move"]);
+  assert.equal(messages[1].source_id, messages[0].source_id);
+  assert.equal(messages[1].view_revision, messages[0].view_revision);
+  assert.equal(messages[1].surface_x, null);
+  assert.ok(messages[2].view_revision > messages[0].view_revision);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+});
+
+test("duplicate ResizeObserver delivery does not cancel an unchanged pointer view", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  FakeResizeObserver.instances.at(-1).deliver();
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "move"]);
+  assert.equal(messages[1].view_revision, messages[0].view_revision);
+});
+
+test("layout and device-scale changes invalidate coordinates even without a resize callback", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointermove");
+  dom.rect.left = 40;
+  dom.emit("pointermove");
+  dom.win.devicePixelRatio = 2;
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["move", "cancel", "move", "cancel", "move"]);
+  assert.equal(messages[2].surface_x, 70);
+  assert.ok(messages[4].view_revision > messages[2].view_revision);
+});
+
+test("zero-sized views cancel and do not manufacture positions or releases", async t => {
+  const dom = pointerCanvas(t);
+  const { client, engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  client.resize(0, 0, 1);
+  dom.rect.width = 0;
+  dom.rect.height = 0;
+  dom.emit("pointermove");
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => message.kind), ["press", "cancel"]);
+});
+
+test("capture loss is distinct from successful release and from foreign capture loss", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { pointerId: 99 });
+  dom.emit("lostpointercapture");
+  dom.emit("pointerup");
+  dom.emit("pointerdown");
+  dom.emit("pointerup");
+  dom.emit("lostpointercapture");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => message.kind), ["press", "capture_lost", "press", "release"]);
+});
+
+test("chorded pointermove edges keep all subscribed button transitions", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { button: 2, buttons: 3 });
+  dom.emit("pointermove", { button: 0, buttons: 2 });
+  dom.emit("pointerup", { button: 2, buttons: 0 });
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => [message.kind, message.button]), [
+    ["press", 0], ["press", 2], ["release", 0], ["release", 2],
+  ]);
+});
+
+test("focus loss clears only the selected contact without a synthetic release", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown", { pointerId: -2 });
+  dom.win.dispatchEvent(new Event("blur"));
+  dom.emit("pointerup", { pointerId: -2 });
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "focus_lost"]);
+  assert.equal(messages[1].pointer_id, -2);
+});
+
+test("a pointer entering with already-held buttons never synthesizes a press or release", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointermove", { buttons: 1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine), []);
 });
