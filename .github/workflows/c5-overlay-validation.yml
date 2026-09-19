@@ -2,6 +2,7 @@ name: C5 selection overlay isolated validation
 on:
   push:
     branches: [validation/c5-selection-overlay-20260919]
+    paths: [.github/workflows/c5-overlay-validation.yml]
 permissions:
   contents: write
 jobs:
@@ -51,10 +52,11 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/noon-c5-overlay" 321f6b661c467a92b47ae9c4b34e5e020fa92efb
           cd "$RUNNER_TEMP/noon-c5-overlay"
           git apply "$RUNNER_TEMP/c5-overlay.patch"
+          git apply "$GITHUB_WORKSPACE/.ci-overlay-corrections.patch"
           cp .github/workflows/native-host-smoke.yml "$GITHUB_WORKSPACE/proof/proposed-native-host-smoke.yml"
           git restore .github/workflows/native-host-smoke.yml
           cargo fmt --all
-          git add crates
+          git add crates scripts/transient-presentation-ratchet.sh
           git diff --cached --check
           git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: render transient selection overlays in the native host'
           branch="staging/c5-selection-overlay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
