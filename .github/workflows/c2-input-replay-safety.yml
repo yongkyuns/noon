@@ -1,0 +1,117 @@
+name: C2 input replay safety validation
+on:
+  push:
+    branches: [work/c2-input-replay-safety]
+    paths:
+      - .github/workflows/c2-input-replay-safety.yml
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 3
+      - name: Verify source payload and install only regression tests
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json
+          from pathlib import Path
+          data = Path('.github/c2-input-replay-payload.b64').read_text()
+          data = data.replace('FMPfyDPHzV5Khiiy', 'FMPfyDPHzV3Khiiy')
+          raw = data.encode()
+          assert hashlib.sha1(f'blob {len(raw)}\0'.encode() + raw).hexdigest() == '6532b83cff63c23c995567337919825607015288'
+          payload = json.loads(gzip.decompress(base64.b64decode(raw)))
+          assert payload['base'] == '4240bfdcfd6dd588f941ea834f3570ba68ad7d29'
+          Path('/tmp/replay-tests.patch').write_text(payload['test_patch'])
+          Path('/tmp/replay-source.patch').write_text(payload['source_patch'])
+          PY
+          git apply --index /tmp/replay-tests.patch
+          printf '\n#[cfg(test)]\nmod input_tests;\n' >> crates/noon-runtime/src/replay.rs
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Prove the old runtime fails the new invariant tests
+        run: |
+          set -euo pipefail
+          set +e
+          cargo test -p noon-runtime --lib replay::input_tests -- --nocapture > /tmp/replay-before.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/replay-before.log
+          test "$status" -ne 0
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/replay-before.log').read_text()
+          assert 'test result: FAILED.' in text, 'must fail tests, not compilation or tool setup'
+          for name in [
+            'direct_input_rejects_a_sealed_replay_before_any_mutation',
+            'input_seek_cannot_write_through_a_sealed_replay',
+            'empty_input_seek_uses_time_qualified_historical_revisions',
+            'empty_input_seek_does_not_require_a_reactive_runtime',
+            'changed_direct_input_invalidates_retention_without_changing_authored_time',
+            'committed_input_batch_has_explicit_unrecorded_classification',
+          ]:
+              assert f'test replay::input_tests::{name} ... FAILED' in text, name
+          PY
+      - name: Apply production repair and remove temporary tooling
+        run: |
+          git reset --hard HEAD
+          git apply --index /tmp/replay-source.patch
+          git rm .github/c2-input-replay-payload.b64 .github/workflows/c2-input-replay-safety.yml
+          cargo fmt --all
+          git add -u
+          git diff --cached --check
+      - name: Qualify runtime and native session input replay
+        run: |
+          set -euo pipefail
+          cargo test -p noon-runtime --lib replay::input_tests -- --nocapture | tee /tmp/replay-runtime.log
+          cargo test -p noon --lib input_replay -- --nocapture | tee /tmp/replay-session.log
+          cargo test -p noon-web --lib semantic_execution_player::pointer_input::tests -- --nocapture | tee /tmp/replay-browser.log
+          cargo test -p noon-runtime --test reactive_dirty_closure --test finite_replay_locality --test semantic_execution_lowering | tee /tmp/replay-locality.log
+      - name: Repository fast validation
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast 4240bfdcfd6dd588f941ea834f3570ba68ad7d29 > /tmp/replay-fast.log 2>&1 || { tail -150 /tmp/replay-fast.log; exit 1; }
+      - name: Direct WASM compilation
+        run: |
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown > /tmp/replay-wasm.log 2>&1 || { tail -100 /tmp/replay-wasm.log; exit 1; }
+      - name: Complete web preflight
+        run: |
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/replay-web.log 2>&1 || { tail -150 /tmp/replay-web.log; exit 1; }
+      - name: Publish only validated source
+        run: |
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Qualify native input replay safety and read-only history'
+          git rev-parse HEAD HEAD^{tree} > /tmp/replay-identity.txt
+          git archive --format=tar.gz HEAD > /tmp/replay-source.tar.gz
+          git push origin HEAD:refs/heads/work/c2-input-replay-safety
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c2-input-replay-safety-proof
+          retention-days: 7
+          path: |
+            /tmp/replay-*.log
+            /tmp/replay-identity.txt
+            /tmp/replay-source.tar.gz
+          if-no-files-found: warn
