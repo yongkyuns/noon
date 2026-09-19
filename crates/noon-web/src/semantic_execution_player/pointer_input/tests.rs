@@ -435,3 +435,89 @@ fn sequence_exhaustion_precedes_source_configuration() {
         Some(&ReactiveValue::Bool(true))
     );
 }
+
+#[test]
+fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution() {
+    let mut f = pointer_fixture();
+    f.player
+        .session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    f.player
+        .submit_browser_pointer_input_json(&browser_pointer_json(
+            "press",
+            Some(200.0),
+            Some(100.0),
+            Some(0),
+            0,
+        ))
+        .unwrap();
+    assert_eq!(
+        f.player.seal_replay(),
+        Err("replay unavailable: UnrecordedInput".to_owned())
+    );
+    f.player.session.advance_to(1.0).unwrap();
+    assert_eq!(f.player.session.frame().time, 1.0);
+    assert_eq!(
+        f.player.session.effective_signal_value(f.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+}
+
+#[test]
+fn browser_no_op_source_setup_does_not_poison_replay() {
+    let mut f = pointer_fixture();
+    f.player
+        .session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    // Center maps to the existing zero position; all reset buttons are already false.
+    f.player
+        .submit_browser_pointer_input_json(&browser_pointer_json(
+            "move",
+            Some(400.0),
+            Some(200.0),
+            None,
+            0,
+        ))
+        .unwrap();
+    assert_eq!(f.player.next_native_event_sequence, 1);
+    f.player.seal_replay().unwrap();
+}
+
+#[test]
+fn sealed_browser_input_does_not_acknowledge_and_can_retry_after_explicit_discard() {
+    let mut f = pointer_fixture();
+    f.player
+        .submit_browser_pointer_input_json(&browser_pointer_json(
+            "move",
+            Some(400.0),
+            Some(200.0),
+            None,
+            0,
+        ))
+        .unwrap();
+    f.player
+        .session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    f.player.seal_replay().unwrap();
+    let input = browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 0);
+    let before = f.player.session.publication_context();
+    let binding = f.player.browser_pointer_binding;
+    assert!(f.player.submit_browser_pointer_input_json(&input).is_err());
+    assert_eq!(f.player.next_native_event_sequence, 1);
+    assert_eq!(f.player.browser_pointer_binding, binding);
+    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(
+        f.player.session.effective_signal_value(f.button),
+        Some(&ReactiveValue::Bool(false))
+    );
+    f.player.session.discard_replay_retention();
+    f.player.submit_browser_pointer_input_json(&input).unwrap();
+    assert_eq!(f.player.next_native_event_sequence, 2);
+    assert_eq!(
+        f.player.session.effective_signal_value(f.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+}

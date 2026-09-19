@@ -713,3 +713,72 @@ fn motion_out_and_back_remains_two_ordered_deliveries() {
         Some(&ReactiveValue::Scalar(1.0))
     );
 }
+
+#[test]
+fn input_replay_classifies_typed_native_samples_and_events() {
+    use noon_runtime::ReplayLimits;
+    for event in [false, true] {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let source = if event {
+            SemanticNativeInputSource::Event(NativeEventSource::Wheel)
+        } else {
+            SemanticNativeInputSource::State(NativeStateSource::Control {
+                name: "gain".into(),
+            })
+        };
+        let signal = native_signal(&mut store, root, source, SemanticSignalValue::Scalar(0.0));
+        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        session
+            .begin_replay_retention(ReplayLimits::default())
+            .unwrap();
+        if event {
+            session
+                .emit_native_event(NativeEventOccurrence::new(7, NativeEventSource::Wheel))
+                .unwrap();
+            assert_eq!(session.last_native_event_sequence, Some(7));
+        } else {
+            session
+                .set_native_state_input(
+                    NativeStateSource::Control {
+                        name: "gain".into(),
+                    },
+                    NativeInputValue::Scalar(1.0),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            session.effective_signal_value(signal),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(session.frame().time, 0.0);
+        assert_eq!(
+            session.seal_replay().map_err(|error| error.to_string()),
+            Err("replay unavailable: UnrecordedInput".to_owned())
+        );
+        session.advance_to(2.0).unwrap();
+        assert_eq!(session.frame().time, 2.0);
+    }
+}
+
+#[test]
+fn input_replay_ignores_unobserved_events_without_poisoning_history() {
+    use noon_runtime::ReplayLimits;
+    let store = SemanticStore::new();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    session
+        .configure_native_pointer_input(POINTER, VIEW)
+        .unwrap();
+    let before = session.publication_context();
+    submit(&mut session, 5, press(1.0, 2.0, 0));
+    assert_eq!(
+        session.publication_context(),
+        before,
+        "no consumer means no effective input change"
+    );
+    assert_eq!(session.last_native_event_sequence, Some(5));
+    session.seal_replay().unwrap();
+}

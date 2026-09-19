@@ -338,8 +338,10 @@ impl SceneInstance {
         self.reactive.as_ref()?.state.value(signal)
     }
 
-    /// Deterministically seek, evaluating a canonical signal-timeline input batch
-    /// before reactive bindings are reapplied to the rebuilt frame.
+    /// Seek while evaluating a canonical signal-timeline input batch before
+    /// reactive bindings are reapplied. Nonempty input batches cannot mutate a
+    /// sealed history; changed values require a separately qualified input replay
+    /// policy. An empty batch follows the ordinary historical seek path.
     pub fn seek_with_reactive_inputs(
         &mut self,
         time: f64,
@@ -347,6 +349,14 @@ impl SceneInstance {
     ) -> Result<&FrameState, crate::EvaluationError> {
         if !time.is_finite() {
             return Err(crate::EvaluationError::InvalidTime(time));
+        }
+        // An empty batch is an ordinary seek, including sealed historical replay.
+        // It must not index a missing input or bypass time-qualified revisions.
+        if inputs.is_empty() {
+            return self.seek(time);
+        }
+        if self.replay_is_sealed() {
+            return Err(crate::EvaluationError::ReplaySealed);
         }
         let previous_time = self.frame.time;
         let prepared = self
@@ -357,6 +367,10 @@ impl SceneInstance {
             })?
             .prepare_input_batch(inputs)
             .map_err(crate::EvaluationError::Reactive)?;
+        let effective_changed = !prepared.is_empty();
+        if effective_changed {
+            self.invalidate_replay_input();
+        }
         let stats = self
             .reactive
             .as_mut()
@@ -364,26 +378,37 @@ impl SceneInstance {
             .commit_prepared_input_batch(prepared);
         self.seek_unchecked(time);
         self.last_reactive_stats = stats;
-        if self.frame.time != previous_time || stats.bindings_invalidated != 0 {
+        if self.frame.time != previous_time || effective_changed {
             self.publish_effective_change();
         }
         Ok(&self.frame)
     }
 
     /// Change one native input and apply only its invalidated bindings to the
-    /// already-compiled dense frame state.
+    /// already-compiled dense frame state. Sealed history is read-only; a changed
+    /// input during retention makes that range unavailable for deterministic
+    /// replay. Rejected and unchanged inputs preserve the retained capability.
     pub fn set_reactive_input(
         &mut self,
         signal: SignalId,
         value: impl Into<ReactiveValue>,
-    ) -> Result<&FrameState, ReactiveError> {
+    ) -> Result<&FrameState, crate::EvaluationError> {
+        if self.replay_is_sealed() {
+            return Err(crate::EvaluationError::ReplaySealed);
+        }
         let update = self
             .reactive
             .as_mut()
-            .ok_or(ReactiveError::UnknownSignal(signal))?
+            .ok_or(crate::EvaluationError::Reactive(
+                ReactiveError::UnknownSignal(signal),
+            ))?
             .state
-            .set_input(signal, value)?;
+            .set_input(signal, value)
+            .map_err(crate::EvaluationError::Reactive)?;
         let effective_changed = !update.signal_changes().is_empty();
+        if effective_changed {
+            self.invalidate_replay_input();
+        }
         let evaluation = update.stats();
         let mut applied_targets = 0;
         let mut changed_targets = 0;
