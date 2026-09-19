@@ -20,6 +20,7 @@ pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionInputError {
+    InvalidPointerClickTolerance,
     PointerNotConfigured,
     ForeignPointerRuntime,
     StalePointerBinding,
@@ -55,6 +56,7 @@ pub enum ExecutionSessionInputError {
 impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointerClickTolerance => formatter.write_str("click tolerance must be finite and nonnegative logical pixels"),
             Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
             Self::StalePointerBinding => formatter.write_str("pointer binding has been replaced"),
@@ -151,9 +153,28 @@ pub struct NativePointerInputPublication {
     input: NativePointerInput,
     previous: PublicationContext,
     current: PublicationContext,
+    selection_query: Option<super::PointerFillQuery>,
+    selection_click: Option<super::PointerSelectionClick>,
+    selection_changed: bool,
 }
 
 impl NativePointerInputPublication {
+    /// Endpoint pick and locality evidence, present only when selection queried.
+    pub const fn selection_query(self) -> Option<super::PointerFillQuery> {
+        self.selection_query
+    }
+
+    /// Exactly-once successful click, only after the whole input commit succeeds.
+    pub const fn selection_click(self) -> Option<super::PointerSelectionClick> {
+        self.selection_click
+    }
+
+    /// An interactive presentation may use this to request overlay work. It does
+    /// not manufacture ordinary scene/renderer dirtiness or advance authored time.
+    pub const fn selection_changed(self) -> bool {
+        self.selection_changed
+    }
+
     pub const fn input(self) -> NativePointerInput {
         self.input
     }
@@ -192,17 +213,18 @@ impl Default for PointerInputState {
 }
 
 impl ExecutionSession {
-    /// Whether any native reactive route observes this collector's pointer vocabulary.
+    /// Whether a native reactive route or transient selection consumes this pointer.
     ///
     /// This bounded lookup inspects lowered routes, not objects or authored scene
     /// graphs. It is an adapter-interest query, not admission: explicit typed
     /// callers still deliver unbound records through the normal session contract.
-    /// Future interaction consumers must extend input interest at the same owner.
+    /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        !self
-            .reactive_projection
-            .native_state_targets(&NativeStateSource::PointerPosition)
-            .is_empty()
+        self.pointer_selection.enabled()
+            || !self
+                .reactive_projection
+                .native_state_targets(&NativeStateSource::PointerPosition)
+                .is_empty()
             || (0..=u8::MAX).any(|button| {
                 !self
                     .reactive_projection
@@ -248,6 +270,7 @@ impl ExecutionSession {
             generation,
         });
         self.pointer_input.next_generation = generation.checked_add(1);
+        self.pointer_selection.cancel_press();
         self.native_pointer_input_token()
     }
 
@@ -283,14 +306,16 @@ impl ExecutionSession {
     /// Cancellation has no coordinates and may clear buttons after frame advance,
     /// but still requires the same runtime, pointer and binding generation.
     /// Native event subscribers observe every accepted down/up occurrence; cancel
-    /// is never projected into a successful release. Picking/click/drag policy is
-    /// intentionally not implemented here.
+    /// is never projected into a successful release. Opt-in transient fill
+    /// selection prepares through the shared picker and commits only after all
+    /// native effects succeed. Drag/authored action policy is not implemented.
     pub fn submit_native_pointer_input(
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
+        let selection = self.prepare_pointer_selection(token, input)?;
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -307,10 +332,14 @@ impl ExecutionSession {
             self.apply_reactive_input_batch(inputs)?;
         }
         self.last_native_event_sequence = Some(input.sequence());
+        self.pointer_selection = selection.state;
         Ok(NativePointerInputPublication {
             input,
             previous,
             current: self.publication_context(),
+            selection_query: selection.query,
+            selection_click: selection.click,
+            selection_changed: selection.changed,
         })
     }
 
