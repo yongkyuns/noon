@@ -274,7 +274,8 @@ impl WasmAuthoringFamilyHandle {
             .get(index)
             .copied()
             .ok_or_else(|| failure("family member index is out of bounds"))?;
-        Ok(store.borrow().semantic_family_checked(member).is_ok())
+        let is_family = store.borrow().semantic_family_checked(member).is_ok();
+        Ok(is_family)
     }
 
     #[wasm_bindgen(js_name = memberFamily)]
