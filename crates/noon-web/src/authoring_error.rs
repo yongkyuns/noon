@@ -621,6 +621,7 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
             }

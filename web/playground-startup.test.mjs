@@ -197,8 +197,13 @@ assert.match(
 assert.match(main, /const METRICS_POLL_MS = 500;/, "runtime metrics polling must be rate-limited");
 assert.match(
   main,
-  /metricsTimer = setTimeout\(poll, METRICS_POLL_MS\);/,
-  "runtime metrics must use the bounded polling cadence",
+  /metricsTimer = setTimeout\(poll, PLAYBACK_POLL_MS\);/,
+  "first metrics observation must use the bounded playback cadence",
+);
+assert.match(
+  main,
+  /const delay = status\.dataset\.playbackPlaying === "true" \? PLAYBACK_POLL_MS : METRICS_POLL_MS;\s*metricsTimer = setTimeout\(poll, delay\);/,
+  "playing and settled metrics must keep their bounded polling cadences",
 );
 assert.doesNotMatch(
   main,

@@ -39,8 +39,11 @@ test("metric polling ignores a runtime replaced during its requests", () => {
   assert.ok(start >= 0 && end > start);
   const metrics = main.slice(start, end);
   assert.match(metrics, /const activePlayer = player/);
-  assert.match(metrics, /Promise\.all\(\[[\s\S]*activePlayer\.metrics\(\),[\s\S]*activePlayer\.state\(\)/);
-  assert.match(metrics, /if \(player !== activePlayer\) return;/);
+  assert.match(metrics, /const playbackState = await activePlayer\.state\(\)/);
+  assert.match(metrics, /void updateRendererMetrics\(observation\)/);
+  assert.doesNotMatch(metrics, /Promise\.all/);
+  assert.match(metrics, /player === observation\.player/);
+  assert.equal((metrics.match(/if \(!isCurrentMetricsObservation\(observation\)\) return;/g) ?? []).length, 2);
   assert.match(metrics, /setPlaybackRuntimeStatus\(\s*playbackState,/);
 });
 
@@ -57,7 +60,8 @@ test("progress is observed during source playback, with stale-generation and pol
   const metrics = main.slice(main.indexOf("async function updateWorkerMetrics()"), main.indexOf("try {\n  const requested ="));
   assert.doesNotMatch(metrics, /sceneRunPromise !== null/);
   assert.match(metrics, /busyDepth > 0 && activeSourceContinuation === null/);
-  assert.match(metrics, /generations\.diagnostics\.runGeneration !== runGeneration/);
+  assert.match(metrics, /generations\.diagnostics\.runGeneration === observation\.runGeneration/);
+  assert.match(metrics, /metricsEpoch === observation\.epoch/);
   assert.match(metrics, /playbackControls\?\.observe\(playbackState\)/);
   assert.match(metrics, /epoch === metricsEpoch/);
   const stop = main.slice(main.indexOf("function stopForSourceEdit()"), main.indexOf("function sameSemanticContinuation("));

@@ -85,7 +85,7 @@ impl SceneInstance {
     /// may still need one wake at the loop boundary so that deterministic history can be
     /// replayed. The runtime remains the owner of the channels and their event cursor.
     pub fn has_timeline_channels(&self) -> bool {
-        self.timeline_scheduler.live_group_count() != 0
+        self.timeline_scheduler.live_group_count() != 0 || self.replay_is_sealed()
     }
 
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.
@@ -94,6 +94,10 @@ impl SceneInstance {
             frame_pending: !self.changes.is_empty(),
             timeline: self.timeline_scheduler.wake_state(),
         }
+        .with_additional_timeline(
+            self.next_replay_revision_time()
+                .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),
+        )
     }
 }
 

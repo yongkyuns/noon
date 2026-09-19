@@ -989,6 +989,9 @@ impl ExecutionSession {
         read_objects: impl IntoIterator<Item = SemanticNodeId>,
         schedule: Option<CallbackSchedulePreview>,
     ) -> Result<CallbackPhaseOverlay, ExecutionSessionCallbackError> {
+        if self.runtime.replay_is_sealed() {
+            return Err(CompilePatchError::ReplaySealed.into());
+        }
         if let Some(pending) = &self.pending_callback {
             return Err(ExecutionSessionCallbackError::Pending(pending.token));
         }
@@ -1045,6 +1048,7 @@ impl ExecutionSession {
         let prior_driver_rows = prepared.prior_driver_rows();
         let delta_time = time - self.frame().time;
         self.next_callback_sequence = sequence.checked_add(1);
+        self.runtime.invalidate_replay_domain();
         self.pending_callback = Some(PendingCallbackPhase {
             token,
             prepared,

@@ -39,6 +39,7 @@ function fixture(
   const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
+    sealReplay: () => {},
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
     initialCallbackPhaseJson: () => null,
@@ -93,7 +94,7 @@ function fixture(
     },
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
-    time: () => time, isPlaying: () => playing,
+    time: () => time, playbackTimeAt: () => time, isPlaying: () => playing,
   };
   const context = {
     createExecutionPlayer: () => { leased = true; created += 1; return player; },
@@ -1967,5 +1968,189 @@ test("rejected continuation pointer input preserves its existing wake", { timeou
     assert.equal(ordinaryReads, 0);
     assert.equal(f.stats().nativeInputs.length, 0);
     assert.equal(f.player.time(), 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("unavailable replay preserves final presentation and rejects transport commands", async () => {
+  const f = fixture();
+  f.player.sealReplay = () => { throw new Error("RetentionLimit"); };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const observed = await request(f.control.port2, "state", 901);
+    assert.equal(observed.replaySupported, false);
+    assert.equal(observed.playing, false);
+    assert.match(observed.replayUnavailable, /RetentionLimit/);
+    for (const command of ["seek", "resume", "restart_playback"]) {
+      const reply = await request(f.control.port2, command, 902, { time: 0 });
+      assert.equal(reply.type, "error");
+      assert.match(reply.message, /Replay unavailable/);
+    }
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("source continuation never seals a still-growing execution plan", async () => {
+  const f = fixture("transferable", null, { generation: 901, onComplete() {}, onError() {} });
+  f.player.sealReplay = () => { throw new Error("must not seal source-owned playback"); };
+  let endpoint;
+  try { const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
+    assert.equal((await request(f.control.port2, "state", 903)).durationSeconds, null);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+for (const reason of ["Incomplete", "UnsupportedDomain", "RetentionLimit"]) {
+  test(`replay rejection (${reason}) preserves paused forward observation without enabling rewind`, async () => {
+    const f = fixture();
+    f.player.sealReplay = () => { throw new Error(reason); };
+    let seeks = 0;
+    f.player.seekDeltaJson = () => { seeks += 1; throw new Error("forward controls must not seek"); };
+    let ticks = 0;
+    f.player.tickCallbackPhaseJson = () => { ticks += 1; return null; };
+    f.render.port2.on("message", (message) => {
+      if (message.type !== "execution_delta") return;
+      f.render.port2.postMessage({ type: "execution_ack", session: message.session, sequence: message.sequence });
+      f.render.port2.postMessage({ type: "execution_presented", session: message.session, sequence: message.sequence });
+    });
+    let endpoint;
+    try {
+      const ready = next(f.control.port2);
+      endpoint = await f.attach(); await ready;
+      const paused = await request(f.control.port2, "pause", 910);
+      assert.equal(paused.type, "pause", paused.message);
+      assert.equal(paused.playing, false);
+      const first = await request(f.control.port2, "advance_to", 911, { time: 0.4 });
+      assert.equal(first.type, "advance_to", first.message);
+      assert.equal(first.time, 0.4);
+      assert.equal(first.replaySupported, false);
+      assert.equal(first.replayUnavailable, reason);
+      // Forward validity is still decided by the player, not a second JS clock.
+      for (const time of [0.2, -1, NaN, Infinity]) {
+        const rejected = await request(f.control.port2, "advance_to", 912, { time });
+        assert.equal(rejected.type, "error");
+        assert.match(rejected.message, /invalid forward time/);
+        assert.equal(f.player.time(), 0.4);
+      }
+      const second = await request(f.control.port2, "advance_to", 913, { time: 0.8 });
+      assert.equal(second.time, 0.8);
+      assert.equal(second.playing, false);
+      for (const command of ["seek", "resume", "restart_playback", "set_loop_duration"]) {
+        const rejected = await request(f.control.port2, command, 914, { time: 0, loopDurationSeconds: 4 });
+        assert.equal(rejected.type, "error");
+        assert.match(rejected.message, /Replay unavailable/);
+      }
+      f.render.port2.postMessage({ type: "tick", timestamp: 1000 });
+      await turn(); await turn();
+      assert.equal(f.player.time(), 0.8);
+      assert.equal(ticks, 0, "denied replay must not restart through a renderer wake");
+      assert.equal(seeks, 0);
+      assert.equal(f.stats().created, 1);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
+test("non-replayable callback observation still waits for matching renderer evidence", { timeout: 3000 }, async () => {
+  let callbacks = 0;
+  const f = fixture("transferable", async (phase) => {
+    callbacks += 1;
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  f.player.sealReplay = () => { throw new Error("Incomplete"); };
+  let endpoint;
+  try {
+    const prepared = await prepareRendererObservationFixture(f, [
+      { target: { slot: 4, generation: 2 } },
+    ]);
+    endpoint = prepared.endpoint;
+    const { observationRequest, publicationMessage, advanced } = prepared.begin(920);
+    // Surface an admission failure immediately instead of hanging on a missing publication.
+    const [observation, publication] = await Promise.race([
+      Promise.all([observationRequest, publicationMessage]),
+      advanced.then((reply) => {
+        assert.notEqual(reply.type, "error", reply.message);
+        throw new Error("forward observation completed before its renderer evidence");
+      }),
+    ]);
+    assert.equal(callbacks, 1);
+    assert.equal(f.stats().committedPhases, 1);
+    assert.equal(observation.session, publication.session);
+    assert.equal(observation.sequence, publication.sequence);
+    let settled = false;
+    advanced.then(() => { settled = true; });
+    f.render.port2.postMessage({ type: "execution_ack", session: publication.session, sequence: publication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: publication.session, sequence: publication.sequence });
+    await turn(); await turn();
+    assert.equal(settled, false, "presentation alone cannot replace callback renderer evidence");
+    const evidence = {
+      outcome: "presented",
+      publication: { session: publication.session, sequence: publication.sequence },
+    };
+    f.render.port2.postMessage({ type: "renderer_observation", ...evidence.publication, json: JSON.stringify(evidence) });
+    const result = await advanced;
+    assert.equal(result.type, "advance_to");
+    assert.equal(result.time, 1);
+    assert.equal(result.playing, false);
+    assert.equal(result.replaySupported, false);
+    assert.deepEqual(result.rendererObservation, evidence);
+    assert.equal(callbacks, 1, "observation must not re-execute the callback");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("real-time state observes the Rust wait clock without driving or publishing", async () => {
+  const f = fixture();
+  let endpoint;
+  const observations = [];
+  f.player.playbackTimeAt = now => { observations.push(now); return 0.75; };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const before = f.stats();
+    const observed = await request(f.control.port2, "state", 900);
+    assert.equal(observed.time, 0.75);
+    assert.equal(f.player.time(), 0);
+    assert.equal(observations.length, 1);
+    assert.ok(Number.isFinite(observations[0]));
+    assert.equal(f.stats().drained, before.drained);
+    assert.deepEqual(f.stats().continuationDriveTimes, []);
+    assert.deepEqual(f.stats().authoredSampleTimes, []);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("pausing in a wait commits the observed time before freezing the replay clock", async () => {
+  const f = fixture(); let endpoint;
+  f.player.playbackTimeAt = () => f.player.isPlaying() ? 0.75 : f.player.time();
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const paused = await request(f.control.port2, "pause", 901);
+    assert.equal(paused.time, 0.75);
+    assert.equal(paused.playing, false);
+    assert.equal(f.player.time(), 0.75);
+    assert.equal((await request(f.control.port2, "state", 902)).time, 0.75);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("external-sample state never projects wall time", async () => {
+  const f = fixture("transferable", null, { generation: 93, onComplete() {}, onError() {} }, { pacing: "external_samples" });
+  let endpoint;
+  f.player.playbackTimeAt = () => { throw new Error("unexpected wall-time projection"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    f.player.seekDeltaJson(0.25);
+    assert.equal((await request(f.control.port2, "state", 903)).time, 0.25);
+    assert.deepEqual(f.stats().authoredSampleTimes, []);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("seek acknowledgements retain the exact evaluated time", async () => {
+  const f = fixture(); let endpoint;
+  f.player.playbackTimeAt = () => { throw new Error("unexpected wall-time projection"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
   } finally { endpoint?.stop(); f.close(); }
 });

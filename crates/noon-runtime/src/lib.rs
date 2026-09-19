@@ -8,7 +8,9 @@ mod frame;
 mod prepared_frame;
 mod reactive;
 mod renderer_publication;
+mod replay;
 mod spatial_index;
+pub use replay::{ReplayError, ReplayLimits, ReplayStats};
 
 pub use derived_display_evaluation::*;
 pub use execution_slots::*;
@@ -50,6 +52,8 @@ pub struct EvaluationStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
+    ReplaySealed,
+    ReplayTimeOutsideRange { time: f64, start: f64, end: f64 },
     InvalidTime(f64),
     NonMonotonicPreparedAdvance { current: f64, requested: f64 },
     FrameEpochExhausted(noon_core::FrameEpoch),
@@ -61,6 +65,12 @@ pub enum EvaluationError {
 impl std::fmt::Display for EvaluationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => {
+                formatter.write_str("sealed replay cannot stage live effective mutations")
+            }
+            Self::ReplayTimeOutsideRange { time, start, end } => {
+                write!(formatter, "replay time {time} is outside {start}..={end}")
+            }
             Self::InvalidTime(time) => write!(formatter, "invalid scene time {time}"),
             Self::NonMonotonicPreparedAdvance { current, requested } => write!(
                 formatter,
@@ -139,6 +149,7 @@ impl RuntimeIdentity {
 pub struct SceneInstance {
     identity: RuntimeIdentity,
     compiled: CompiledScene,
+    replay_history: Option<replay::ReplayHistory>,
     frame: FrameState,
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
@@ -161,6 +172,7 @@ impl Clone for SceneInstance {
         Self {
             identity: RuntimeIdentity::fresh(),
             compiled: self.compiled.clone(),
+            replay_history: self.replay_history.clone(),
             frame: self.frame.clone(),
             painter_order: self.painter_order.clone(),
             painter_ranks: self.painter_ranks.clone(),
@@ -199,6 +211,7 @@ impl SceneInstance {
                 .map(|index| compiled.painter_rank(index as u32))
                 .collect(),
             compiled,
+            replay_history: None,
             frame,
             groups,
             timeline_scheduler,
@@ -392,6 +405,8 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         if time >= self.frame.time {
             self.advance_unchecked(time);
         } else {
@@ -405,6 +420,8 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         let previous_time = self.frame.time;
         self.seek_unchecked(time);
         if self.frame.time != previous_time {
@@ -417,6 +434,8 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         let previous_time = self.frame.time;
         if time < previous_time {
             self.seek_unchecked(time);
@@ -443,6 +462,17 @@ impl SceneInstance {
     }
 
     fn apply_patch_unpublished(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<&FrameState, CompilePatchError> {
+        self.require_replay_writable()?;
+        let inverse = self.prepare_replay_change(patch);
+        self.apply_patch_without_history(patch)?;
+        self.retain_replay_change(inverse);
+        Ok(&self.frame)
+    }
+
+    fn apply_patch_without_history(
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {

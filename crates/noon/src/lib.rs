@@ -54,6 +54,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod animated_number_line_example;
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;

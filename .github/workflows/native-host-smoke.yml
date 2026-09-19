@@ -55,6 +55,11 @@ jobs:
       - name: Check transient viewport integration
         run: cargo test -p noon --all-features --test transient_viewport
 
+      - name: Qualify native agent temporal rendering
+        run: |
+          cargo test -p noon --all-features --test agent_temporal_qualification \
+            -- --include-ignored --nocapture
+
       - name: Check native transient viewport preparation
         run: cargo test -p noon-native --all-features --lib execution_source::viewport_tests
 
