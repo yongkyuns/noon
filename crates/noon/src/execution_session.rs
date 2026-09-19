@@ -7,6 +7,8 @@ mod input;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
 };
+mod picking;
+pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 mod publication;
 mod replay;
 mod signal_timeline;

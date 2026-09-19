@@ -290,6 +290,37 @@ impl ExecutionSession {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let previous = self.preflight_native_pointer_input(token, input)?;
+
+        let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
+            self.pointer_button_reset_inputs()
+        } else {
+            Vec::new()
+        };
+        for update in input.state_updates() {
+            self.append_native_state_inputs(update, &mut inputs);
+        }
+        if let Some(event) = input.button_event() {
+            self.append_native_event_inputs(&event, &mut inputs);
+        }
+        if !inputs.is_empty() {
+            self.apply_reactive_input_batch(inputs)?;
+        }
+        self.last_native_event_sequence = Some(input.sequence());
+        Ok(NativePointerInputPublication {
+            input,
+            previous,
+            current: self.publication_context(),
+        })
+    }
+
+    /// Shared read-only admission check for input consumers. Picking does not
+    /// acknowledge a sequence, project signals, or relax callback/context gates.
+    pub(super) fn preflight_native_pointer_input(
+        &self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<PublicationContext, ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
         if token.runtime != self.runtime_identity() {
             return Err(ExecutionSessionInputError::ForeignPointerRuntime);
@@ -319,26 +350,7 @@ impl ExecutionSession {
         }
         self.require_native_event_sequence(input.sequence())?;
 
-        let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
-            self.pointer_button_reset_inputs()
-        } else {
-            Vec::new()
-        };
-        for update in input.state_updates() {
-            self.append_native_state_inputs(update, &mut inputs);
-        }
-        if let Some(event) = input.button_event() {
-            self.append_native_event_inputs(&event, &mut inputs);
-        }
-        if !inputs.is_empty() {
-            self.apply_reactive_input_batch(inputs)?;
-        }
-        self.last_native_event_sequence = Some(input.sequence());
-        Ok(NativePointerInputPublication {
-            input,
-            previous,
-            current: self.publication_context(),
-        })
+        Ok(previous)
     }
 
     /// Deliver one normalized sampled native state through signal-owned routes.
