@@ -1,0 +1,37 @@
+name: C2 wake base reconciliation
+on:
+  push:
+    branches: [work/c2-wake-base-reconcile]
+    paths: [.github/workflows/c2-reconcile-wake.yml]
+permissions:
+  contents: write
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 80
+      - name: Merge pinned current master without dropping either side
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin b7258363817b0c4d31f4becf8a5cc17b6605c139
+          set +e
+          git merge --no-commit --no-ff b7258363817b0c4d31f4becf8a5cc17b6605c139
+          result=$?
+          set -e
+          test "$result" -le 1
+          git diff --name-only --diff-filter=U > /tmp/c2-conflicts.txt
+          git diff --cc > /tmp/c2-conflict-diff.txt
+          cat /tmp/c2-conflicts.txt /tmp/c2-conflict-diff.txt
+          tar --exclude=.git -czf /tmp/c2-merged-worktree.tar.gz .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c2-reconciliation-inspection
+          path: |
+            /tmp/c2-conflicts.txt
+            /tmp/c2-conflict-diff.txt
+            /tmp/c2-merged-worktree.tar.gz
+          retention-days: 7
