@@ -18,6 +18,12 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "set_loop_duration",
   "advance_to",
 ]);
+// A denied replay capability is not a denial of forward execution. Pause and
+// advance_to keep the existing callback-aware, non-rewinding Rust path; only
+// controls that can restart/loop the historical plan require replay admission.
+const REPLAY_DEPENDENT_CONTROLS = new Set([
+  "resume", "seek", "restart_playback", "set_loop_duration",
+]);
 
 export async function attachSemanticEngine(
   context,
@@ -55,6 +61,7 @@ export async function attachSemanticEngine(
     throw new Error("external sample pacing requires a source-owned semantic continuation");
   }
   let player = null;
+  let replayUnavailable = null;
   // A player is leased from the authoring context. The transport session only
   // frames deltas; it never selects or creates a second runtime for a scene.
   let transport;
@@ -207,9 +214,16 @@ export async function attachSemanticEngine(
       return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: null };
     }
     return {
-      type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0",
+      type,
+      // Observe the Rust clock during idle waits. Command acknowledgements and
+      // external samples retain exact evaluated-frame time, independent of wall time.
+      time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
+        ? player.playbackTimeAt(performance.now()) : player.time(),
+      playing: player.isPlaying(), nextPatchSequence: "0",
       // A Python continuation has not authored its complete future timeline.
-      ...(continuation === null ? {} : { durationSeconds: null }),
+      ...(continuation === null
+        ? { replaySupported: replayUnavailable === null, replayUnavailable }
+        : { durationSeconds: null }),
     };
   };
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
@@ -636,10 +650,18 @@ export async function attachSemanticEngine(
       let sourceCompleted;
       try {
         switch (message.type) {
-          case "pause":
+          case "pause": {
+            latestTick = null;
+            if (pacing === SEMANTIC_PACING_REALTIME) {
+              const time = player.playbackTimeAt(performance.now());
+              // Commit elapsed static time before freezing, so pause/resume does
+              // not jump back to the previous rendered frame's timestamp.
+              if (time > player.time()) await advanceToAuthoredTime(time);
+            }
             player.pause();
             observeExecutionWake(performance.now(), true);
             break;
+          }
           case "resume":
             player.resume();
             observeExecutionWake(performance.now(), true);
@@ -812,7 +834,12 @@ export async function attachSemanticEngine(
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
-    if (initiallyPaused) player.pause();
+    if (continuation === null) {
+      if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
+      try { player.sealReplay(); }
+      catch (error) { replayUnavailable = String(error?.message ?? error); }
+    }
+    if (initiallyPaused || replayUnavailable !== null) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
@@ -834,6 +861,9 @@ export async function attachSemanticEngine(
           "native_state_input", "native_event", "browser_pointer_input",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
+        }
+        if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
+          throw new Error(`Replay unavailable: ${replayUnavailable}`);
         }
         if (continuation !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
           throw new Error(
@@ -879,7 +909,7 @@ export async function attachSemanticEngine(
       if (stopped) return;
       if (message?.type === "tick") {
         if (!Number.isFinite(message.timestamp)) { fail(new Error("invalid render timestamp")); return; }
-        if (pacing === SEMANTIC_PACING_REALTIME) {
+        if (pacing === SEMANTIC_PACING_REALTIME && replayUnavailable === null) {
           latestTick = message.timestamp;
           void drain();
         }

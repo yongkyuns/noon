@@ -6,6 +6,8 @@ pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
 mod execution_patch;
+mod replay_revision;
+pub use replay_revision::CompiledReplayRevision;
 mod semantic_lowering;
 mod transaction_preflight;
 mod transform;
@@ -548,6 +550,7 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
     InvalidFamilyAnimation,
@@ -595,6 +598,7 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => formatter.write_str("sealed replay is read-only; discard its retention before editing"),
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
             }

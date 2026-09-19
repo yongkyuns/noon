@@ -409,3 +409,30 @@ pub async fn create_coordinate_plotting_renderer(
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// The animated gallery uses the same typed program as the native example.
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createAnimatedCoordinatePlottingRenderer)]
+pub async fn create_animated_coordinate_plotting_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::coordinate_plotting_example::program()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createAnimatedNumberLineRenderer)]
+pub async fn create_animated_number_line_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::animated_number_line_example::program()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
