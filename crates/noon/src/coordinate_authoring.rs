@@ -62,6 +62,7 @@ impl Default for RiemannRectangleOptions {
 }
 
 pub(crate) mod area;
+pub use area::RiemannRectanglePlan;
 mod number_plane;
 pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
@@ -486,28 +487,35 @@ impl ManimAxes {
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        self.riemann_plan(graph, options)?.publish(None, None)
+    }
+
+    /// Capture one cold authored snapshot before evaluating arbitrary functions.
+    /// Rust owns the partition; evaluate `samples()` and optionally `starts()`,
+    /// then publish the returned values through this plan.
+    pub fn riemann_plan(
+        &self,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
         self.require_graph_store(graph)?;
-        let bounded = match options.bounded_graph {
-            Some(id) => Some(Mobject::from_node(
-                Rc::clone(self.family.integration_store()),
-                id,
-            )?),
-            None => None,
-        };
+        let bounded = options
+            .bounded_graph
+            .map(|id| Mobject::from_node(Rc::clone(self.family.integration_store()), id))
+            .transpose()?;
         if let Some(ref bound) = bounded {
             self.require_graph_store(bound)?;
         }
         let frame = self.authored_frame()?;
         let graph_path = graph.path_query()?;
         let bounded_path = bounded.as_ref().map(Mobject::path_query).transpose()?;
-        let paths = area::prepare_riemann_paths(
+        RiemannRectanglePlan::from_snapshot(
             frame,
             graph,
             &graph_path,
             bounded.as_ref().zip(bounded_path.as_ref()),
             options,
-        )?;
-        area::publish_path_family(Rc::clone(self.family.integration_store()), paths)
+        )
     }
 
     fn require_graph_store(&self, graph: &Mobject) -> Result<(), CoordinateAuthoringError> {
@@ -616,6 +624,19 @@ impl Scene {
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        let paths = self
+            .effective_riemann_plan(axes, graph, options)?
+            .paths(None, None)?;
+        crate::scene::publish_path_family(self, paths).map_err(Into::into)
+    }
+
+    /// Immutable effective source snapshot for exact scalar callback evaluation.
+    pub fn effective_riemann_plan(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
             || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
         {
@@ -637,14 +658,13 @@ impl Scene {
             .as_ref()
             .map(|bound| self.effective_path_query(bound))
             .transpose()?;
-        let paths = area::prepare_riemann_paths(
+        RiemannRectanglePlan::from_snapshot(
             frame,
             graph,
             &graph_path,
             bounded.as_ref().zip(bounded_path.as_ref()),
             options,
-        )?;
-        crate::scene::publish_path_family(self, paths).map_err(Into::into)
+        )
     }
 }
 
