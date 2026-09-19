@@ -652,6 +652,24 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    pub(crate) fn live_create_path_family(
+        &mut self,
+        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_path_family(paths)
+        .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_image(
         &mut self,

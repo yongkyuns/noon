@@ -11,6 +11,14 @@
   },
   "fixtures": [
     {
+      "id": "area-helpers",
+      "scene": "RetainedAreaHelpers",
+      "source": "parity/manim-v0.21/core-examples/area_helpers.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate",
+      "notes": "Shared retained area baselines, signed midpoint Riemann paints, and bounded graph area; source-equivalent on both renderers."
+    },
+    {
       "id": "number-line-ticks",
       "scene": "NumberLineTicks",
       "source": "parity/manim-v0.21/core-examples/number_line.py",

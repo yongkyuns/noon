@@ -210,6 +210,14 @@ class PlottingQualification(Scene):
         self.play(Create(later), run_time=0.2, rate_func=linear)
         near(sentinel.get_center(), (4, 2))
         assert len(calls) == 5
+        area = axes.get_area(later, [-0.75, 0.75], color=GREEN, opacity=0.4)
+        rectangles = axes.get_riemann_rectangles(later, [-1, 1], dx=0.5, input_sample_type="center", fill_opacity=0.6)
+        self.add(area, rectangles)
+        near(area.get_start(), axes.c2p(-0.75, 0))
+        assert len(rectangles.submobjects) == 4
+        assert abs(rectangles.submobjects[0].get_fill_opacity() - 0.6) < 1e-6
+        self.remove(area, rectangles)
+        assert len(calls) == 5, "area queries must not reevaluate unrelated callbacks"
         for bad_length in (float("nan"), -1, 0):
             try:
                 Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=bad_length)

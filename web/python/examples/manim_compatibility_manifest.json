@@ -311,6 +311,22 @@
       "order": 1172
     },
     {
+      "id": "noon-area-helpers",
+      "title": "Area and Riemann rectangles",
+      "summary": "Compare a shaded curve area with midpoint rectangles; negative samples invert their gradient colors.",
+      "status": "ready",
+      "path": "python/examples/area_helpers.py",
+      "category": "manim-compatible/plotting",
+      "features": ["Axes.get_area", "get_riemann_rectangles", "signed area", "bounded curves", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "area-helpers",
+      "thumbnail": "thumbnails/manim/generated/area-helpers.png",
+      "thumbnail_alt": "A blue parabola with a green shaded area and signed midpoint rectangles",
+      "thumbnail_time": 0,
+      "order": 1173
+    },
+    {
       "id": "noon-raster-image",
       "title": "RasterImage",
       "summary": "Immutable ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",
