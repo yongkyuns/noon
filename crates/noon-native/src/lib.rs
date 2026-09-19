@@ -9,6 +9,7 @@
 
 mod execution_source;
 mod pointer_input;
+mod selection_overlay;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,7 +24,10 @@ use noon_core::{
     Vec2,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
-use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+use noon_render_wgpu::{
+    Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState, RetainedFramePreparer,
+    RetainedTextGpuState,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -258,6 +262,7 @@ struct NativeApp {
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
+    last_selection_highlight: Option<noon::integration::PointerSelectionHighlight>,
     error: Option<NativeHostError>,
     #[cfg(test)]
     exit_after_present: Option<f64>,
@@ -303,6 +308,7 @@ impl NativeApp {
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
+            last_selection_highlight: None,
             error: None,
             #[cfg(test)]
             exit_after_present: None,
@@ -497,6 +503,8 @@ impl NativeApp {
             .viewport_bounds(viewport_aspect)
             .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
         let visibility = self.execution.query_viewport(viewport_bounds);
+        let highlight = self.execution.session().pointer_selection_highlight();
+        let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
         let force_full_redraw = self.force_full_redraw;
         let Some(((surface_texture, reconfigure_after_present), publication)) =
             Self::take_renderer_publication_after_acquire(
@@ -512,6 +520,7 @@ impl NativeApp {
             .gpu
             .as_mut()
             .expect("drawable native host must own GPU state");
+        gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
         let metrics = gpu.text_metrics(camera)?;
         let derived = gpu
             .preparer
@@ -541,29 +550,21 @@ impl NativeApp {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Noon native frame"),
             });
-        let _draw = if derived.slots.is_empty() {
-            gpu.renderer
-                .encode_retained(
-                    &mut encoder,
-                    &view,
-                    &prepared,
-                    &gpu.text_state,
-                    CLEAR_COLOR,
-                    None,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?
-        } else {
-            gpu.renderer
-                .encode_retained_with_transient_presentations(
-                    &mut encoder,
-                    &view,
-                    &prepared,
-                    &derived,
-                    CLEAR_COLOR,
-                    None,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?
-        };
+        let _draw = gpu
+            .renderer
+            .encode_interactive_retained(
+                &mut encoder,
+                &view,
+                InteractiveRetainedFrame {
+                    prepared: &prepared,
+                    text: &gpu.text_state,
+                    transient: Some(&derived),
+                    overlay: &gpu.overlay,
+                },
+                CLEAR_COLOR,
+                None,
+            )
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         #[cfg(test)]
         {
             self.last_geometry_draw_calls = _draw.geometry.draw_calls;
@@ -576,6 +577,7 @@ impl NativeApp {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
         let presented = publication.context();
+        self.last_selection_highlight = highlight;
         self.execution.admit_presented_publication(presented)?;
         #[cfg(test)]
         {
@@ -586,7 +588,7 @@ impl NativeApp {
     }
 
     fn publication_pending(&self) -> bool {
-        self.force_full_redraw || self.execution.frame_pending()
+        self.force_full_redraw || self.execution.frame_pending() || self.selection_overlay_pending()
     }
 
     /// Bind runtime invalidation consumption to a successful surface acquisition.
@@ -603,7 +605,9 @@ impl NativeApp {
         if force_full_redraw {
             publication.invalidate_all();
         }
-        (!publication.changes().is_empty()).then_some((acquired, publication))
+        // An acquired overlay-only redraw must redraw the retained scene too:
+        // surface contents are not retained, and clearing selection must erase it.
+        Some((acquired, publication))
     }
 }
 
@@ -774,7 +778,7 @@ impl ApplicationHandler for NativeApp {
             event_loop.exit();
             return;
         }
-        if self.force_full_redraw || self.execution.frame_pending() {
+        if self.publication_pending() {
             window.request_redraw();
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
@@ -822,6 +826,7 @@ struct NativeGpu {
     preparer: RetainedFramePreparer,
     text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
+    overlay: OverlayGpuState,
 }
 
 impl NativeGpu {
@@ -873,6 +878,7 @@ impl NativeGpu {
             preparer: RetainedFramePreparer::new(),
             text_state,
             renderer,
+            overlay: OverlayGpuState::default(),
         })
     }
 

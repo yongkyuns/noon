@@ -14,6 +14,10 @@ pub struct Raster {
     text: RetainedTextGpuState,
     target: wgpu::Texture,
     readback: wgpu::Buffer,
+    overlay: noon_render_wgpu::OverlayGpuState,
+    pub last_scene_upload_bytes: usize,
+    pub last_overlay_upload_bytes: usize,
+    pub last_scene_repacked: usize,
 }
 impl Raster {
     pub async fn new() -> Self {
@@ -74,9 +78,39 @@ impl Raster {
             text,
             target,
             readback,
+            overlay: noon_render_wgpu::OverlayGpuState::default(),
+            last_scene_upload_bytes: 0,
+            last_overlay_upload_bytes: 0,
+            last_scene_repacked: 0,
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
+        self.capture_frame(publication, false, None)
+    }
+
+    // Shared support is compiled independently by non-interactive integration tests.
+    #[allow(dead_code)]
+    pub fn capture_interactive(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        overlay: Option<noon_render_wgpu::AnalyticOverlay>,
+    ) -> Vec<u8> {
+        self.capture_frame(publication, true, overlay)
+    }
+
+    fn capture_frame(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        interactive: bool,
+        overlay: Option<noon_render_wgpu::AnalyticOverlay>,
+    ) -> Vec<u8> {
+        self.last_overlay_upload_bytes = if interactive {
+            self.overlay
+                .update(&self.device, &self.queue, overlay)
+                .bytes_uploaded
+        } else {
+            0
+        };
         let prepared = self
             .preparer
             .prepare_publication(
@@ -86,19 +120,39 @@ impl Raster {
                 TextDeviceMetrics::uniform(SIZE as f32 / WORLD_SIZE).unwrap(),
             )
             .unwrap();
-        self.renderer
-            .upload_retained(&self.device, &self.queue, &prepared, &mut self.text);
+        self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
+        self.last_scene_upload_bytes = self
+            .renderer
+            .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
+            .bytes_uploaded();
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.renderer
-            .encode_retained(
-                &mut encoder,
-                &self.target.create_view(&Default::default()),
-                &prepared,
-                &self.text,
-                wgpu::Color::BLACK,
-                None,
-            )
-            .unwrap();
+        if interactive {
+            self.renderer
+                .encode_interactive_retained(
+                    &mut encoder,
+                    &self.target.create_view(&Default::default()),
+                    noon_render_wgpu::InteractiveRetainedFrame {
+                        prepared: &prepared,
+                        text: &self.text,
+                        transient: None,
+                        overlay: &self.overlay,
+                    },
+                    wgpu::Color::BLACK,
+                    None,
+                )
+                .unwrap();
+        } else {
+            self.renderer
+                .encode_retained(
+                    &mut encoder,
+                    &self.target.create_view(&Default::default()),
+                    &prepared,
+                    &self.text,
+                    wgpu::Color::BLACK,
+                    None,
+                )
+                .unwrap();
+        }
         encoder.copy_texture_to_buffer(
             self.target.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
