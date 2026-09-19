@@ -1,0 +1,98 @@
+name: C5 pointer selection isolated validation
+
+on:
+  push:
+    branches: [validation/c5-pointer-selection-20260919]
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Prepare code-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          base64 -d .ci-c5-selection.patch.xz.b64 | xz -d > "$RUNNER_TEMP/c5-selection.patch"
+          echo "6a083e16a7c30c03327eb6d85066731136ace060b4b7e8e7bc6bf5770eec7675  $RUNNER_TEMP/c5-selection.patch" | sha256sum --check
+          git worktree add --detach "$RUNNER_TEMP/noon-c5-selection" e8e74f7fa92fb964fec5a34d1d68bd8fd2455f23
+          cd "$RUNNER_TEMP/noon-c5-selection"
+          git apply "$RUNNER_TEMP/c5-selection.patch"
+          cargo fmt --all
+          git add crates/noon/src
+          git diff --cached --check
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: atomic pointer click selection and transient highlight projection'
+          branch="staging/c5-pointer-selection-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git push origin "HEAD:refs/heads/$branch"
+          {
+            echo "branch=$branch"
+            git rev-parse HEAD 'HEAD^{tree}'
+            git diff --stat e8e74f7fa92fb964fec5a34d1d68bd8fd2455f23
+          } | tee "$GITHUB_WORKSPACE/proof/c5-selection-identity.txt"
+          git archive HEAD | gzip > "$GITHUB_WORKSPACE/proof/c5-selection-source.tar.gz"
+          git diff e8e74f7fa92fb964fec5a34d1d68bd8fd2455f23 > "$GITHUB_WORKSPACE/proof/c5-selection-formatted.patch"
+      - name: Focused selection and existing session tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-selection"
+          cargo test -p noon --no-default-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-selection-tests.log"
+          cargo test -p noon --no-default-features --lib execution_session::input::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-input-tests.log"
+          cargo test -p noon --no-default-features --lib execution_session::picking::tests -- --nocapture 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-picking-tests.log"
+      - name: Architecture and complete fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-selection"
+          bash scripts/check.sh fast e8e74f7fa92fb964fec5a34d1d68bd8fd2455f23 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-fast.log"
+      - name: Direct Rust WASM compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-selection"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-wasm.log"
+      - name: JavaScript regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-selection"
+          node --test web/*.test.mjs 2>&1 | tee "$GITHUB_WORKSPACE/proof/c5-js.log"
+      - name: Retain source and executable evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-pointer-selection-proof
+          path: proof/
+          retention-days: 14
