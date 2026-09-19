@@ -7,7 +7,6 @@ from typing import Any
 import noon as _base
 import _manim_camera as _camera
 import _manim_compat as _compat
-import _manim_scene as _scene
 import _manim_semantic_handles as _semantic
 from _noon_errors import engine_call
 
@@ -110,6 +109,7 @@ class ZoomedScene(_camera.MovingCameraScene):
         super().__init__(**kwargs)
 
     def setup(self) -> None:
+        import _manim_scene as _scene
         super().setup()
         frame = _ZoomedCameraFrame(
             self.zoomed_display_width, self.zoomed_display_height
@@ -139,6 +139,7 @@ class ZoomedScene(_camera.MovingCameraScene):
         self.zoomed_display = display
 
     def activate_zooming(self, animate: bool = False) -> None:
+        import _manim_scene as _scene
         if animate:
             raise NotImplementedError("animated ZoomedScene activation is not supported")
         if self._zoomed_view_handle is None:
