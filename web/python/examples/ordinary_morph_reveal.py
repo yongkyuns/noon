@@ -1,4 +1,8 @@
-"""Concurrent retained morph and reveal, paired with the direct Rust example."""
+"""Noon extension: independent morph and reveal, paired with the Rust example.
+
+Manim's point-mutating Create and Transform do not compose this way; this example
+qualifies Noon's retained channels, not source-equivalent Manim behavior.
+"""
 from noon import BLUE, PINK, Create, Path, Scene, Transform, Vec2, VectorPath, linear
 
 

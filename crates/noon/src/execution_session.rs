@@ -2410,7 +2410,7 @@ impl ExecutionSession {
                     });
                 }
                 // A content-morph Transform and Create own disjoint morph and reveal
-                // drivers. Manim permits those two children to share one detached
+                // drivers in Noon's retained-channel extension. They share one detached
                 // source in a Parallel play, so membership is admitted once while both
                 // animations retain their own semantic identities. Competing Create
                 // introductions remain an atomic preflight error.
