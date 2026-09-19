@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 8
+          fetch-depth: 12
       - name: Verify source payload and install only regression tests
         run: |
           python3 - <<'PY'
@@ -49,8 +49,10 @@ jobs:
           assert text.count(old) == 1
           p.write_text(text.replace(old, new))
           PY
+          cp .github/c2-input-publication.py /tmp/qualify-input-publication.py
           git apply --index /tmp/replay-tests.patch
           python3 /tmp/qualify-input-locality.py
+          python3 /tmp/qualify-input-publication.py tests
           printf '\n#[cfg(test)]\nmod input_tests;\n' >> crates/noon-runtime/src/replay.rs
       - name: Use repository-pinned Rust
         run: rustup install
@@ -85,6 +87,7 @@ jobs:
             'empty_input_seek_does_not_require_a_reactive_runtime',
             'changed_direct_input_invalidates_retention_without_changing_authored_time',
             'committed_input_batch_has_explicit_unrecorded_classification',
+            'signal_only_input_rejects_a_previously_prepared_phase',
           ]:
               assert f'test replay::input_tests::{name} ... FAILED' in text, name
           PY
@@ -93,7 +96,9 @@ jobs:
           git reset --hard HEAD
           git apply --index /tmp/replay-source.patch
           python3 /tmp/qualify-input-locality.py
-          git rm .github/c2-input-replay-payload.b64 .github/workflows/c2-input-replay-safety.yml
+          python3 /tmp/qualify-input-publication.py tests
+          python3 /tmp/qualify-input-publication.py source
+          git rm .github/c2-input-replay-payload.b64 .github/c2-input-publication.py .github/workflows/c2-input-replay-safety.yml
           cargo fmt --all
           git add -u
           git diff --cached --check
