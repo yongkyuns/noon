@@ -221,6 +221,31 @@ class PlottingQualification(Scene):
         near(data.get_start(), axes.c2p(1, 0))
         near(data.get_end(), axes.c2p(-1, 0.25))
 
+        # Riemann helpers must evaluate authored functions at the exact
+        # Rust-planned sample positions instead of interpolating retained points.
+        exact_calls = []
+        def exact_function(x):
+            exact_calls.append(x)
+            return x * x
+        exact_graph = axes.plot(exact_function, [-1, 1, 1], use_smoothing=False)
+        assert exact_calls == [-1, 0, 1], exact_calls
+        exact_rectangles = axes.get_riemann_rectangles(
+            exact_graph, [-1, 1], dx=0.5, input_sample_type="center")
+        assert exact_calls == [-1, 0, 1, -0.75, -0.25, 0.25, 0.75], exact_calls
+        assert len(exact_rectangles.submobjects) == 4
+
+        bound_calls = []
+        def exact_bound(x):
+            bound_calls.append(x)
+            return -0.25
+        exact_bound_graph = axes.plot(exact_bound, [-1, 1, 1], use_smoothing=False)
+        assert bound_calls == [-1, 0, 1], bound_calls
+        axes.get_riemann_rectangles(
+            exact_graph, [-1, 1], dx=0.5, input_sample_type="center",
+            bounded_graph=exact_bound_graph)
+        assert exact_calls[-4:] == [-0.75, -0.25, 0.25, 0.75], exact_calls
+        assert bound_calls == [-1, 0, 1, -1, -0.5, 0, 0.5], bound_calls
+
         split = FunctionGraph(lambda x: 1 / x, [-1, 1, 0.1],
                               discontinuities=[0], dt=0.05, use_smoothing=False)
         assert len(split.get_subpaths()) == 2
