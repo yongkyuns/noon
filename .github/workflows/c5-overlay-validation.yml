@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 8adfab7703085277feec0adda5ca0c6f733c5086
+          ref: 6dd34bde8698fca44af95b1d9b0e6ba1a34d7758
           fetch-depth: 0
       - name: Use repository-pinned Rust
         run: |
@@ -48,11 +48,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p proof
-          test "$(git rev-parse HEAD)" = 8adfab7703085277feec0adda5ca0c6f733c5086
+          test "$(git rev-parse HEAD)" = 6dd34bde8698fca44af95b1d9b0e6ba1a34d7758
           git diff --exit-code
           git rev-parse HEAD 'HEAD^{tree}' | tee proof/identity.txt
           git archive HEAD | gzip > proof/source.tar.gz
           git diff 321f6b661c467a92b47ae9c4b34e5e020fa92efb > proof/formatted.patch
+      - name: Guardrail self-tests and minimal all-target consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/transient-presentation-ratchet.test.sh 2>&1 | tee proof/guard-self-tests.log
+          cargo check -p noon --no-default-features --all-targets 2>&1 | tee proof/minimal-all-targets.log
       - name: Real selection pixels and export isolation
         shell: bash
         env:
