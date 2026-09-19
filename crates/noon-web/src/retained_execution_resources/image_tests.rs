@@ -124,6 +124,7 @@ fn image_addition_is_rolled_back_after_late_family_or_base_publication_failure()
             family_plans: vec![],
             resource_additions: Some(bundle),
             transient_presentations: vec![],
+            selection_overlay: None,
         };
         let mut invalid = valid.clone();
         if failure == "family" {
@@ -181,6 +182,7 @@ fn stale_image_additions_are_dropped_without_retaining_pixels() {
         family_plans: vec![],
         resource_additions: Some(bundle),
         transient_presentations: vec![],
+        selection_overlay: None,
     };
     let (outcome, _) = mirror.apply_family(stale).unwrap();
     assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);

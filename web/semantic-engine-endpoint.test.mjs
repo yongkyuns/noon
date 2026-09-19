@@ -2209,3 +2209,103 @@ test("callback-stalled pointer controls keep bounded order and occurrence-local 
     assert.equal(f.player.time(), 0, "delivery does not advance authored time");
   } finally { release(); endpoint?.stop(); f.close(); }
 });
+
+for (const transportMode of ["transferable", "shared"]) {
+  test(`selection presentation uses ordinary ${transportMode} ordering while paused`, { timeout: 5000 }, async () => {
+    const f = fixture(transportMode, null, null, { initiallyPaused: true });
+    let endpoint;
+    let reader;
+    let sequence = 1;
+    let pending = null;
+    const deltas = [];
+    const configurations = [];
+    // This test doubles the Rust boundary, not picking or renderer semantics.
+    const overlay = {
+      geometry: { kind: "circle", radius: 1 },
+      transform: { translation: { x: 0, y: 0 }, scale: { x: -2, y: 0.5 }, rotation: 0.7 },
+    };
+    f.player.setPointerFillSelection = value => { configurations.push(value); };
+    f.player.drainDeltaJson = () => {
+      if (pending === null) return null;
+      const delta = pending;
+      pending = null;
+      return JSON.stringify(delta);
+    };
+    const receive = json => {
+      const delta = JSON.parse(json);
+      deltas.push(delta);
+      f.render.port2.postMessage({ type: "execution_ack", session: 7, sequence: delta.sequence });
+      f.render.port2.postMessage({ type: "transport_writable" });
+      return true;
+    };
+    f.render.port2.on("message", message => {
+      if (message.type === "transport_setup") {
+        reader = new SharedExecutionDeltaReader(message.mailbox);
+        reader.drain(receive);
+      } else if (message.type === "shared_delta") reader.drain(receive);
+      else if (message.type === "execution_delta") receive(decodeTransferableExecutionDelta(message).json);
+    });
+    const waitForDeltas = async count => {
+      for (let n = 0; n < 50 && deltas.length < count; n += 1) await turn();
+      assert.equal(deltas.length, count);
+    };
+    try {
+      const ready = next(f.control.port2);
+      endpoint = await f.attach();
+      await ready;
+      await waitForDeltas(1);
+      assert.equal((await request(f.control.port2, "pointer_fill_selection", 1, { maxMovement: 4 })).type, "pointer_fill_selection");
+      assert.deepEqual(configurations, [4]);
+      assert.equal(deltas.length, 1, "configuration without an image change emits nothing");
+      // Supply exact output from the mocked shared session after admission. JS
+      // must forward this verbatim; it must not invent IDs, rows, or a new clock.
+      pending = { channel: "noon.execution.retained", protocol_version: 5,
+        session: 7, sequence: sequence++, snapshot: false, time: 0,
+        objects: [], selection_overlay: overlay };
+      const selected = await request(f.control.port2, "browser_pointer_input", 2, { kind: "release" });
+      assert.equal(selected.type, "browser_pointer_input");
+      await waitForDeltas(2);
+      assert.deepEqual(deltas[1].selection_overlay, overlay);
+      assert.deepEqual(deltas[1].objects, []);
+      assert.equal(selected.time, 0);
+      assert.equal(selected.playing, false);
+      pending = { channel: "noon.execution.retained", protocol_version: 5,
+        session: 7, sequence: sequence++, snapshot: false, time: 0, objects: [] };
+      const cleared = await request(f.control.port2, "pointer_fill_selection", 3, { maxMovement: null });
+      assert.equal(cleared.type, "pointer_fill_selection");
+      await waitForDeltas(3);
+      assert.deepEqual(configurations, [4, null]);
+      assert.deepEqual(deltas.map(d => d.sequence), [0, 1, 2]);
+      assert.equal(deltas[2].selection_overlay, undefined);
+      assert.deepEqual(deltas.map(d => d.time), [0, 0, 0]);
+      assert.equal(cleared.playing, false);
+      assert.equal(f.stats().continuationDriveTimes.length, 0);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
+test("selection configuration rejection does not drain or replace the current wake", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let endpoint;
+  let calls = 0;
+  f.player.setPointerFillSelection = () => { calls += 1; throw new Error("required callback barrier"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const before = f.stats();
+    for (const [index, maxMovement] of [undefined, -1, Infinity, NaN, "4", {}, true].entries()) {
+      const response = await request(f.control.port2, "pointer_fill_selection", index + 10, { maxMovement });
+      assert.equal(response.type, "error");
+      assert.match(response.message, /selection tolerance/);
+    }
+    assert.equal(calls, 0, "malformed transport never reaches Rust");
+    const response = await request(f.control.port2, "pointer_fill_selection", 20, { maxMovement: 4 });
+    assert.equal(response.type, "error");
+    assert.match(response.message, /required callback barrier/);
+    assert.equal(calls, 1);
+    assert.equal(f.stats().drained, before.drained);
+    assert.equal(f.stats().executionWakeTimes.length, before.executionWakeTimes.length);
+    assert.equal(f.player.time(), 0);
+  } finally { endpoint?.stop(); f.close(); }
+});

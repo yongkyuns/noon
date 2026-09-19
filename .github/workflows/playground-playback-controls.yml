@@ -17,6 +17,9 @@ on:
       - "scripts/playground-playback-morph-regression.mjs"
       - "scripts/playground-wait-clock-regression.mjs"
       - "scripts/manim-raster-support.mjs"
+      - "scripts/browser-pointer-input-smoke.mjs"
+      - "scripts/pointer-selection-*.mjs"
+      - "scripts/check-web-package.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -27,7 +30,14 @@ on:
       - "web/playground-playback-controls*"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
+      - "web/browser-pointer-input*"
+      - "web/authoring-execution-client*"
+      - "web/execution-worker-client*"
+      - "crates/noon-render-wgpu/**"
       - "scripts/manim-raster-support.mjs"
+      - "scripts/browser-pointer-input-smoke.mjs"
+      - "scripts/pointer-selection-*.mjs"
+      - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
       - "scripts/playground-wait-clock-regression.mjs"
@@ -75,6 +85,11 @@ jobs:
         run: |
           cargo test -p noon --no-default-features --test finite_replay_history
           cargo test -p noon-runtime --test finite_replay_locality
+      - name: Test shared pointer selection and renderer-less WASM build
+        run: |
+          cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
@@ -93,6 +108,11 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Qualify actual DOM samples and paused click-selection pixels
+        run: |
+          node --test scripts/pointer-selection-raster-contract.test.mjs
+          node scripts/browser-pointer-input-smoke.mjs
+          node scripts/pointer-selection-qualification.mjs
       - name: Test public playback controls
         env:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
@@ -119,6 +139,8 @@ jobs:
         with:
           name: playground-playback-controls
           path: |
+            browser-smoke-artifacts/pointer-dom
+            browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph

@@ -167,6 +167,10 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub resource_additions: Option<RetainedResourceBundle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transient_presentations: Vec<RetainedTransientPresentationOccurrence>,
+    /// Complete session-only overlay for this transport sequence; absence clears.
+    /// Ordinary scene/export producers leave it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_overlay: Option<crate::SelectionOverlayPresentation>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -187,6 +191,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .collect(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
             retained,
         };
         envelope.validate()?;
@@ -220,6 +225,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .collect(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
             retained,
         };
         envelope.validate()?;
@@ -243,6 +249,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             family_plans: Vec::new(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
             retained,
         };
         envelope.validate()?;
@@ -279,6 +286,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .collect(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
             retained,
         };
         envelope.validate()?;
@@ -286,6 +294,9 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if let Some(overlay) = self.selection_overlay {
+            overlay.validate()?;
+        }
         let mut seen = HashSet::with_capacity(self.family_states.len());
         for entry in &self.family_states {
             if !seen.insert(entry.object) {
@@ -669,6 +680,7 @@ pub enum RetainedFamilyExecutionTransportError {
     InvalidTransientAnchorIndex(usize),
     DuplicateTransientOccurrence(u32),
     UnsupportedTransientContent(u32),
+    InvalidSelectionOverlay,
     UnknownTransientAnchor(ObjectId),
     UnknownObject(ObjectId),
     StateWithoutPlan(ObjectId),
@@ -727,6 +739,9 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             Self::UnsupportedTransientContent(occurrence) => write!(
                 formatter,
                 "transient presentation occurrence {occurrence} requires unsupported retained text content"
+            ),
+            Self::InvalidSelectionOverlay => formatter.write_str(
+                "selection overlay requires finite, nondegenerate analytic geometry and transform",
             ),
             Self::UnknownTransientAnchor(object) => write!(
                 formatter,
@@ -1032,6 +1047,7 @@ mod tests {
             ],
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1055,6 +1071,7 @@ mod tests {
             family_plans: Vec::new(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         assert_eq!(
             installed
@@ -1087,6 +1104,7 @@ mod tests {
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
@@ -1123,6 +1141,7 @@ mod tests {
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         let index_lookups = Cell::new(0);
         let object_lookups = Cell::new(0);
@@ -1181,6 +1200,7 @@ mod tests {
             }],
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
 
         assert!(installed
@@ -1208,6 +1228,7 @@ mod tests {
             family_plans: Vec::new(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1218,6 +1239,7 @@ mod tests {
                     family_plans: Vec::new(),
                     resource_additions: None,
                     transient_presentations: Vec::new(),
+                    selection_overlay: None,
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -1253,6 +1275,7 @@ mod tests {
             family_plans: Vec::new(),
             resource_additions: None,
             transient_presentations: Vec::new(),
+            selection_overlay: None,
         };
         assert_eq!(
             installed
