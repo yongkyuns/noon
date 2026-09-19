@@ -153,6 +153,8 @@ impl WasmAuthoringFamilyHandle {
     }
 }
 
+#[wasm_bindgen]
+impl WasmAuthoringFamilyHandle {
     #[wasm_bindgen(js_name = riemannRectanglesFromValues)]
     pub fn riemann_rectangles_from_values(
         &self,
