@@ -2000,7 +2000,7 @@ test("source continuation never seals a still-growing execution plan", async () 
   } finally { endpoint?.stop(); f.close(); }
 });
 
-for (const reason of ["Incomplete", "UnsupportedDomain", "RetentionLimit"]) {
+for (const reason of ["Incomplete", "UnsupportedDomain", "UnrecordedInput", "RetentionLimit"]) {
   test(`replay rejection (${reason}) preserves paused forward observation without enabling rewind`, async () => {
     const f = fixture();
     f.player.sealReplay = () => { throw new Error(reason); };
