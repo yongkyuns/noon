@@ -6,6 +6,7 @@ cd "$ROOT"
 
 python3 -I -S - <<'PY'
 from pathlib import Path
+import re
 
 
 def read(path: str) -> str:
@@ -58,9 +59,22 @@ require(retained, "pub fn encode_retained_with_transient_presentations(", "gener
 
 for path in ("crates/noon-native/src/lib.rs", "crates/noon-web/src/execution_canvas.rs"):
     host = read(path)
-    require(host, ".encode_retained_with_transient_presentations(", f"{path} bypasses generic transient renderer entry point")
+    # The explicit overlay variant composes the same transient scene pass before
+    # presentation; neither host may couple to feature-specific derived rendering.
+    if not re.search(r"\.encode_retained_with_transient_presentations(?:_and_overlay)?\(", host):
+        raise SystemExit(f"transient presentation ratchet: {path} bypasses generic transient renderer entry point")
     if ".encode_retained_with_derived(" in host:
         raise SystemExit(f"transient presentation ratchet: {path} regained derived-display host coupling")
+
+overlay_name = "pub fn encode_retained_with_transient_presentations_and_overlay("
+require(retained, overlay_name, "explicit overlay renderer entry point disappeared")
+overlay_start = retained.index(overlay_name)
+overlay_end = retained.find("pub fn encode_retained(", overlay_start)
+if overlay_end < 0:
+    raise SystemExit("transient presentation ratchet: could not bound overlay renderer entry point")
+overlay_entry = retained[overlay_start:overlay_end]
+require(overlay_entry, "self.encode_retained_derived_inner(", "overlay entry bypasses shared transient scene encoding")
+require(overlay_entry, "self.encode_retained_inner(", "overlay entry bypasses shared mixed scene encoding")
 
 for path in (
     "crates/noon-runtime/src/renderer_publication.rs",
