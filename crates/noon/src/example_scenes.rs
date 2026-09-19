@@ -35,6 +35,7 @@ pub mod polar_plane;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
+pub mod sample_space;
 pub mod specialized_geometry;
 pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
