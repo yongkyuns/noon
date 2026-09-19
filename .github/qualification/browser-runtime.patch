@@ -1,0 +1,232 @@
+diff --git a/web/authoring-execution-client.js b/web/authoring-execution-client.js
+index 591f5ef9b583f1d34e4e196e5f46ff1eae6dfc8b..a5972b42ff0291d4383dfa173aa395e4337f776e 100644
+--- a/web/authoring-execution-client.js
++++ b/web/authoring-execution-client.js
+@@ -1,4 +1,4 @@
+-import { ExecutionWorkerClient } from "./execution-worker-client.js";
++import { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
+ import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+ 
+ export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
+@@ -279,6 +279,10 @@ export class AuthoringExecutionClient {
+     return this.#withInputPlayer((player) => player.setNativeStateInput(source, value));
+   }
+ 
++  async setPointerFillSelection(maxMovement) {
++    return this.#withInputPlayer((player) => player.setPointerFillSelection(maxMovement));
++  }
++
+   async emitNativeEvent(source) {
+     return this.#withInputPlayer((player) => player.emitNativeEvent(source));
+   }
+@@ -523,6 +527,7 @@ export class AuthoringExecutionClient {
+       viewRevision: () => this.#pointerViewRevision,
+       advanceView: () => this.#advancePointerView(),
+       onError: error => { void fault(error); },
++      maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+     });
+   }
+ 
+diff --git a/web/browser-pointer-input.js b/web/browser-pointer-input.js
+index f7d833dde03a4cf7109f4a8920d1b300e6b65871..61ca8de7b3cb6986457f42e65a2de1183f2308d4 100644
+--- a/web/browser-pointer-input.js
++++ b/web/browser-pointer-input.js
+@@ -5,8 +5,11 @@
+ const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
+ 
+ export function attachBrowserPointerInput(canvas, {
+-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError,
++  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples,
+ }) {
++  if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
++    throw new RangeError("browser pointer sample capacity must be a positive safe integer");
++  }
+   let selected = null;
+   let view = null;
+   const active = () => !signal.aborted && isCurrent();
+@@ -39,7 +42,7 @@ export function attachBrowserPointerInput(canvas, {
+     view = next;
+     return rect;
+   };
+-  const receive = (type, event) => {
++  const receive = (type, event, receiptRect = null) => {
+     if (!active()) return;
+     // -1 is the non-pointing-device ID, not a source for pointer gestures.
+     if (event.isPrimary !== true || event.pointerId === -1) return;
+@@ -61,7 +64,7 @@ export function attachBrowserPointerInput(canvas, {
+     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+       throw new TypeError("DOM pointer coordinates must be finite");
+     }
+-    const rect = currentView();
++    const rect = receiptRect ?? currentView();
+     if (rect === null) return;
+     // View invalidation and pointer replacement retire the previous contact.
+     // Never turn a release or an in-progress outside contact into a new press.
+@@ -99,13 +102,88 @@ export function attachBrowserPointerInput(canvas, {
+     selected.buttons = event.buttons;
+     // Touch IDs may be recycled; the next contact must receive a new source.
+     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
++    return true;
++  };
++  const collect = (type, event) => {
++    if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
++    if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
++    if (type !== "pointermove" || typeof event.getCoalescedEvents !== "function") {
++      receive(type, event);
++      return;
++    }
++    const initialButtons = selected?.id === event.pointerId ? selected.buttons : 0;
++    const samples = coalescedSamples(event, initialButtons, maxSamples);
++    if (samples.length === 0) {
++      receive(type, event);
++      return;
++    }
++    // Coalesced events replace their summary; appending it would duplicate an
++    // occurrence (and may reintroduce a browser-adjusted, non-sample position).
++    // This is receipt-time mapping, not historical displayed-frame association.
++    const rect = currentView();
++    if (rect === null || (initialButtons !== 0 && selected === null)) return;
++    for (const sample of samples) {
++      if (!active() || !receive(type, sample, rect)) break;
++    }
+   };
+   const guard = operation => event => {
+     try { operation(event); } catch (error) { onError(error); }
+   };
+   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
+-    canvas.addEventListener(type, guard(event => receive(type, event)), { signal });
++    canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
+   }
+   window.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+   return { invalidateView };
+ }
++
++// Validate and snapshot the complete bounded packet before any delivery. There
++// is no retained queue or frontend gesture policy here. Each sample still uses
++// the existing session-ordered producer reservation and acknowledgement path.
++function coalescedSamples(event, initialButtons, capacity) {
++  const events = event.getCoalescedEvents();
++  if (!Array.isArray(events)) throw new TypeError("invalid DOM coalesced sample list");
++  const count = events.length;
++  if (count > capacity) throw new RangeError("DOM coalesced sample capacity exceeded");
++  if (count === 0) return [];
++  if (!Number.isInteger(event.pointerId) || event.pointerId < -2147483648 ||
++      event.pointerId > 2147483647) throw new TypeError("invalid DOM pointer identity");
++  if (!Number.isFinite(event.timeStamp) || event.timeStamp < 0) {
++    throw new TypeError("invalid DOM coalesced parent timestamp");
++  }
++  const samples = [];
++  let previousTime = 0;
++  let buttons = initialButtons;
++  for (let i = 0; i < count; i += 1) {
++    const value = events[i];
++    if (!value || value.pointerId !== event.pointerId || value.pointerType !== event.pointerType ||
++        value.isPrimary !== event.isPrimary) throw new TypeError("foreign DOM coalesced pointer sample");
++    const { clientX, clientY, timeStamp, buttons: nextButtons } = value;
++    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
++      throw new TypeError("DOM coalesced pointer coordinates must be finite");
++    }
++    if (!Number.isFinite(timeStamp) || timeStamp < previousTime || timeStamp > event.timeStamp) {
++      throw new TypeError("DOM coalesced timestamps must be ordered within their parent");
++    }
++    if (!Number.isInteger(nextButtons) || nextButtons < 0 || nextButtons > 63) {
++      throw new TypeError("unsupported DOM coalesced pointer button mask");
++    }
++    // A UA may copy its parent button label into multiple samples. Only the
++    // mask transition is an edge; equal masks must preserve motion, not cancel
++    // as duplicate presses. Multiple simultaneous changes remain ambiguous.
++    const changed = buttons ^ nextButtons;
++    const button = changed === 0 ? -1 : BUTTON_BITS.indexOf(changed);
++    if (changed !== 0 && (button === -1 || value.button !== button)) {
++      throw new TypeError("ambiguous DOM coalesced button transition");
++    }
++    samples.push({
++      pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary,
++      clientX, clientY, button, buttons: nextButtons,
++      shiftKey: value.shiftKey === true, ctrlKey: value.ctrlKey === true,
++      altKey: value.altKey === true, metaKey: value.metaKey === true,
++    });
++    buttons = nextButtons;
++    previousTime = timeStamp;
++  }
++  if (buttons !== event.buttons) throw new TypeError("DOM coalesced final button state differs from parent");
++  return samples;
++}
+diff --git a/web/execution-worker-client.js b/web/execution-worker-client.js
+index 5adeabbe01269ff1f9415f773d23d9d58dae6561..cfd44fd9738727ef88bc505000a5e2098835bed7 100644
+--- a/web/execution-worker-client.js
++++ b/web/execution-worker-client.js
+@@ -558,6 +558,16 @@ export class ExecutionWorkerClient {
+     return this.#requestNativeInput("native_state_input", { source, value });
+   }
+ 
++  // Session/editor policy, ordered with pointer input and never auto-replayed.
++  async setPointerFillSelection(maxMovement) {
++    this.#requireStarted();
++    if (maxMovement !== null &&
++        (typeof maxMovement !== "number" || !Number.isFinite(maxMovement) || maxMovement < 0)) {
++      throw new TypeError("selection tolerance must be a finite nonnegative number or null");
++    }
++    return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
++  }
++
+   // Forward one occurrence-local browser pointer record. Surface coordinates
+   // remain CSS pixels; Rust converts them against the current camera/publication.
+   async submitBrowserPointerInput(input) {
+diff --git a/web/semantic-engine-endpoint.js b/web/semantic-engine-endpoint.js
+index acc8651ae0740305deb223743a87f30173b1c85a..0224f93978113edd75ff590a33b181d2c5f0964a 100644
+--- a/web/semantic-engine-endpoint.js
++++ b/web/semantic-engine-endpoint.js
+@@ -448,7 +448,14 @@ export async function attachSemanticEngine(
+   }
+ 
+   function applyNativeInput(message) {
+-    if (message.type === "native_state_input") {
++    if (message.type === "pointer_fill_selection") {
++      if (message.maxMovement !== null &&
++          (typeof message.maxMovement !== "number" ||
++           !Number.isFinite(message.maxMovement) || message.maxMovement < 0)) {
++        throw new TypeError("selection tolerance must be a finite nonnegative number or null");
++      }
++      player.setPointerFillSelection(message.maxMovement);
++    } else if (message.type === "native_state_input") {
+       player.setNativeStateInputJson(JSON.stringify({
+         source: message.source,
+         value: message.value,
+@@ -481,7 +488,8 @@ export async function attachSemanticEngine(
+       while (controls.length > 0 &&
+              (controls[0].type === "native_state_input" ||
+               controls[0].type === "native_event" ||
+-              controls[0].type === "browser_pointer_input")) {
++              controls[0].type === "browser_pointer_input" ||
++              controls[0].type === "pointer_fill_selection")) {
+         const message = controls.shift();
+         try {
+           applyNativeInput(message);
+@@ -717,6 +725,7 @@ export async function attachSemanticEngine(
+           case "native_state_input":
+           case "native_event":
+           case "browser_pointer_input":
++          case "pointer_fill_selection":
+             applyNativeInput(message);
+             send(player.drainDeltaJson());
+             // Live driving pauses the ordinary playback clock. Native input
+@@ -858,7 +867,7 @@ export async function attachSemanticEngine(
+         if (![
+           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
+           "sample_to_authored_time", "debug_frame",
+-          "native_state_input", "native_event", "browser_pointer_input",
++          "native_state_input", "native_event", "browser_pointer_input", "pointer_fill_selection",
+         ].includes(message.type)) {
+           throw new Error(`unsupported semantic execution command ${message.type}`);
+         }
+@@ -890,7 +899,8 @@ export async function attachSemanticEngine(
+         if (player === null &&
+             (message.type === "native_state_input" ||
+              message.type === "native_event" ||
+-             message.type === "browser_pointer_input")) {
++             message.type === "browser_pointer_input" ||
++             message.type === "pointer_fill_selection")) {
+           throw new Error("native input requires an active Python source continuation segment");
+         }
+         if (message.type === "advance_to" && message.observeRenderer !== undefined &&

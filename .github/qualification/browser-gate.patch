@@ -1,0 +1,75 @@
+diff --git a/.github/workflows/playground-playback-controls.yml b/.github/workflows/playground-playback-controls.yml
+index e27a99b67023fedaf3a38958bd43caeab4ff24eb..a19207a91a8427171fffe739599ed2f96b4fb80b 100644
+--- a/.github/workflows/playground-playback-controls.yml
++++ b/.github/workflows/playground-playback-controls.yml
+@@ -17,6 +17,9 @@ on:
+       - "scripts/playground-playback-morph-regression.mjs"
+       - "scripts/playground-wait-clock-regression.mjs"
+       - "scripts/manim-raster-support.mjs"
++      - "scripts/browser-pointer-input-smoke.mjs"
++      - "scripts/pointer-selection-*.mjs"
++      - "scripts/check-web-package.mjs"
+       - "web/**"
+   pull_request:
+     paths:
+@@ -27,7 +30,14 @@ on:
+       - "web/playground-playback-controls*"
+       - "web/semantic-engine-endpoint*"
+       - "web/main.js"
++      - "web/browser-pointer-input*"
++      - "web/authoring-execution-client*"
++      - "web/execution-worker-client*"
++      - "crates/noon-render-wgpu/**"
+       - "scripts/manim-raster-support.mjs"
++      - "scripts/browser-pointer-input-smoke.mjs"
++      - "scripts/pointer-selection-*.mjs"
++      - "scripts/check-web-package.mjs"
+       - ".github/workflows/playground-playback-controls.yml"
+       - "scripts/playground-playback-*.mjs"
+       - "scripts/playground-wait-clock-regression.mjs"
+@@ -75,6 +85,11 @@ jobs:
+         run: |
+           cargo test -p noon --no-default-features --test finite_replay_history
+           cargo test -p noon-runtime --test finite_replay_locality
++      - name: Test shared pointer selection and renderer-less WASM build
++        run: |
++          cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture
++          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
++          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
+       - name: Install pinned wasm-pack
+         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+         with:
+@@ -93,6 +108,11 @@ jobs:
+         run: |
+           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+           npx playwright install chromium
++      - name: Qualify actual DOM samples and paused click-selection pixels
++        run: |
++          node --test scripts/pointer-selection-raster-contract.test.mjs
++          node scripts/browser-pointer-input-smoke.mjs
++          node scripts/pointer-selection-qualification.mjs
+       - name: Test public playback controls
+         env:
+           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
+diff --git a/scripts/check-web-package.mjs b/scripts/check-web-package.mjs
+index 1ae2f5096f25b6bc534c457417a902fc8624034f..56788384cf48947e93e5394752c7abb8915b88f1 100644
+--- a/scripts/check-web-package.mjs
++++ b/scripts/check-web-package.mjs
+@@ -46,6 +46,8 @@ const expectedJavascriptSurface = [
+   "export class SemanticExecutionPlayer",
+   "seekDirect(",
+   "resourceBundleBytes(",
++  "setPointerFillSelection(",
++  "submitBrowserPointerInputJson(",
+   "advanceForwardToCallbackPhaseJson(",
+   "requiredCallbackReadJson(",
+   "export class WasmExecutionWake",
+@@ -213,6 +215,8 @@ const expectedTypeSurface = [
+   "export class WasmAuthoringMobjectHandle",
+   "export class SemanticExecutionPlayer",
+   "resourceBundleBytes(): Uint8Array",
++  "setPointerFillSelection(max_movement?: number | null): void",
++  "submitBrowserPointerInputJson(json: string): void",
+   "advanceForwardToCallbackPhaseJson(time: number): string | undefined",
+   "requiredCallbackReadJson(token_json: string, request_json: string): string",
+   "export class WasmExecutionWake",

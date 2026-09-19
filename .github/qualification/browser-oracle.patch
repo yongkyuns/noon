@@ -1,0 +1,148 @@
+diff --git a/scripts/pointer-selection-raster-contract.mjs b/scripts/pointer-selection-raster-contract.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..9b59c00392becf8238441493842870943d7099cb
+--- /dev/null
++++ b/scripts/pointer-selection-raster-contract.mjs
+@@ -0,0 +1,83 @@
++// Independent pixel assertions for the selection qualification fixture. These
++// inspect captured output; they never participate in production picking/rendering.
++import assert from "node:assert/strict";
++
++export const VIEW = Object.freeze({ width: 640, height: 360, cameraHeight: 8 });
++export const SHAPES = Object.freeze([
++  Object.freeze({ kind: "circle", radius: 0.9, x: -1.6, y: 0.2,
++    scaleX: -1.3, scaleY: 0.65, rotation: 0.45, color: "BLUE" }),
++  Object.freeze({ kind: "rectangle", width: 1.7, height: 1.2, x: 1.5, y: -0.2,
++    scaleX: 1, scaleY: 1, rotation: -0.5, color: "GREEN" }),
++]);
++
++export function selectionFixtureSource() {
++  const shapes = SHAPES.map((shape, index) => {
++    const constructor = shape.kind === "circle" ? `Circle(radius=${shape.radius}` :
++      `Rectangle(width=${shape.width}, height=${shape.height}`;
++    return `        shape${index} = ${constructor}, color=${shape.color}, fill_opacity=1, stroke_width=0)\n` +
++      `        shape${index}.stretch(${shape.scaleX}, 0).stretch(${shape.scaleY}, 1).rotate(${shape.rotation}).shift([${shape.x}, ${shape.y}, 0])`;
++  });
++  return ["from noon import *", "", "class PointerSelectionFixture(Scene):", "    def construct(self):",
++    ...shapes, '        label = Text("Click a filled shape; background clears", font_size=24).shift(2.8 * UP)',
++    "        self.add(shape0, shape1, label)", ""].join("\n");
++}
++
++export function shapeSurfaceCenter(shape) {
++  const pixels = VIEW.height / VIEW.cameraHeight;
++  return { x: VIEW.width / 2 + shape.x * pixels, y: VIEW.height / 2 - shape.y * pixels };
++}
++
++function requireImage(image) {
++  assert.ok(image && Number.isSafeInteger(image.width) && Number.isSafeInteger(image.height), "invalid image dimensions");
++  assert.equal(image.width, VIEW.width); assert.equal(image.height, VIEW.height);
++  assert.equal(image.data?.length, image.width * image.height * 4, "expected decoded RGBA pixels");
++}
++
++function localPoint(shape, x, y) {
++  const units = VIEW.cameraHeight / VIEW.height;
++  const worldX = (x + 0.5 - VIEW.width / 2) * units - shape.x;
++  const worldY = (VIEW.height / 2 - y - 0.5) * units - shape.y;
++  const cos = Math.cos(shape.rotation), sin = Math.sin(shape.rotation);
++  return { x: (cos * worldX + sin * worldY) / shape.scaleX,
++    y: (-sin * worldX + cos * worldY) / shape.scaleY };
++}
++
++function inside(shape, x, y, marginPixels) {
++  const point = localPoint(shape, x, y);
++  const margin = marginPixels * VIEW.cameraHeight / VIEW.height;
++  if (shape.kind === "circle") {
++    const radius = shape.radius + margin / Math.min(Math.abs(shape.scaleX), Math.abs(shape.scaleY));
++    return radius > 0 && Math.hypot(point.x, point.y) <= radius;
++  }
++  return Math.abs(point.x) <= shape.width / 2 + margin / Math.abs(shape.scaleX) &&
++    Math.abs(point.y) <= shape.height / 2 + margin / Math.abs(shape.scaleY);
++}
++
++export function assertExactPixels(actual, expected, label) {
++  requireImage(actual); requireImage(expected);
++  const firstDifference = actual.data.findIndex((value, index) => value !== expected.data[index]);
++  assert.equal(firstDifference, -1, `${label}: RGBA pixels must be identical`);
++}
++
++export function assertSelectionPixels(before, after, shape) {
++  requireImage(before); requireImage(after);
++  let changed = 0, interior = 0, changedInterior = 0;
++  for (let y = 0; y < before.height; y++) {
++    for (let x = 0; x < before.width; x++) {
++      const offset = (y * before.width + x) * 4;
++      const differs = [0, 1, 2, 3].some(channel => before.data[offset + channel] !== after.data[offset + channel]);
++      if (differs) {
++        changed++;
++        assert.ok(inside(shape, x, y, 2), `selection changed unrelated pixel (${x}, ${y})`);
++      }
++      if (inside(shape, x, y, -2)) {
++        interior++;
++        if (differs) changedInterior++;
++      }
++    }
++  }
++  assert.ok(interior > 100, "fixture must cover a meaningful interior");
++  assert.equal(changedInterior, interior, "all definite fill-interior pixels must visibly change");
++  assert.ok(changed > 100, "selection must actually change captured pixels");
++  return { changed, interior, changedInterior, edgeTolerancePixels: 2 };
++}
+diff --git a/scripts/pointer-selection-raster-contract.test.mjs b/scripts/pointer-selection-raster-contract.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..d14adc853d57b54aa120916891998a7b5d9af3b2
+--- /dev/null
++++ b/scripts/pointer-selection-raster-contract.test.mjs
+@@ -0,0 +1,53 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { VIEW, SHAPES, selectionFixtureSource, shapeSurfaceCenter, assertExactPixels,
++  assertSelectionPixels } from "./pointer-selection-raster-contract.mjs";
++
++const image = () => ({ width: VIEW.width, height: VIEW.height,
++  data: Buffer.alloc(VIEW.width * VIEW.height * 4, 0xff) });
++// Synthetic mutations test the oracle only; they are not renderer evidence.
++function fill(shape) {
++  const result = image();
++  const center = shapeSurfaceCenter(shape), scale = VIEW.height / VIEW.cameraHeight;
++  for (let y = 0; y < result.height; y++) for (let x = 0; x < result.width; x++) {
++    const dx = (x + 0.5 - center.x) / scale, dy = -(y + 0.5 - center.y) / scale;
++    const u = (dx * Math.cos(shape.rotation) + dy * Math.sin(shape.rotation)) / shape.scaleX;
++    const v = (-dx * Math.sin(shape.rotation) + dy * Math.cos(shape.rotation)) / shape.scaleY;
++    if (shape.kind === "circle" ? u * u + v * v <= shape.radius * shape.radius :
++      Math.abs(u) <= shape.width / 2 && Math.abs(v) <= shape.height / 2) result.data[(y * result.width + x) * 4] = 0;
++  }
++  return result;
++}
++
++test("fixture source and click points share the same explicit geometry", () => {
++  const source = selectionFixtureSource();
++  assert.match(source, /class PointerSelectionFixture\(Scene\)/);
++  assert.doesNotMatch(source, /self\.(play|wait)|add_updater|callback/);
++  assert.deepEqual(shapeSurfaceCenter(SHAPES[0]), { x: 248, y: 171 });
++  assert.deepEqual(shapeSurfaceCenter(SHAPES[1]), { x: 387.5, y: 189 });
++});
++for (const shape of SHAPES) test(`${shape.kind}: accept the transformed interior, reject absent/wrong/partial tint`, () => {
++  const before = image(), after = fill(shape);
++  assert.ok(assertSelectionPixels(before, after, shape).changed > 100);
++  assert.throws(() => assertSelectionPixels(before, before, shape), /interior/);
++  assert.throws(() => assertSelectionPixels(before, fill(SHAPES.find(value => value !== shape)), shape), /unrelated/);
++  const center = shapeSurfaceCenter(shape), offset = (Math.floor(center.y) * VIEW.width + Math.floor(center.x)) * 4;
++  after.data[offset] = before.data[offset];
++  assert.throws(() => assertSelectionPixels(before, after, shape), /interior/);
++});
++test("changed pixels outside the fill are not accepted as bounding-box selection", () => {
++  const shape = SHAPES[0], after = fill(shape);
++  after.data[0] = 0;
++  assert.throws(() => assertSelectionPixels(image(), after, shape), /unrelated pixel/);
++});
++test("clear and redraw checks reject even a one-channel one-pixel difference", () => {
++  const before = image(), after = image();
++  assertExactPixels(before, after, "clear");
++  after.data[7] = 0;
++  assert.throws(() => assertExactPixels(before, after, "clear"), /identical/);
++});
++test("invalid dimensions and incomplete decoded captures fail closed", () => {
++  const before = image();
++  assert.throws(() => assertSelectionPixels(before, { ...image(), width: 0 }, SHAPES[0]));
++  assert.throws(() => assertExactPixels(before, { ...image(), data: Buffer.alloc(3) }, "capture"), /RGBA/);
++});

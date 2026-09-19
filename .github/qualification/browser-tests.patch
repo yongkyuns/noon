@@ -1,0 +1,565 @@
+diff --git a/web/authoring-render-transition-runtime.test.mjs b/web/authoring-render-transition-runtime.test.mjs
+index 972db06b67249725b1ca45d3e048780c0ea6d67b..933c34964163f066c2c57e3ddf3c65174d0a1975 100644
+--- a/web/authoring-render-transition-runtime.test.mjs
++++ b/web/authoring-render-transition-runtime.test.mjs
+@@ -708,3 +708,32 @@ test("clamped zero-to-one resize stays idle and later real resizes still present
+   assert.equal(vm.runInContext("needsPresent", context), false);
+   assert.equal(vm.runInContext("scheduledFrame", context), null);
+ });
++
++test("selection-only publications retry presentation, gate clear, and settle without an engine tick", async () => {
++  const harness = await createManagedWakeHarness([true, false, true, true]);
++  const applied = [];
++  // GPU results are deliberately stubbed: this proves production controller
++  // ordering/acknowledgement, not the shape or pixels drawn by Rust/WASM.
++  harness.createdRenderer.applyDeltaJson = json => { applied.push(JSON.parse(json)); return true; };
++  const selected = { channel: "noon.execution.retained", protocol_version: 5,
++    session: 12, sequence: 4, time: 0, snapshot: false, objects: [],
++    selection_overlay: { geometry: { kind: "circle", radius: 1 },
++      transform: { translation: {x:0,y:0}, scale: {x:1,y:1}, rotation: 0 } } };
++  const cleared = { ...selected, sequence: 5 };
++  delete cleared.selection_overlay;
++  harness.context.selectedJson = JSON.stringify(selected);
++  harness.context.clearedJson = JSON.stringify(cleared);
++  assert.equal(vm.runInContext('consumeDelta(selectedJson, {session:12, sequence:4});', harness.context), true);
++  assert.equal(harness.nextPort.messages.filter(m => m.type === "execution_presented").length, 0);
++  assert.equal(vm.runInContext('consumeDelta(clearedJson, {session:12, sequence:5});', harness.context), false);
++  assert.deepEqual(applied, [selected]);
++  assert.equal(harness.animationFrames.length, 1);
++  harness.animationFrames.shift()(10);
++  assert.deepEqual(harness.nextPort.messages.filter(m => m.type === "execution_presented").map(m => m.sequence), [4]);
++  assert.equal(vm.runInContext('consumeDelta(clearedJson, {session:12, sequence:5});', harness.context), true);
++  assert.deepEqual(applied, [selected, cleared]);
++  assert.deepEqual(harness.nextPort.messages.filter(m => m.type === "execution_presented").map(m => m.sequence), [4, 5]);
++  assert.equal(harness.nextPort.messages.filter(m => m.type === "tick").length, 0);
++  assert.equal(harness.animationFrames.length, 0);
++  assert.equal(harness.timers.size, 0);
++});
+diff --git a/web/browser-pointer-input.test.mjs b/web/browser-pointer-input.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f181684126bb737968f995a603546825e9e2a5b
+--- /dev/null
++++ b/web/browser-pointer-input.test.mjs
+@@ -0,0 +1,362 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++
++import {
++  FakeCanvas, FakeMessageChannel, FakeWorker, FakeResizeObserver, FakeSemanticAuthoringClient,
++} from "./test-support/execution-fakes.mjs";
++
++globalThis.ResizeObserver = FakeResizeObserver;
++
++globalThis.HTMLCanvasElement = FakeCanvas;
++globalThis.MessageChannel = FakeMessageChannel;
++globalThis.Worker = FakeWorker;
++globalThis.window = { devicePixelRatio: 1 };
++
++const {
++  AuthoringExecutionClient,
++} = await import("./authoring-execution-client.js");
++
++function envelope(channel, type, payload = {}) {
++  return { channel, protocolVersion: 1, type, ...payload };
++}
++
++function renderWorker() {
++  return FakeWorker.instances.findLast((worker) => worker.name === "noon-render");
++}
++
++function request(worker, type) {
++  const entry = worker.messages.findLast(({ message }) => message.type === type);
++  assert.ok(entry, `missing ${type}`);
++  return entry.message;
++}
++
++async function waitForRequest(worker, type) {
++  for (let attempt = 0; attempt < 20; attempt += 1) {
++    const entry = worker.messages.findLast(({ message }) => message.type === type);
++    if (entry) return entry.message;
++    await Promise.resolve();
++  }
++  assert.fail(`missing ${type}`);
++}
++
++function replyRender(worker, type, responseType, payload = {}) {
++  const sent = request(worker, type);
++  worker.emitMessage(
++    envelope("noon.render", responseType, {
++      requestId: sent.requestId,
++      transportMode: "transferable",
++      backend: "WebGL2",
++      ...payload,
++    }),
++  );
++}
++
++async function prepare(client) {
++  const prepared = client.prepare({ transportMode: "transferable" });
++  const render = renderWorker();
++  replyRender(render, "prepare", "prepared");
++  await prepared;
++  return render;
++}
++
++const { MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
++const inputTurn = () => new Promise(resolve => setImmediate(resolve));
++
++async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
++  const authoring = new FakeSemanticAuthoringClient();
++  const client = new AuthoringExecutionClient(canvas, callbacks);
++  t.after(() => client.terminate());
++  const render = await prepare(client);
++  const started = client.startSemanticExecution({ contextId: "original" }, { authoringClient: authoring });
++  await waitForRequest(render, "start_engine");
++  replyRender(render, "start_engine", "engine_started");
++  await started;
++  authoring.autoRespond = false;
++  return { client, authoring, render, engine: authoring.attachments.at(-1).controlPort.peer };
++}
++
++function pointerCanvas(t) {
++  const target = new EventTarget();
++  const win = new EventTarget();
++  const previous = globalThis.window;
++  win.devicePixelRatio = 1;
++  globalThis.window = win;
++  t.after(() => { globalThis.window = previous; });
++  const canvas = new FakeCanvas();
++  const listeners = new Map();
++  const rect = { left: 10, top: 20, width: 640, height: 360 };
++  canvas.getBoundingClientRect = () => ({ ...rect });
++  canvas.addEventListener = (type, listener, options) => {
++    listeners.set(type, listener);
++    target.addEventListener(type, listener, options);
++  };
++  let buttons = 0;
++  return { canvas, listeners, rect, win, emit(type, values = {}) {
++    if (type === "pointerdown") buttons = 1;
++    if (type === "pointerup" || type === "pointercancel") buttons = 0;
++    const event = new Event(type);
++    Object.assign(event, {
++      clientX: 110, clientY: 220,
++      button: type === "pointermove" ? -1 : 0, buttons,
++      pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
++    });
++    target.dispatchEvent(event);
++  } };
++}
++
++const pointerMessages = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
++
++// Supply raw samples; browsers can copy one parent button label into several
++// samples. Test the real collector/client route, not a second click recognizer.
++function coalescedSamples(values) {
++  return function () {
++    return values.map(value => ({
++      pointerId: this.pointerId, pointerType: this.pointerType, isPrimary: this.isPrimary,
++      clientX: this.clientX, clientY: this.clientY, button: this.button, buttons: this.buttons,
++      timeStamp: this.timeStamp, ...value,
++    }));
++  };
++}
++
++function acknowledgePointers(engine) {
++  for (const message of pointerMessages(engine)) {
++    engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
++  }
++}
++
++test("coalesced out-and-back motion preserves every occurrence before release, not the parent summary", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  let layoutReads = 0;
++  dom.canvas.getBoundingClientRect = () => { layoutReads += 1; return { ...dom.rect }; };
++  dom.emit("pointerdown");
++  layoutReads = 0;
++  dom.emit("pointermove", {
++    clientX: 111, // deliberately differs from the raw last sample
++    getCoalescedEvents: coalescedSamples([
++      { clientX: 150, clientY: 225, shiftKey: true },
++      { clientX: 110, clientY: 220, ctrlKey: true },
++    ]),
++    getPredictedEvents() { assert.fail("predictions are not observed input"); },
++  });
++  assert.equal(layoutReads, 1, "one receipt-time viewport is shared by the entire packet");
++  dom.emit("pointerup");
++  await inputTurn();
++  const messages = pointerMessages(engine);
++  assert.deepEqual(messages.map(m => [m.kind, m.surface_x, m.surface_y]), [
++    ["press", 100, 200], ["move", 140, 205], ["move", 100, 200], ["release", 100, 200],
++  ]);
++  assert.equal(messages[1].shift, true);
++  assert.equal(messages[2].control, true);
++  assert.equal(new Set(messages.map(m => m.source_id)).size, 1);
++  assert.equal(new Set(messages.map(m => m.view_revision)).size, 1);
++});
++
++test("empty coalesced lists fall back once and down/up never expand an attached list", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  const forbidden = () => assert.fail("only pointermove can expand samples");
++  dom.emit("pointerdown", { getCoalescedEvents: forbidden });
++  dom.emit("pointermove", { getCoalescedEvents: () => [] });
++  dom.emit("pointerup", { getCoalescedEvents: forbidden });
++  await inputTurn();
++  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "move", "release"]);
++});
++
++test("coalesced packet snapshots are immutable and identical positions are not deduplicated", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  let samples;
++  dom.emit("pointermove", { getCoalescedEvents() {
++    samples = coalescedSamples([{ altKey: true }, { metaKey: true }]).call(this);
++    return samples;
++  } });
++  samples[0].clientX = 999;
++  samples[0].altKey = false;
++  samples[1].pointerId = 99;
++  await inputTurn();
++  const messages = pointerMessages(engine);
++  assert.equal(messages.length, 2);
++  assert.deepEqual(messages.map(m => m.surface_x), [100, 100]);
++  assert.equal(messages[0].alt, true);
++  assert.equal(messages[1].meta, true);
++  assert.equal(messages[1].pointer_id, 1);
++});
++
++test("coalesced chord labels do not duplicate button edges or erase sample-local positions", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  dom.emit("pointerdown");
++  dom.emit("pointermove", { button: 2, buttons: 3,
++    getCoalescedEvents: coalescedSamples([{ clientX: 115 }, { clientX: 120 }]),
++  });
++  dom.emit("pointermove", { button: 0, buttons: 2,
++    getCoalescedEvents: coalescedSamples([{ clientX: 125 }, { clientX: 130 }]),
++  });
++  dom.emit("pointerup", { button: 2, buttons: 0 });
++  await inputTurn();
++  assert.deepEqual(pointerMessages(engine).map(m => [m.kind, m.button, m.surface_x]), [
++    ["press", 0, 100], ["press", 2, 105], ["move", null, 110],
++    ["release", 0, 115], ["move", null, 120], ["release", 2, 100],
++  ]);
++});
++
++for (const [label, invalid] of [
++  ["foreign identity", { pointerId: 2 }],
++  ["foreign pointer type", { pointerType: "pen" }],
++  ["nonprimary sample", { isPrimary: false }],
++  ["nonfinite position", { clientX: Number.NaN }],
++  ["nonfinite timestamp", { timeStamp: Infinity }],
++  ["future timestamp", { timeStamp: Number.MAX_VALUE }],
++  ["unsupported mask", { buttons: 64 }],
++  ["ambiguous button transition", { buttons: 6 }],
++  ["missing button edge", { buttons: 3, button: -1 }],
++  ["inconsistent final mask", { buttons: 3, button: 2 }],
++]) {
++  test(`malformed coalesced ${label} faults before forwarding any packet prefix`, async t => {
++    const dom = pointerCanvas(t);
++    const errors = [];
++    const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++    dom.emit("pointerdown");
++    await inputTurn();
++    dom.emit("pointermove", { getCoalescedEvents: coalescedSamples([{}, invalid]) });
++    dom.emit("pointerup");
++    await inputTurn();
++    assert.equal(errors.length, 1);
++    assert.match(errors[0].message, /coalesced|DOM pointer/);
++    assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press"]);
++    acknowledgePointers(engine);
++    await inputTurn();
++    assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "cancel"]);
++  });
++}
++
++test("coalesced timestamps preserve supplied order and reject descending history", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples([{ timeStamp: 0 }, { timeStamp: 0 }]) });
++  await inputTurn();
++  assert.equal(pointerMessages(engine).length, 2, "equal timestamp resolution does not merge occurrences");
++  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples([{ timeStamp: 1 }, { timeStamp: 0 }]) });
++  await inputTurn();
++  assert.equal(errors.length, 1);
++  assert.match(errors[0].message, /timestamp/);
++  assert.equal(pointerMessages(engine).length, 2);
++});
++
++for (const [label, getCoalescedEvents] of [
++  ["unavailable data", () => null],
++  ["sparse data", () => new Array(1)],
++  ["throwing provider", () => { throw new Error("coalesced provider failed"); }],
++]) {
++  test(`coalesced ${label} is not silently replaced by the parent`, async t => {
++    const dom = pointerCanvas(t);
++    const errors = [];
++    const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++    dom.emit("pointermove", { getCoalescedEvents });
++    await inputTurn();
++    assert.equal(errors.length, 1);
++    assert.equal(pointerMessages(engine).length, 0);
++  });
++}
++
++test("foreign and nonprimary parents never inspect or inject their coalesced history", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  const forbidden = () => assert.fail("ignored contact must not inspect coalesced history");
++  dom.emit("pointerdown");
++  dom.emit("pointermove", { pointerId: 2, getCoalescedEvents: forbidden });
++  dom.emit("pointermove", { isPrimary: false, getCoalescedEvents: forbidden });
++  dom.emit("pointerup");
++  await inputTurn();
++  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "release"]);
++});
++
++test("oversized coalesced packets fail before walking samples or posting a truncated prefix", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  const oversized = new Array(MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
++  Object.defineProperty(oversized, 0, { get() { assert.fail("size must be checked before visiting samples"); } });
++  dom.emit("pointermove", { getCoalescedEvents: () => oversized });
++  dom.emit("pointerdown");
++  await inputTurn();
++  assert.equal(errors.length, 1);
++  assert.match(errors[0].message, /coalesced.*capacity/);
++  assert.equal(pointerMessages(engine).length, 0);
++});
++
++test("coalesced packets use the existing aggregate producer bound and ordered overflow cleanup", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  dom.emit("pointerdown");
++  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
++    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
++  ) });
++  await inputTurn();
++  assert.equal(pointerMessages(engine).length, MAX_IN_FLIGHT_NATIVE_INPUTS);
++  assert.equal(errors.length, 1);
++  assert.match(errors[0].message, /native input.*full/i);
++  dom.emit("pointerup");
++  acknowledgePointers(engine);
++  await inputTurn();
++  const messages = pointerMessages(engine);
++  assert.equal(messages.length, MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
++  assert.equal(messages.at(-1).kind, "cancel");
++  assert.equal(messages.some(m => m.kind === "release"), false);
++});
++
++test("a coalesced resize packet cannot resume an old held gesture in the new viewport", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  dom.emit("pointerdown");
++  dom.rect.width = 800;
++  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples([{}, {}]) });
++  dom.emit("pointerup");
++  await inputTurn();
++  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "cancel"]);
++});
++
++test("an exactly capacity-sized coalesced packet forwards all samples without a second queue", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
++  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
++    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
++  ) });
++  await inputTurn();
++  const messages = pointerMessages(engine);
++  assert.equal(messages.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
++  assert.deepEqual(messages.map(m => m.surface_x), Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => 100 + i));
++  assert.equal(errors.length, 0);
++});
++
++test("a coalesced array cannot override bounded ordered indexing with a custom iterator", async t => {
++  const dom = pointerCanvas(t);
++  const { engine } = await startInputClient(t, dom.canvas);
++  dom.emit("pointermove", { getCoalescedEvents() {
++    const samples = coalescedSamples([{ clientX: 111 }, { clientX: 112 }]).call(this);
++    samples[Symbol.iterator] = () => assert.fail("iterate only the bounded platform list indices");
++    return samples;
++  } });
++  await inputTurn();
++  assert.deepEqual(pointerMessages(engine).map(m => m.surface_x), [101, 102]);
++});
++
++test("retired coalesced callbacks neither inspect history nor deliver to a replacement session", async t => {
++  const dom = pointerCanvas(t);
++  const { client, render } = await startInputClient(t, dom.canvas);
++  const listener = dom.listeners.get("pointermove");
++  const replacement = new FakeSemanticAuthoringClient();
++  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
++  await waitForRequest(render, "rebuild_engine");
++  replyRender(render, "rebuild_engine", "engine_rebuilt");
++  await switching;
++  listener({ pointerId: 1, pointerType: "mouse", isPrimary: true,
++    getCoalescedEvents() { assert.fail("retired collector must not inspect samples"); },
++  });
++  await inputTurn();
++  assert.equal(pointerMessages(replacement.attachments.at(-1).controlPort.peer).length, 0);
++});
+diff --git a/web/execution-worker-client.test.mjs b/web/execution-worker-client.test.mjs
+index 40e827cbd9aa43a1fd4f4f19334f7a02a85c8d15..1a8d7b4d0d952f21c0b4b13ac80867dae0483723 100644
+--- a/web/execution-worker-client.test.mjs
++++ b/web/execution-worker-client.test.mjs
+@@ -569,3 +569,47 @@ test("uncloneable native input releases its reservation without allocating a tra
+     assert.ok((await accepted).value);
+   } finally { client.terminate(); }
+ });
++
++test("selection policy uses the bounded input lane and validates before reservation", async () => {
++  const { client, engine } = await startClient();
++  const pending = [];
++  try {
++    for (const invalid of [undefined, -1, NaN, Infinity, "4", {}, true]) {
++      await assert.rejects(client.setPointerFillSelection(invalid), /selection tolerance/);
++    }
++    assert.equal(client.diagnostics.engine.pendingRequests, 0);
++    assert.equal(client.diagnostics.engine.nextRequestId, 0);
++    pending.push(observeResult(client.setPointerFillSelection(4)));
++    for (let i = 1; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
++      pending.push(observeResult(nativeInputCall(client, i)));
++    }
++    await assert.rejects(client.setPointerFillSelection(null), /native input.*full/i);
++    const configuration = await waitForRequest(engine, "pointer_fill_selection");
++    assert.equal(configuration.maxMovement, 4);
++    assert.equal(client.diagnostics.engine.pendingRequests, MAX_IN_FLIGHT_NATIVE_INPUTS);
++    engine.emitMessage(engineMessage(configuration.type, { requestId: configuration.requestId, time: 0 }));
++    assert.equal((await pending[0]).value.time, 0);
++    pending.push(observeResult(client.setPointerFillSelection(null)));
++    await new Promise(resolve => setImmediate(resolve));
++    const clear = engine.messages.filter(m => m.type === "pointer_fill_selection").at(-1);
++    assert.equal(clear.maxMovement, null);
++    engine.emitMessage(engineMessage(clear.type, { requestId: clear.requestId, time: 0 }));
++    assert.equal((await pending.at(-1)).value.time, 0);
++  } finally { client.terminate(); await Promise.all(pending); }
++});
++
++test("selection configuration is not replayed through a replacement scene", async () => {
++  const { client, engine: oldEngine, render } = await startClient();
++  const configuration = observeResult(client.setPointerFillSelection(4));
++  const replacement = new FakeSemanticAuthoringClient();
++  const switching = client.switchToSemanticExecution("replacement", replacement);
++  try {
++    const rebuild = await waitForRequest(render, "rebuild_engine");
++    replyRender(render, rebuild, "engine_rebuilt");
++    await switching;
++    assert.match((await configuration).error?.message ?? "", /retired|transition/i);
++    const currentEngine = replacement.attachments.at(-1).controlPort.peer;
++    assert.equal(oldEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
++    assert.equal(currentEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
++  } finally { client.terminate(); await configuration; }
++});
+diff --git a/web/semantic-engine-endpoint.test.mjs b/web/semantic-engine-endpoint.test.mjs
+index d787be7b3a9e1d19ecb7f433d707ae6f6b1d02a5..4fda11bd971a41299dbdfa4e11203e83a85626eb 100644
+--- a/web/semantic-engine-endpoint.test.mjs
++++ b/web/semantic-engine-endpoint.test.mjs
+@@ -2209,3 +2209,103 @@ test("callback-stalled pointer controls keep bounded order and occurrence-local
+     assert.equal(f.player.time(), 0, "delivery does not advance authored time");
+   } finally { release(); endpoint?.stop(); f.close(); }
+ });
++
++for (const transportMode of ["transferable", "shared"]) {
++  test(`selection presentation uses ordinary ${transportMode} ordering while paused`, { timeout: 5000 }, async () => {
++    const f = fixture(transportMode, null, null, { initiallyPaused: true });
++    let endpoint;
++    let reader;
++    let sequence = 1;
++    let pending = null;
++    const deltas = [];
++    const configurations = [];
++    // This test doubles the Rust boundary, not picking or renderer semantics.
++    const overlay = {
++      geometry: { kind: "circle", radius: 1 },
++      transform: { translation: { x: 0, y: 0 }, scale: { x: -2, y: 0.5 }, rotation: 0.7 },
++    };
++    f.player.setPointerFillSelection = value => { configurations.push(value); };
++    f.player.drainDeltaJson = () => {
++      if (pending === null) return null;
++      const delta = pending;
++      pending = null;
++      return JSON.stringify(delta);
++    };
++    const receive = json => {
++      const delta = JSON.parse(json);
++      deltas.push(delta);
++      f.render.port2.postMessage({ type: "execution_ack", session: 7, sequence: delta.sequence });
++      f.render.port2.postMessage({ type: "transport_writable" });
++      return true;
++    };
++    f.render.port2.on("message", message => {
++      if (message.type === "transport_setup") {
++        reader = new SharedExecutionDeltaReader(message.mailbox);
++        reader.drain(receive);
++      } else if (message.type === "shared_delta") reader.drain(receive);
++      else if (message.type === "execution_delta") receive(decodeTransferableExecutionDelta(message).json);
++    });
++    const waitForDeltas = async count => {
++      for (let n = 0; n < 50 && deltas.length < count; n += 1) await turn();
++      assert.equal(deltas.length, count);
++    };
++    try {
++      const ready = next(f.control.port2);
++      endpoint = await f.attach();
++      await ready;
++      await waitForDeltas(1);
++      assert.equal((await request(f.control.port2, "pointer_fill_selection", 1, { maxMovement: 4 })).type, "pointer_fill_selection");
++      assert.deepEqual(configurations, [4]);
++      assert.equal(deltas.length, 1, "configuration without an image change emits nothing");
++      // Supply exact output from the mocked shared session after admission. JS
++      // must forward this verbatim; it must not invent IDs, rows, or a new clock.
++      pending = { channel: "noon.execution.retained", protocol_version: 5,
++        session: 7, sequence: sequence++, snapshot: false, time: 0,
++        objects: [], selection_overlay: overlay };
++      const selected = await request(f.control.port2, "browser_pointer_input", 2, { kind: "release" });
++      assert.equal(selected.type, "browser_pointer_input");
++      await waitForDeltas(2);
++      assert.deepEqual(deltas[1].selection_overlay, overlay);
++      assert.deepEqual(deltas[1].objects, []);
++      assert.equal(selected.time, 0);
++      assert.equal(selected.playing, false);
++      pending = { channel: "noon.execution.retained", protocol_version: 5,
++        session: 7, sequence: sequence++, snapshot: false, time: 0, objects: [] };
++      const cleared = await request(f.control.port2, "pointer_fill_selection", 3, { maxMovement: null });
++      assert.equal(cleared.type, "pointer_fill_selection");
++      await waitForDeltas(3);
++      assert.deepEqual(configurations, [4, null]);
++      assert.deepEqual(deltas.map(d => d.sequence), [0, 1, 2]);
++      assert.equal(deltas[2].selection_overlay, undefined);
++      assert.deepEqual(deltas.map(d => d.time), [0, 0, 0]);
++      assert.equal(cleared.playing, false);
++      assert.equal(f.stats().continuationDriveTimes.length, 0);
++    } finally { endpoint?.stop(); f.close(); }
++  });
++}
++
++test("selection configuration rejection does not drain or replace the current wake", { timeout: 5000 }, async () => {
++  const f = fixture("transferable", null, null, { initiallyPaused: true });
++  let endpoint;
++  let calls = 0;
++  f.player.setPointerFillSelection = () => { calls += 1; throw new Error("required callback barrier"); };
++  try {
++    const ready = next(f.control.port2);
++    endpoint = await f.attach();
++    await ready;
++    const before = f.stats();
++    for (const [index, maxMovement] of [undefined, -1, Infinity, NaN, "4", {}, true].entries()) {
++      const response = await request(f.control.port2, "pointer_fill_selection", index + 10, { maxMovement });
++      assert.equal(response.type, "error");
++      assert.match(response.message, /selection tolerance/);
++    }
++    assert.equal(calls, 0, "malformed transport never reaches Rust");
++    const response = await request(f.control.port2, "pointer_fill_selection", 20, { maxMovement: 4 });
++    assert.equal(response.type, "error");
++    assert.match(response.message, /required callback barrier/);
++    assert.equal(calls, 1);
++    assert.equal(f.stats().drained, before.drained);
++    assert.equal(f.stats().executionWakeTimes.length, before.executionWakeTimes.length);
++    assert.equal(f.player.time(), 0);
++  } finally { endpoint?.stop(); f.close(); }
++});

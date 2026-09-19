@@ -1,0 +1,115 @@
+name: C5 browser pixel candidate qualification
+on:
+  push:
+    branches: [validation/c5-browser-render-20260919]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify and apply the exact browser candidate in an isolated worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          cd .github/qualification
+          sha256sum -c <<'HASHES'
+          35ca9f741847a087498ada9c1222ae80d4be2bffc91f1d567a3f9ebe45025497  c5-browser-rust.patch
+          df56ce144e2d6291a82209e6c59d2f8961678262426c919d8a9617e0734f6717  browser-runtime.patch
+          0b65ab12ef12e4b1fe78aa16e558e835f03a8cf9288f76471961d17b147b8bfd  browser-tests.patch
+          6457264c54c3ffbc695711228814e23cdd6ffa01501fd390a1012c4c38b20174  browser-gate.patch
+          0c7cc0a5f18132e2a4a1be5ddc9d52601088e5d4e2cf94e55614c77df3ef3498  browser-oracle.patch
+          e56f2b441252d00f36ca1136a0983f1b2d5ff6ea5e70192b50587494312fb38b  browser-pointer-input-smoke.mjs
+          781b27b980e2ba9806ad3b2e789532afe572b52a38dde5df7c6449b1d0248a79  pointer-selection-qualification.mjs
+          HASHES
+          git worktree add --detach "$RUNNER_TEMP/noon-c5-browser" 7261c1ebf35eba91ae6efd8436b822a9c887bf2c
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          test "$(git rev-parse HEAD^{tree})" = 046f45fe0ba0123b78ff95838ee0d66617e80f22
+          for patch in c5-browser-rust browser-runtime browser-tests browser-gate browser-oracle; do
+            git apply --check "$GITHUB_WORKSPACE/.github/qualification/$patch.patch"
+            git apply "$GITHUB_WORKSPACE/.github/qualification/$patch.patch"
+          done
+          cp "$GITHUB_WORKSPACE/.github/qualification/browser-pointer-input-smoke.mjs" scripts/
+          cp "$GITHUB_WORKSPACE/.github/qualification/pointer-selection-qualification.mjs" scripts/
+          git add crates/noon-web web scripts .github/workflows/playground-playback-controls.yml
+          git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/unformatted.patch"
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/proof/base.txt"
+          git write-tree > "$GITHUB_WORKSPACE/proof/unformatted-tree.txt"
+      - name: Use pinned Rust and format candidate
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$GITHUB_WORKSPACE/proof/rustc.txt"
+          cargo fmt --all
+          git add crates/noon-web
+          git diff --cached --full-index > "$GITHUB_WORKSPACE/proof/formatted.patch"
+          git write-tree > "$GITHUB_WORKSPACE/proof/formatted-tree.txt"
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-c5-browser-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build the actual browser package with full preflight
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$GITHUB_WORKSPACE/proof/build.log"
+          sha256sum web/pkg/noon_web.js web/pkg/noon_web_bg.wasm web/pkg/noon_web.d.ts > "$GITHUB_WORKSPACE/proof/package-sha256.txt"
+      - name: Install browser qualification dependencies
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Execute independent oracle tests and real DOM qualification
+        env:
+          NOON_POINTER_DOM_ARTIFACTS: ${{ github.workspace }}/proof/pointer-dom
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          node --test scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$GITHUB_WORKSPACE/proof/oracle-tests.log"
+          node scripts/browser-pointer-input-smoke.mjs 2>&1 | tee "$GITHUB_WORKSPACE/proof/dom.log"
+      - name: Qualify actual click-to-highlight pixels across both backends and worker transports
+        env:
+          NOON_POINTER_SELECTION_ARTIFACTS: ${{ github.workspace }}/proof/pointer-selection
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/noon-c5-browser"
+          node scripts/pointer-selection-qualification.mjs 2>&1 | tee "$GITHUB_WORKSPACE/proof/pixels.log"
+      - name: Retain exact code and actual browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-browser-pixel-candidate-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7

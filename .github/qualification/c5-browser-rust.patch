@@ -1,0 +1,785 @@
+diff --git a/crates/noon-web/src/lib.rs b/crates/noon-web/src/lib.rs
+index 9eecc82342b0f2466d5bd5dff82ae9b75d92d3cc..60bbc4bc5d2ff20e55a969afebfbca049548ebb6 100644
+--- a/crates/noon-web/src/lib.rs
++++ b/crates/noon-web/src/lib.rs
+@@ -83,6 +83,7 @@ mod retained_resource_mutation_transport;
+ mod retained_resource_transport;
+ #[cfg(feature = "renderer")]
+ mod retained_typst_canvas;
++mod selection_overlay_transport;
+ mod semantic_execution_player;
+ #[cfg(target_arch = "wasm32")]
+ mod text_colors;
+@@ -149,6 +150,7 @@ pub use retained_resource_mutation_transport::*;
+ pub use retained_resource_transport::*;
+ #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+ pub use retained_typst_canvas::*;
++pub use selection_overlay_transport::{SelectionOverlayGeometry, SelectionOverlayPresentation};
+ pub use semantic_execution_player::*;
+ #[cfg(target_arch = "wasm32")]
+ pub use text_colors::*;
+diff --git a/crates/noon-web/src/retained_execution_canvas.rs b/crates/noon-web/src/retained_execution_canvas.rs
+index 050fd683c185a667c3ecbd8ecf86127c6e09ddda..7a24db4d9854cfa74bd0c99c86bbfa3a905b207a 100644
+--- a/crates/noon-web/src/retained_execution_canvas.rs
++++ b/crates/noon-web/src/retained_execution_canvas.rs
+@@ -3,8 +3,8 @@ mod wasm {
+     use noon_core::Vec2;
+     use noon_render_wgpu::text::TextDeviceMetrics;
+     use noon_render_wgpu::{
+-        Camera2D, GpuRenderer, PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState,
+-        UploadWrite,
++        AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
++        PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState, UploadWrite,
+     };
+     use noon_runtime::FrameChanges;
+     use wasm_bindgen::prelude::*;
+@@ -56,6 +56,8 @@ mod wasm {
+         preparer: RetainedFramePreparer,
+         renderer: GpuRenderer,
+         text_gpu: RetainedTextGpuState,
++        selection_overlay: Option<AnalyticOverlay>,
++        selection_overlay_gpu: OverlayGpuState,
+         camera_center: Vec2,
+         camera_height: f32,
+         last_draw_calls: usize,
+@@ -178,6 +180,8 @@ mod wasm {
+                 preparer,
+                 renderer,
+                 text_gpu,
++                selection_overlay: None,
++                selection_overlay_gpu: OverlayGpuState::default(),
+                 camera_center: camera.center,
+                 camera_height: camera.height,
+                 last_draw_calls: 0,
+@@ -217,6 +221,18 @@ mod wasm {
+                     .applied_sequence()
+                     .is_some_and(|sequence| delta.retained.sequence <= sequence);
+ 
++            // Stale packets cannot change the current overlay. Validate a fresh
++            // presentation before resource preparation or mirror admission.
++            let overlay = if stale {
++                None
++            } else {
++                delta
++                    .selection_overlay
++                    .as_ref()
++                    .map(crate::SelectionOverlayPresentation::prepare)
++                    .transpose()
++                    .map_err(js_error)?
++            };
+             if !stale {
+                 delta.validate().map_err(js_error)?;
+                 if let Some(bundle) = delta.resource_additions.as_ref() {
+@@ -280,6 +296,7 @@ mod wasm {
+             let (outcome, changes) = self.mirror.apply_family(delta).map_err(js_error)?;
+             match outcome {
+                 RetainedTransportApplyOutcome::Applied => {
++                    self.selection_overlay = overlay;
+                     let camera = self.mirror.camera();
+                     if camera.center != self.camera_center || camera.height != self.camera_height {
+                         self.camera_center = camera.center;
+@@ -458,9 +475,15 @@ mod wasm {
+             let transient_upload =
+                 self.renderer
+                     .upload_transient_presentations(&self.device, &self.queue, &transient);
++            let overlay_upload = self.selection_overlay_gpu.update(
++                &self.device,
++                &self.queue,
++                self.selection_overlay,
++            );
+             self.last_bytes_uploaded = upload
+                 .bytes_uploaded()
+-                .saturating_add(transient_upload.bytes_uploaded);
++                .saturating_add(transient_upload.bytes_uploaded)
++                .saturating_add(overlay_upload.bytes_uploaded);
+ 
+             let view = surface_texture
+                 .texture
+@@ -470,29 +493,21 @@ mod wasm {
+                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                     label: Some("Noon retained execution render worker frame"),
+                 });
+-            let draw = if transient.slots.is_empty() {
+-                self.renderer
+-                    .encode_retained(
+-                        &mut encoder,
+-                        &view,
+-                        &prepared,
+-                        &self.text_gpu,
+-                        CLEAR_COLOR,
+-                        None,
+-                    )
+-                    .map_err(js_error)?
+-            } else {
+-                self.renderer
+-                    .encode_retained_with_transient_presentations(
+-                        &mut encoder,
+-                        &view,
+-                        &prepared,
+-                        &transient,
+-                        CLEAR_COLOR,
+-                        None,
+-                    )
+-                    .map_err(js_error)?
+-            };
++            let draw = self
++                .renderer
++                .encode_retained_with_transient_presentations_and_overlay(
++                    &mut encoder,
++                    &view,
++                    InteractiveRetainedFrame {
++                        prepared: &prepared,
++                        text: &self.text_gpu,
++                        transient: Some(&transient),
++                        overlay: &self.selection_overlay_gpu,
++                    },
++                    CLEAR_COLOR,
++                    None,
++                )
++                .map_err(js_error)?;
+             self.queue.submit(Some(encoder.finish()));
+             self.queue.present(surface_texture);
+             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
+diff --git a/crates/noon-web/src/retained_execution_resources.rs b/crates/noon-web/src/retained_execution_resources.rs
+index 671f6d07113618338dbfaa1bce5ea27b848c8a63..a698dab237aa9e201920112d0fba87e935199bfc 100644
+--- a/crates/noon-web/src/retained_execution_resources.rs
++++ b/crates/noon-web/src/retained_execution_resources.rs
+@@ -601,6 +601,7 @@ mod tests {
+             .unwrap()],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         }
+     }
+ 
+@@ -762,6 +763,7 @@ mod tests {
+             .unwrap()],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         assert!(mirror.apply_family(invalid).is_err());
+         assert_ne!(mirror.frame().unwrap().time, 2.0);
+@@ -802,6 +804,7 @@ mod tests {
+             family_plans: Vec::new(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+ 
+         assert!(mirror.apply_family(invalid).is_err());
+diff --git a/crates/noon-web/src/retained_execution_resources/image_tests.rs b/crates/noon-web/src/retained_execution_resources/image_tests.rs
+index 6bd71e95a843bae8acb68d6f888b400bcbdc091e..ab636c716eee6720faf88d783bedb9e6b749de2f 100644
+--- a/crates/noon-web/src/retained_execution_resources/image_tests.rs
++++ b/crates/noon-web/src/retained_execution_resources/image_tests.rs
+@@ -124,6 +124,7 @@ fn image_addition_is_rolled_back_after_late_family_or_base_publication_failure()
+             family_plans: vec![],
+             resource_additions: Some(bundle),
+             transient_presentations: vec![],
++            selection_overlay: None,
+         };
+         let mut invalid = valid.clone();
+         if failure == "family" {
+@@ -181,6 +182,7 @@ fn stale_image_additions_are_dropped_without_retaining_pixels() {
+         family_plans: vec![],
+         resource_additions: Some(bundle),
+         transient_presentations: vec![],
++        selection_overlay: None,
+     };
+     let (outcome, _) = mirror.apply_family(stale).unwrap();
+     assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+diff --git a/crates/noon-web/src/retained_family_execution_transport.rs b/crates/noon-web/src/retained_family_execution_transport.rs
+index fac114ad5f6bf989f6c4f66030e46f1de444148c..3d13b04540ad1ead11fa4713ecd6c01032c52dab 100644
+--- a/crates/noon-web/src/retained_family_execution_transport.rs
++++ b/crates/noon-web/src/retained_family_execution_transport.rs
+@@ -167,6 +167,10 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
+     pub resource_additions: Option<RetainedResourceBundle>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub transient_presentations: Vec<RetainedTransientPresentationOccurrence>,
++    /// Complete session-only overlay for this transport sequence; absence clears.
++    /// Ordinary scene/export producers leave it absent.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub selection_overlay: Option<crate::SelectionOverlayPresentation>,
+ }
+ 
+ impl RetainedFamilyExecutionDeltaEnvelope {
+@@ -187,6 +191,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
+                 .collect(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+             retained,
+         };
+         envelope.validate()?;
+@@ -220,6 +225,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
+                 .collect(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+             retained,
+         };
+         envelope.validate()?;
+@@ -243,6 +249,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
+             family_plans: Vec::new(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+             retained,
+         };
+         envelope.validate()?;
+@@ -279,6 +286,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
+                 .collect(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+             retained,
+         };
+         envelope.validate()?;
+@@ -286,6 +294,9 @@ impl RetainedFamilyExecutionDeltaEnvelope {
+     }
+ 
+     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
++        if let Some(overlay) = self.selection_overlay {
++            overlay.validate()?;
++        }
+         let mut seen = HashSet::with_capacity(self.family_states.len());
+         for entry in &self.family_states {
+             if !seen.insert(entry.object) {
+@@ -669,6 +680,7 @@ pub enum RetainedFamilyExecutionTransportError {
+     InvalidTransientAnchorIndex(usize),
+     DuplicateTransientOccurrence(u32),
+     UnsupportedTransientContent(u32),
++    InvalidSelectionOverlay,
+     UnknownTransientAnchor(ObjectId),
+     UnknownObject(ObjectId),
+     StateWithoutPlan(ObjectId),
+@@ -728,6 +740,9 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
+                 formatter,
+                 "transient presentation occurrence {occurrence} requires unsupported retained text content"
+             ),
++            Self::InvalidSelectionOverlay => formatter.write_str(
++                "selection overlay requires finite, nondegenerate analytic geometry and transform",
++            ),
+             Self::UnknownTransientAnchor(object) => write!(
+                 formatter,
+                 "transient presentation occurrence references unknown stable anchor {}",
+@@ -1032,6 +1047,7 @@ mod tests {
+             ],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         let mut installed = InstalledRetainedFamilyExecutionState::default();
+         installed
+@@ -1055,6 +1071,7 @@ mod tests {
+             family_plans: Vec::new(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         assert_eq!(
+             installed
+@@ -1087,6 +1104,7 @@ mod tests {
+             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         installed
+             .apply(&appended, &retained_frame, &TextResourceArena::new())
+@@ -1123,6 +1141,7 @@ mod tests {
+             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         let index_lookups = Cell::new(0);
+         let object_lookups = Cell::new(0);
+@@ -1181,6 +1200,7 @@ mod tests {
+             }],
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+ 
+         assert!(installed
+@@ -1208,6 +1228,7 @@ mod tests {
+             family_plans: Vec::new(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         let mut installed = InstalledRetainedFamilyExecutionState::default();
+         installed
+@@ -1218,6 +1239,7 @@ mod tests {
+                     family_plans: Vec::new(),
+                     resource_additions: None,
+                     transient_presentations: Vec::new(),
++                    selection_overlay: None,
+                 },
+                 &frame(),
+                 &TextResourceArena::new(),
+@@ -1253,6 +1275,7 @@ mod tests {
+             family_plans: Vec::new(),
+             resource_additions: None,
+             transient_presentations: Vec::new(),
++            selection_overlay: None,
+         };
+         assert_eq!(
+             installed
+diff --git a/crates/noon-web/src/selection_overlay_transport.rs b/crates/noon-web/src/selection_overlay_transport.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..29e035e84310e12d8b2c17673dac95b1e106b0be
+--- /dev/null
++++ b/crates/noon-web/src/selection_overlay_transport.rs
+@@ -0,0 +1,91 @@
++//! Identity-free, bounded selection presentation at the genuine worker boundary.
++//!
++//! Each retained publication carries the complete optional overlay. Absence clears
++//! it; it is never a scene row, resource, painter anchor, or selected-target owner.
++
++#[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
++use noon_core::Vec2;
++use noon_core::{GeometryRef, Transform2D};
++use serde::{Deserialize, Serialize};
++
++#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
++#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
++pub enum SelectionOverlayGeometry {
++    Circle { radius: f32 },
++    Rectangle { width: f32, height: f32 },
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct SelectionOverlayPresentation {
++    pub geometry: SelectionOverlayGeometry,
++    pub transform: Transform2D,
++}
++
++impl SelectionOverlayPresentation {
++    pub(crate) fn from_highlight(
++        highlight: &noon::integration::PointerSelectionHighlight,
++    ) -> Result<Self, crate::RetainedFamilyExecutionTransportError> {
++        let geometry = match &highlight.geometry {
++            GeometryRef::Circle { radius } => SelectionOverlayGeometry::Circle { radius: *radius },
++            GeometryRef::Rectangle { size } => SelectionOverlayGeometry::Rectangle {
++                width: size.x,
++                height: size.y,
++            },
++            _ => return Err(crate::RetainedFamilyExecutionTransportError::InvalidSelectionOverlay),
++        };
++        let value = Self {
++            geometry,
++            transform: highlight.transform,
++        };
++        value.validate()?;
++        Ok(value)
++    }
++
++    pub(crate) fn validate(&self) -> Result<(), crate::RetainedFamilyExecutionTransportError> {
++        let positive = |value: f32| value.is_finite() && value > 0.0;
++        let geometry_valid = match self.geometry {
++            SelectionOverlayGeometry::Circle { radius } => positive(radius),
++            SelectionOverlayGeometry::Rectangle { width, height } => {
++                positive(width) && positive(height)
++            }
++        };
++        let transform = self.transform;
++        if !geometry_valid
++            || ![
++                transform.translation.x,
++                transform.translation.y,
++                transform.scale.x,
++                transform.scale.y,
++                transform.rotation,
++            ]
++            .into_iter()
++            .all(f32::is_finite)
++            || transform.scale.x == 0.0
++            || transform.scale.y == 0.0
++        {
++            return Err(crate::RetainedFamilyExecutionTransportError::InvalidSelectionOverlay);
++        }
++        Ok(())
++    }
++
++    #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
++    pub(crate) fn prepare(
++        &self,
++    ) -> Result<noon_render_wgpu::AnalyticOverlay, noon_render_wgpu::OverlayPrepareError> {
++        let geometry = match self.geometry {
++            SelectionOverlayGeometry::Circle { radius } => GeometryRef::Circle { radius },
++            SelectionOverlayGeometry::Rectangle { width, height } => GeometryRef::Rectangle {
++                size: Vec2::new(width, height),
++            },
++        };
++        noon_render_wgpu::AnalyticOverlay::new(
++            &geometry,
++            self.transform,
++            noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35),
++        )
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/noon-web/src/selection_overlay_transport/tests.rs b/crates/noon-web/src/selection_overlay_transport/tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..864e83f90716ed9513545983f2639c2626512c53
+--- /dev/null
++++ b/crates/noon-web/src/selection_overlay_transport/tests.rs
+@@ -0,0 +1,112 @@
++use super::*;
++use noon_core::Vec2;
++
++fn circle() -> SelectionOverlayPresentation {
++    SelectionOverlayPresentation {
++        geometry: SelectionOverlayGeometry::Circle { radius: 1.0 },
++        transform: Transform2D::IDENTITY,
++    }
++}
++
++#[test]
++fn round_trip_is_bounded_geometry_without_scene_identity_or_resources() {
++    for geometry in [
++        SelectionOverlayGeometry::Circle { radius: 1.5 },
++        SelectionOverlayGeometry::Rectangle {
++            width: 2.0,
++            height: 1.0,
++        },
++    ] {
++        let value = SelectionOverlayPresentation {
++            geometry,
++            transform: Transform2D {
++                translation: Vec2::new(3.0, -2.0),
++                scale: Vec2::new(-2.0, 0.5),
++                rotation: 0.7,
++            },
++        };
++        value.validate().unwrap();
++        let json = serde_json::to_value(value).unwrap();
++        let fields = json.as_object().unwrap();
++        assert_eq!(fields.len(), 2);
++        assert!(fields.contains_key("geometry") && fields.contains_key("transform"));
++        assert_eq!(
++            serde_json::from_value::<SelectionOverlayPresentation>(json).unwrap(),
++            value,
++        );
++    }
++}
++
++#[test]
++fn nonanalytic_or_unknown_payloads_are_not_silently_accepted() {
++    let json = serde_json::to_value(circle()).unwrap();
++    for geometry in [
++        serde_json::json!({"kind":"vector_path","points":[]}),
++        serde_json::json!({"kind":"circle","radius":1.0,"semantic_id":7}),
++        serde_json::json!({"kind":"rectangle","width":1.0}),
++    ] {
++        let mut bad = json.clone();
++        bad["geometry"] = geometry;
++        assert!(serde_json::from_value::<SelectionOverlayPresentation>(bad).is_err());
++    }
++    let mut bad = json;
++    bad["target"] = serde_json::json!(4);
++    assert!(serde_json::from_value::<SelectionOverlayPresentation>(bad).is_err());
++}
++
++#[test]
++fn degenerate_and_nonfinite_geometry_or_transforms_fail_validation() {
++    for v in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
++        let mut value = circle();
++        value.geometry = SelectionOverlayGeometry::Circle { radius: v };
++        assert!(value.validate().is_err());
++        for geometry in [
++            SelectionOverlayGeometry::Rectangle {
++                width: v,
++                height: 1.0,
++            },
++            SelectionOverlayGeometry::Rectangle {
++                width: 1.0,
++                height: v,
++            },
++        ] {
++            value.geometry = geometry;
++            assert!(value.validate().is_err());
++        }
++    }
++    for axis in 0..5 {
++        for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
++            let mut value = circle();
++            match axis {
++                0 => value.transform.translation.x = v,
++                1 => value.transform.translation.y = v,
++                2 => value.transform.scale.x = v,
++                3 => value.transform.scale.y = v,
++                _ => value.transform.rotation = v,
++            }
++            assert!(value.validate().is_err());
++        }
++    }
++    for scale in [Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0)] {
++        let mut value = circle();
++        value.transform.scale = scale;
++        assert!(value.validate().is_err());
++    }
++}
++
++#[cfg(feature = "renderer")]
++#[test]
++fn preparation_reuses_the_native_analytic_overlay_value() {
++    let mut value = circle();
++    value.transform.scale = Vec2::new(-2.0, 0.5);
++    value.transform.rotation = 0.6;
++    assert_eq!(
++        value.prepare().unwrap(),
++        noon_render_wgpu::AnalyticOverlay::new(
++            &GeometryRef::Circle { radius: 1.0 },
++            value.transform,
++            noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35),
++        )
++        .unwrap(),
++    );
++}
+diff --git a/crates/noon-web/src/semantic_execution_player.rs b/crates/noon-web/src/semantic_execution_player.rs
+index d8357917d86f6678748db2c4cffd83d3a4650cca..f546dfc5f058271318b661102f8f75347213e64e 100644
+--- a/crates/noon-web/src/semantic_execution_player.rs
++++ b/crates/noon-web/src/semantic_execution_player.rs
+@@ -117,6 +117,9 @@ pub struct SemanticExecutionPlayer {
+     /// authoring-worker to render-worker boundary.
+     resource_bundle: Vec<u8>,
+     snapshot_sent: bool,
++    /// Last emitted presentation only. The session remains selection authority;
++    /// renderer acknowledgement and retry belong to the existing transport.
++    last_sent_selection_overlay: Option<crate::SelectionOverlayPresentation>,
+     /// Exact phase metadata needed only to re-anchor presentation after the
+     /// session atomically commits its own pending callback phase. The session
+     /// remains the sole owner of callback progression and termination.
+@@ -289,6 +292,7 @@ impl SemanticExecutionPlayer {
+             encoder,
+             resource_bundle,
+             snapshot_sent: false,
++            last_sent_selection_overlay: None,
+             pending_callback_phase: None,
+             #[cfg(any(target_arch = "wasm32", test))]
+             semantics: None,
+@@ -328,6 +332,7 @@ impl SemanticExecutionPlayer {
+             encoder,
+             resource_bundle,
+             snapshot_sent: false,
++            last_sent_selection_overlay: None,
+             pending_callback_phase: None,
+             semantics: Some(semantics),
+             semantic_root: Some(semantic_root),
+@@ -2213,9 +2218,21 @@ impl SemanticExecutionPlayer {
+         &mut self,
+         snapshot: bool,
+     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
++        let overlay = self
++            .session
++            .pointer_selection_highlight()
++            .as_ref()
++            .map(crate::SelectionOverlayPresentation::from_highlight)
++            .transpose()
++            .map_err(|error| error.to_string())?;
+         let camera = self.session.camera().map_err(|e| e.to_string())?;
+         let publication = self.session.take_renderer_publication();
+-        let changes = publication.changes().clone();
++        let mut changes = publication.changes().clone();
++        if changes.is_empty() && overlay != self.last_sent_selection_overlay {
++            // Presentation-only transport work, not authored/runtime dirtiness.
++            // Reuse the existing sequence and backpressure; never invent a row.
++            changes = noon_runtime::FrameChanges::presentation_redraw();
++        }
+         let frame = publication.frame();
+         let planned = publication.planned_family_frame();
+         let plans = publication.family_animation_plans();
+@@ -2304,6 +2321,8 @@ impl SemanticExecutionPlayer {
+         delta
+             .replace_transient_presentations(frame, publication.transient_presentations())
+             .map_err(|error| error.to_string())?;
++        delta.selection_overlay = overlay;
++        self.last_sent_selection_overlay = overlay;
+         Ok(Some(delta))
+     }
+ 
+@@ -2941,6 +2960,18 @@ impl SemanticExecutionPlayer {
+         self.set_native_state_input(input.source, input.value.into())
+     }
+ 
++    /// Configure session/editor fill selection, never an authored interaction binding.
++    /// Configuration is ordered with native input and is not replayed into a new scene.
++    #[cfg(any(target_arch = "wasm32", test))]
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
++    pub fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), String> {
++        match max_movement {
++            Some(value) => self.session.enable_pointer_fill_selection(value),
++            None => self.session.disable_pointer_fill_selection(),
++        }
++        .map_err(|error| error.to_string())
++    }
++
+     /// Decode one contextual browser pointer occurrence at the genuine worker
+     /// control-port boundary. Coordinates are CSS pixels relative to the content
+     /// viewport; conversion and admission happen against one session publication.
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input.rs b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+index 2787a666a5f3216075b3a5e89ddd8fe28e425d71..87ced1eeba059b74825994a9b2774c77cc669d1a 100644
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+@@ -269,3 +269,6 @@ impl SemanticExecutionPlayer {
+ 
+ #[cfg(test)]
+ mod tests;
++
++#[cfg(test)]
++mod selection_tests;
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input/selection_tests.rs b/crates/noon-web/src/semantic_execution_player/pointer_input/selection_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..9104cf9e6c9b9d9742c4b8bb2015b0a2575e0999
+--- /dev/null
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input/selection_tests.rs
+@@ -0,0 +1,143 @@
++//! Real shared-session click admission and retained transport, without a DOM mock.
++use super::*;
++use crate::{
++    InstalledRetainedExecutionMirror, RetainedFamilyExecutionDeltaEnvelope,
++    RetainedTransportApplyOutcome,
++};
++
++fn player() -> SemanticExecutionPlayer {
++    let mut scene = noon::Scene::new();
++    let mut circle = scene.circle(1.0).unwrap();
++    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
++    scene.add(&circle).unwrap();
++    let mut player =
++        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
++            .unwrap();
++    player.pause();
++    player.set_pointer_fill_selection(Some(4.0)).unwrap();
++    player.initial_delta_json().unwrap();
++    player
++}
++
++fn input(player: &mut SemanticExecutionPlayer, kind: &str, x: f32) {
++    player
++        .submit_browser_pointer_input_json(
++            &serde_json::json!({
++                "kind": kind, "source_id": 1, "pointer_id": 7, "view_revision": 0,
++                "surface_x": x, "surface_y": 200.0,
++                "viewport_width": 800.0, "viewport_height": 400.0,
++                "button": if kind == "move" { None } else { Some(0_u8) },
++            })
++            .to_string(),
++        )
++        .unwrap();
++}
++
++fn click(player: &mut SemanticExecutionPlayer, x: f32) {
++    input(player, "press", x);
++    input(player, "release", x);
++}
++
++fn drain(player: &mut SemanticExecutionPlayer) -> RetainedFamilyExecutionDeltaEnvelope {
++    serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap()
++}
++
++#[test]
++fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
++    let mut p = player();
++    let frame = p.session.frame().clone();
++    let context = p.session.publication_context();
++    let bundle = p.resource_bundle_bytes();
++    input(&mut p, "press", 400.0);
++    assert!(p.drain_delta_json().unwrap().is_none());
++    input(&mut p, "release", 400.0);
++    let selected = drain(&mut p);
++    assert!(!selected.retained.snapshot);
++    assert_eq!(selected.retained.sequence, 1);
++    assert!(selected.retained.objects.is_empty());
++    assert!(selected.family_states.is_empty() && selected.family_plans.is_empty());
++    assert!(selected.resource_additions.is_none());
++    assert!(selected.transient_presentations.is_empty());
++    assert!(selected.selection_overlay.is_some());
++    assert_eq!(p.session.frame(), &frame);
++    assert_eq!(p.session.publication_context(), context);
++    assert_eq!(p.resource_bundle_bytes(), bundle);
++    assert!(p.session.take_renderer_publication().changes().is_empty());
++    assert!(p.drain_delta_json().unwrap().is_none());
++    click(&mut p, 5.0);
++    let clear = drain(&mut p);
++    assert_eq!(clear.retained.sequence, 2);
++    assert!(clear.retained.objects.is_empty());
++    assert!(clear.selection_overlay.is_none());
++    assert!(!serde_json::to_value(&clear)
++        .unwrap()
++        .as_object()
++        .unwrap()
++        .contains_key("selection_overlay"));
++    assert_eq!(p.session.frame(), &frame);
++    assert_eq!(p.session.publication_context(), context);
++    assert_eq!(p.execution_wake(50_000.0).unwrap().cadence(), "idle");
++}
++
++#[test]
++fn same_selection_out_and_back_and_rejected_configuration_emit_no_delta() {
++    let mut p = player();
++    click(&mut p, 400.0);
++    let selected = drain(&mut p).selection_overlay;
++    click(&mut p, 400.0);
++    assert!(p.drain_delta_json().unwrap().is_none());
++    input(&mut p, "press", 5.0);
++    input(&mut p, "move", 45.0);
++    input(&mut p, "move", 5.0);
++    input(&mut p, "release", 5.0);
++    assert!(p.drain_delta_json().unwrap().is_none());
++    for bad in [-1.0, f32::NAN, f32::INFINITY] {
++        assert!(p.set_pointer_fill_selection(Some(bad)).is_err());
++        assert!(p.drain_delta_json().unwrap().is_none());
++    }
++    assert_eq!(p.last_sent_selection_overlay, selected);
++    p.set_pointer_fill_selection(None).unwrap();
++    assert!(drain(&mut p).selection_overlay.is_none());
++    assert!(p.drain_delta_json().unwrap().is_none());
++}
++
++#[test]
++fn rebind_snapshot_projects_current_session_but_seek_clears_selection() {
++    let mut p = player();
++    click(&mut p, 400.0);
++    let selected = drain(&mut p).selection_overlay;
++    p.rebind_transport(2.0, 8).unwrap();
++    let snapshot: RetainedFamilyExecutionDeltaEnvelope =
++        serde_json::from_str(&p.initial_delta_json().unwrap()).unwrap();
++    assert!(snapshot.retained.snapshot);
++    assert_eq!(snapshot.retained.session, 8);
++    assert_eq!(snapshot.retained.sequence, 0);
++    assert_eq!(snapshot.selection_overlay, selected);
++    let clear: RetainedFamilyExecutionDeltaEnvelope =
++        serde_json::from_str(&p.seek_delta_json(0.0).unwrap().unwrap()).unwrap();
++    assert!(clear.selection_overlay.is_none());
++    assert!(p.session.selected_pointer_target().is_none());
++}
++
++#[test]
++fn invalid_overlay_does_not_acknowledge_or_mutate_the_retained_mirror() {
++    let mut p = player();
++    // Begin a new transport so the mirror's first snapshot is sequence zero.
++    p.rebind_transport(2.0, 8).unwrap();
++    let mut mirror =
++        InstalledRetainedExecutionMirror::from_bundle_bytes(&p.resource_bundle_bytes()).unwrap();
++    let snapshot: RetainedFamilyExecutionDeltaEnvelope =
++        serde_json::from_str(&p.initial_delta_json().unwrap()).unwrap();
++    mirror.apply_family(snapshot).unwrap();
++    let before = mirror.frame().unwrap().clone();
++    click(&mut p, 400.0);
++    let valid = drain(&mut p);
++    let mut invalid = valid.clone();
++    invalid.selection_overlay.as_mut().unwrap().transform.scale.x = 0.0;
++    assert!(mirror.apply_family(invalid).is_err());
++    assert_eq!(mirror.frame().unwrap(), &before);
++    // The same sequence must still be admissible, not dropped as acknowledged.
++    let (outcome, _) = mirror.apply_family(valid).unwrap();
++    assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
++    assert_eq!(mirror.frame().unwrap(), &before);
++}
