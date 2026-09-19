@@ -215,9 +215,8 @@ impl GpuRenderer {
             encoder,
             view,
             stable,
-            clear_color,
             Some(presentations),
-            None,
+            super::FramePassOptions::new(clear_color, None),
         )
     }
 
@@ -236,9 +235,8 @@ impl GpuRenderer {
             encoder,
             view,
             stable,
-            clear_color,
             Some(presentations),
-            Some(query_set),
+            super::FramePassOptions::new(clear_color, Some(query_set)),
         )
     }
 
