@@ -83,6 +83,48 @@ function directWasmPreparation() {
     if (!limited) throw new Error("two-endpoint plot did not retain exact budget rejection");
   }
 
+  // The rectangle constructor must use the same represented arange samples
+  // as plots, including duplicates and a regular sample rounded onto the end.
+  for (const [range, length, end, dx, expected] of [
+    [[1e16, 1e16 + 12, 4], 12, 1e16 + 8, 3, [-2, 2, 6]],
+    [[-1e16, -1e16 + 12, 4], 12, -1e16 + 8, 3, [-2, 2, 6]],
+    [[1, 1 + Number.EPSILON, Number.EPSILON], 4, 1 + Number.EPSILON,
+      Number.EPSILON / 4, [-2, -2, -2, -2]],
+  ]) {
+    const partitionStore = new WasmAuthoringStore();
+    let partitionAxes, partitionFrame, partitionPlan, graph, rectangles;
+    let members = [];
+    try {
+      const options = WasmCoordinateOptions.axes(range, [0, 2, 1], length, 2);
+      options.setTicks(false, 0.1, true);
+      partitionAxes = partitionStore.createCoordinates(options);
+      partitionFrame = partitionAxes.axesFrame();
+      partitionPlan = partitionFrame.plotPlan(range, [], undefined, undefined);
+      graph = partitionStore.createManimGeometry(
+        partitionPlan.functionSamples(partitionPlan.parameters().map(() => 1), false));
+      rectangles = partitionAxes.riemannRectangles(graph,
+        WasmCoordinateOptions.riemann([range[0], end], dx, 0, 1), graph, false);
+      members = Array.from(rectangles.directMobjects());
+      if (members.length !== expected.length) {
+        throw new Error(`Riemann partition lost members: ${members.length} != ${expected.length}`);
+      }
+      for (const [index, member] of members.entries()) {
+        const rectanglePath = member.pathQuery();
+        try {
+          near(Array.from(rectanglePath.start()), [expected[index], 0], "Riemann rectangle start");
+        } finally { rectanglePath.free(); }
+      }
+    } finally {
+      members.forEach(member => member.free());
+      rectangles?.free();
+      graph?.free();
+      partitionPlan?.free();
+      partitionFrame?.free();
+      partitionAxes?.free();
+      partitionStore.free();
+    }
+  }
+
   const split = WasmPlotSamplingPlan.parametric([-1, 1, 0.25], [0], 0.05, undefined);
   if (Array.from(split.parameters()).includes(0)) throw new Error("discontinuity gap was sampled");
   split.free();
@@ -116,6 +158,21 @@ class PlottingQualification(Scene):
             shifted = offset.time_series_plan(((limits[0], limits[0]), (limits[1], limits[1])), run_time=1)
             near(shifted.cursor_points[0], (-3, 0))
             near(timed.cursor_points[0], (-4, 0))
+
+        # Real Python wrappers must publish the same family sizes and physical
+        # rectangle starts as the native/direct-WASM boundary regressions.
+        for limits, length, end, dx, expected in (
+            ((1e16, 1e16 + 12, 4), 12, 1e16 + 8, 3, (-2, 2, 6)),
+            ((-1e16, -1e16 + 12, 4), 12, -1e16 + 8, 3, (-2, 2, 6)),
+            ((1, 1 + 2**-52, 2**-52), 4, 1 + 2**-52, 2**-54, (-2, -2, -2, -2)),
+        ):
+            partition_axes = Axes(limits, [0, 2, 1], x_length=length, y_length=2, include_ticks=False)
+            graph = partition_axes.plot(lambda x: 1, limits, use_smoothing=False)
+            partitions = partition_axes.get_riemann_rectangles(
+                graph, [limits[0], end], dx=dx, width_scale_factor=1)
+            assert len(partitions.submobjects) == len(expected)
+            for rectangle, x in zip(partitions.submobjects, expected):
+                near(rectangle.get_start(), (x, 0))
 
         # Extreme parameter values may still map to ordinary visible geometry.
         # The callback must see both exact endpoints, once each, in that order.
