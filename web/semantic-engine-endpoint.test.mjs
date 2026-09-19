@@ -2154,3 +2154,58 @@ test("seek acknowledgements retain the exact evaluated time", async () => {
     assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
   } finally { endpoint?.stop(); f.close(); }
 });
+
+
+test("callback-stalled pointer controls keep bounded order and occurrence-local motion evidence", async () => {
+  let release;
+  let entered;
+  const callbackStarted = new Promise(resolve => { entered = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  const f = fixture("transferable", async phase => {
+    entered();
+    await barrier;
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  let endpoint;
+  try {
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    const first = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+    f.player.tickCallbackPhaseJson = () => JSON.stringify({ token: { sequence: 1 }, time: 0 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await callbackStarted;
+    const inputs = Array.from({ length: MAX_PENDING_SEMANTIC_CONTROLS }, (_, i) => ({
+      kind: i === 0 ? "press" : i === MAX_PENDING_SEMANTIC_CONTROLS - 1 ? "release" : "move",
+      surface_x: i === 1 ? 700 : 20,
+      surface_y: 40,
+      viewport_width: 800, viewport_height: 400,
+      button: i === 0 || i === MAX_PENDING_SEMANTIC_CONTROLS - 1 ? 0 : null,
+      view_revision: 3,
+      shift: i === 0, control: false, alt: false, meta: false,
+    }));
+    const replies = [];
+    f.control.port2.on("message", message => {
+      if (message.type === "browser_pointer_input") replies.push(message.requestId);
+    });
+    const overflow = nextMatching(f.control.port2, message => message.type === "error");
+    for (let i = 0; i <= inputs.length; i += 1) {
+      f.control.port2.postMessage({
+        channel: "noon.engine", protocolVersion: 1, type: "browser_pointer_input",
+        requestId: i, ...inputs[i % inputs.length],
+      });
+    }
+    const rejection = await overflow;
+    assert.equal(rejection.requestId, inputs.length);
+    assert.match(rejection.message, /control queue is full/);
+    assert.deepEqual(f.stats().nativeInputs, [], "input must not bypass the required callback barrier");
+    assert.deepEqual(replies, []);
+    const drained = nextMatching(f.control.port2, message => message.requestId === inputs.length - 1);
+    release();
+    await drained;
+    assert.equal(f.stats().committedPhases, 1);
+    assert.deepEqual(replies, inputs.map((_, i) => i));
+    assert.deepEqual(f.stats().nativeInputs, inputs.map(value => ({ type: "pointer", value })));
+    assert.equal(f.player.time(), 0, "delivery does not advance authored time");
+  } finally { release(); endpoint?.stop(); f.close(); }
+});
