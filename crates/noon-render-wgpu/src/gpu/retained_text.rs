@@ -3214,6 +3214,17 @@ fn text_upload_needed(last_uploaded_generation: Option<u64>, generation: u64) ->
     last_uploaded_generation != Some(generation)
 }
 
+// Round the final interior edges once. Rounding placement and border separately
+// discards an extra pixel between the display outline and its captured contents.
+fn inset_interior_scissor(bounds: [f32; 4], half_stroke: f32) -> [u32; 4] {
+    let [left, top, right, bottom] = bounds;
+    let x = (left + half_stroke).ceil().max(0.0) as u32;
+    let y = (top + half_stroke).ceil().max(0.0) as u32;
+    let right = (right - half_stroke).floor().max(0.0) as u32;
+    let bottom = (bottom - half_stroke).floor().max(0.0) as u32;
+    [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
+}
+
 impl GpuRenderer {
     pub fn create_retained_text_state(
         &self,
@@ -3265,13 +3276,8 @@ impl GpuRenderer {
             let stroke_pixels = 0.5
                 * (state.display_stroke_width / self.camera.world_size.x * surface.x)
                     .max(state.display_stroke_width / self.camera.world_size.y * surface.y);
-            let border = stroke_pixels.ceil().max(0.0) as u32;
-            let x = left.ceil() as u32 + border;
-            let y = top.ceil() as u32 + border;
-            let right = right.floor() as u32;
-            let bottom = bottom.floor() as u32;
-            let width = right.saturating_sub(x.saturating_add(border));
-            let height = bottom.saturating_sub(y.saturating_add(border));
+            let [x, y, width, height] =
+                inset_interior_scissor([left, top, right, bottom], stroke_pixels);
             if width == 0 || height == 0 {
                 return Err(Inset2DRenderError::DisplayOutsideViewport(state.display));
             }
@@ -3983,6 +3989,19 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inset_border_rounding_preserves_fractional_pixel_coverage() {
+        let interior = super::inset_interior_scissor([723.75, 33.75, 926.25, 236.25], 1.0125);
+        assert_eq!(interior, [725, 35, 200, 200]);
+        // Moving a display by one pixel moves its interior without changing its size.
+        let translated = super::inset_interior_scissor([724.75, 34.75, 927.25, 237.25], 1.0125);
+        assert_eq!(translated, [726, 36, 200, 200]);
+        assert_eq!(
+            super::inset_interior_scissor([0.0, 0.0, 2.0, 2.0], 2.0)[2..],
+            [0, 0]
+        );
+    }
+
     use noon_compile::{CompiledObject, CompiledScene};
     use noon_core::FontResourceId;
     use noon_runtime::{FrameObjectState, SceneInstance};
