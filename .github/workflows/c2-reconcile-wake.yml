@@ -39,16 +39,17 @@ jobs:
           PY
           git add web/semantic-engine-endpoint.test.mjs
           test -z "$(git diff --name-only --diff-filter=U)"
+          git rm .github/workflows/c2-reconcile-wake.yml
           git diff --cached --check
       - name: Verify all combined endpoint and adjacent regressions
         run: |
+          set -o pipefail
           node --test web/semantic-engine-endpoint.test.mjs | tee /tmp/c2-merged-endpoint.log
           node --test web/execution-worker-client.test.mjs web/semantic-execution-routing.test.mjs web/direct-execution-wake-driver.test.mjs | tee /tmp/c2-merged-adjacent.log
       - name: Validate all web preflight checks
         run: NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/c2-merged-preflight.log 2>&1 || { tail -150 /tmp/c2-merged-preflight.log; exit 1; }
       - name: Publish reviewed merged source without temporary tooling
         run: |
-          git rm .github/workflows/c2-reconcile-wake.yml
           git diff --cached --check
           git commit -m 'Reconcile contextual pointer fix with current playback and plotting work'
           git push origin HEAD:refs/heads/work/c2-wake-base-reconcile
