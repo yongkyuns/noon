@@ -3,8 +3,8 @@ mod wasm {
     use noon_core::Vec2;
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
-        Camera2D, GpuRenderer, PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState,
-        UploadWrite,
+        AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
+        PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState, UploadWrite,
     };
     use noon_runtime::FrameChanges;
     use wasm_bindgen::prelude::*;
@@ -56,6 +56,8 @@ mod wasm {
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         text_gpu: RetainedTextGpuState,
+        selection_overlay: Option<AnalyticOverlay>,
+        selection_overlay_gpu: OverlayGpuState,
         camera_center: Vec2,
         camera_height: f32,
         last_draw_calls: usize,
@@ -178,6 +180,8 @@ mod wasm {
                 preparer,
                 renderer,
                 text_gpu,
+                selection_overlay: None,
+                selection_overlay_gpu: OverlayGpuState::default(),
                 camera_center: camera.center,
                 camera_height: camera.height,
                 last_draw_calls: 0,
@@ -217,6 +221,18 @@ mod wasm {
                     .applied_sequence()
                     .is_some_and(|sequence| delta.retained.sequence <= sequence);
 
+            // Stale packets cannot change the current overlay. Validate a fresh
+            // presentation before resource preparation or mirror admission.
+            let overlay = if stale {
+                None
+            } else {
+                delta
+                    .selection_overlay
+                    .as_ref()
+                    .map(crate::SelectionOverlayPresentation::prepare)
+                    .transpose()
+                    .map_err(js_error)?
+            };
             if !stale {
                 delta.validate().map_err(js_error)?;
                 if let Some(bundle) = delta.resource_additions.as_ref() {
@@ -280,6 +296,7 @@ mod wasm {
             let (outcome, changes) = self.mirror.apply_family(delta).map_err(js_error)?;
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
+                    self.selection_overlay = overlay;
                     let camera = self.mirror.camera();
                     if camera.center != self.camera_center || camera.height != self.camera_height {
                         self.camera_center = camera.center;
@@ -458,9 +475,15 @@ mod wasm {
             let transient_upload =
                 self.renderer
                     .upload_transient_presentations(&self.device, &self.queue, &transient);
+            let overlay_upload = self.selection_overlay_gpu.update(
+                &self.device,
+                &self.queue,
+                self.selection_overlay,
+            );
             self.last_bytes_uploaded = upload
                 .bytes_uploaded()
-                .saturating_add(transient_upload.bytes_uploaded);
+                .saturating_add(transient_upload.bytes_uploaded)
+                .saturating_add(overlay_upload.bytes_uploaded);
 
             let view = surface_texture
                 .texture
@@ -470,29 +493,21 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon retained execution render worker frame"),
                 });
-            let draw = if transient.slots.is_empty() {
-                self.renderer
-                    .encode_retained(
-                        &mut encoder,
-                        &view,
-                        &prepared,
-                        &self.text_gpu,
-                        CLEAR_COLOR,
-                        None,
-                    )
-                    .map_err(js_error)?
-            } else {
-                self.renderer
-                    .encode_retained_with_transient_presentations(
-                        &mut encoder,
-                        &view,
-                        &prepared,
-                        &transient,
-                        CLEAR_COLOR,
-                        None,
-                    )
-                    .map_err(js_error)?
-            };
+            let draw = self
+                .renderer
+                .encode_retained_with_transient_presentations_and_overlay(
+                    &mut encoder,
+                    &view,
+                    InteractiveRetainedFrame {
+                        prepared: &prepared,
+                        text: &self.text_gpu,
+                        transient: Some(&transient),
+                        overlay: &self.selection_overlay_gpu,
+                    },
+                    CLEAR_COLOR,
+                    None,
+                )
+                .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);

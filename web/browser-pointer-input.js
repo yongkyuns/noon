@@ -5,8 +5,11 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples,
 }) {
+  if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
+    throw new RangeError("browser pointer sample capacity must be a positive safe integer");
+  }
   let selected = null;
   let view = null;
   const active = () => !signal.aborted && isCurrent();
@@ -39,7 +42,7 @@ export function attachBrowserPointerInput(canvas, {
     view = next;
     return rect;
   };
-  const receive = (type, event) => {
+  const receive = (type, event, receiptRect = null) => {
     if (!active()) return;
     // -1 is the non-pointing-device ID, not a source for pointer gestures.
     if (event.isPrimary !== true || event.pointerId === -1) return;
@@ -61,7 +64,7 @@ export function attachBrowserPointerInput(canvas, {
     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       throw new TypeError("DOM pointer coordinates must be finite");
     }
-    const rect = currentView();
+    const rect = receiptRect ?? currentView();
     if (rect === null) return;
     // View invalidation and pointer replacement retire the previous contact.
     // Never turn a release or an in-progress outside contact into a new press.
@@ -99,13 +102,96 @@ export function attachBrowserPointerInput(canvas, {
     selected.buttons = event.buttons;
     // Touch IDs may be recycled; the next contact must receive a new source.
     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
+    return true;
+  };
+  const collect = (type, event) => {
+    if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
+    if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
+    // A held contact without an admitted press cannot resume after cancellation
+    // or enter from outside. Keep ordinary parent validation/ignore semantics;
+    // do not interpret its coalesced button mask as a new press transition.
+    if (type === "pointermove" && event.buttons !== 0 &&
+        (selected === null || selected.id !== event.pointerId)) {
+      receive(type, event);
+      return;
+    }
+    if (type !== "pointermove" || typeof event.getCoalescedEvents !== "function") {
+      receive(type, event);
+      return;
+    }
+    const initialButtons = selected?.id === event.pointerId ? selected.buttons : 0;
+    const samples = coalescedSamples(event, initialButtons, maxSamples);
+    if (samples.length === 0) {
+      receive(type, event);
+      return;
+    }
+    // Coalesced events replace their summary; appending it would duplicate an
+    // occurrence (and may reintroduce a browser-adjusted, non-sample position).
+    // This is receipt-time mapping, not historical displayed-frame association.
+    const rect = currentView();
+    if (rect === null || (initialButtons !== 0 && selected === null)) return;
+    for (const sample of samples) {
+      if (!active() || !receive(type, sample, rect)) break;
+    }
   };
   const guard = operation => event => {
     try { operation(event); } catch (error) { onError(error); }
   };
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
-    canvas.addEventListener(type, guard(event => receive(type, event)), { signal });
+    canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
   window.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   return { invalidateView };
+}
+
+// Validate and snapshot the complete bounded packet before any delivery. There
+// is no retained queue or frontend gesture policy here. Each sample still uses
+// the existing session-ordered producer reservation and acknowledgement path.
+function coalescedSamples(event, initialButtons, capacity) {
+  const events = event.getCoalescedEvents();
+  if (!Array.isArray(events)) throw new TypeError("invalid DOM coalesced sample list");
+  const count = events.length;
+  if (count > capacity) throw new RangeError("DOM coalesced sample capacity exceeded");
+  if (count === 0) return [];
+  if (!Number.isInteger(event.pointerId) || event.pointerId < -2147483648 ||
+      event.pointerId > 2147483647) throw new TypeError("invalid DOM pointer identity");
+  if (!Number.isFinite(event.timeStamp) || event.timeStamp < 0) {
+    throw new TypeError("invalid DOM coalesced parent timestamp");
+  }
+  const samples = [];
+  let previousTime = 0;
+  let buttons = initialButtons;
+  for (let i = 0; i < count; i += 1) {
+    const value = events[i];
+    if (!value || value.pointerId !== event.pointerId || value.pointerType !== event.pointerType ||
+        value.isPrimary !== event.isPrimary) throw new TypeError("foreign DOM coalesced pointer sample");
+    const { clientX, clientY, timeStamp, buttons: nextButtons } = value;
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      throw new TypeError("DOM coalesced pointer coordinates must be finite");
+    }
+    if (!Number.isFinite(timeStamp) || timeStamp < previousTime || timeStamp > event.timeStamp) {
+      throw new TypeError("DOM coalesced timestamps must be ordered within their parent");
+    }
+    if (!Number.isInteger(nextButtons) || nextButtons < 0 || nextButtons > 63) {
+      throw new TypeError("unsupported DOM coalesced pointer button mask");
+    }
+    // A UA may copy its parent button label into multiple samples. Only the
+    // mask transition is an edge; equal masks must preserve motion, not cancel
+    // as duplicate presses. Multiple simultaneous changes remain ambiguous.
+    const changed = buttons ^ nextButtons;
+    const button = changed === 0 ? -1 : BUTTON_BITS.indexOf(changed);
+    if (changed !== 0 && (button === -1 || value.button !== button)) {
+      throw new TypeError("ambiguous DOM coalesced button transition");
+    }
+    samples.push({
+      pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary,
+      clientX, clientY, button, buttons: nextButtons,
+      shiftKey: value.shiftKey === true, ctrlKey: value.ctrlKey === true,
+      altKey: value.altKey === true, metaKey: value.metaKey === true,
+    });
+    buttons = nextButtons;
+    previousTime = timeStamp;
+  }
+  if (buttons !== event.buttons) throw new TypeError("DOM coalesced final button state differs from parent");
+  return samples;
 }

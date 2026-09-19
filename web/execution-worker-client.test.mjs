@@ -569,3 +569,47 @@ test("uncloneable native input releases its reservation without allocating a tra
     assert.ok((await accepted).value);
   } finally { client.terminate(); }
 });
+
+test("selection policy uses the bounded input lane and validates before reservation", async () => {
+  const { client, engine } = await startClient();
+  const pending = [];
+  try {
+    for (const invalid of [undefined, -1, NaN, Infinity, "4", {}, true]) {
+      await assert.rejects(client.setPointerFillSelection(invalid), /selection tolerance/);
+    }
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    assert.equal(client.diagnostics.engine.nextRequestId, 0);
+    pending.push(observeResult(client.setPointerFillSelection(4)));
+    for (let i = 1; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+      pending.push(observeResult(nativeInputCall(client, i)));
+    }
+    await assert.rejects(client.setPointerFillSelection(null), /native input.*full/i);
+    const configuration = await waitForRequest(engine, "pointer_fill_selection");
+    assert.equal(configuration.maxMovement, 4);
+    assert.equal(client.diagnostics.engine.pendingRequests, MAX_IN_FLIGHT_NATIVE_INPUTS);
+    engine.emitMessage(engineMessage(configuration.type, { requestId: configuration.requestId, time: 0 }));
+    assert.equal((await pending[0]).value.time, 0);
+    pending.push(observeResult(client.setPointerFillSelection(null)));
+    await new Promise(resolve => setImmediate(resolve));
+    const clear = engine.messages.filter(m => m.type === "pointer_fill_selection").at(-1);
+    assert.equal(clear.maxMovement, null);
+    engine.emitMessage(engineMessage(clear.type, { requestId: clear.requestId, time: 0 }));
+    assert.equal((await pending.at(-1)).value.time, 0);
+  } finally { client.terminate(); await Promise.all(pending); }
+});
+
+test("selection configuration is not replayed through a replacement scene", async () => {
+  const { client, engine: oldEngine, render } = await startClient();
+  const configuration = observeResult(client.setPointerFillSelection(4));
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.switchToSemanticExecution("replacement", replacement);
+  try {
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    replyRender(render, rebuild, "engine_rebuilt");
+    await switching;
+    assert.match((await configuration).error?.message ?? "", /retired|transition/i);
+    const currentEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(oldEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
+    assert.equal(currentEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
+  } finally { client.terminate(); await configuration; }
+});

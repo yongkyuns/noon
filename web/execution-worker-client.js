@@ -558,6 +558,16 @@ export class ExecutionWorkerClient {
     return this.#requestNativeInput("native_state_input", { source, value });
   }
 
+  // Session/editor policy, ordered with pointer input and never auto-replayed.
+  async setPointerFillSelection(maxMovement) {
+    this.#requireStarted();
+    if (maxMovement !== null &&
+        (typeof maxMovement !== "number" || !Number.isFinite(maxMovement) || maxMovement < 0)) {
+      throw new TypeError("selection tolerance must be a finite nonnegative number or null");
+    }
+    return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
+  }
+
   // Forward one occurrence-local browser pointer record. Surface coordinates
   // remain CSS pixels; Rust converts them against the current camera/publication.
   async submitBrowserPointerInput(input) {

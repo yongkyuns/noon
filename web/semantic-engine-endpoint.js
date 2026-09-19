@@ -448,7 +448,14 @@ export async function attachSemanticEngine(
   }
 
   function applyNativeInput(message) {
-    if (message.type === "native_state_input") {
+    if (message.type === "pointer_fill_selection") {
+      if (message.maxMovement !== null &&
+          (typeof message.maxMovement !== "number" ||
+           !Number.isFinite(message.maxMovement) || message.maxMovement < 0)) {
+        throw new TypeError("selection tolerance must be a finite nonnegative number or null");
+      }
+      player.setPointerFillSelection(message.maxMovement);
+    } else if (message.type === "native_state_input") {
       player.setNativeStateInputJson(JSON.stringify({
         source: message.source,
         value: message.value,
@@ -481,7 +488,8 @@ export async function attachSemanticEngine(
       while (controls.length > 0 &&
              (controls[0].type === "native_state_input" ||
               controls[0].type === "native_event" ||
-              controls[0].type === "browser_pointer_input")) {
+              controls[0].type === "browser_pointer_input" ||
+              controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
         try {
           applyNativeInput(message);
@@ -717,6 +725,7 @@ export async function attachSemanticEngine(
           case "native_state_input":
           case "native_event":
           case "browser_pointer_input":
+          case "pointer_fill_selection":
             applyNativeInput(message);
             send(player.drainDeltaJson());
             // Live driving pauses the ordinary playback clock. Native input
@@ -858,7 +867,7 @@ export async function attachSemanticEngine(
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event", "browser_pointer_input",
+          "native_state_input", "native_event", "browser_pointer_input", "pointer_fill_selection",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -890,7 +899,8 @@ export async function attachSemanticEngine(
         if (player === null &&
             (message.type === "native_state_input" ||
              message.type === "native_event" ||
-             message.type === "browser_pointer_input")) {
+             message.type === "browser_pointer_input" ||
+             message.type === "pointer_fill_selection")) {
           throw new Error("native input requires an active Python source continuation segment");
         }
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&

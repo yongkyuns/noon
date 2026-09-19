@@ -708,3 +708,32 @@ test("clamped zero-to-one resize stays idle and later real resizes still present
   assert.equal(vm.runInContext("needsPresent", context), false);
   assert.equal(vm.runInContext("scheduledFrame", context), null);
 });
+
+test("selection-only publications retry presentation, gate clear, and settle without an engine tick", async () => {
+  const harness = await createManagedWakeHarness([true, false, true, true]);
+  const applied = [];
+  // GPU results are deliberately stubbed: this proves production controller
+  // ordering/acknowledgement, not the shape or pixels drawn by Rust/WASM.
+  harness.createdRenderer.applyDeltaJson = json => { applied.push(JSON.parse(json)); return true; };
+  const selected = { channel: "noon.execution.retained", protocol_version: 5,
+    session: 12, sequence: 4, time: 0, snapshot: false, objects: [],
+    selection_overlay: { geometry: { kind: "circle", radius: 1 },
+      transform: { translation: {x:0,y:0}, scale: {x:1,y:1}, rotation: 0 } } };
+  const cleared = { ...selected, sequence: 5 };
+  delete cleared.selection_overlay;
+  harness.context.selectedJson = JSON.stringify(selected);
+  harness.context.clearedJson = JSON.stringify(cleared);
+  assert.equal(vm.runInContext('consumeDelta(selectedJson, {session:12, sequence:4});', harness.context), true);
+  assert.equal(harness.nextPort.messages.filter(m => m.type === "execution_presented").length, 0);
+  assert.equal(vm.runInContext('consumeDelta(clearedJson, {session:12, sequence:5});', harness.context), false);
+  assert.deepEqual(applied, [selected]);
+  assert.equal(harness.animationFrames.length, 1);
+  harness.animationFrames.shift()(10);
+  assert.deepEqual(harness.nextPort.messages.filter(m => m.type === "execution_presented").map(m => m.sequence), [4]);
+  assert.equal(vm.runInContext('consumeDelta(clearedJson, {session:12, sequence:5});', harness.context), true);
+  assert.deepEqual(applied, [selected, cleared]);
+  assert.deepEqual(harness.nextPort.messages.filter(m => m.type === "execution_presented").map(m => m.sequence), [4, 5]);
+  assert.equal(harness.nextPort.messages.filter(m => m.type === "tick").length, 0);
+  assert.equal(harness.animationFrames.length, 0);
+  assert.equal(harness.timers.size, 0);
+});

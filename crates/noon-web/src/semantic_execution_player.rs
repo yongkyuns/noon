@@ -117,6 +117,9 @@ pub struct SemanticExecutionPlayer {
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
     snapshot_sent: bool,
+    /// Last emitted presentation only. The session remains selection authority;
+    /// renderer acknowledgement and retry belong to the existing transport.
+    last_sent_selection_overlay: Option<crate::SelectionOverlayPresentation>,
     /// Exact phase metadata needed only to re-anchor presentation after the
     /// session atomically commits its own pending callback phase. The session
     /// remains the sole owner of callback progression and termination.
@@ -289,6 +292,7 @@ impl SemanticExecutionPlayer {
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
@@ -328,6 +332,7 @@ impl SemanticExecutionPlayer {
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
@@ -2213,9 +2218,21 @@ impl SemanticExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        let overlay = self
+            .session
+            .pointer_selection_highlight()
+            .as_ref()
+            .map(crate::SelectionOverlayPresentation::from_highlight)
+            .transpose()
+            .map_err(|error| error.to_string())?;
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let publication = self.session.take_renderer_publication();
-        let changes = publication.changes().clone();
+        let mut changes = publication.changes().clone();
+        if changes.is_empty() && overlay != self.last_sent_selection_overlay {
+            // Presentation-only transport work, not authored/runtime dirtiness.
+            // Reuse the existing sequence and backpressure; never invent a row.
+            changes = noon_runtime::FrameChanges::presentation_redraw();
+        }
         let frame = publication.frame();
         let planned = publication.planned_family_frame();
         let plans = publication.family_animation_plans();
@@ -2304,6 +2321,8 @@ impl SemanticExecutionPlayer {
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
+        delta.selection_overlay = overlay;
+        self.last_sent_selection_overlay = overlay;
         Ok(Some(delta))
     }
 
@@ -2939,6 +2958,18 @@ impl SemanticExecutionPlayer {
         let input: NativeStateInputWire = serde_json::from_str(json)
             .map_err(|error| format!("invalid native state input JSON: {error}"))?;
         self.set_native_state_input(input.source, input.value.into())
+    }
+
+    /// Configure session/editor fill selection, never an authored interaction binding.
+    /// Configuration is ordered with native input and is not replayed into a new scene.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
+    pub fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), String> {
+        match max_movement {
+            Some(value) => self.session.enable_pointer_fill_selection(value),
+            None => self.session.disable_pointer_fill_selection(),
+        }
+        .map_err(|error| error.to_string())
     }
 
     /// Decode one contextual browser pointer occurrence at the genuine worker

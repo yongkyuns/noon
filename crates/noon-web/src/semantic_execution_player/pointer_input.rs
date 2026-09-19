@@ -269,3 +269,6 @@ impl SemanticExecutionPlayer {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod selection_tests;

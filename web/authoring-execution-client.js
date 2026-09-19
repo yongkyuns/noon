@@ -1,4 +1,4 @@
-import { ExecutionWorkerClient } from "./execution-worker-client.js";
+import { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
 import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
@@ -279,6 +279,10 @@ export class AuthoringExecutionClient {
     return this.#withInputPlayer((player) => player.setNativeStateInput(source, value));
   }
 
+  async setPointerFillSelection(maxMovement) {
+    return this.#withInputPlayer((player) => player.setPointerFillSelection(maxMovement));
+  }
+
   async emitNativeEvent(source) {
     return this.#withInputPlayer((player) => player.emitNativeEvent(source));
   }
@@ -523,6 +527,7 @@ export class AuthoringExecutionClient {
       viewRevision: () => this.#pointerViewRevision,
       advanceView: () => this.#advancePointerView(),
       onError: error => { void fault(error); },
+      maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
     });
   }
 

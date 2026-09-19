@@ -83,6 +83,7 @@ mod retained_resource_mutation_transport;
 mod retained_resource_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
+mod selection_overlay_transport;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;
@@ -149,6 +150,7 @@ pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;
+pub use selection_overlay_transport::{SelectionOverlayGeometry, SelectionOverlayPresentation};
 pub use semantic_execution_player::*;
 #[cfg(target_arch = "wasm32")]
 pub use text_colors::*;
