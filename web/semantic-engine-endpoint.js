@@ -697,7 +697,11 @@ export async function attachSemanticEngine(
           case "browser_pointer_input":
             applyNativeInput(message);
             send(player.drainDeltaJson());
+            // Live driving pauses the ordinary playback clock. Native input
+            // must retain the active segment's Rust-derived wake, including
+            // pure-wait deadlines, rather than accidentally publishing idle.
             if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
+            else if (continuationActive) observeContinuationWake(performance.now());
             else observeExecutionWake(performance.now());
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
