@@ -9,6 +9,8 @@ pub use input::{
 };
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
+mod selection;
+pub use selection::{PointerSelectionClick, PointerSelectionHighlight};
 mod publication;
 mod replay;
 mod signal_timeline;
@@ -619,6 +621,7 @@ pub struct ExecutionSession {
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
+    pointer_selection: selection::PointerSelectionState,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
     next_callback_sequence: Option<u64>,
@@ -656,6 +659,7 @@ impl Clone for ExecutionSession {
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
+            pointer_selection: self.pointer_selection.fresh(),
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),
@@ -826,6 +830,7 @@ impl ExecutionSession {
             next_activation_track_id,
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
+            pointer_selection: selection::PointerSelectionState::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
             next_callback_sequence: Some(0),
@@ -3605,15 +3610,19 @@ impl ExecutionSession {
         time: f64,
         mode: ExecutionEvaluationMode,
     ) -> Result<&FrameState, EvaluationError> {
+        let current = self.runtime.frame().time;
+        let requires_seek = mode.requires_seek(current, time);
         if self.signal_timeline.is_empty() {
-            return match mode {
+            match mode {
                 ExecutionEvaluationMode::Evaluate => self.runtime.evaluate(time),
                 ExecutionEvaluationMode::Seek => self.runtime.seek(time),
                 ExecutionEvaluationMode::Advance => self.runtime.advance_to(time),
-            };
+            }?;
+            if requires_seek {
+                self.pointer_selection.reset();
+            }
+            return Ok(self.runtime.frame());
         }
-        let current = self.runtime.frame().time;
-        let requires_seek = mode.requires_seek(current, time);
         if !requires_seek && self.signal_timeline.is_coherent_at(current, time) {
             return Ok(self.runtime.frame());
         }
@@ -3630,6 +3639,9 @@ impl ExecutionSession {
                 .advance_to_with_reactive_inputs(time, preview.inputs())?;
         }
         self.signal_timeline.commit(preview);
+        if requires_seek {
+            self.pointer_selection.reset();
+        }
         Ok(self.runtime.frame())
     }
 

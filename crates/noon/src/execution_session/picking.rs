@@ -36,7 +36,7 @@ pub enum PointerFillOutcome {
 
 /// Immutable observation, not input acceptance or authority for a later action.
 /// Revalidate the input token at the session boundary before publishing actions.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerFillQuery {
     input: NativePointerInput,
     publication: PublicationContext,
@@ -148,7 +148,7 @@ impl ExecutionSession {
     }
 }
 
-fn analytic_fill_contains(
+pub(super) fn analytic_fill_contains(
     frame: &FrameState,
     index: usize,
     point: Vec2,
