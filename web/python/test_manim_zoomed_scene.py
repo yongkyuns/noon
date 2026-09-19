@@ -52,6 +52,7 @@ class ZoomedSceneFacadeTests(unittest.TestCase):
             patch.object(_manim_scene, "_bind_camera_frame", bind_camera),
             patch.object(_manim_scene, "_bind_zoomed_view", bind_zoom),
             patch.object(_manim_scene, "_activate_zoomed_view", activate),
+            patch.object(_manim_scene, "_zoomed_view_factor", lambda scene, actual: actual.zoomFactor()),
         ):
             scene = zoomed.ZoomedScene(
                 zoomed_display_height=2.0,

@@ -8,7 +8,6 @@ import noon as _base
 import _manim_camera as _camera
 import _manim_compat as _compat
 import _manim_semantic_handles as _semantic
-from _noon_errors import engine_call
 
 
 class _ZoomedCameraFrame(_compat.Rectangle):
@@ -155,12 +154,9 @@ class ZoomedScene(_camera.MovingCameraScene):
     def get_zoom_factor(self) -> float:
         if self._zoomed_view_handle is None:
             raise RuntimeError("ZoomedScene.setup() must run before querying zoom")
-        return float(
-            engine_call(
-                self._zoomed_view_handle.zoomFactor,
-                operation="ZoomedScene.get_zoom_factor",
-            )
-        )
+        import _manim_scene as _scene
+        return _scene._zoomed_view_factor(self, self._zoomed_view_handle)
+
 
 
 __all__ = ["ZoomedScene"]

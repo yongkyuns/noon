@@ -505,6 +505,10 @@ def _bind_zoomed_view(
     return view
 
 
+def _zoomed_view_factor(scene: _base.Scene, view: object) -> float:
+    return float(engine_call(_context(scene).zoomFactor, view, operation="ZoomedScene.get_zoom_factor"))
+
+
 def _activate_zoomed_view(scene: _base.Scene, view: object, *wrappers: _base.Mobject) -> None:
     """Publish the relation and foreground membership through one Rust transaction."""
     engine_call(_context(scene).activateZooming, view, operation="ZoomedScene.activate_zooming")

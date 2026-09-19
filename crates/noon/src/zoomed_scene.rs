@@ -137,14 +137,26 @@ impl ZoomedView {
 
     /// Current authored camera-to-display height ratio.
     pub fn zoom_factor(&self) -> Result<f64, AuthoringError> {
-        let display_height = self.display.height()?;
-        if !display_height.is_finite() || display_height <= 0.0 {
-            return Err(AuthoringError::NonPositiveNumber {
-                name: "zoomed_display_height".into(),
-                value: display_height,
-            });
-        }
-        Ok(self.camera_frame.height()? / display_height)
+        zoom_ratio(self.camera_frame.height()?, self.display.height()?)
+    }
+}
+
+fn zoom_ratio(camera_height: f64, display_height: f64) -> Result<f64, AuthoringError> {
+    if !display_height.is_finite() || display_height <= 0.0 {
+        return Err(AuthoringError::NonPositiveNumber {
+            name: "zoomed_display_height".into(),
+            value: display_height,
+        });
+    }
+    Ok(camera_height / display_height)
+}
+
+impl crate::LiveSession<'_> {
+    /// Read both ordinary inset handles from the same effective publication.
+    pub fn zoom_factor(&self, view: &ZoomedView) -> Result<f64, crate::LiveSessionError> {
+        let frame = self.effective_layout(view.camera_frame())?;
+        let display = self.effective_layout(view.display())?;
+        zoom_ratio(frame.height, display.height).map_err(Into::into)
     }
 }
 
@@ -321,11 +333,14 @@ mod tests {
             .live(&mut session)
             .advance_segment_to(segment, 0.5)
             .unwrap();
+        assert!((scene.live(&mut session).zoom_factor(&view).unwrap() - 0.225).abs() < 1.0e-6);
+        assert!((view.zoom_factor().unwrap() - 0.15).abs() < 1.0e-6);
         let midpoint = session.inset_2d_views().unwrap()[0];
         assert_eq!(midpoint.camera.center, Vec2::new(1.0, -0.5));
         assert!((midpoint.zoom_factor() - 0.225).abs() < 1.0e-6);
 
         session.seek(0.25).unwrap();
+        assert!((scene.live(&mut session).zoom_factor(&view).unwrap() - 0.1875).abs() < 1.0e-6);
         let rewind = session.inset_2d_views().unwrap()[0];
         assert_eq!(rewind.camera.center, Vec2::new(0.5, -0.25));
         assert!((rewind.zoom_factor() - 0.1875).abs() < 1.0e-6);

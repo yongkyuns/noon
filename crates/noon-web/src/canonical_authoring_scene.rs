@@ -337,6 +337,23 @@ impl CanonicalAuthoringScene {
         Ok(view)
     }
 
+    /// Query the current inset ratio through the existing cold/live scene authority.
+    pub fn zoom_factor(&mut self, view: &noon::ZoomedView) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(
+            view.display().integration_store(),
+            self.scene.integration_store(),
+        ) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        #[cfg(any(target_arch = "wasm32", test))]
+        if !matches!(self.player_ownership, PlayerOwnership::Unstarted) {
+            return self
+                .active_live_player()?
+                .with_live_session(|live| live.zoom_factor(view));
+        }
+        view.zoom_factor().map_err(Into::into)
+    }
+
     /// Activate an existing inset through the current cold/live transaction authority.
     pub fn activate_zooming(&mut self, view: &noon::ZoomedView) -> Result<(), AuthoringFailure> {
         let transaction = self
@@ -5118,6 +5135,14 @@ mod wasm {
                 )
                 .map(|view| WasmAuthoringZoomedViewHandle { view })
                 .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner.zoom_factor(&view.view).map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = activateZooming)]
