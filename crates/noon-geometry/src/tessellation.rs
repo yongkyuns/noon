@@ -94,7 +94,7 @@ impl TessellatedPath {
         let right = self.reveal_points[upper];
         let span = right.progress - left.progress;
         if span <= f32::EPSILON {
-            return Some(right.position);
+            return Some(position(right));
         }
         let t = ((reveal - left.progress) / span).clamp(0.0, 1.0);
         let left = position(left);
@@ -1871,6 +1871,30 @@ mod tests {
             .reveal_head_position_at_morph(0.5, 0.5)
             .expect("morphed reveal head");
         assert!((head - Vec2::new(1.0, 1.0)).length() < 1.0e-5);
+    }
+
+    #[test]
+    fn degenerate_reveal_span_still_uses_the_morphed_endpoint() {
+        let mesh = TessellatedPath {
+            reveal_points: vec![
+                RevealPoint {
+                    progress: 0.0,
+                    position: Vec2::ZERO,
+                    target_position: Vec2::ZERO,
+                },
+                RevealPoint {
+                    progress: f32::EPSILON * 0.5,
+                    position: Vec2::new(1.0, 2.0),
+                    target_position: Vec2::new(5.0, 6.0),
+                },
+            ],
+            ..TessellatedPath::default()
+        };
+
+        assert_eq!(
+            mesh.reveal_head_position_at_morph(f32::EPSILON * 0.25, 0.25),
+            Some(Vec2::new(2.0, 3.0))
+        );
     }
 
     #[test]
