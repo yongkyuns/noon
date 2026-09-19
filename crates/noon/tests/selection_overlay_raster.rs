@@ -60,7 +60,7 @@ fn retain(name: &str, pixels: &[u8]) {
         let path = std::path::Path::new(&dir).join(format!("{name}.ppm"));
         let mut file = std::fs::File::create(path).unwrap();
         write!(file, "P6\n{SIZE} {SIZE}\n255\n").unwrap();
-        for rgba in pixels.chunks_exact(4) {
+        for rgba in pixels.as_chunks::<4>().0 {
             file.write_all(&rgba[..3]).unwrap();
         }
     }
@@ -123,11 +123,9 @@ fn paused_click_overlay_changes_only_exact_fill_pixels_and_never_exports() {
         );
         let (sin, cos) = highlight.transform.rotation.sin_cos();
         let mut changed = 0;
-        for (i, (a, b)) in original
-            .chunks_exact(4)
-            .zip(pixels.chunks_exact(4))
-            .enumerate()
-        {
+        let original_pixels = original.as_chunks::<4>().0;
+        let selected_pixels = pixels.as_chunks::<4>().0;
+        for (i, (a, b)) in original_pixels.iter().zip(selected_pixels).enumerate() {
             if a == b {
                 continue;
             }
