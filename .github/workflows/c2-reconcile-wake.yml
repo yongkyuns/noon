@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 80
-      - name: Merge pinned current master without dropping either side
+      - name: Merge pinned master and preserve both independent test additions
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -22,16 +22,46 @@ jobs:
           git merge --no-commit --no-ff b7258363817b0c4d31f4becf8a5cc17b6605c139
           result=$?
           set -e
-          test "$result" -le 1
-          git diff --name-only --diff-filter=U > /tmp/c2-conflicts.txt
-          git diff --cc > /tmp/c2-conflict-diff.txt
-          cat /tmp/c2-conflicts.txt /tmp/c2-conflict-diff.txt
-          tar --exclude=.git -czf /tmp/c2-merged-worktree.tar.gz .
+          test "$result" = 1
+          test "$(git diff --name-only --diff-filter=U)" = web/semantic-engine-endpoint.test.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('web/semantic-engine-endpoint.test.mjs')
+          text = p.read_text()
+          prefix, start, rest = text.partition('<<<<<<< HEAD\n')
+          ours, middle, rest = rest.partition('=======\n')
+          theirs, end, tail = rest.partition('>>>>>>> b7258363817b0c4d31f4becf8a5cc17b6605c139\n')
+          assert start and middle and end and text.count('<<<<<<<') == 1
+          assert tail == '  } finally { endpoint?.stop(); f.close(); }\n});\n'
+          assert 'native input preserves active continuation wake' in ours
+          assert 'seek acknowledgements retain the exact evaluated time' in theirs
+          p.write_text(prefix + ours + tail + '\n' + theirs + tail)
+          PY
+          git add web/semantic-engine-endpoint.test.mjs
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+      - name: Verify all combined endpoint and adjacent regressions
+        run: |
+          node --test web/semantic-engine-endpoint.test.mjs | tee /tmp/c2-merged-endpoint.log
+          node --test web/execution-worker-client.test.mjs web/semantic-execution-routing.test.mjs web/direct-execution-wake-driver.test.mjs | tee /tmp/c2-merged-adjacent.log
+      - name: Validate all web preflight checks
+        run: NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/c2-merged-preflight.log 2>&1 || { tail -150 /tmp/c2-merged-preflight.log; exit 1; }
+      - name: Publish reviewed merged source without temporary tooling
+        run: |
+          git rm .github/workflows/c2-reconcile-wake.yml
+          git diff --cached --check
+          git commit -m 'Reconcile contextual pointer fix with current playback and plotting work'
+          git push origin HEAD:refs/heads/work/c2-wake-base-reconcile
+          git archive --format=tar.gz -o /tmp/c2-reconciled-source.tar.gz HEAD
+          git rev-parse HEAD HEAD^{tree} > /tmp/c2-reconciled-identity.txt
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: c2-reconciliation-inspection
+          name: c2-reconciliation-proof
           path: |
-            /tmp/c2-conflicts.txt
-            /tmp/c2-conflict-diff.txt
-            /tmp/c2-merged-worktree.tar.gz
+            /tmp/c2-merged-endpoint.log
+            /tmp/c2-merged-adjacent.log
+            /tmp/c2-merged-preflight.log
+            /tmp/c2-reconciled-source.tar.gz
+            /tmp/c2-reconciled-identity.txt
           retention-days: 7
