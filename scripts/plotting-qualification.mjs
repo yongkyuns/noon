@@ -12,7 +12,7 @@ import { browserArgs } from "./manim-raster-support.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "plotting-artifacts");
-const source = await readFile(path.join(root, "web/python/examples/coordinate_plotting.py"), "utf8");
+const source = await readFile(path.join(root, "web/python/examples/coordinate_plotting_static.py"), "utf8");
 const sourceHash = createHash("sha256").update(source).digest("hex");
 const server = await serveRepository(root, 4199);
 await mkdir(output, { recursive: true });
