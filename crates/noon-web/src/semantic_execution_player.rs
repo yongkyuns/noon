@@ -652,6 +652,7 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_path_family(
         &mut self,
         paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,

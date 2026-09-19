@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 23);
+assert.equal(gallery.examples.length, 24);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -37,6 +37,7 @@ assert.deepEqual(
     "noon-coordinate-plotting",
     "noon-number-plane",
     "noon-implicit-plotting",
+    "noon-area-helpers",
     "noon-raster-image",
     "noon-markup-text",
     "noon-text-range-colors",
@@ -242,5 +243,16 @@ assert.equal(implicitEntry.parity_status, "candidate");
 const implicitSource = await readFile(new URL(`./${implicitEntry.path}`, import.meta.url), "utf8");
 assert.match(implicitSource, /plot_implicit_curve\(/);
 assert.match(implicitSource, /min_depth=4, max_quads=600/);
+
+const areaEntry = readyEntries.find((entry) => entry.id === "noon-area-helpers");
+assert.ok(areaEntry, "area helpers must be a ready compatibility example");
+assert.equal(areaEntry.parity_status, "candidate");
+assert.equal(areaEntry.parity_fixture, "area-helpers");
+assert.equal(areaEntry.category, "manim-compatible/plotting");
+const areaSource = await readFile(new URL(`./${areaEntry.path}`, import.meta.url), "utf8");
+assert.match(areaSource, /Axes\(/, "area gallery example must construct Axes");
+assert.match(areaSource, /\.get_area\(/, "area gallery example must construct a shaded area");
+assert.match(areaSource, /\.get_riemann_rectangles\(/, "area gallery example must construct Riemann rectangles");
+assert.match(areaSource, /input_sample_type="center"/, "area gallery example must exercise midpoint sampling");
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");
