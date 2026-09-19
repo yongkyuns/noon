@@ -1,0 +1,91 @@
+diff --git a/crates/noon-native/src/lib.rs b/crates/noon-native/src/lib.rs
+--- a/crates/noon-native/src/lib.rs
++++ b/crates/noon-native/src/lib.rs
+@@ -547,7 +547,7 @@
+             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                 label: Some("Noon native frame"),
+             });
+-        let _draw = gpu.renderer.encode_interactive_retained(
++        let _draw = gpu.renderer.encode_retained_with_transient_presentations_and_overlay(
+             &mut encoder, &view,
+             InteractiveRetainedFrame {
+                 prepared: &prepared, text: &gpu.text_state,
+diff --git a/crates/noon/tests/raster_support/mod.rs b/crates/noon/tests/raster_support/mod.rs
+--- a/crates/noon/tests/raster_support/mod.rs
++++ b/crates/noon/tests/raster_support/mod.rs
+@@ -121,7 +121,7 @@
+             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text).bytes_uploaded();
+         let mut encoder = self.device.create_command_encoder(&Default::default());
+         if interactive {
+-            self.renderer.encode_interactive_retained(
++            self.renderer.encode_retained_with_transient_presentations_and_overlay(
+                 &mut encoder, &self.target.create_view(&Default::default()),
+                 noon_render_wgpu::InteractiveRetainedFrame {
+                     prepared: &prepared, text: &self.text, transient: None, overlay: &self.overlay,
+diff --git a/crates/noon-render-wgpu/src/gpu/retained_text.rs b/crates/noon-render-wgpu/src/gpu/retained_text.rs
+--- a/crates/noon-render-wgpu/src/gpu/retained_text.rs
++++ b/crates/noon-render-wgpu/src/gpu/retained_text.rs
+@@ -3363,7 +3363,7 @@
+     /// Explicit interactive presentation. Overlay draws contribute to geometry
+     /// draw totals, but never to authored membership, stable slots or painter order.
+     /// The optional GPU timestamps still measure the scene pass, not the overlay.
+-    pub fn encode_interactive_retained(
++    pub fn encode_retained_with_transient_presentations_and_overlay(
+         &self,
+         encoder: &mut wgpu::CommandEncoder,
+         view: &wgpu::TextureView,
+diff --git a/scripts/transient-presentation-ratchet.sh b/scripts/transient-presentation-ratchet.sh
+--- a/scripts/transient-presentation-ratchet.sh
++++ b/scripts/transient-presentation-ratchet.sh
+@@ -6,6 +6,7 @@
+ 
+ python3 -I -S - <<'PY'
+ from pathlib import Path
++import re
+ 
+ 
+ def read(path: str) -> str:
+@@ -58,9 +59,18 @@
+ 
+ for path in ("crates/noon-native/src/lib.rs", "crates/noon-web/src/execution_canvas.rs"):
+     host = read(path)
+-    require(host, ".encode_retained_with_transient_presentations(", f"{path} bypasses generic transient renderer entry point")
++    # The explicit overlay variant composes the same transient scene pass before
++    # presentation; neither host may couple to feature-specific derived rendering.
++    if not re.search(r"\.encode_retained_with_transient_presentations(?:_and_overlay)?\(", host):
++        raise SystemExit(f"transient presentation ratchet: {path} bypasses generic transient renderer entry point")
+     if ".encode_retained_with_derived(" in host:
+         raise SystemExit(f"transient presentation ratchet: {path} regained derived-display host coupling")
++
++overlay_start = retained.index("pub fn encode_retained_with_transient_presentations_and_overlay(")
++overlay_end = retained.index("pub fn encode_retained(", overlay_start)
++overlay_entry = retained[overlay_start:overlay_end]
++require(overlay_entry, "self.encode_retained_derived_inner(", "overlay entry bypasses shared transient scene encoding")
++require(overlay_entry, "self.encode_retained_inner(", "overlay entry bypasses shared mixed scene encoding")
+ 
+ for path in (
+     "crates/noon-runtime/src/renderer_publication.rs",
+diff --git a/crates/noon-native/src/selection_overlay/tests.rs b/crates/noon-native/src/selection_overlay/tests.rs
+--- a/crates/noon-native/src/selection_overlay/tests.rs
++++ b/crates/noon-native/src/selection_overlay/tests.rs
+@@ -53,7 +53,7 @@
+ }
+ 
+ #[test]
+-fn failed_acquire_keeps_overlay_pending_and_out_and_back_does_not_select() {
++fn failed_acquire_keeps_overlay_pending_and_out_and_back_does_not_clear() {
+     let mut app = app();
+     app.static_session_mut().take_renderer_publication();
+     click(&mut app, 160.0);
+@@ -61,8 +61,10 @@
+         app.execution.as_mut(), false, None::<()>).is_none());
+     assert!(app.selection_overlay_pending());
+     app.last_selection_highlight = app.session().pointer_selection_highlight();
++    // An incorrectly recognized background click would erase the selection.
++    app.dispatch_pointer_position(PhysicalPosition::new(10.0, 90.0), SIZE, 1.0).unwrap();
+     app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0).unwrap();
+-    for x in [180.0, 160.0] {
++    for x in [30.0, 10.0] {
+         app.dispatch_pointer_position(PhysicalPosition::new(x, 90.0), SIZE, 1.0).unwrap();
+     }
+     app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0).unwrap();
