@@ -4,8 +4,6 @@ use super::TextAuthoringError;
 use super::{MathTypst, Typst};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
-#[cfg(feature = "typst")]
-use noon_core::GeometryResourceArena;
 #[cfg(feature = "native-text")]
 use noon_core::Vec2;
 #[cfg(feature = "typst")]
@@ -162,33 +160,19 @@ fn typst_spec_state(
     text.presentation.validate()?;
     let identity = super::super::compiler::typst_identity(&text, mode);
     let artifact = text.compile_artifact(mode)?;
-    text_artifact_state(
-        store,
-        identity,
+    let (transform, style) = text_artifact_presentation(
         text.authored_transform(),
         text.presentation.color,
         text.presentation.opacity,
-        artifact.resource.as_ref().clone(),
-        artifact.fonts.as_ref().clone(),
-        artifact.geometry.as_ref().clone(),
-    )
-}
-
-#[cfg(feature = "typst")]
-fn text_artifact_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    identity: noon_core::TextCompilationIdentity,
-    transform: noon_core::Transform2D,
-    color: noon_core::Color,
-    opacity: f32,
-    resource: noon_core::TextResource,
-    fonts: noon_core::FontResourceArena,
-    geometries: GeometryResourceArena,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
-    let (transform, style) = text_artifact_presentation(transform, color, opacity)?;
+    )?;
     let handle = store
         .borrow_mut()
-        .import_compiled_text_resource(identity, resource, &fonts, &geometries)
+        .import_compiled_text_resource(
+            identity,
+            artifact.resource.as_ref().clone(),
+            artifact.fonts.as_ref(),
+            artifact.geometry.as_ref(),
+        )
         .map_err(TextAuthoringError::Import)?;
     Ok(semantic_text_state(handle, transform, style))
 }
