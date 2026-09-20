@@ -2,7 +2,6 @@
 
 use super::{NativeApp, NativeHostError};
 use noon::integration::PointerSelectionHighlight;
-use noon_core::Color;
 use noon_render_wgpu::AnalyticOverlay;
 
 pub(super) fn prepare_highlight(
@@ -13,7 +12,7 @@ pub(super) fn prepare_highlight(
             AnalyticOverlay::new(
                 &value.geometry,
                 value.transform,
-                Color::rgba(1.0, 1.0, 0.0, 0.35),
+                noon::integration::pointer_selection_overlay_color(),
             )
         })
         .transpose()
