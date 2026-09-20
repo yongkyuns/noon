@@ -49,6 +49,11 @@ fn prepare(changes: Changes) {
         .then(FrameChanges::default);
 }
 pub fn encode_retained_with_transient_presentations(&self) {}
+pub fn encode_retained_with_transient_presentations_and_overlay(&self) {
+    self.encode_retained_derived_inner();
+    self.encode_retained_inner();
+}
+pub fn encode_retained(&self) {}
 RUST
   cat > crates/noon-render-wgpu/src/render_order.rs <<'RUST'
 pub fn prepare_transient() {}
@@ -97,5 +102,43 @@ write_fixture
 
 sed -i 's/encode_retained_with_transient_presentations/encode_retained_with_derived/' crates/noon-native/src/lib.rs
 expect_rejected 'feature-specific direct host entry point' 'bypasses generic transient renderer entry point'
+
+write_fixture
+
+# Either host may use the explicit overlay variant, but an unknown variant or
+# legacy feature-specific route must not become an alternative draw path.
+for host in crates/noon-native/src/lib.rs crates/noon-web/src/execution_canvas.rs; do
+  sed -i 's/encode_retained_with_transient_presentations/encode_retained_with_transient_presentations_and_overlay/' "$host"
+  bash scripts/transient-presentation-ratchet.sh >/dev/null
+  sed -i 's/encode_retained_with_transient_presentations_and_overlay/encode_retained_with_transient_presentations_unchecked/' "$host"
+  expect_rejected "unknown overlay variant in $host" 'bypasses generic transient renderer entry point'
+  write_fixture
+  printf '\nfn legacy(renderer: Renderer) { renderer.encode_retained_with_derived(); }\n' >> "$host"
+  expect_rejected "additional legacy entry in $host" 'regained derived-display host coupling'
+  write_fixture
+done
+
+retained=crates/noon-render-wgpu/src/gpu/retained_text.rs
+sed -i 's/pub fn encode_retained_with_transient_presentations_and_overlay(/pub fn removed_overlay(/' "$retained"
+expect_rejected 'missing overlay entry' 'explicit overlay renderer entry point disappeared'
+write_fixture
+sed -i 's/pub fn encode_retained(/pub fn removed_retained(/' "$retained"
+expect_rejected 'unbounded overlay entry' 'could not bound overlay renderer entry point'
+write_fixture
+
+for lane in derived mixed; do
+  if [[ "$lane" == derived ]]; then
+    delegate=encode_retained_derived_inner
+    diagnostic='overlay entry bypasses shared transient scene encoding'
+  else
+    delegate=encode_retained_inner
+    diagnostic='overlay entry bypasses shared mixed scene encoding'
+  fi
+  sed -i "s/self.$delegate();/self.bypass_scene_encoding();/" "$retained"
+  # A matching call in another method must not satisfy this entry's contract.
+  printf '\nfn unrelated(&self) { self.%s(); }\n' "$delegate" >> "$retained"
+  expect_rejected "overlay $lane delegation bypass" "$diagnostic"
+  write_fixture
+done
 
 echo "transient presentation ratchet self-test passed"

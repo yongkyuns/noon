@@ -5,7 +5,9 @@ use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
 mod derived_display;
+mod overlay;
 mod presentation;
+pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod raster_image_gpu;
 mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
@@ -422,6 +424,22 @@ pub struct GpuRenderer {
     path_instance_capacity_bytes: usize,
     mega_path_index_capacity_bytes: usize,
     mega_path_vertex_instance_capacity_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+struct FramePassOptions<'a> {
+    clear_color: wgpu::Color,
+    query_set: Option<&'a wgpu::QuerySet>,
+    overlay: Option<&'a OverlayGpuState>,
+}
+impl<'a> FramePassOptions<'a> {
+    fn new(clear_color: wgpu::Color, query_set: Option<&'a wgpu::QuerySet>) -> Self {
+        Self {
+            clear_color,
+            query_set,
+            overlay: None,
+        }
+    }
 }
 
 impl GpuRenderer {
@@ -1018,7 +1036,13 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, None, None)
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            None,
+            FramePassOptions::new(clear_color, None),
+        )
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
@@ -1030,7 +1054,13 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: &wgpu::QuerySet,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, None, Some(query_set))
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            None,
+            FramePassOptions::new(clear_color, Some(query_set)),
+        )
     }
 
     fn encode_inner(
@@ -1038,10 +1068,14 @@ impl GpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
-        clear_color: wgpu::Color,
         derived: Option<&PreparedDerivedDisplay>,
-        query_set: Option<&wgpu::QuerySet>,
+        options: FramePassOptions<'_>,
     ) -> DrawStats {
+        let FramePassOptions {
+            clear_color,
+            query_set,
+            overlay,
+        } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = if derived.is_some_and(|presentations| {
             presentations
@@ -1114,6 +1148,8 @@ impl GpuRenderer {
                 None => self.draw_ordered(&mut pass, prepared, false),
             }
         };
+        let mut stats = stats;
+        stats += self.encode_overlay(encoder, view, overlay);
         self.presentation.encode_present(encoder, view);
         stats
     }

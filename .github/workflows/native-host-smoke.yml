@@ -80,3 +80,24 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x720x24" \
             cargo test -p noon-native native_surface_smoke_presents_callback_continuation_endpoint \
               -- --ignored --nocapture --test-threads=1
+
+      - name: Qualify paused selection pixels and export isolation
+        env:
+          NOON_SELECTION_PROOF_DIR: ${{ github.workspace }}/selection-proof
+        run: |
+          cargo test -p noon --all-features --test selection_overlay_raster \
+            -- --include-ignored --nocapture
+
+      - name: Present click selection and clear without advancing native time
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_paused_click_selection_and_clear \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Retain selection pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-selection-pixels
+          path: selection-proof/
+          retention-days: 14
