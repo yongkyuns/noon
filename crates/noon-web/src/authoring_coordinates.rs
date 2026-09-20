@@ -24,6 +24,7 @@ pub struct WasmCoordinateOptions {
 pub(crate) enum CoordinateRequest {
     NumberLine(ManimNumberLineOptions),
     Axes(ManimAxesOptions),
+    NumberPlane(noon::ManimNumberPlaneOptions),
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -46,6 +47,7 @@ impl WasmCoordinateOptions {
         match &mut self.request {
             CoordinateRequest::NumberLine(options) => &mut options.style,
             CoordinateRequest::Axes(options) => &mut options.style,
+            CoordinateRequest::NumberPlane(options) => &mut options.axis_style,
         }
     }
 }
@@ -85,10 +87,18 @@ impl WasmCoordinateOptions {
     }
 
     #[wasm_bindgen(js_name = setTicks)]
-    pub fn set_ticks(&mut self, enabled: bool, half_length: f64, exclude_origin: bool) {
+    pub fn set_ticks(
+        &mut self,
+        enabled: bool,
+        half_length: f64,
+        exclude_origin: bool,
+    ) -> Result<(), JsValue> {
         let ticks = match &mut self.request {
             CoordinateRequest::NumberLine(options) => &mut options.ticks,
             CoordinateRequest::Axes(options) => &mut options.ticks,
+            CoordinateRequest::NumberPlane(_) => {
+                return Err(js_error("NumberPlane ticks are not supported"))
+            }
         };
         *ticks = CoordinateTicks {
             enabled,
@@ -96,6 +106,7 @@ impl WasmCoordinateOptions {
             exclude_origin,
             ..*ticks
         };
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = setColor)]
@@ -152,6 +163,10 @@ impl WasmAuthoringStore {
             CoordinateRequest::Axes(options) => {
                 ManimAxes::create(Rc::clone(&self.semantics), &options)
                     .map(|axes| axes.family().clone())
+            }
+            CoordinateRequest::NumberPlane(options) => {
+                noon::ManimNumberPlane::create(Rc::clone(&self.semantics), &options)
+                    .map(|plane| plane.family().clone())
             }
         };
         family
@@ -290,14 +305,20 @@ impl WasmAuthoringFamilyHandle {
             .and_then(|line| line.ticks())
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let members = ticks
-            .integration_store()
-            .borrow()
-            .semantic_family_members_checked(ticks.node_id())
+        Self::from_semantic_family(ticks).direct_mobjects()
+    }
+
+    /// Batch direct leaf handles once, avoiding one full membership scan per leaf.
+    #[wasm_bindgen(js_name = directMobjects)]
+    pub fn direct_mobjects(&self) -> Result<js_sys::Array, JsValue> {
+        let family = self.semantic_family()?;
+        let store = family.integration_store().borrow();
+        let node = store
+            .semantic_family_checked(family.node_id())
             .map_err(js_error)?;
         let result = js_sys::Array::new();
-        for member in members {
-            let object = noon::Mobject::from_node(Rc::clone(ticks.integration_store()), member)
+        for member in node.members_iter() {
+            let object = noon::Mobject::from_node(Rc::clone(family.integration_store()), member)
                 .map_err(js_error)?;
             result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(object).into());
         }
@@ -324,7 +345,7 @@ impl WasmAuthoringFamilyHandle {
 }
 
 impl CanonicalAuthoringSceneContext {
-    fn coordinate_line_frame(
+    pub(crate) fn coordinate_line_frame(
         &mut self,
         line: &ManimNumberLine,
     ) -> Result<NumberLineFrame, JsValue> {
@@ -408,31 +429,4 @@ pub async fn create_coordinate_plotting_renderer(
     let session = noon::coordinate_plotting_example::session()
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
-}
-
-/// The animated gallery uses the same typed program as the native example.
-#[cfg(all(
-    feature = "renderer",
-    any(debug_assertions, feature = "renderer-smoke")
-))]
-#[wasm_bindgen(js_name = createAnimatedCoordinatePlottingRenderer)]
-pub async fn create_animated_coordinate_plotting_renderer(
-    canvas: web_sys::OffscreenCanvas,
-) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
-    let program = noon::coordinate_plotting_example::program()
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
-}
-
-#[cfg(all(
-    feature = "renderer",
-    any(debug_assertions, feature = "renderer-smoke")
-))]
-#[wasm_bindgen(js_name = createAnimatedNumberLineRenderer)]
-pub async fn create_animated_number_line_renderer(
-    canvas: web_sys::OffscreenCanvas,
-) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
-    let program = noon::animated_number_line_example::program()
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
