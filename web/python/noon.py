@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable
+from enum import Enum
 
 from _noon_errors import (
     NoonError,
@@ -148,6 +149,12 @@ DEFAULT_MOBJECT_TO_EDGE_BUFFER = MED_LARGE_BUFF
 DEFAULT_MOBJECT_TO_MOBJECT_BUFFER = MED_SMALL_BUFF
 DEFAULT_FRAME_HEIGHT = 8.0
 DEFAULT_FRAME_WIDTH = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0
+
+
+class SectionType(str, Enum):
+    NORMAL = "normal"
+    SKIP = "skip"
+
 
 
 def _hex_color(value: int) -> Color:
@@ -725,6 +732,15 @@ class Scene:
     @property
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
+
+    def next_section(
+        self, name: str = "", type: SectionType = SectionType.NORMAL
+    ) -> Scene:
+        return _scene_operations()._canonical_next_section(self, name, type)
+
+    @property
+    def sections(self) -> list[dict[str, object]]:
+        return _scene_operations()._canonical_sections(self)
 
     def value_tracker(self, value: float = 0.0) -> Any:
         return _scene_operations()._canonical_value_tracker(self, value)
