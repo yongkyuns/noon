@@ -302,8 +302,25 @@ impl GpuRenderer {
         derived: &PreparedDerivedDisplay,
         single_sample_analytics: bool,
     ) -> DrawStats {
+        self.draw_with_derived_camera(
+            pass,
+            stable,
+            derived,
+            single_sample_analytics,
+            &self.camera_bind_group,
+        )
+    }
+
+    pub(super) fn draw_with_derived_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        stable: &PreparedFrame<'_>,
+        derived: &PreparedDerivedDisplay,
+        single_sample_analytics: bool,
+        camera_bind_group: &'a wgpu::BindGroup,
+    ) -> DrawStats {
         let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera_bind_group, &[]);
 
         let (anchors, resolution) = resolve_transient_anchors(stable, derived);
         assert_eq!(
