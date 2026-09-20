@@ -310,21 +310,26 @@ class BraceLabel(_compat.VGroup):
         if isinstance(obj, list):
             obj = _compat.VGroup(*obj)
         old_brace = self.brace
+        # Prepare the replacement before changing family membership. Constructor
+        # and brace-geometry failures therefore leave the published composite intact.
+        brace = Brace(obj, direction=self.brace_direction, **kwargs)
+        brace.put_at_tip(self.label)
         self.remove(old_brace, self.label)
-        self.brace = Brace(obj, direction=self.brace_direction, **kwargs)
-        self.brace.put_at_tip(self.label)
-        self.add(self.brace, self.label)
+        self.add(brace, self.label)
+        self.brace = brace
         return self
 
     def change_label(self, *text: str, **kwargs: Any) -> BraceLabel:
         old_label = self.label
-        self.remove(old_label)
+        # Construct, validate, and place the detached replacement first. User
+        # constructor/placement failures cannot dismantle the existing family.
         label = self.label_constructor(*text, **kwargs)
         if not isinstance(label, _base.Mobject):
             raise TypeError("label_constructor must return a Mobject")
+        self.brace.put_at_tip(label)
+        self.remove(old_label)
+        self.add(label)
         self.label = label
-        self.brace.put_at_tip(self.label)
-        self.add(self.label)
         return self
 
     def change_brace_label(
