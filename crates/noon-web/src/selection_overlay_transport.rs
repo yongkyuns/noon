@@ -82,7 +82,7 @@ impl SelectionOverlayPresentation {
         noon_render_wgpu::AnalyticOverlay::new(
             &geometry,
             self.transform,
-            noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35),
+            noon::integration::pointer_selection_overlay_color(),
         )
     }
 }
