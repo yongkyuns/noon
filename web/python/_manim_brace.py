@@ -338,8 +338,21 @@ class BraceLabel(_compat.VGroup):
         *text: str,
         **kwargs: Any,
     ) -> BraceLabel:
-        self.shift_brace(obj)
-        self.change_label(*text, **kwargs)
+        if isinstance(obj, list):
+            obj = _compat.VGroup(*obj)
+        old_brace = self.brace
+        old_label = self.label
+        # Prepare both replacements before publishing either one, so a label
+        # failure cannot leave a newly committed brace paired with the old label.
+        brace = Brace(obj, direction=self.brace_direction)
+        label = self.label_constructor(*text, **kwargs)
+        if not isinstance(label, _base.Mobject):
+            raise TypeError("label_constructor must return a Mobject")
+        brace.put_at_tip(label)
+        self.remove(old_brace, old_label)
+        self.add(brace, label)
+        self.brace = brace
+        self.label = label
         return self
 
 
