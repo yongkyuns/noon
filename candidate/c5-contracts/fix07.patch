@@ -1,0 +1,249 @@
+diff --git a/scripts/pointer-selection-direct-qualification.mjs b/scripts/pointer-selection-direct-qualification.mjs
+index 2d159dfbd7c3fd8bc89b0101328b62107f8bb6e4..1b660013d307146c39f04949ccbaab5ca80d9916 100644
+--- a/scripts/pointer-selection-direct-qualification.mjs
++++ b/scripts/pointer-selection-direct-qualification.mjs
+@@ -74,8 +74,8 @@ try {
+             return result;
+           };
+           const driver = createDirectExecutionWakeDriver(renderer);
+-          const attach = () => attachNativeInputs(renderer, canvas, {
+-            onInput: () => driver.wake(), onError: error => errors.push(String(error)),
++          const attach = (onInput = () => driver.wake()) => attachNativeInputs(renderer, canvas, {
++            onInput, onError: error => errors.push(String(error)),
+           });
+           globalThis.direct = { renderer, driver, attach, detach: attach(), errors, admittedInputs };
+         }, liveProgram);
+@@ -160,6 +160,58 @@ try {
+           assertExactPixels(await image(`clear-after-${kind}`), baseline, `clear after ${kind}`);
+           result.steps.push({ name: `stationary-${kind}`, retiredReleaseRejected: true });
+         }
++        // Fatal host notification/collector errors must retire the Rust contact,
++        // not just its JavaScript listeners. The scene still owns the admitted
++        // press until an explicit cancellation succeeds.
++        for (const fault of ["notification", "malformed-motion"]) {
++          await page.evaluate(fault => {
++            direct.detach();
++            direct.admittedInputs.length = 0;
++            direct.detach = direct.attach(fault === "notification" ? () => {
++              if (direct.admittedInputs.at(-1)?.[0] === "press") {
++                throw new Error("qualification notification fault");
++              }
++              direct.driver.wake();
++            } : undefined);
++          }, fault);
++          await settled(); prior = await state();
++          await page.mouse.move(bounds.x + center.x, bounds.y + center.y);
++          await page.mouse.down();
++          const press = await page.evaluate(() => direct.admittedInputs.findLast(args => args[0] === "press"));
++          assert.ok(press, "failure-path press must reach Rust");
++          if (fault === "malformed-motion") {
++            await page.evaluate(pointerId => {
++              const event = new PointerEvent("pointermove", { pointerId, pointerType: "mouse",
++                isPrimary: true, button: -1, buttons: 1 });
++              Object.defineProperty(event, "clientX", { value: NaN });
++              document.querySelector("#scene").dispatchEvent(event);
++            }, press[2]);
++          }
++          await page.mouse.up();
++          const faults = await page.evaluate(() => direct.errors.splice(0));
++          assert.equal(faults.length, 1, "report exactly the originating terminal fault");
++          assert.match(faults[0], fault === "notification" ? /qualification notification fault/ : /finite/);
++          const admitted = await page.evaluate(() => direct.admittedInputs.map(args => args[0]));
++          assert.equal(admitted.at(-1), "cancel", "fatal input retirement must reach Rust as cancellation");
++          assert.ok(!admitted.includes("release"), "retired listener must not deliver release");
++          const rejected = await page.evaluate(press => {
++            const release = [...press]; release[0] = "release";
++            try { direct.renderer.nativePointerInput(...release); return null; }
++            catch (error) { return String(error); }
++          }, press);
++          assert.match(rejected ?? "", /identity\/view does not match its live source/,
++            "failure cleanup must retire the Rust source");
++          await settled();
++          assert.deepEqual((await state()).frame, before.frame);
++          assert.equal((await state()).stats.presentedFrames, prior.stats.presentedFrames);
++          assertExactPixels(await image(`fatal-${fault}`), baseline, `fatal ${fault}`);
++          await page.evaluate(() => { direct.detach(); direct.detach = direct.attach(); });
++          prior = await state(); await click(SHAPES[0]); await changed(prior);
++          assertExactPixels(await image(`after-fatal-${fault}`), selected, `fresh contact after ${fault}`);
++          prior = await state(); await page.mouse.click(bounds.x + 20, bounds.y + 320); await changed(prior);
++          assertExactPixels(await image(`clear-after-fatal-${fault}`), baseline, `clear after ${fault}`);
++          result.steps.push({ name: `fatal-${fault}`, retiredReleaseRejected: true });
++        }
+         await page.evaluate(() => { direct.detach(); direct.detach = direct.attach(); });
+         prior = await state(); await click(SHAPES[0]); await changed(prior);
+         prior = await state();
+diff --git a/web/browser-pointer-input.js b/web/browser-pointer-input.js
+index 0cc16f3d9c2000bb420aae8eaa4978b5c2a5dbfd..faf84babb9f33c971f900fcec6fd38ea232d27ae 100644
+--- a/web/browser-pointer-input.js
++++ b/web/browser-pointer-input.js
+@@ -91,15 +91,20 @@ export function attachBrowserPointerInput(canvas, {
+       cancel();
+       return;
+     }
++    const contact = selected;
+     send({
+-      kind, source_id: selected.source, pointer_id: selected.id,
++      kind, source_id: contact.source, pointer_id: contact.id,
+       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
+       viewport_width: rect.width, viewport_height: rect.height,
+-      button, view_revision: selected.viewRevision,
++      button, view_revision: contact.viewRevision,
+       shift: event.shiftKey === true, control: event.ctrlKey === true,
+       alt: event.altKey === true, meta: event.metaKey === true,
+     });
+-    selected.buttons = event.buttons;
++    // Delivery can synchronously retire the attachment/contact (for example,
++    // when a presentation notification fails after Rust admitted the press).
++    // Do not mutate a cancelled or replacement contact on return from send.
++    if (!active() || selected !== contact) return;
++    contact.buttons = event.buttons;
+     // Touch IDs may be recycled; the next contact must receive a new source.
+     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
+     return true;
+diff --git a/web/native-inputs.js b/web/native-inputs.js
+index a6f7bb52c0dfa4d9195385d190a04ef6d00d6be2..872235234d286e4ac24fd286894d6487beb63872 100644
+--- a/web/native-inputs.js
++++ b/web/native-inputs.js
+@@ -58,15 +58,23 @@ export function attachNativeInputs(
+   if (typeof onError !== "function") throw new TypeError("onError must be a function");
+   if (typeof onInput !== "function") throw new TypeError("onInput must be a function");
+   let attached = true;
++  let failing = false;
++  let collector = null;
+   const controller = new AbortController();
+   const fail = error => {
+-    if (!attached) return;
++    if (!attached || failing) return;
++    failing = true;
++    // Listener retirement alone does not retire an already admitted press.
++    // Attempt the same ordered cancellation as explicit detach before aborting.
++    // A terminal admission failure can reject cleanup too; never replay input,
++    // retry cleanup or replace the original fault with that secondary failure.
++    try { collector?.invalidateView(); } catch { /* Preserve the original fault. */ }
+     attached = false;
+     controller.abort();
+     onError(error);
+   };
+   const notify = value => {
+-    if (!attached) return;
++    if (!attached || failing) return;
+     try { onInput(value); } catch (error) { fail(error); }
+   };
+   const invoke = (method, ...args) => {
+@@ -84,7 +92,7 @@ export function attachNativeInputs(
+     if (lifetime[key] >= Number.MAX_SAFE_INTEGER) throw new RangeError("pointer lifetime exhausted");
+     return ++lifetime[key];
+   };
+-  const collector = pointer ? attachBrowserPointerInput(canvas, {
++  collector = pointer ? attachBrowserPointerInput(canvas, {
+     signal: controller.signal, isCurrent: () => attached,
+     allocateSource: () => increment("source"), viewRevision: () => lifetime.view,
+     advanceView: () => increment("view"), maxSamples: MAX_DIRECT_POINTER_SAMPLES,
+diff --git a/web/native-inputs.test.mjs b/web/native-inputs.test.mjs
+index 3042dc59e20dac4fa75ec218900368cb2af36c29..20bf8d0cb7febad0acf4a6d2b11d7bfd80a41dba 100644
+--- a/web/native-inputs.test.mjs
++++ b/web/native-inputs.test.mjs
+@@ -288,8 +288,12 @@ test("rejected direct input neither notifies the wake driver nor admits a later
+     onError: error => errors.push(error), onInput: value => wakes.push(value) });
+   canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
+   canvas.dispatch("pointerup", pointer("pointerup", 100, 0));
+-  assert.equal(calls.length, 1); assert.equal(errors.length, 1); assert.equal(wakes.length, 0);
++  assert.deepEqual(calls.map(args => args[0]), ["press", "cancel"],
++    "one cleanup attempt is allowed, but the rejected press and later release are never replayed");
++  assert.equal(errors.length, 1); assert.equal(wakes.length, 0);
++  assert.match(String(errors[0]), /admission rejected/);
+   detach();
++  assert.equal(calls.length, 2, "cleanup is not retried after retirement");
+ });
+ 
+ test("detached asynchronous input cannot wake a replacement attachment", async () => {
+@@ -357,3 +361,89 @@ test("control-only binding does not require unrelated pointer keyboard or wheel
+   assert.deepEqual(calls, [["value", "opacity", 0.5], ["value", "opacity", 0.5], ["commit", "opacity"]]);
+   detach();
+ });
++
++test("fatal presentation notification after an admitted press cancels the contact before detaching", () => {
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget();
++  const calls = [], errors = [];
++  const failure = new Error("presentation notification failed after input commit");
++  let held = false;
++  const host = recordingHost({ nativePointerInput: (...args) => {
++    calls.push(args[0]);
++    if (args[0] === "press") held = true;
++    if (args[0] === "cancel") held = false;
++    return true;
++  } });
++  const detach = attachNativeInputs(host, canvas, { keyboardTarget,
++    onInput: () => { throw failure; }, onError: error => errors.push(error) });
++  canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
++  assert.deepEqual(calls, ["press", "cancel"]);
++  assert.equal(held, false, "retiring listeners must not strand an admitted button");
++  assert.deepEqual(errors, [failure]);
++  canvas.dispatch("pointerup", pointer("pointerup", 100, 0));
++  detach();
++  assert.deepEqual(calls, ["press", "cancel"], "neither release nor cleanup is replayed");
++});
++
++test("malformed later motion cancels a previously admitted contact before failing closed", () => {
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget();
++  const calls = [], errors = [];
++  const host = recordingHost({ nativePointerInput: (...args) => calls.push(args[0]) });
++  const detach = attachNativeInputs(host, canvas, { keyboardTarget,
++    onError: error => errors.push(error) });
++  canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
++  canvas.dispatch("pointermove", { ...pointer("pointermove", 100, 1), clientX: NaN });
++  assert.deepEqual(calls, ["press", "cancel"]);
++  assert.equal(errors.length, 1);
++  assert.match(String(errors[0]), /finite/);
++  assert.ok([...canvas.listeners.values()].every(listeners => listeners.length === 0));
++  detach();
++});
++
++test("asynchronous notification failure cancels once and cannot notify a replacement attachment", async () => {
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget();
++  const calls = [], errors = [], replacementWakes = [];
++  const failure = new Error("asynchronous presentation notification failed");
++  const host = recordingHost({ nativePointerInput: (...args) => {
++    calls.push(args);
++    return Promise.resolve(true);
++  } });
++  const detach = attachNativeInputs(host, canvas, { keyboardTarget,
++    onInput: () => { throw failure; }, onError: error => errors.push(error) });
++  canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
++  await Promise.resolve(); await Promise.resolve();
++  assert.deepEqual(calls.map(args => args[0]), ["press", "cancel"]);
++  assert.deepEqual(errors, [failure]);
++  detach();
++  const replacement = attachNativeInputs(host, canvas, { keyboardTarget,
++    onInput: value => replacementWakes.push(value) });
++  await Promise.resolve();
++  assert.deepEqual(replacementWakes, []);
++  canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
++  await Promise.resolve();
++  assert.ok(calls.at(-1)[1] > calls[0][1]);
++  assert.deepEqual(replacementWakes, [true]);
++  replacement();
++});
++
++test("collector delivery can synchronously retire its contact without a secondary exception", async () => {
++  const { attachBrowserPointerInput } = await import("./browser-pointer-input.js");
++  const canvas = new FakeCanvas(), controller = new AbortController();
++  const calls = [], errors = [];
++  let source = 0;
++  const collector = attachBrowserPointerInput(canvas, {
++    signal: controller.signal, isCurrent: () => true,
++    allocateSource: () => ++source, viewRevision: () => 0, advanceView: () => {},
++    windowTarget: canvas.ownerDocument.defaultView, maxSamples: 64,
++    onError: error => errors.push(error),
++    send: sample => {
++      calls.push(sample.kind);
++      if (sample.kind === "press") {
++        collector.invalidateView();
++        controller.abort();
++      }
++    },
++  });
++  canvas.dispatch("pointerdown", pointer("pointerdown", 100, 1));
++  assert.deepEqual(calls, ["press", "cancel"]);
++  assert.deepEqual(errors, [], "returning delivery must not dereference a retired contact");
++});
