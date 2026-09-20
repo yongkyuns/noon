@@ -61,8 +61,10 @@ impl PresentationBridge {
             bind_group: None,
             pipeline: None,
         };
-        result.initialize_present_pipeline(device, surface_format);
-        result.recreate_scene_target(device);
+        if transfer == OutputTransfer::BrowserWebGlSrgb {
+            result.initialize_present_pipeline(device, surface_format);
+            result.recreate_scene_target(device);
+        }
         result
     }
 
@@ -76,16 +78,16 @@ impl PresentationBridge {
             return;
         }
         self.viewport_size = viewport_size;
-        self.recreate_scene_target(device);
+        if self.transfer == OutputTransfer::BrowserWebGlSrgb {
+            self.recreate_scene_target(device);
+        }
     }
 
     pub(crate) fn scene_view<'a>(
         &'a self,
-        _surface_view: &'a wgpu::TextureView,
+        surface_view: &'a wgpu::TextureView,
     ) -> &'a wgpu::TextureView {
-        self.view
-            .as_ref()
-            .expect("presentation bridge always owns the scene target")
+        self.view.as_ref().unwrap_or(surface_view)
     }
 
     pub(crate) fn encode_present(
@@ -93,14 +95,9 @@ impl PresentationBridge {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
     ) {
-        let pipeline = self
-            .pipeline
-            .as_ref()
-            .expect("presentation bridge always owns the present pipeline");
-        let bind_group = self
-            .bind_group
-            .as_ref()
-            .expect("presentation bridge always owns the scene bind group");
+        let (Some(pipeline), Some(bind_group)) = (&self.pipeline, &self.bind_group) else {
+            return;
+        };
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: surface_view,
             depth_slice: None,
