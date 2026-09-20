@@ -153,6 +153,28 @@ class SceneForegroundFacadeTests(unittest.TestCase):
                 raise AssertionError("expected keyed batch rejection")
         """)
 
+    def test_failed_replace_does_not_change_foreground_metadata(self):
+        self.run_source("""
+            import noon
+
+            scene = noon.Scene()
+            old = object()
+            replacement = object()
+            scene.foreground_mobjects = [old]
+
+            def reject(*args, **kwargs):
+                raise RuntimeError("rejected")
+
+            scene._edit_membership = reject
+            try:
+                scene.replace(old, replacement)
+            except RuntimeError as error:
+                assert str(error) == "rejected"
+            else:
+                raise AssertionError("expected replacement rejection")
+            assert scene.foreground_mobjects == [old]
+        """)
+
     def test_replace_retires_foreground_before_a_later_add_can_resurrect_it(self):
         self.run_source("""
             import noon
@@ -175,6 +197,30 @@ class SceneForegroundFacadeTests(unittest.TestCase):
 
             scene.add(later)
             assert edits[-1] == ("add", (later,), None)
+        """)
+
+    def test_failed_group_removal_does_not_change_foreground_metadata(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            scene = noon.Scene()
+            child = object()
+            group = object.__new__(compat.Group)
+            group.submobjects = [child]
+            scene.foreground_mobjects = [child]
+
+            def reject(*args, **kwargs):
+                raise RuntimeError("rejected")
+
+            scene._edit_membership = reject
+            try:
+                scene.remove(group)
+            except RuntimeError as error:
+                assert str(error) == "rejected"
+            else:
+                raise AssertionError("expected removal rejection")
+            assert scene.foreground_mobjects == [child]
         """)
 
     def test_group_removal_retires_foreground_child_before_later_add(self):
