@@ -23,8 +23,7 @@ fn auto_frame_fits_transformed_content_with_margin_and_aspect() {
     assert_eq!(state.transform.translation.x, -0.5);
     assert_eq!(state.transform.translation.y, 0.0);
     assert!(
-        (state.transform.scale.x - fit.height / f64::from(DEFAULT_FRAME_HEIGHT)).abs()
-            < 1.0e-6
+        (state.transform.scale.x - fit.height / f64::from(DEFAULT_FRAME_HEIGHT)).abs() < 1.0e-6
     );
     assert_eq!(state.transform.scale.x, state.transform.scale.y);
 }
