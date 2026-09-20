@@ -452,8 +452,7 @@ pub struct GpuRenderer {
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    secondary_camera_buffer: wgpu::Buffer,
-    secondary_camera_bind_group: wgpu::BindGroup,
+    camera_bind_group_layout: wgpu::BindGroupLayout,
     camera: Camera2D,
     viewport_size: [u32; 2],
     target_format: wgpu::TextureFormat,
@@ -539,21 +538,6 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-        let secondary_camera_buffer =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Noon secondary viewport camera uniform"),
-                contents: bytemuck::bytes_of(&camera_uniform),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-        let secondary_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon secondary viewport camera bind group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: secondary_camera_buffer.as_entire_binding(),
-            }],
-        });
-
         let shader = device.create_shader_module(wgpu::include_wgsl!("../analytic.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
@@ -693,8 +677,7 @@ impl GpuRenderer {
             quad_buffer,
             camera_buffer,
             camera_bind_group,
-            secondary_camera_buffer,
-            secondary_camera_bind_group,
+            camera_bind_group_layout: camera_layout,
             camera,
             viewport_size,
             target_format,
@@ -1107,18 +1090,18 @@ impl GpuRenderer {
     /// camera command encoding is unaffected.
     pub fn encode_secondary_viewport(
         &self,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
         secondary: SecondaryViewport,
     ) -> Result<DrawStats, SecondaryViewportError> {
-        self.encode_secondary_viewport_inner(queue, encoder, view, prepared, None, secondary)
+        self.encode_secondary_viewport_inner(device, encoder, view, prepared, None, secondary)
     }
 
     pub fn encode_secondary_viewport_with_transient_presentations(
         &self,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
@@ -1126,7 +1109,7 @@ impl GpuRenderer {
         secondary: SecondaryViewport,
     ) -> Result<DrawStats, SecondaryViewportError> {
         self.encode_secondary_viewport_inner(
-            queue,
+            device,
             encoder,
             view,
             prepared,
@@ -1137,7 +1120,7 @@ impl GpuRenderer {
 
     fn encode_secondary_viewport_inner(
         &self,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
@@ -1147,26 +1130,37 @@ impl GpuRenderer {
         let secondary =
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         let [x, y, width, height] = secondary.destination;
-        // Validate the entire draw contract before touching even the small camera
-        // uniform. Failed secondary encoding must be side-effect free.
-        // This bounded foundation currently supports the single-sample analytic
-        // lane only. Vector paths require a destination-sized MSAA resolve target;
-        // do not silently draw them with the wrong sampling contract.
-        if ordered_render_sample_count(prepared.path_batches) != 1
-            || presentations.is_some_and(|presentations| {
-                presentations
-                    .path_batches
-                    .iter()
-                    .any(|batch| !batch.index_range.is_empty())
-            })
-        {
+        let has_transient_paths = presentations.is_some_and(|presentations| {
+            presentations
+                .path_batches
+                .iter()
+                .any(|batch| !batch.index_range.is_empty())
+        });
+        let multisampled =
+            ordered_render_sample_count(prepared.path_batches) != 1 || has_transient_paths;
+        // Reject before touching the shared secondary camera uniform. This keeps
+        // failed encoding side-effect free for any earlier encoded secondary pass.
+        if multisampled {
             return Err(SecondaryViewportError::MultisampledContentUnsupported);
         }
-        queue.write_buffer(
-            &self.secondary_camera_buffer,
-            0,
-            bytemuck::bytes_of(&secondary.camera.uniform([width, height])),
-        );
+        // Encode against a call-local immutable camera resource. Command buffers
+        // therefore retain the camera that belonged to this viewport even when
+        // several secondary views are encoded before one queue submission.
+        let camera_uniform = secondary.camera.uniform([width, height]);
+        let secondary_camera_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Noon secondary viewport camera uniform"),
+                contents: bytemuck::bytes_of(&camera_uniform),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let secondary_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon secondary viewport camera bind group"),
+            layout: &self.camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: secondary_camera_buffer.as_entire_binding(),
+            }],
+        });
         let scene_view = self.presentation.scene_view(view);
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: scene_view,
@@ -1187,21 +1181,27 @@ impl GpuRenderer {
         });
         pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
         pass.set_scissor_rect(x, y, width, height);
-        Ok(match presentations {
+        let stats = match presentations {
             Some(presentations) => self.draw_with_derived_camera(
                 &mut pass,
                 prepared,
                 presentations,
-                true,
-                &self.secondary_camera_bind_group,
+                !multisampled,
+                &secondary_camera_bind_group,
             ),
             None => self.draw_ordered_with_camera(
                 &mut pass,
                 prepared,
-                true,
-                &self.secondary_camera_bind_group,
+                !multisampled,
+                &secondary_camera_bind_group,
             ),
-        })
+        };
+        drop(pass);
+        // Browser/WebGL uses an intermediate scene target. Re-present after the
+        // secondary composition so callers cannot accidentally publish the
+        // pre-secondary scene. Direct output is a no-op here.
+        self.presentation.encode_present(encoder, view);
+        Ok(stats)
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
