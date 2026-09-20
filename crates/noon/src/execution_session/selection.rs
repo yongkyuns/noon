@@ -13,6 +13,11 @@ use super::{
     PointerFillQuery,
 };
 
+/// Shared transient presentation policy for pointer-selection overlays.
+pub fn pointer_selection_overlay_color() -> noon_core::Color {
+    noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35)
+}
+
 /// One successfully admitted click. `None` is a background click, not a failed
 /// pick. Both endpoints retain their occurrence-local coordinates and context.
 #[derive(Clone, Copy, Debug, PartialEq)]
