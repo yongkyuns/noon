@@ -294,6 +294,62 @@ impl Default for Camera2D {
     }
 }
 
+/// One validated secondary viewport over the renderer's existing retained frame.
+///
+/// This descriptor owns no scene, execution, resources, or camera buffer. It is a
+/// pure composition request that can be encoded against the same prepared frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SecondaryViewport {
+    pub camera: Camera2D,
+    /// Destination rectangle in physical output pixels: [x, y, width, height].
+    pub destination: [u32; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecondaryViewportError {
+    EmptyDestination,
+    DestinationOutOfBounds,
+}
+
+impl std::fmt::Display for SecondaryViewportError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyDestination => "secondary viewport destination must be non-empty",
+            Self::DestinationOutOfBounds => {
+                "secondary viewport destination must fit inside the output viewport"
+            }
+        })
+    }
+}
+
+impl std::error::Error for SecondaryViewportError {}
+
+impl SecondaryViewport {
+    pub fn new(
+        camera: Camera2D,
+        destination: [u32; 4],
+        output_size: [u32; 2],
+    ) -> Result<Self, SecondaryViewportError> {
+        let [x, y, width, height] = destination;
+        if width == 0 || height == 0 {
+            return Err(SecondaryViewportError::EmptyDestination);
+        }
+        let Some(end_x) = x.checked_add(width) else {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        };
+        let Some(end_y) = y.checked_add(height) else {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        };
+        if end_x > output_size[0] || end_y > output_size[1] {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        }
+        Ok(Self {
+            camera,
+            destination,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UploadStats {
     pub bytes_uploaded: usize,
