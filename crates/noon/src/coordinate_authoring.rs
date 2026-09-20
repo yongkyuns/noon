@@ -4,6 +4,10 @@
 //! wrappers retain family identity, never ranges, endpoints, or a second scene.
 //! Initial constructors require explicit ranges and do not add tips or labels.
 
+mod number_plane;
+pub(crate) use number_plane::prepare_number_plane;
+pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
+
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
