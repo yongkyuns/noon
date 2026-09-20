@@ -4,6 +4,9 @@ on:
     branches: [validation/c5-contract-consolidation-20260920]
 permissions:
   contents: read
+concurrency:
+  group: c5-contract-candidate-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   qualify:
     runs-on: ubuntu-latest
@@ -19,9 +22,7 @@ jobs:
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+        with: {fetch-depth: 0, persist-credentials: false}
       - name: Apply exact candidate to its verified feature base
         shell: bash
         run: |
@@ -32,6 +33,12 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/candidate" 8b3ead1d0fda10c1d76405c01b3d2c1e1e567393
           git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
           git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          for patch in "$GITHUB_WORKSPACE"/candidate/c5-contracts/fix*.patch; do
+            if [ -f "$patch" ]; then
+              git -C "$RUNNER_TEMP/candidate" apply "$patch"
+              cp "$patch" "$GITHUB_WORKSPACE/proof/"
+            fi
+          done
           echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
           echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
       - name: Use repository-pinned Rust
@@ -41,8 +48,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           rustc --version --verbose | tee "$PROOF/rust-version.txt"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
+        with: {version: v0.16.0}
       - uses: actions/cache@v6
         with:
           path: |
@@ -80,9 +86,7 @@ jobs:
           cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-minimal.log"
           cargo check -p noon-web --features renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-renderer.log"
       - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
+        with: {tool: 'wasm-pack@0.15.0', fallback: none}
       - name: Build actual renderer-smoke browser package with preflight
         run: |
           set -o pipefail
@@ -134,8 +138,7 @@ jobs:
   publish-tested-source:
     needs: qualify
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: {contents: write}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -153,8 +156,8 @@ jobs:
           git apply "$proof/formatted.patch"
           git add -A
           test "$(git write-tree)" = "$(cat "$proof/tree.txt")"
-          # GitHub App source pushes do not carry workflow-file write permission.
-          # The exact tested permanent workflow is reapplied via the connector.
+          # Source pushes omit workflow-file changes; restore the exact tested
+          # permanent workflow later through the connector's workflow permission.
           git restore --source=HEAD --staged --worktree .github/workflows
           git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: unify contextual pointer admission and transient presentation across hosts'
           git push origin HEAD:refs/heads/staging/c5-contracts-tested-${{ github.run_id }}
