@@ -152,6 +152,7 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
     ManimNumberLineOptions,
