@@ -16,6 +16,13 @@ impl CanonicalAuthoringScene {
     ) -> Result<noon::ManimNumberLine, AuthoringFailure> {
         self.active_live_player()?.live_create_number_line(options)
     }
+
+    pub(super) fn live_create_number_plane(
+        &mut self,
+        options: &noon::ManimNumberPlaneOptions,
+    ) -> Result<noon::ManimNumberPlane, AuthoringFailure> {
+        self.active_live_player()?.live_create_number_plane(options)
+    }
 }
 
 #[cfg(test)]
