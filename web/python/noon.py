@@ -623,8 +623,15 @@ class Scene:
         """Dissolve affected Groups while retaining unaffected foreground siblings."""
         from _manim_compat import Group
 
+        def removal_contains(candidate: object, value: object) -> bool:
+            if candidate is value:
+                return True
+            return isinstance(candidate, Group) and any(
+                removal_contains(child, value) for child in candidate.submobjects
+            )
+
         def removed(value: object) -> bool:
-            return any(value is target for target in removals)
+            return any(removal_contains(target, value) for target in removals)
 
         def contains_removed(value: object) -> bool:
             if removed(value):
@@ -708,6 +715,9 @@ class Scene:
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
         self._edit_membership("replace", (old_mobject, new_mobject))
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, (old_mobject,)
+        )
         return self
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
