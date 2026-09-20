@@ -460,6 +460,20 @@ def _canonical_scene_time(scene: _base.Scene) -> float:
     return float(_context(scene).authoredDuration())
 
 
+def _canonical_next_section(scene: _base.Scene, name: str, section_type: object) -> _base.Scene:
+    if not isinstance(name, str):
+        raise TypeError("section name must be a string")
+    value = getattr(section_type, "value", section_type)
+    if value not in {"normal", "skip"}:
+        raise ValueError("section type must be SectionType.NORMAL or SectionType.SKIP")
+    engine_call(_context(scene).nextSection, name, value == "skip", operation="Scene.next_section")
+    return scene
+
+
+def _canonical_sections(scene: _base.Scene) -> list[dict[str, object]]:
+    return json.loads(str(engine_call(_context(scene).sectionsJson, operation="Scene.sections")))
+
+
 def _begin_async_continuation_construct(scene: _base.Scene) -> None:
     if getattr(scene, _ASYNC_CONTINUATION_MODE, False):
         raise RuntimeError("canonical async construct is already active")
