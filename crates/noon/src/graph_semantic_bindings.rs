@@ -11,6 +11,7 @@ use std::{collections::HashMap, rc::Rc};
 pub struct GraphSemanticBindings {
     vertices: HashMap<GraphVertexId, SemanticNodeId>,
     edges: HashMap<GraphEdgeId, SemanticNodeId>,
+    edge_lines: HashMap<GraphEdgeId, SemanticNodeId>,
     store: Option<Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
@@ -64,6 +65,10 @@ impl GraphSemanticBindings {
         self.edges.get(&id).copied()
     }
 
+    pub fn edge_line_node(&self, id: GraphEdgeId) -> Option<SemanticNodeId> {
+        self.edge_lines.get(&id).copied()
+    }
+
     pub fn bind_vertex(
         &mut self,
         topology: &GraphTopology,
@@ -100,6 +105,28 @@ impl GraphSemanticBindings {
         Ok(())
     }
 
+    /// Bind the ordinary analytic Line child that carries one edge's endpoints.
+    ///
+    /// The family root remains the graph edge's semantic identity; this typed
+    /// component binding avoids inferring child meaning from family order.
+    pub fn bind_edge_line(
+        &mut self,
+        topology: &GraphTopology,
+        id: GraphEdgeId,
+        line: &Mobject,
+    ) -> Result<(), GraphBindingError> {
+        if topology.edge(id).is_none() {
+            return Err(GraphTopologyError::UnknownEdge(id).into());
+        }
+        if !self.edges.contains_key(&id) {
+            return Err(GraphBindingError::EdgeNotBound(id));
+        }
+        self.require_store(line.integration_store())?;
+        self.require_unbound_semantic_identity(line.node_id())?;
+        self.edge_lines.insert(id, line.node_id());
+        Ok(())
+    }
+
     pub fn remove_vertex(
         &mut self,
         topology: &GraphTopology,
@@ -121,6 +148,7 @@ impl GraphSemanticBindings {
         if topology.edge(id).is_none() {
             return Err(GraphTopologyError::UnknownEdge(id).into());
         }
+        self.edge_lines.remove(&id);
         self.edges
             .remove(&id)
             .ok_or(GraphBindingError::EdgeNotBound(id))
@@ -163,7 +191,11 @@ impl GraphSemanticBindings {
         &self,
         node: SemanticNodeId,
     ) -> Result<(), GraphBindingError> {
-        if self.vertices.values().chain(self.edges.values()).any(|&bound| bound == node) {
+        if self.vertices
+            .values()
+            .chain(self.edges.values())
+            .chain(self.edge_lines.values())
+            .any(|&bound| bound == node) {
             Err(GraphBindingError::SemanticIdentityAlreadyBound(node))
         } else {
             Ok(())
