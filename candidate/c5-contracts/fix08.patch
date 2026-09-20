@@ -1,19 +1,18 @@
 diff --git a/crates/noon/src/execution_session.rs b/crates/noon/src/execution_session.rs
-index 845e477439ba664a1be48b4043c0c1c811e43b23..b18a8ffce9d216930264f4792176f1ac5750115c 100644
+index 679b0dc9c9d6175a5596e5f3bd471c2939c5edb4..0121c3ed9ec9d279b3b1e233de3b6a5f042f3374 100644
 --- a/crates/noon/src/execution_session.rs
 +++ b/crates/noon/src/execution_session.rs
-@@ -11,7 +11,8 @@ mod picking;
+@@ -10,7 +10,7 @@ pub use input::{
+ mod picking;
  pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
  mod selection;
- pub use selection::{
--    PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
-+    pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
-+    PointerSelectionPresentation,
- };
+-pub use selection::{PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation};
++pub use selection::{pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation};
  mod publication;
  mod replay;
+ mod signal_timeline;
 diff --git a/crates/noon/src/execution_session/selection.rs b/crates/noon/src/execution_session/selection.rs
-index 3d968633bd2992ff842f796d9e96593f3f826b6f..6cd8efc066638566d9b455aab17208e241bfcf38 100644
+index 71275763f3604471daf3971c065ed40c82d38bc5..68d3b70aa512eaf24284db60526518c4903e601c 100644
 --- a/crates/noon/src/execution_session/selection.rs
 +++ b/crates/noon/src/execution_session/selection.rs
 @@ -13,6 +13,11 @@ use super::{
@@ -28,26 +27,26 @@ index 3d968633bd2992ff842f796d9e96593f3f826b6f..6cd8efc066638566d9b455aab17208e2
  /// One successfully admitted click. `None` is a background click, not a failed
  /// pick. Both endpoints retain their occurrence-local coordinates and context.
  #[derive(Clone, Copy, Debug, PartialEq)]
-@@ -202,7 +207,7 @@ impl ExecutionSession {
-             .map(|highlight| PointerSelectionPresentation {
-                 geometry: highlight.geometry,
-                 transform: highlight.transform,
--                color: Color::rgba(1.0, 1.0, 0.0, 0.35),
-+                color: pointer_selection_overlay_color(),
-             })
+@@ -201,7 +206,7 @@ impl ExecutionSession {
+         self.pointer_selection_highlight().map(|highlight| PointerSelectionPresentation {
+             geometry: highlight.geometry,
+             transform: highlight.transform,
+-            color: Color::rgba(1.0, 1.0, 0.0, 0.35),
++            color: pointer_selection_overlay_color(),
+         })
      }
  
 diff --git a/crates/noon/src/integration.rs b/crates/noon/src/integration.rs
-index ebdbd826e3cbc872fc3f35ae964aaf5075d62255..d6aa649ca384f3e3a37629b7bbd272e3c580801a 100644
+index 42b681204d39c5b7a29e7a7d87c64c8702b511b8..4f9730bc22357efd8a300ecda63a7dd7d00aec29 100644
 --- a/crates/noon/src/integration.rs
 +++ b/crates/noon/src/integration.rs
-@@ -35,8 +35,8 @@ pub use crate::execution_session::{
+@@ -35,8 +35,7 @@ pub use crate::execution_session::{
      StructuralPublicationStats,
  };
  pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 -pub use crate::execution_session::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
- pub use crate::execution_session::{
-+    pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported,
-     PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
- };
+-pub use crate::execution_session::{PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation};
++pub use crate::execution_session::{pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported, PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation};
  pub use crate::host_callbacks::{
+     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
+     effective_style_with_fill_opacity, effective_style_with_paint_opacity,
