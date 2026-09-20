@@ -460,8 +460,6 @@ pub struct GpuRenderer {
     presentation: PresentationBridge,
     path_msaa_texture: wgpu::Texture,
     path_msaa_view: wgpu::TextureView,
-    secondary_path_msaa_texture: wgpu::Texture,
-    secondary_path_msaa_view: wgpu::TextureView,
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
     line_buffer: wgpu::Buffer,
@@ -681,8 +679,6 @@ impl GpuRenderer {
         let derived_display = DerivedDisplayGpu::new(device);
         let (path_msaa_texture, path_msaa_view) =
             create_path_msaa_target(device, target_format, viewport_size);
-        let (secondary_path_msaa_texture, secondary_path_msaa_view) =
-            create_path_msaa_target(device, target_format, viewport_size);
 
         Self {
             circle_pipeline,
@@ -705,8 +701,6 @@ impl GpuRenderer {
             presentation,
             path_msaa_texture,
             path_msaa_view,
-            secondary_path_msaa_texture,
-            secondary_path_msaa_view,
             circle_buffer,
             rectangle_buffer,
             line_buffer,
@@ -749,10 +743,6 @@ impl GpuRenderer {
         self.viewport_size = [width.max(1), height.max(1)];
         (self.path_msaa_texture, self.path_msaa_view) =
             create_path_msaa_target(device, self.target_format, self.viewport_size);
-        (
-            self.secondary_path_msaa_texture,
-            self.secondary_path_msaa_view,
-        ) = create_path_msaa_target(device, self.target_format, self.viewport_size);
         self.presentation.resize(device, self.viewport_size);
         self.write_camera_uniform(queue);
     }
@@ -1165,19 +1155,17 @@ impl GpuRenderer {
         });
         let multisampled =
             ordered_render_sample_count(prepared.path_batches) != 1 || has_transient_paths;
+        // Reject before touching the shared secondary camera uniform. This keeps
+        // failed encoding side-effect free for any earlier encoded secondary pass.
+        if multisampled {
+            return Err(SecondaryViewportError::MultisampledContentUnsupported);
+        }
         queue.write_buffer(
             &self.secondary_camera_buffer,
             0,
             bytemuck::bytes_of(&secondary.camera.uniform([width, height])),
         );
         let scene_view = self.presentation.scene_view(view);
-        // A full-size MSAA resolve writes every pixel of the resolve attachment,
-        // not only the scissored draw region. Seed the scratch target from the
-        // already-rendered scene before drawing the secondary view so resolving
-        // cannot erase primary pixels outside the destination rectangle.
-        if multisampled {
-            return Err(SecondaryViewportError::MultisampledContentUnsupported);
-        }
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: scene_view,
             depth_slice: None,
