@@ -206,8 +206,11 @@ class SceneForegroundFacadeTests(unittest.TestCase):
 
             scene = noon.Scene()
             child = object()
-            group = object.__new__(compat.Group)
-            group.submobjects = [child]
+            class FakeGroup:
+                def __init__(self, *members):
+                    self.submobjects = list(members)
+            compat.Group = FakeGroup
+            group = FakeGroup(child)
             scene.foreground_mobjects = [child]
 
             def reject(*args, **kwargs):
@@ -238,8 +241,11 @@ class SceneForegroundFacadeTests(unittest.TestCase):
             )
             child = object()
             sibling = object()
-            group = object.__new__(compat.Group)
-            group.submobjects = [child, sibling]
+            class FakeGroup:
+                def __init__(self, *members):
+                    self.submobjects = list(members)
+            compat.Group = FakeGroup
+            group = FakeGroup(child, sibling)
             scene.foreground_mobjects = [child]
 
             assert scene.remove(group) is scene
