@@ -81,18 +81,19 @@ pub(crate) fn prepare_axes_implicit_path(
     mut function: impl FnMut(f64, f64) -> f64,
 ) -> Result<VectorPath, crate::CoordinateAuthoringError> {
     let planner_budget = validate_isoline_request(options.bounds, options.contour)
-        .map_err(|_| PlotPreparationError::InvalidImplicitOptions)?;
+        .map_err(|_| PlotAuthoringError::from(PlotPreparationError::InvalidImplicitOptions))?;
     planner_budget
         .checked_add(2)
         .filter(|leaves| *leaves <= options.max_leaves)
-        .ok_or(PlotPreparationError::ImplicitLeafLimitExceeded)?;
+        .ok_or(PlotPreparationError::ImplicitLeafLimitExceeded)
+        .map_err(PlotAuthoringError::from)?;
 
     let plan = plan_isoline(
         |point| function(point.x, point.y),
         options.bounds,
         options.contour,
     )
-    .map_err(|_| PlotPreparationError::InvalidImplicitOptions)?;
+    .map_err(|_| PlotAuthoringError::from(PlotPreparationError::InvalidImplicitOptions))?;
 
     // Map the planner's f64 coordinate points before the retained VectorPath
     // narrowing. This preserves small spans at large coordinate offsets.
@@ -111,7 +112,7 @@ pub(crate) fn prepare_axes_implicit_path(
     }
     if options.use_smoothing {
         change_path_anchor_mode_with_boundary(&path, true, SplineBoundary::ManimSignedClosure)
-            .map_err(|_| PlotPreparationError::SmoothingFailed.into())
+            .map_err(|_| PlotAuthoringError::from(PlotPreparationError::SmoothingFailed).into())
     } else {
         Ok(path)
     }
