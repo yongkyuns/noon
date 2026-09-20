@@ -153,6 +153,57 @@ class SceneForegroundFacadeTests(unittest.TestCase):
                 raise AssertionError("expected keyed batch rejection")
         """)
 
+    def test_replace_retires_foreground_before_a_later_add_can_resurrect_it(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: [value]
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
+                (kind, values, key)
+            )
+            old = object()
+            replacement = object()
+            later = object()
+            scene.foreground_mobjects = [old]
+
+            assert scene.replace(old, replacement) is scene
+            assert edits[-1] == ("replace", (old, replacement), None)
+            assert scene.foreground_mobjects == []
+
+            scene.add(later)
+            assert edits[-1] == ("add", (later,), None)
+        """)
+
+    def test_group_removal_retires_foreground_child_before_later_add(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: list(
+                value.submobjects if isinstance(value, compat.Group) else [value]
+            )
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
+                (kind, values, key)
+            )
+            child = object()
+            sibling = object()
+            group = object.__new__(compat.Group)
+            group.submobjects = [child, sibling]
+            scene.foreground_mobjects = [child]
+
+            assert scene.remove(group) is scene
+            assert scene.foreground_mobjects == []
+
+            later = object()
+            scene.add(later)
+            assert edits[-1] == ("add", (later,), None)
+        """)
+
 
 if __name__ == "__main__":
     unittest.main()
