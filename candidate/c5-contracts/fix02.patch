@@ -1,0 +1,57 @@
+diff --git a/web/native-inputs.js b/web/native-inputs.js
+--- a/web/native-inputs.js
++++ b/web/native-inputs.js
+@@ -65,11 +65,15 @@
+     controller.abort();
+     onError(error);
+   };
++  const notify = value => {
++    if (!attached) return;
++    try { onInput(value); } catch (error) { fail(error); }
++  };
+   const invoke = (method, ...args) => {
+     if (!attached) return;
+     const result = host[method](...args);
+-    if (result && typeof result.then === "function") result.then(onInput, fail);
+-    else onInput(result);
++    if (result && typeof result.then === "function") result.then(notify, fail);
++    else notify(result);
+   };
+   const guarded = (method, ...args) => {
+     try { invoke(method, ...args); } catch (error) { fail(error); }
+diff --git a/web/native-inputs.test.mjs b/web/native-inputs.test.mjs
+--- a/web/native-inputs.test.mjs
++++ b/web/native-inputs.test.mjs
+@@ -291,3 +291,32 @@
+   assert.equal(calls.length, 1); assert.equal(errors.length, 1); assert.equal(wakes.length, 0);
+   detach();
+ });
++
++test("detached asynchronous input cannot wake a replacement attachment", async () => {
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget(), wakes = [];
++  let complete;
++  const host = recordingHost({ nativeKey: () => new Promise(resolve => { complete = resolve; }) });
++  const detach = attachNativeInputs(host, canvas, { keyboardTarget, onInput: value => wakes.push(value) });
++  keyboardTarget.dispatch("keydown", { code: "Space" });
++  detach();
++  const replacement = attachNativeInputs(host, canvas, { keyboardTarget, onInput: value => wakes.push(value) });
++  complete(true);
++  await Promise.resolve();
++  assert.deepEqual(wakes, []);
++  replacement();
++});
++
++test("asynchronous presentation notification failure retires input and reports the error", async () => {
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget(), errors = [];
++  const failure = new Error("presentation failed");
++  let calls = 0;
++  const host = recordingHost({ nativeKey: () => { calls++; return Promise.resolve(true); } });
++  const detach = attachNativeInputs(host, canvas, { keyboardTarget,
++    onInput: () => { throw failure; }, onError: error => errors.push(error) });
++  keyboardTarget.dispatch("keydown", { code: "Space" });
++  await Promise.resolve();
++  keyboardTarget.dispatch("keyup", { code: "Space" });
++  assert.equal(calls, 1);
++  assert.deepEqual(errors, [failure]);
++  detach();
++});
