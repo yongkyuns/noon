@@ -1,6 +1,6 @@
 use crate::{GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, Mobject, MobjectFamily};
 use noon_core::SemanticNodeId;
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 /// Stable semantic bindings for one graph topology.
 ///
@@ -11,6 +11,7 @@ use std::collections::HashMap;
 pub struct GraphSemanticBindings {
     vertices: HashMap<GraphVertexId, SemanticNodeId>,
     edges: HashMap<GraphEdgeId, SemanticNodeId>,
+    store: Option<Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub enum GraphBindingError {
     VertexNotBound(GraphVertexId),
     EdgeNotBound(GraphEdgeId),
     SemanticIdentityAlreadyBound(SemanticNodeId),
+    ForeignSemanticStore,
 }
 
 impl From<GraphTopologyError> for GraphBindingError {
@@ -39,6 +41,9 @@ impl std::fmt::Display for GraphBindingError {
             Self::EdgeNotBound(id) => write!(formatter, "graph edge {} is not bound", id.get()),
             Self::SemanticIdentityAlreadyBound(id) => {
                 write!(formatter, "semantic identity {id:?} is already bound in this graph")
+            }
+            Self::ForeignSemanticStore => {
+                formatter.write_str("graph semantic bindings cannot span semantic stores")
             }
         }
     }
@@ -71,6 +76,7 @@ impl GraphSemanticBindings {
         if self.vertices.contains_key(&id) {
             return Err(GraphBindingError::VertexAlreadyBound(id));
         }
+        self.require_store(object.integration_store())?;
         self.require_unbound_semantic_identity(object.node_id())?;
         self.vertices.insert(id, object.node_id());
         Ok(())
@@ -88,6 +94,7 @@ impl GraphSemanticBindings {
         if self.edges.contains_key(&id) {
             return Err(GraphBindingError::EdgeAlreadyBound(id));
         }
+        self.require_store(family.integration_store())?;
         self.require_unbound_semantic_identity(family.node_id())?;
         self.edges.insert(id, family.node_id());
         Ok(())
@@ -136,6 +143,20 @@ impl GraphSemanticBindings {
                     .ok_or(GraphBindingError::EdgeNotBound(edge))
             })
             .collect()
+    }
+
+    fn require_store(
+        &mut self,
+        store: &Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    ) -> Result<(), GraphBindingError> {
+        match &self.store {
+            Some(bound) if !Rc::ptr_eq(bound, store) => Err(GraphBindingError::ForeignSemanticStore),
+            Some(_) => Ok(()),
+            None => {
+                self.store = Some(Rc::clone(store));
+                Ok(())
+            }
+        }
     }
 
     fn require_unbound_semantic_identity(
@@ -214,4 +235,23 @@ mod tests {
         ));
         assert_eq!(bindings.vertex_node(b), None);
     }
+    #[test]
+    fn bindings_reject_cross_scene_identity_before_mutation() {
+        let mut topology = GraphTopology::new();
+        let a = topology.add_vertex().unwrap();
+        let b = topology.add_vertex().unwrap();
+        let mut first = Scene::new();
+        let mut second = Scene::new();
+        let va = first.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
+        let vb = second.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
+
+        let mut bindings = GraphSemanticBindings::new();
+        bindings.bind_vertex(&topology, a, &va).unwrap();
+        assert_eq!(
+            bindings.bind_vertex(&topology, b, &vb),
+            Err(GraphBindingError::ForeignSemanticStore)
+        );
+        assert_eq!(bindings.vertex_node(b), None);
+    }
+
 }
