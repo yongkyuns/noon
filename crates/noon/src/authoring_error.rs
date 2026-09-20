@@ -108,6 +108,8 @@ pub enum AuthoringError {
     MissingImageResource(noon_core::RasterImageResourceHandle),
     /// The camera must be initialized before ordinary root content is added.
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
+    /// Camera auto-frame inputs cannot produce a finite representable viewport.
+    InvalidCameraAutoFrame(&'static str),
     /// A committed creation did not resolve its prepared local token.
     UnresolvedCreatedNode(noon_core::SemanticLocalNodeToken),
     /// Existing shared domain cause.
@@ -244,6 +246,9 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::CameraRequiresEmptyScene(_) => {
                 f.write_str("2D camera frame must be created before scene content")
+            }
+            Self::InvalidCameraAutoFrame(reason) => {
+                write!(f, "invalid camera auto-frame: {reason}")
             }
             Self::UnresolvedCreatedNode(token) => {
                 write!(f, "committed creation did not resolve {token:?}")
