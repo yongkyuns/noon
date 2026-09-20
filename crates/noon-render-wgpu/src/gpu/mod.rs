@@ -1185,7 +1185,7 @@ impl GpuRenderer {
         });
         pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
         pass.set_scissor_rect(x, y, width, height);
-        Ok(match presentations {
+        let stats = match presentations {
             Some(presentations) => self.draw_with_derived_camera(
                 &mut pass,
                 prepared,
@@ -1199,7 +1199,13 @@ impl GpuRenderer {
                 !multisampled,
                 &self.secondary_camera_bind_group,
             ),
-        })
+        };
+        drop(pass);
+        // Browser/WebGL uses an intermediate scene target. Re-present after the
+        // secondary composition so callers cannot accidentally publish the
+        // pre-secondary scene. Direct output is a no-op here.
+        self.presentation.encode_present(encoder, view);
+        Ok(stats)
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
