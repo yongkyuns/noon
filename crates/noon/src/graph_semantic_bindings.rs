@@ -1,4 +1,6 @@
-use crate::{GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, Mobject, MobjectFamily};
+use crate::{
+    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, Mobject, MobjectFamily,
+};
 use noon_core::SemanticNodeId;
 use std::{collections::HashMap, rc::Rc};
 
@@ -36,12 +38,19 @@ impl std::fmt::Display for GraphBindingError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Topology(error) => error.fmt(formatter),
-            Self::VertexAlreadyBound(id) => write!(formatter, "graph vertex {} is already bound", id.get()),
-            Self::EdgeAlreadyBound(id) => write!(formatter, "graph edge {} is already bound", id.get()),
+            Self::VertexAlreadyBound(id) => {
+                write!(formatter, "graph vertex {} is already bound", id.get())
+            }
+            Self::EdgeAlreadyBound(id) => {
+                write!(formatter, "graph edge {} is already bound", id.get())
+            }
             Self::VertexNotBound(id) => write!(formatter, "graph vertex {} is not bound", id.get()),
             Self::EdgeNotBound(id) => write!(formatter, "graph edge {} is not bound", id.get()),
             Self::SemanticIdentityAlreadyBound(id) => {
-                write!(formatter, "semantic identity {id:?} is already bound in this graph")
+                write!(
+                    formatter,
+                    "semantic identity {id:?} is already bound in this graph"
+                )
             }
             Self::ForeignSemanticStore => {
                 formatter.write_str("graph semantic bindings cannot span semantic stores")
@@ -178,7 +187,9 @@ impl GraphSemanticBindings {
         store: &Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     ) -> Result<(), GraphBindingError> {
         match &self.store {
-            Some(bound) if !Rc::ptr_eq(bound, store) => Err(GraphBindingError::ForeignSemanticStore),
+            Some(bound) if !Rc::ptr_eq(bound, store) => {
+                Err(GraphBindingError::ForeignSemanticStore)
+            }
             Some(_) => Ok(()),
             None => {
                 self.store = Some(Rc::clone(store));
