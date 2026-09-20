@@ -10,7 +10,9 @@ pub use input::{
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 mod selection;
-pub use selection::{PointerSelectionClick, PointerSelectionHighlight};
+pub use selection::{
+    PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
+};
 mod publication;
 mod replay;
 mod signal_timeline;

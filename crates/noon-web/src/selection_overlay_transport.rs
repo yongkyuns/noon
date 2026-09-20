@@ -5,7 +5,7 @@
 
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 use noon_core::Vec2;
-use noon_core::{GeometryRef, Transform2D};
+use noon_core::{Color, GeometryRef, Transform2D};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,13 +20,14 @@ pub enum SelectionOverlayGeometry {
 pub struct SelectionOverlayPresentation {
     pub geometry: SelectionOverlayGeometry,
     pub transform: Transform2D,
+    pub color: Color,
 }
 
 impl SelectionOverlayPresentation {
-    pub(crate) fn from_highlight(
-        highlight: &noon::integration::PointerSelectionHighlight,
+    pub(crate) fn from_presentation(
+        presentation: &noon::integration::PointerSelectionPresentation,
     ) -> Result<Self, crate::RetainedFamilyExecutionTransportError> {
-        let geometry = match &highlight.geometry {
+        let geometry = match &presentation.geometry {
             GeometryRef::Circle { radius } => SelectionOverlayGeometry::Circle { radius: *radius },
             GeometryRef::Rectangle { size } => SelectionOverlayGeometry::Rectangle {
                 width: size.x,
@@ -36,7 +37,8 @@ impl SelectionOverlayPresentation {
         };
         let value = Self {
             geometry,
-            transform: highlight.transform,
+            transform: presentation.transform,
+            color: presentation.color,
         };
         value.validate()?;
         Ok(value)
@@ -51,7 +53,15 @@ impl SelectionOverlayPresentation {
             }
         };
         let transform = self.transform;
-        if !geometry_valid
+        if ![
+            self.color.red,
+            self.color.green,
+            self.color.blue,
+            self.color.alpha,
+        ]
+        .into_iter()
+        .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+            || !geometry_valid
             || ![
                 transform.translation.x,
                 transform.translation.y,
@@ -79,11 +89,7 @@ impl SelectionOverlayPresentation {
                 size: Vec2::new(width, height),
             },
         };
-        noon_render_wgpu::AnalyticOverlay::new(
-            &geometry,
-            self.transform,
-            noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35),
-        )
+        noon_render_wgpu::AnalyticOverlay::new(&geometry, self.transform, self.color)
     }
 }
 

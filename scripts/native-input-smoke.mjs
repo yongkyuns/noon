@@ -177,19 +177,8 @@ try {
     const paused = await execution.pause();
     if (paused.playing) throw new Error("native input execution did not pause");
 
-    // This fixture uses the default canonical viewport. A split-worker product
-    // host supplies its platform viewport mapping through the same adapter.
-    const host = createExecutionWorkerNativeInputHost(execution, {
-      pointerToScene(normalizedX, normalizedY) {
-        const frameHeight = 8;
-        const frameWidth = frameHeight * (canvas.width / canvas.height);
-        return {
-          x: (normalizedX - 0.5) * frameWidth,
-          y: (0.5 - normalizedY) * frameHeight,
-        };
-      },
-    });
-    const detachInputs = attachNativeInputs(host, canvas, { onError: recordError });
+    const host = createExecutionWorkerNativeInputHost(execution);
+    const detachInputs = attachNativeInputs(host, canvas, { pointer: false, onError: recordError });
     const detachControl = bindNativeControl(host, slider, "opacity", { onError: recordError });
     window.__nativeInputExecution = execution;
     window.__nativeInputCleanup = () => {

@@ -5,7 +5,7 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, windowTarget = window,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -30,7 +30,7 @@ export function attachBrowserPointerInput(canvas, {
   };
   const currentView = () => {
     const rect = canvas.getBoundingClientRect();
-    const next = [rect.left, rect.top, rect.width, rect.height, window.devicePixelRatio || 1];
+    const next = [rect.left, rect.top, rect.width, rect.height, windowTarget.devicePixelRatio || 1];
     if (!next.every(Number.isFinite) || rect.width <= 0 || rect.height <= 0 || next[4] <= 0) {
       invalidateView();
       return null;
@@ -140,7 +140,7 @@ export function attachBrowserPointerInput(canvas, {
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
-  window.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   return { invalidateView };
 }
 
