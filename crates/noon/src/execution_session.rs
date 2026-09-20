@@ -12,6 +12,7 @@ pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 mod selection;
 pub use selection::{
     pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
+    PointerSelectionPresentation,
 };
 mod publication;
 mod replay;

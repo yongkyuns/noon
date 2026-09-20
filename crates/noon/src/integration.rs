@@ -28,7 +28,7 @@ pub use crate::compact_value_authoring::semantic_object_state_from_compact;
 pub use crate::execution_segment::{ExecutionSegmentSequence, ExecutionSegmentToken};
 pub use crate::execution_session::{
     pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported,
-    PointerSelectionClick, PointerSelectionHighlight,
+    PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
 };
 pub use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,

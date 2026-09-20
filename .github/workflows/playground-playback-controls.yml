@@ -31,6 +31,8 @@ on:
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
       - "web/browser-pointer-input*"
+      - "web/native-inputs*"
+      - "web/direct-execution-wake-driver*"
       - "web/authoring-execution-client*"
       - "web/execution-worker-client*"
       - "crates/noon-render-wgpu/**"
@@ -98,6 +100,7 @@ jobs:
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
@@ -113,6 +116,7 @@ jobs:
           node --test scripts/pointer-selection-raster-contract.test.mjs
           node scripts/browser-pointer-input-smoke.mjs
           node scripts/pointer-selection-qualification.mjs
+          node scripts/pointer-selection-direct-qualification.mjs
       - name: Test public playback controls
         env:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
@@ -141,6 +145,7 @@ jobs:
           path: |
             browser-smoke-artifacts/pointer-dom
             browser-smoke-artifacts/pointer-selection
+            browser-smoke-artifacts/pointer-selection-direct
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph

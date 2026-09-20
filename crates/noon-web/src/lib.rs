@@ -29,6 +29,8 @@ mod authoring_svg;
 mod authoring_synchronized_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
+#[cfg(any(target_arch = "wasm32", test))]
+mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;
@@ -57,6 +59,12 @@ mod matching_shapes_smoke;
 mod morph_preload_cases;
 #[cfg(any(target_arch = "wasm32", test))]
 mod plot_error;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod pointer_selection_smoke;
 #[cfg(all(
     feature = "renderer",
     target_arch = "wasm32",
