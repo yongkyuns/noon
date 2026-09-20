@@ -35,9 +35,9 @@ pub use crate::execution_session::{
     StructuralPublicationStats,
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
-pub use crate::execution_session::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 pub use crate::execution_session::{
-    pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
+    pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported,
+    PointerSelectionClick, PointerSelectionHighlight,
 };
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
