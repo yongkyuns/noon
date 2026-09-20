@@ -96,6 +96,8 @@ mod family_style;
 mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
+mod graph_topology;
+pub use graph_topology::*;
 mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
