@@ -333,4 +333,5 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!xs.is_empty());
         assert!(xs.iter().all(|x| x.abs() < 0.1), "{xs:?}");
-    }}
+    }
+}
