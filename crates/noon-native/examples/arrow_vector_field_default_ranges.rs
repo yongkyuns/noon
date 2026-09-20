@@ -1,5 +1,5 @@
 use noon::{
-    manim_default_vector_field_ranges_2d, ManimArrowVectorField, MobjectFamilyMember, Scene,
+    manim_default_vector_field_ranges_2d, ManimArrowVectorField, MobjectTarget, Scene,
     VectorFieldPoint, PURPLE,
 };
 use std::rc::Rc;
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PURPLE,
     )?;
 
-    scene.add_many(&[MobjectFamilyMember::Family(field.family())])?;
+    scene.add_many(&[MobjectTarget::Family(field.family())])?;
     noon_native::run(scene.execution_session()?)?;
     Ok(())
 }
