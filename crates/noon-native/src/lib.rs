@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod execution_source;
+mod pointer_input;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -255,6 +256,7 @@ struct NativeApp {
     gpu: Option<NativeGpu>,
     realtime_clock: Option<RealtimeClock>,
     next_input_sequence: u64,
+    pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
     error: Option<NativeHostError>,
     #[cfg(test)]
@@ -299,6 +301,7 @@ impl NativeApp {
             gpu: None,
             realtime_clock: None,
             next_input_sequence: 0,
+            pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
             error: None,
             #[cfg(test)]
@@ -390,26 +393,6 @@ impl NativeApp {
             NativeEventSource::KeyPress { code }
         } else {
             NativeEventSource::KeyRelease { code }
-        })
-    }
-
-    fn dispatch_pointer_button(
-        &mut self,
-        button: MouseButton,
-        state: ElementState,
-    ) -> Result<(), NativeHostError> {
-        let Some(button) = native_pointer_button(button) else {
-            return Ok(());
-        };
-        let pressed = state == ElementState::Pressed;
-        self.dispatch_state(
-            NativeStateSource::PointerButton { button },
-            NativeInputValue::Bool(pressed),
-        )?;
-        self.dispatch_event(if pressed {
-            NativeEventSource::PointerDown { button }
-        } else {
-            NativeEventSource::PointerUp { button }
         })
     }
 
@@ -625,6 +608,16 @@ impl NativeApp {
 }
 
 impl ApplicationHandler for NativeApp {
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = self
+            .pointer_focus_lost()
+            .and_then(|()| self.rebind_pointer_view())
+        {
+            self.fail(event_loop, error);
+        }
+        self.gpu = None;
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let attributes = Window::default_attributes()
@@ -701,6 +694,38 @@ impl ApplicationHandler for NativeApp {
                     }
                     self.force_full_redraw = true;
                 }
+                if let Err(error) = self.rebind_pointer_view() {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let Err(error) = self.pointer_scale_changed(window.inner_size(), scale_factor) {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.pointer.modifiers = modifiers.state();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Err(error) = self.dispatch_pointer_position(
+                    position,
+                    window.inner_size(),
+                    window.scale_factor(),
+                ) {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // This shell does not promise cross-platform OS capture. Leaving
+                // the surface explicitly cancels, rather than risking a stuck drag.
+                if let Err(error) = self.pointer_left() {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::Focused(false) => {
+                if let Err(error) = self.pointer_focus_lost() {
+                    self.fail(event_loop, error);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let Err(error) = self.dispatch_keyboard(event.physical_key, event.state) {
@@ -708,7 +733,12 @@ impl ApplicationHandler for NativeApp {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Err(error) = self.dispatch_pointer_button(button, state) {
+                if let Err(error) = self.dispatch_pointer_button(
+                    button,
+                    state,
+                    window.inner_size(),
+                    window.scale_factor(),
+                ) {
                     self.fail(event_loop, error);
                 }
             }
