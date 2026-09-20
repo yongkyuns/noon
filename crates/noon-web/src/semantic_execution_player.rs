@@ -4,6 +4,8 @@ mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerInput};
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     RuntimeIdentity,
@@ -20,8 +22,6 @@ use noon_core::{
     NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
     Vec2,
 };
-#[cfg(any(target_arch = "wasm32", test))]
-use pointer_input::{BrowserPointerBinding, BrowserPointerInputWire};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -119,7 +119,7 @@ pub struct SemanticExecutionPlayer {
     snapshot_sent: bool,
     /// Last emitted presentation only. The session remains selection authority;
     /// renderer acknowledgement and retry belong to the existing transport.
-    last_sent_selection_overlay: Option<crate::SelectionOverlayPresentation>,
+    last_sent_selection_overlay: Option<noon::integration::PointerSelectionPresentation>,
     /// Exact phase metadata needed only to re-anchor presentation after the
     /// session atomically commits its own pending callback phase. The session
     /// remains the sole owner of callback progression and termination.
@@ -2218,17 +2218,16 @@ impl SemanticExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
-        let overlay = self
-            .session
-            .pointer_selection_highlight()
+        let presentation = self.session.pointer_selection_presentation();
+        let overlay = presentation
             .as_ref()
-            .map(crate::SelectionOverlayPresentation::from_highlight)
+            .map(crate::SelectionOverlayPresentation::from_presentation)
             .transpose()
             .map_err(|error| error.to_string())?;
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let publication = self.session.take_renderer_publication();
         let mut changes = publication.changes().clone();
-        if changes.is_empty() && overlay != self.last_sent_selection_overlay {
+        if changes.is_empty() && presentation != self.last_sent_selection_overlay {
             // Presentation-only transport work, not authored/runtime dirtiness.
             // Reuse the existing sequence and backpressure; never invent a row.
             changes = noon_runtime::FrameChanges::presentation_redraw();
@@ -2322,7 +2321,7 @@ impl SemanticExecutionPlayer {
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
         delta.selection_overlay = overlay;
-        self.last_sent_selection_overlay = overlay;
+        self.last_sent_selection_overlay = presentation;
         Ok(Some(delta))
     }
 
@@ -2978,7 +2977,7 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<(), String> {
-        let input: BrowserPointerInputWire = serde_json::from_str(json)
+        let input: BrowserPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
         self.submit_browser_pointer_input(input)
     }

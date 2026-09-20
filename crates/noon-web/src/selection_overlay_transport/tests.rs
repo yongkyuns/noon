@@ -5,6 +5,7 @@ fn circle() -> SelectionOverlayPresentation {
     SelectionOverlayPresentation {
         geometry: SelectionOverlayGeometry::Circle { radius: 1.0 },
         transform: Transform2D::IDENTITY,
+        color: Color::rgba(1.0, 1.0, 0.0, 0.35),
     }
 }
 
@@ -19,6 +20,7 @@ fn round_trip_is_bounded_geometry_without_scene_identity_or_resources() {
     ] {
         let value = SelectionOverlayPresentation {
             geometry,
+            color: Color::rgba(1.0, 1.0, 0.0, 0.35),
             transform: Transform2D {
                 translation: Vec2::new(3.0, -2.0),
                 scale: Vec2::new(-2.0, 0.5),
@@ -28,7 +30,8 @@ fn round_trip_is_bounded_geometry_without_scene_identity_or_resources() {
         value.validate().unwrap();
         let json = serde_json::to_value(value).unwrap();
         let fields = json.as_object().unwrap();
-        assert_eq!(fields.len(), 2);
+        assert_eq!(fields.len(), 3);
+        assert!(fields.contains_key("color"));
         assert!(fields.contains_key("geometry") && fields.contains_key("transform"));
         assert_eq!(
             serde_json::from_value::<SelectionOverlayPresentation>(json).unwrap(),
@@ -109,4 +112,37 @@ fn preparation_reuses_the_native_analytic_overlay_value() {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn transport_preserves_shared_style_and_rejects_invalid_color() {
+    let presentation = noon::integration::PointerSelectionPresentation {
+        geometry: GeometryRef::Circle { radius: 1.0 },
+        transform: Transform2D::IDENTITY,
+        color: Color::rgba(0.25, 0.5, 0.75, 0.4),
+    };
+    let wire = SelectionOverlayPresentation::from_presentation(&presentation).unwrap();
+    assert_eq!(wire.color, presentation.color);
+    #[cfg(feature = "renderer")]
+    assert_eq!(
+        wire.prepare().unwrap(),
+        noon_render_wgpu::AnalyticOverlay::new(
+            &presentation.geometry,
+            presentation.transform,
+            presentation.color
+        )
+        .unwrap()
+    );
+    for bad in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+        for channel in 0..4 {
+            let mut value = wire;
+            match channel {
+                0 => value.color.red = bad,
+                1 => value.color.green = bad,
+                2 => value.color.blue = bad,
+                _ => value.color.alpha = bad,
+            }
+            assert!(value.validate().is_err());
+        }
+    }
 }

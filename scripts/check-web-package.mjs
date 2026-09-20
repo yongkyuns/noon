@@ -48,6 +48,7 @@ const expectedJavascriptSurface = [
   "resourceBundleBytes(",
   "setPointerFillSelection(",
   "submitBrowserPointerInputJson(",
+  "nativePointerInput(",
   "advanceForwardToCallbackPhaseJson(",
   "requiredCallbackReadJson(",
   "export class WasmExecutionWake",

@@ -262,7 +262,7 @@ struct NativeApp {
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
-    last_selection_highlight: Option<noon::integration::PointerSelectionHighlight>,
+    last_selection_presentation: Option<noon::integration::PointerSelectionPresentation>,
     error: Option<NativeHostError>,
     #[cfg(test)]
     exit_after_present: Option<f64>,
@@ -308,7 +308,7 @@ impl NativeApp {
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
-            last_selection_highlight: None,
+            last_selection_presentation: None,
             error: None,
             #[cfg(test)]
             exit_after_present: None,
@@ -503,7 +503,7 @@ impl NativeApp {
             .viewport_bounds(viewport_aspect)
             .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
         let visibility = self.execution.query_viewport(viewport_bounds);
-        let highlight = self.execution.session().pointer_selection_highlight();
+        let highlight = self.execution.session().pointer_selection_presentation();
         let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
         let force_full_redraw = self.force_full_redraw;
         let Some(((surface_texture, reconfigure_after_present), publication)) =
@@ -577,7 +577,7 @@ impl NativeApp {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
         let presented = publication.context();
-        self.last_selection_highlight = highlight;
+        self.last_selection_presentation = highlight;
         self.execution.admit_presented_publication(presented)?;
         #[cfg(test)]
         {
