@@ -35,8 +35,7 @@ for (const required of [
 for (const required of [
   "let query_set =",
   'timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot))',
-  ".encode_retained(",
-  ".encode_retained_with_transient_presentations(",
+  ".encode_retained_with_transient_presentations_and_overlay(",
   "query_set,",
 ]) {
   assert.ok(

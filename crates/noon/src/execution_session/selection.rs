@@ -4,14 +4,19 @@
 //! retains one gesture and one semantic identity, never a scene or input queue.
 
 use noon_core::{
-    GeometryRef, NativePointerInput, NativePointerInputKind, PublicationContext, SemanticNodeId,
-    Transform2D,
+    Color, GeometryRef, NativePointerInput, NativePointerInputKind, PublicationContext,
+    SemanticNodeId, Transform2D,
 };
 
 use super::{
     ExecutionSession, ExecutionSessionInputError, NativePointerInputToken, PointerFillOutcome,
     PointerFillQuery,
 };
+
+/// Shared transient presentation policy for pointer-selection overlays.
+pub fn pointer_selection_overlay_color() -> noon_core::Color {
+    noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35)
+}
 
 /// One successfully admitted click. `None` is a background click, not a failed
 /// pick. Both endpoints retain their occurrence-local coordinates and context.
@@ -44,6 +49,19 @@ pub struct PointerSelectionHighlight {
     pub publication: PublicationContext,
     pub geometry: GeometryRef,
     pub transform: Transform2D,
+}
+
+/// The desired selection image, independent of semantic identity and publication.
+///
+/// Equality describes the same world-space overlay content. Hosts still handle
+/// camera/surface invalidation and retain this value at their own delivery or
+/// presentation boundary. Target identity and frame epoch are not image-change
+/// signals. This is not authored scene content.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PointerSelectionPresentation {
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub color: Color,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -178,6 +196,19 @@ impl ExecutionSession {
             geometry: frame.render_geometry(index)?.clone(),
             transform,
         })
+    }
+
+    /// Observe the current desired interactive image using the shared tint policy.
+    /// This reads only the selected effective row; it consumes no dirtiness and
+    /// does not acknowledge input or renderer delivery. Native and direct WASM
+    /// use this typed value; a worker serializes it only at its transport boundary.
+    pub fn pointer_selection_presentation(&self) -> Option<PointerSelectionPresentation> {
+        self.pointer_selection_highlight()
+            .map(|highlight| PointerSelectionPresentation {
+                geometry: highlight.geometry,
+                transform: highlight.transform,
+                color: pointer_selection_overlay_color(),
+            })
     }
 
     /// Prepare on a small copied gesture record. Input evaluation remains the

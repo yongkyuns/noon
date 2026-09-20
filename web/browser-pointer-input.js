@@ -5,7 +5,7 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, windowTarget = window,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -30,7 +30,7 @@ export function attachBrowserPointerInput(canvas, {
   };
   const currentView = () => {
     const rect = canvas.getBoundingClientRect();
-    const next = [rect.left, rect.top, rect.width, rect.height, window.devicePixelRatio || 1];
+    const next = [rect.left, rect.top, rect.width, rect.height, windowTarget.devicePixelRatio || 1];
     if (!next.every(Number.isFinite) || rect.width <= 0 || rect.height <= 0 || next[4] <= 0) {
       invalidateView();
       return null;
@@ -91,15 +91,20 @@ export function attachBrowserPointerInput(canvas, {
       cancel();
       return;
     }
+    const contact = selected;
     send({
-      kind, source_id: selected.source, pointer_id: selected.id,
+      kind, source_id: contact.source, pointer_id: contact.id,
       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
       viewport_width: rect.width, viewport_height: rect.height,
-      button, view_revision: selected.viewRevision,
+      button, view_revision: contact.viewRevision,
       shift: event.shiftKey === true, control: event.ctrlKey === true,
       alt: event.altKey === true, meta: event.metaKey === true,
     });
-    selected.buttons = event.buttons;
+    // Delivery can synchronously retire the attachment/contact (for example,
+    // when a presentation notification fails after Rust admitted the press).
+    // Do not mutate a cancelled or replacement contact on return from send.
+    if (!active() || selected !== contact) return;
+    contact.buttons = event.buttons;
     // Touch IDs may be recycled; the next contact must receive a new source.
     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
     return true;
@@ -140,7 +145,7 @@ export function attachBrowserPointerInput(canvas, {
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
-  window.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   return { invalidateView };
 }
 
