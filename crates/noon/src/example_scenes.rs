@@ -3302,3 +3302,5 @@ pub mod boolean_geometry;
 pub mod path_alignment;
 
 pub mod animated_priority;
+
+pub mod pointer_selection;
