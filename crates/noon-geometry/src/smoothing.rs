@@ -3,6 +3,28 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 use crate::PathProportionError;
 
+/// Selects the boundary condition used by shared cubic spline smoothing.
+///
+/// `ExactClosure` preserves Noon’s existing exact-closure behavior. The Manim policy
+/// intentionally reproduces ManimCE's signed `is_closed` tolerance for callers
+/// that require pinned authoring parity; it changes spline handles only, never
+/// the retained path's explicit `Close` commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SplineBoundary {
+    #[default]
+    ExactClosure,
+    ManimSignedClosure,
+}
+
+impl SplineBoundary {
+    fn spline_is_closed(self, anchors: &[Vec2], explicit_close: bool) -> bool {
+        match self {
+            Self::ExactClosure => explicit_close || anchors.first() == anchors.last(),
+            Self::ManimSignedClosure => manim_signed_is_closed(anchors),
+        }
+    }
+}
+
 /// Replace handles with a C2 cubic spline, or straight segments in jagged mode.
 /// Each explicit contour is independent. Existing curve anchors/order and closed
 /// joins survive; unfinished anchors have no curve and are omitted.
@@ -10,6 +32,19 @@ use crate::PathProportionError;
 pub fn change_path_anchor_mode(
     path: &VectorPath,
     smooth: bool,
+) -> Result<VectorPath, PathProportionError> {
+    change_path_anchor_mode_with_boundary(path, smooth, SplineBoundary::ExactClosure)
+}
+
+/// Replace handles using the requested spline boundary condition.
+///
+/// This shares the ordinary contour walker and solver with
+/// [`change_path_anchor_mode`]. Boundary selection affects only whether the
+/// smooth solver is natural or periodic; path closure remains authored topology.
+pub fn change_path_anchor_mode_with_boundary(
+    path: &VectorPath,
+    smooth: bool,
+    boundary: SplineBoundary,
 ) -> Result<VectorPath, PathProportionError> {
     if !path.is_finite() {
         return Err(PathProportionError::InvalidMetric);
@@ -20,7 +55,7 @@ pub fn change_path_anchor_mode(
     for command in path.commands() {
         match *command {
             PathCommand::MoveTo { to } => {
-                result = append_contour(result, &anchors, closed, smooth)?;
+                result = append_contour(result, &anchors, closed, smooth, boundary)?;
                 anchors.clear();
                 anchors.push(to);
                 closed = false;
@@ -38,7 +73,7 @@ pub fn change_path_anchor_mode(
             }
         }
     }
-    append_contour(result, &anchors, closed, smooth)
+    append_contour(result, &anchors, closed, smooth, boundary)
 }
 
 fn append_contour(
@@ -46,14 +81,15 @@ fn append_contour(
     anchors: &[Vec2],
     closed: bool,
     smooth: bool,
+    boundary: SplineBoundary,
 ) -> Result<VectorPath, PathProportionError> {
     if anchors.len() < 2 {
         return Ok(path);
     }
     path = path.move_to(anchors[0]);
     if smooth {
-        let closed = closed || anchors.first() == anchors.last();
-        let handles = smooth_handles(anchors, closed);
+        let spline_closed = boundary.spline_is_closed(anchors, closed);
+        let handles = smooth_handles(anchors, spline_closed);
         for (index, [first, second]) in handles.into_iter().enumerate() {
             path = path.cubic_to(first, second, anchors[index + 1]);
         }
@@ -69,6 +105,22 @@ fn append_contour(
         return Err(PathProportionError::InvalidMetric);
     }
     Ok(path)
+}
+
+/// ManimCE's `bezier.is_closed` uses the signed first coordinate when deriving
+/// each tolerance. This is intentionally not an absolute tolerance: a negative
+/// start coordinate makes even an exactly repeated endpoint choose the natural
+/// spline path in the pinned implementation.
+fn manim_signed_is_closed(anchors: &[Vec2]) -> bool {
+    let (Some(&start), Some(&end)) = (anchors.first(), anchors.last()) else {
+        return false;
+    };
+    let start_x = f64::from(start.x);
+    let start_y = f64::from(start.y);
+    let end_x = f64::from(end.x);
+    let end_y = f64::from(end.y);
+    let tolerance = |coordinate: f64| 1.0e-8 + 1.0e-5 * coordinate;
+    (end_x - start_x).abs() <= tolerance(start_x) && (end_y - start_y).abs() <= tolerance(start_y)
 }
 
 /// Solve the natural/open or periodic/closed spline equations in f64. The
@@ -225,6 +277,55 @@ mod tests {
                 near(original[column] + Vec2::new(-5., -7.), shifted[column]);
             }
         }
+    }
+
+    fn first_cubic(path: &VectorPath) -> (Vec2, Vec2) {
+        match path.commands() {
+            [PathCommand::MoveTo { .. }, PathCommand::CubicTo {
+                control1, control2, ..
+            }, ..] => (*control1, *control2),
+            commands => panic!("expected first cubic contour, got {commands:?}"),
+        }
+    }
+
+    #[test]
+    fn manim_signed_closure_uses_natural_handles_for_negative_closed_anchors() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1., -1.))
+            .line_to(Vec2::new(1., -1.))
+            .line_to(Vec2::new(1., 1.))
+            .line_to(Vec2::new(-1., 1.))
+            .close();
+        let smoothed =
+            change_path_anchor_mode_with_boundary(&path, true, SplineBoundary::ManimSignedClosure)
+                .unwrap();
+        let (first, second) = first_cubic(&smoothed);
+        near(first, Vec2::new(-3. / 14., -17. / 14.));
+        near(second, Vec2::new(4. / 7., -10. / 7.));
+        assert!(matches!(
+            smoothed.commands().last(),
+            Some(PathCommand::Close)
+        ));
+    }
+
+    #[test]
+    fn manim_signed_closure_uses_periodic_handles_for_positive_closed_anchors() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(1., 1.))
+            .line_to(Vec2::new(3., 1.))
+            .line_to(Vec2::new(3., 3.))
+            .line_to(Vec2::new(1., 3.))
+            .close();
+        let smoothed =
+            change_path_anchor_mode_with_boundary(&path, true, SplineBoundary::ManimSignedClosure)
+                .unwrap();
+        let (first, second) = first_cubic(&smoothed);
+        near(first, Vec2::new(1.5, 0.5));
+        near(second, Vec2::new(2.5, 0.5));
+        assert!(matches!(
+            smoothed.commands().last(),
+            Some(PathCommand::Close)
+        ));
     }
 
     #[test]
