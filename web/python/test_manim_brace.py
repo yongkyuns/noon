@@ -258,6 +258,42 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 assert "MathTex" in str(error)
             else:
                 raise AssertionError("BraceLabel default must wait for MathTex")
+
+            # Replacement preparation must fail before family membership changes.
+            membership = []
+            composite.remove = lambda *members: membership.append(("remove", members)) or composite
+            composite.add = lambda *members: membership.append(("add", members)) or composite
+            old_label = composite.label
+            old_brace = composite.brace
+
+            def failing_label(*args, **kwargs):
+                raise RuntimeError("label construction failed")
+
+            composite.label_constructor = failing_label
+            try:
+                composite.change_label("new")
+            except RuntimeError as error:
+                assert str(error) == "label construction failed"
+            else:
+                raise AssertionError("expected label construction failure")
+            assert membership == []
+            assert composite.label is old_label
+            assert composite.brace is old_brace
+
+            class FailingBrace:
+                def __init__(self, *args, **kwargs):
+                    raise RuntimeError("brace construction failed")
+
+            brace_module.Brace = FailingBrace
+            try:
+                composite.shift_brace(target)
+            except RuntimeError as error:
+                assert str(error) == "brace construction failed"
+            else:
+                raise AssertionError("expected brace construction failure")
+            assert membership == []
+            assert composite.label is old_label
+            assert composite.brace is old_brace
             """
         )
 
