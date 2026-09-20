@@ -58,8 +58,8 @@ impl ManimGeometryOptions {
         options: &ImplicitPlotOptions,
         function: impl FnMut(f64, f64) -> f64,
     ) -> Result<Self, crate::CoordinateAuthoringError> {
-        let path = prepare_implicit_path(options, function)?;
-        Ok(Self::path(map_coordinate_path(path, frame)?)?)
+        let path = prepare_axes_implicit_path(frame, options, function)?;
+        Ok(Self::path(path)?)
     }
 }
 
@@ -72,6 +72,63 @@ impl Scene {
         function: impl FnMut(f64, f64) -> f64,
     ) -> Result<Mobject, PlotAuthoringError> {
         Ok(self.geometry(ManimGeometryOptions::implicit_plot(options, function)?)?)
+    }
+}
+
+pub(crate) fn prepare_axes_implicit_path(
+    frame: AxesFrame,
+    options: &ImplicitPlotOptions,
+    mut function: impl FnMut(f64, f64) -> f64,
+) -> Result<VectorPath, crate::CoordinateAuthoringError> {
+    let planner_budget = validate_isoline_request(options.bounds, options.contour)
+        .map_err(|_| PlotPreparationError::InvalidImplicitOptions)?;
+    planner_budget
+        .checked_add(2)
+        .filter(|leaves| *leaves <= options.max_leaves)
+        .ok_or(PlotPreparationError::ImplicitLeafLimitExceeded)?;
+
+    let plan = plan_isoline(
+        |point| function(point.x, point.y),
+        options.bounds,
+        options.contour,
+    )
+    .map_err(|_| PlotPreparationError::InvalidImplicitOptions)?;
+
+    // Map the planner's f64 coordinate points before the retained VectorPath
+    // narrowing. This preserves small spans at large coordinate offsets.
+    let mut path = VectorPath::new();
+    for curve in &plan.curves {
+        let Some(first) = curve.first().copied() else { continue };
+        path = path.move_to(map_isoline_point(frame, first)?);
+        let closed = curve.len() > 2 && curve.first() == curve.last();
+        let end = if closed { curve.len() - 1 } else { curve.len() };
+        for point in &curve[1..end] {
+            path = path.line_to(map_isoline_point(frame, *point)?);
+        }
+        if closed {
+            path = path.close();
+        }
+    }
+    if options.use_smoothing {
+        change_path_anchor_mode_with_boundary(&path, true, SplineBoundary::ManimSignedClosure)
+            .map_err(|_| PlotPreparationError::SmoothingFailed.into())
+    } else {
+        Ok(path)
+    }
+}
+
+fn map_isoline_point(
+    frame: AxesFrame,
+    point: noon_geometry::IsolinePoint,
+) -> Result<Vec2, crate::CoordinateAuthoringError> {
+    let [x, y] = frame.coords_to_point(point.x, point.y)?;
+    let point = Vec2::new(x as f32, y as f32);
+    if point.x.is_finite() && point.y.is_finite() {
+        Ok(point)
+    } else {
+        Err(crate::CoordinateAuthoringError::Coordinate(
+            noon_geometry::CoordinateError::InvalidPoint,
+        ))
     }
 }
 
@@ -114,44 +171,6 @@ fn implicit_path_error(error: IsolinePathError) -> PlotPreparationError {
     }
 }
 
-fn map_coordinate_path(
-    path: VectorPath,
-    frame: AxesFrame,
-) -> Result<VectorPath, crate::CoordinateAuthoringError> {
-    let mut mapped = VectorPath::new();
-    for command in path.commands() {
-        mapped = match *command {
-            PathCommand::MoveTo { to } => mapped.move_to(map_point(frame, to)?),
-            PathCommand::LineTo { to } => mapped.line_to(map_point(frame, to)?),
-            PathCommand::QuadraticTo { control, to } => {
-                mapped.quadratic_to(map_point(frame, control)?, map_point(frame, to)?)
-            }
-            PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => mapped.cubic_to(
-                map_point(frame, control1)?,
-                map_point(frame, control2)?,
-                map_point(frame, to)?,
-            ),
-            PathCommand::Close => mapped.close(),
-        };
-    }
-    Ok(mapped)
-}
-
-fn map_point(frame: AxesFrame, point: Vec2) -> Result<Vec2, crate::CoordinateAuthoringError> {
-    let [x, y] = frame.coords_to_point(f64::from(point.x), f64::from(point.y))?;
-    let point = Vec2::new(x as f32, y as f32);
-    if point.x.is_finite() && point.y.is_finite() {
-        Ok(point)
-    } else {
-        Err(crate::CoordinateAuthoringError::Coordinate(
-            noon_geometry::CoordinateError::InvalidPoint,
-        ))
-    }
-}
 
 #[cfg(test)]
 mod tests {
