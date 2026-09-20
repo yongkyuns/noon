@@ -385,9 +385,19 @@ mod tests {
 
         let removed = topology.remove_vertex(center).unwrap();
         assert_eq!(removed.len(), 1_000);
-        assert_eq!(topology.edges().iter().map(|edge| edge.id).collect::<Vec<_>>(), vec![before, after]);
+        assert_eq!(
+            topology
+                .edges()
+                .iter()
+                .map(|edge| edge.id)
+                .collect::<Vec<_>>(),
+            vec![before, after]
+        );
         assert_eq!(topology.incident_edges(unrelated_a).unwrap(), &[before]);
-        assert_eq!(topology.incident_edges(unrelated_b).unwrap(), &[before, after]);
+        assert_eq!(
+            topology.incident_edges(unrelated_b).unwrap(),
+            &[before, after]
+        );
     }
 
     #[test]
