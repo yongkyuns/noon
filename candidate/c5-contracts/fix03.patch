@@ -1,0 +1,35 @@
+diff --git a/crates/noon/src/live_program/pointer_input_tests.rs b/crates/noon/src/live_program/pointer_input_tests.rs
+--- a/crates/noon/src/live_program/pointer_input_tests.rs
++++ b/crates/noon/src/live_program/pointer_input_tests.rs
+@@ -164,7 +164,11 @@
+ fn selection_configuration_preserves_program_phase_and_frame_contracts() {
+     let scene = Scene::new();
+     let mut program = scene.into_live_program(Finish).unwrap();
+-    assert!(program.set_pointer_fill_selection(Some(4.0)).is_err());
++    // Like the existing host-input methods, configuration is allowed before
++    // the first continuation resumes; it must not drive that continuation.
++    program.set_pointer_fill_selection(Some(4.0)).unwrap();
++    assert_eq!(program.status(), LiveProgramStatus::ReadyToResume);
++    program.set_pointer_fill_selection(None).unwrap();
+     assert!(!program.session().has_native_pointer_subscribers());
+     program.resume().unwrap();
+     let frame = program.session().frame().clone();
+@@ -177,3 +181,18 @@
+     assert_eq!(program.session().frame(), &frame);
+     assert_eq!(program.status(), LiveProgramStatus::Finished);
+ }
++
++#[test]
++fn terminal_program_cannot_reconfigure_transient_selection() {
++    let mut program = Scene::new().into_live_program(Fail).unwrap();
++    program.set_pointer_fill_selection(Some(4.0)).unwrap();
++    assert!(program.resume().is_err());
++    let frame = program.session().frame().clone();
++    for setting in [None, Some(2.0)] {
++        assert!(matches!(program.set_pointer_fill_selection(setting),
++            Err(LiveProgramError::InvalidState { .. })));
++        assert!(program.session().has_native_pointer_subscribers());
++        assert_eq!(program.session().frame(), &frame);
++        assert_eq!(program.status(), LiveProgramStatus::Terminal);
++    }
++}
