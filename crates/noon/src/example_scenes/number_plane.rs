@@ -1,6 +1,6 @@
 //! One retained coordinate grid, curve and marker, paired with number_plane.py.
 use crate::{
-    ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, Text, BLUE, GREEN, YELLOW,
+    ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, BLUE, GREEN, YELLOW,
 };
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
@@ -38,15 +38,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let content = scene.family(&[plane.family().into(), (&curve).into(), (&marker).into()])?;
     content.scale(0.85, 0.85)?;
     content.shift(0.0, -0.1)?;
-    let mut title =
-        scene.text(Text::new("NumberPlane: a shared coordinate grid").with_font_size(28.0))?;
-    title.shift(0.0, 3.0)?;
-    let mut caption = scene.text(
-        Text::new("Major lines + subdivisions | y = 0.35 x² - 1 | point (1, -0.65)")
-            .with_font_size(20.0),
-    )?;
-    caption.shift(0.0, -3.0)?;
-    scene.add_many(&[(&content).into(), (&title).into(), (&caption).into()])?;
+    scene.add_many(&[(&content).into()])?;
     Ok(scene)
 }
 
