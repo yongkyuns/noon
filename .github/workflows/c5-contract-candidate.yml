@@ -1,0 +1,167 @@
+name: C5 shared input and presentation qualification
+on:
+  push:
+    branches: [validation/c5-contract-consolidation-20260920]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_WASM_SKIP_OPT: '1'
+      NOON_RENDERER_SMOKE: '1'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Apply exact candidate to its verified feature base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          cat candidate/c5-contracts/part{0,1,2,3,4,5} | base64 -d | xz -d > "$GITHUB_WORKSPACE/proof/input.patch"
+          echo 'c9f1cd6bcb7de4aed9371c5f5e89fcdf75875eb902ce8586f01ba76100e39114  proof/input.patch' | sha256sum -c -
+          git worktree add --detach "$RUNNER_TEMP/candidate" 8b3ead1d0fda10c1d76405c01b3d2c1e1e567393
+          git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
+          git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
+      - name: Use repository-pinned Rust
+        run: |
+          cd "$CANDIDATE"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF/rust-version.txt"
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: c5-contract-cargo-${{ runner.os }}-${{ hashFiles('crates/**/Cargo.toml') }}
+          restore-keys: |
+            c5-contract-cargo-${{ runner.os }}-
+            ${{ runner.os }}-cargo-sources-
+      - name: Format and retain exact source identity
+        run: |
+          cd "$CANDIDATE"
+          cargo fmt --all
+          git add -A
+          git diff --cached --check
+          git write-tree | tee "$PROOF/tree.txt"
+          git diff --cached --binary --full-index > "$PROOF/formatted.patch"
+          git diff --cached --stat > "$PROOF/stat.txt"
+      - name: Execute shared selection input and live-program regressions
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo test -p noon --all-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee "$PROOF/selection.log"
+          cargo test -p noon --all-features --lib live_program::pointer_input_tests -- --nocapture 2>&1 | tee "$PROOF/live-input.log"
+          cargo test -p noon-web --all-features --lib -- --nocapture 2>&1 | tee "$PROOF/web-rust.log"
+      - name: Run repository fast gate
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          bash scripts/check.sh fast 8b3ead1d0fda10c1d76405c01b3d2c1e1e567393 2>&1 | tee "$PROOF/fast.log"
+      - name: Compile direct and reduced-feature WASM
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-minimal.log"
+          cargo check -p noon-web --features renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-renderer.log"
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build actual renderer-smoke browser package with preflight
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$PROOF/browser-build.log"
+          sha256sum web/pkg/noon_web_bg.wasm > "$PROOF/wasm.sha256"
+      - name: Install browser dependencies
+        run: |
+          cd "$CANDIDATE"
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify real DOM and worker selection pixels
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          node --test scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$PROOF/oracle.log"
+          node scripts/browser-pointer-input-smoke.mjs 2>&1 | tee "$PROOF/dom.log"
+          node scripts/pointer-selection-qualification.mjs 2>&1 | tee "$PROOF/worker-pixels.log"
+      - name: Qualify direct single-context Rust and live-program pixels
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          node scripts/pointer-selection-direct-qualification.mjs 2>&1 | tee "$PROOF/direct-pixels.log"
+          node scripts/native-input-smoke.mjs 2>&1 | tee "$PROOF/reactive-input.log"
+      - name: Execute native surface and retained overlay qualification
+        run: |
+          set -o pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+          cd "$CANDIDATE"
+          WGPU_BACKEND=vulkan NOON_SELECTION_PROOF_DIR="$PROOF/native-pixels" cargo test -p noon --all-features --test selection_overlay_raster -- --include-ignored --nocapture 2>&1 | tee "$PROOF/native-pixels.log"
+          WGPU_BACKEND=vulkan xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native native_surface_smoke_presents_paused_click_selection_and_clear -- --ignored --nocapture --test-threads=1 2>&1 | tee "$PROOF/native-surface.log"
+      - name: Record completed candidate qualification
+        run: echo passed > "$PROOF/qualification.txt"
+      - name: Retain source and evidence including failures
+        if: always()
+        run: |
+          if [ -n "${CANDIDATE:-}" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/proof/browser"
+            cp -R "$CANDIDATE/browser-smoke-artifacts/." "$GITHUB_WORKSPACE/proof/browser/" 2>/dev/null || true
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c5-contract-consolidation-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
+  publish-tested-source:
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 8b3ead1d0fda10c1d76405c01b3d2c1e1e567393
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: c5-contract-consolidation-proof
+          path: ${{ runner.temp }}/proof
+      - name: Publish tested source without temporary workflow ancestry
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/proof"
+          test "$(cat "$proof/qualification.txt")" = passed
+          git apply "$proof/formatted.patch"
+          git add -A
+          test "$(git write-tree)" = "$(cat "$proof/tree.txt")"
+          # GitHub App source pushes do not carry workflow-file write permission.
+          # The exact tested permanent workflow is reapplied via the connector.
+          git restore --source=HEAD --staged --worktree .github/workflows
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: unify contextual pointer admission and transient presentation across hosts'
+          git push origin HEAD:refs/heads/staging/c5-contracts-tested-${{ github.run_id }}
+          git rev-parse HEAD | tee "$RUNNER_TEMP/published.txt"
+          git rev-parse HEAD^{tree} >> "$RUNNER_TEMP/published.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c5-contracts-tested-publication
+          path: ${{ runner.temp }}/published.txt
+          retention-days: 7
