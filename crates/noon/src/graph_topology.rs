@@ -38,6 +38,8 @@ pub enum GraphTopologyError {
         end: GraphVertexId,
         directed: bool,
     },
+    VertexIdExhausted,
+    EdgeIdExhausted,
 }
 
 impl std::fmt::Display for GraphTopologyError {
@@ -56,6 +58,8 @@ impl std::fmt::Display for GraphTopologyError {
                 start.get(),
                 end.get()
             ),
+            Self::VertexIdExhausted => formatter.write_str("graph vertex identity space exhausted"),
+            Self::EdgeIdExhausted => formatter.write_str("graph edge identity space exhausted"),
         }
     }
 }
@@ -118,13 +122,16 @@ impl RetainedGraphTopology {
         &self.edges
     }
 
-    pub fn add_vertex(&mut self) -> GraphVertexId {
+    pub fn add_vertex(&mut self) -> Result<GraphVertexId, GraphTopologyError> {
         let id = GraphVertexId(self.next_vertex_id);
-        self.next_vertex_id += 1;
+        self.next_vertex_id = self
+            .next_vertex_id
+            .checked_add(1)
+            .ok_or(GraphTopologyError::VertexIdExhausted)?;
         self.vertex_positions.insert(id, self.vertices.len());
         self.vertices.push(id);
         self.incident_edges.insert(id, Vec::new());
-        id
+        Ok(id)
     }
 
     pub fn contains_vertex(&self, id: GraphVertexId) -> bool {
@@ -154,7 +161,10 @@ impl RetainedGraphTopology {
         }
 
         let id = GraphEdgeId(self.next_edge_id);
-        self.next_edge_id += 1;
+        self.next_edge_id = self
+            .next_edge_id
+            .checked_add(1)
+            .ok_or(GraphTopologyError::EdgeIdExhausted)?;
         let edge = GraphEdge {
             id,
             start,
@@ -250,10 +260,10 @@ mod tests {
     #[test]
     fn moving_vertex_can_resolve_only_incident_edges() {
         let mut topology = RetainedGraphTopology::new();
-        let a = topology.add_vertex();
-        let b = topology.add_vertex();
-        let c = topology.add_vertex();
-        let d = topology.add_vertex();
+        let a = topology.add_vertex().unwrap();
+        let b = topology.add_vertex().unwrap();
+        let c = topology.add_vertex().unwrap();
+        let d = topology.add_vertex().unwrap();
         let ab = topology.add_edge(a, b, false).unwrap();
         let ac = topology.add_edge(a, c, false).unwrap();
         let cd = topology.add_edge(c, d, false).unwrap();
@@ -266,9 +276,9 @@ mod tests {
     #[test]
     fn local_mutation_preserves_unrelated_vertex_and_edge_identity() {
         let mut topology = RetainedGraphTopology::new();
-        let a = topology.add_vertex();
-        let b = topology.add_vertex();
-        let c = topology.add_vertex();
+        let a = topology.add_vertex().unwrap();
+        let b = topology.add_vertex().unwrap();
+        let c = topology.add_vertex().unwrap();
         let ab = topology.add_edge(a, b, false).unwrap();
         let bc = topology.add_edge(b, c, false).unwrap();
 
@@ -290,7 +300,7 @@ mod tests {
         assert_eq!(topology.incident_edges(b).unwrap(), &[bc]);
         assert_eq!(topology.incident_edges(c).unwrap(), &[bc]);
 
-        let d = topology.add_vertex();
+        let d = topology.add_vertex().unwrap();
         assert!(d.get() > c.get());
         let cd = topology.add_edge(c, d, false).unwrap();
         assert!(cd.get() > bc.get());
@@ -299,8 +309,8 @@ mod tests {
     #[test]
     fn undirected_duplicate_is_endpoint_order_independent() {
         let mut topology = RetainedGraphTopology::new();
-        let a = topology.add_vertex();
-        let b = topology.add_vertex();
+        let a = topology.add_vertex().unwrap();
+        let b = topology.add_vertex().unwrap();
         topology.add_edge(a, b, false).unwrap();
 
         assert!(matches!(
@@ -316,7 +326,7 @@ mod tests {
     #[test]
     fn self_edge_is_indexed_once() {
         let mut topology = RetainedGraphTopology::new();
-        let a = topology.add_vertex();
+        let a = topology.add_vertex().unwrap();
         let aa = topology.add_edge(a, a, false).unwrap();
         assert_eq!(topology.incident_edges(a).unwrap(), &[aa]);
         topology.remove_edge(aa).unwrap();
@@ -326,7 +336,7 @@ mod tests {
     #[test]
     fn unknown_endpoints_fail_before_topology_changes() {
         let mut topology = RetainedGraphTopology::new();
-        let a = topology.add_vertex();
+        let a = topology.add_vertex().unwrap();
         let unknown = GraphVertexId(99);
         assert_eq!(
             topology.add_edge(a, unknown, false),
@@ -335,4 +345,27 @@ mod tests {
         assert!(topology.edges().is_empty());
         assert!(topology.incident_edges(a).unwrap().is_empty());
     }
+    #[test]
+    fn identity_exhaustion_fails_before_topology_mutation() {
+        let mut vertices = RetainedGraphTopology::new();
+        vertices.next_vertex_id = u64::MAX;
+        assert_eq!(
+            vertices.add_vertex(),
+            Err(GraphTopologyError::VertexIdExhausted)
+        );
+        assert!(vertices.vertices().is_empty());
+
+        let mut edges = RetainedGraphTopology::new();
+        let a = edges.add_vertex().unwrap();
+        let b = edges.add_vertex().unwrap();
+        edges.next_edge_id = u64::MAX;
+        assert_eq!(
+            edges.add_edge(a, b, false),
+            Err(GraphTopologyError::EdgeIdExhausted)
+        );
+        assert!(edges.edges().is_empty());
+        assert!(edges.incident_edges(a).unwrap().is_empty());
+        assert!(edges.incident_edges(b).unwrap().is_empty());
+    }
+
 }
