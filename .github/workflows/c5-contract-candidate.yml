@@ -111,6 +111,30 @@ jobs:
           cd "$CANDIDATE"
           node scripts/pointer-selection-direct-qualification.mjs 2>&1 | tee "$PROOF/direct-pixels.log"
           node scripts/native-input-smoke.mjs 2>&1 | tee "$PROOF/reactive-input.log"
+      - name: Verify rendered cancellation regression detects omitted delivery
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          cp web/native-inputs.js "$RUNNER_TEMP/native-inputs-original.js"
+          trap 'cp "$RUNNER_TEMP/native-inputs-original.js" web/native-inputs.js' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('web/native-inputs.js')
+          text = path.read_text()
+          before = 'send: sample => invoke("nativePointerInput",'
+          after = 'send: sample => !["cancel", "focus_lost", "capture_lost"].includes(sample.kind) && invoke("nativePointerInput",'
+          assert text.count(before) == 1
+          path.write_text(text.replace(before, after))
+          PY
+          if NOON_POINTER_DIRECT_ARTIFACTS="$PROOF/browser/pointer-selection-direct-no-cancel" node scripts/pointer-selection-direct-qualification.mjs > "$PROOF/cancellation-mutation.log" 2>&1; then
+            echo 'omitted cancellation unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'Rust must admit stationary focus_lost' "$PROOF/cancellation-mutation.log"
+          cp "$RUNNER_TEMP/native-inputs-original.js" web/native-inputs.js
+          trap - EXIT
+          git diff --exit-code -- web/native-inputs.js
+          echo 'Omitted cancellation rejected by the stationary browser regression; source restored.' | tee "$PROOF/cancellation-mutation-result.txt"
       - name: Execute native surface and retained overlay qualification
         run: |
           set -o pipefail

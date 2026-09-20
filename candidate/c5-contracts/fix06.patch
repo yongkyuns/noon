@@ -1,0 +1,83 @@
+diff --git a/scripts/pointer-selection-direct-qualification.mjs b/scripts/pointer-selection-direct-qualification.mjs
+index 7c8ec5f..2d159df 100644
+--- a/scripts/pointer-selection-direct-qualification.mjs
++++ b/scripts/pointer-selection-direct-qualification.mjs
+@@ -11,7 +11,9 @@ import { VIEW, SHAPES, shapeSurfaceCenter, assertExactPixels, assertSelectionPix
+   from "./pointer-selection-raster-contract.mjs";
+ 
+ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+-const output = path.join(root, "browser-smoke-artifacts/pointer-selection-direct");
++const output = process.env.NOON_POINTER_DIRECT_ARTIFACTS
++  ? path.resolve(process.env.NOON_POINTER_DIRECT_ARTIFACTS)
++  : path.join(root, "browser-smoke-artifacts/pointer-selection-direct");
+ const report = { scope: "direct-rust-wasm", status: "running", cases: [] };
+ await mkdir(output, { recursive: true });
+ let server, browser;
+@@ -63,11 +65,19 @@ try {
+           const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+           const canvas = document.querySelector("#scene"), errors = [];
+           const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), liveProgram);
++          // Observe only calls that actually return from the Rust ABI. This is
++          // test instrumentation, not an alternate collector or input consumer.
++          const admittedInputs = [], nativePointerInput = renderer.nativePointerInput.bind(renderer);
++          renderer.nativePointerInput = (...args) => {
++            const result = nativePointerInput(...args);
++            admittedInputs.push(args);
++            return result;
++          };
+           const driver = createDirectExecutionWakeDriver(renderer);
+           const attach = () => attachNativeInputs(renderer, canvas, {
+             onInput: () => driver.wake(), onError: error => errors.push(String(error)),
+           });
+-          globalThis.direct = { renderer, driver, attach, detach: attach(), errors };
++          globalThis.direct = { renderer, driver, attach, detach: attach(), errors, admittedInputs };
+         }, liveProgram);
+         await settled();
+         const before = await state(), baseline = await image("baseline");
+@@ -110,6 +120,46 @@ try {
+         await page.mouse.move(bounds.x + center.x, bounds.y + center.y); await page.mouse.down();
+         await page.mouse.move(850, 550); await page.mouse.move(bounds.x + center.x, bounds.y + center.y); await page.mouse.up();
+         await settled(); assertExactPixels(await image("cancel"), baseline, "cancelled re-entry");
++        // No excursion: movement-threshold rejection must not mask a missing
++        // cancellation. Down/up are trusted mouse events; loss events here are
++        // deliberately injected (no OS capture acquisition is claimed).
++        for (const [eventType, kind] of [["blur", "focus_lost"],
++          ["lostpointercapture", "capture_lost"], ["pointercancel", "cancel"]]) {
++          prior = await state();
++          await page.evaluate(() => { direct.admittedInputs.length = 0; });
++          await page.mouse.move(bounds.x + center.x, bounds.y + center.y);
++          await page.mouse.down();
++          const press = await page.evaluate(() => direct.admittedInputs.findLast(args => args[0] === "press"));
++          assert.ok(press, "stationary press must reach Rust");
++          await page.evaluate(({ eventType, pointerId }) => {
++            if (eventType === "blur") window.dispatchEvent(new Event("blur"));
++            else document.querySelector("#scene").dispatchEvent(new PointerEvent(eventType, {
++              pointerId, pointerType: "mouse", isPrimary: true,
++            }));
++          }, { eventType, pointerId: press[2] });
++          await page.mouse.up(); await settled();
++          const admitted = await page.evaluate(() => direct.admittedInputs.map(args => args[0]));
++          assert.equal(admitted.at(-1), kind, `Rust must admit stationary ${kind}`);
++          assert.ok(!admitted.includes("release"), "cancelled DOM release must not become an edge");
++          // A deliberate stale platform-ABI call must also fail in Rust. The
++          // collector ignoring the ordinary release alone is not enough proof.
++          const rejected = await page.evaluate(press => {
++            const release = [...press]; release[0] = "release";
++            try { direct.renderer.nativePointerInput(...release); return null; }
++            catch (error) { return String(error); }
++          }, press);
++          assert.match(rejected ?? "", /identity\/view does not match its live source/,
++            "Rust must reject a release for the cancelled source");
++          assert.deepEqual((await state()).frame, before.frame);
++          assert.equal((await state()).stats.presentedFrames, prior.stats.presentedFrames);
++          assertExactPixels(await image(`stationary-${kind}`), baseline, `stationary ${kind}`);
++          // A fresh contact must still select normally after each cancellation.
++          prior = await state(); await click(SHAPES[0]); await changed(prior);
++          assertExactPixels(await image(`after-${kind}`), selected, `new contact after ${kind}`);
++          prior = await state(); await page.mouse.click(bounds.x + 20, bounds.y + 320); await changed(prior);
++          assertExactPixels(await image(`clear-after-${kind}`), baseline, `clear after ${kind}`);
++          result.steps.push({ name: `stationary-${kind}`, retiredReleaseRejected: true });
++        }
+         await page.evaluate(() => { direct.detach(); direct.detach = direct.attach(); });
+         prior = await state(); await click(SHAPES[0]); await changed(prior);
+         prior = await state();
