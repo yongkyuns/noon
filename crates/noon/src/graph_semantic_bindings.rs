@@ -278,6 +278,7 @@ mod tests {
         ));
         assert_eq!(bindings.vertex_node(b), None);
     }
+
     #[test]
     fn bindings_reject_cross_scene_identity_before_mutation() {
         let mut topology = GraphTopology::new();
@@ -296,5 +297,4 @@ mod tests {
         );
         assert_eq!(bindings.vertex_node(b), None);
     }
-
 }
