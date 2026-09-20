@@ -1,4 +1,5 @@
 //! Direct Rust authoring and coherent live execution for Noon.
+pub use implicit_plotting::ImplicitPlotOptions;
 //!
 //! Start with [`Scene`] and [`Mobject`]. Scene-owned persistent operations such as
 //! geometry creation, family translation and linear/grid arrangement use the same
@@ -96,6 +97,7 @@ mod family_style;
 mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
+mod implicit_plotting;
 mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
@@ -152,7 +154,7 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
