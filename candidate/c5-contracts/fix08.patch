@@ -1,0 +1,53 @@
+diff --git a/crates/noon/src/execution_session.rs b/crates/noon/src/execution_session.rs
+index 845e477439ba664a1be48b4043c0c1c811e43b23..b18a8ffce9d216930264f4792176f1ac5750115c 100644
+--- a/crates/noon/src/execution_session.rs
++++ b/crates/noon/src/execution_session.rs
+@@ -11,7 +11,8 @@ mod picking;
+ pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
+ mod selection;
+ pub use selection::{
+-    PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
++    pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
++    PointerSelectionPresentation,
+ };
+ mod publication;
+ mod replay;
+diff --git a/crates/noon/src/execution_session/selection.rs b/crates/noon/src/execution_session/selection.rs
+index 3d968633bd2992ff842f796d9e96593f3f826b6f..6cd8efc066638566d9b455aab17208e241bfcf38 100644
+--- a/crates/noon/src/execution_session/selection.rs
++++ b/crates/noon/src/execution_session/selection.rs
+@@ -13,6 +13,11 @@ use super::{
+     PointerFillQuery,
+ };
+ 
++/// Shared transient presentation policy for pointer-selection overlays.
++pub fn pointer_selection_overlay_color() -> noon_core::Color {
++    noon_core::Color::rgba(1.0, 1.0, 0.0, 0.35)
++}
++
+ /// One successfully admitted click. `None` is a background click, not a failed
+ /// pick. Both endpoints retain their occurrence-local coordinates and context.
+ #[derive(Clone, Copy, Debug, PartialEq)]
+@@ -202,7 +207,7 @@ impl ExecutionSession {
+             .map(|highlight| PointerSelectionPresentation {
+                 geometry: highlight.geometry,
+                 transform: highlight.transform,
+-                color: Color::rgba(1.0, 1.0, 0.0, 0.35),
++                color: pointer_selection_overlay_color(),
+             })
+     }
+ 
+diff --git a/crates/noon/src/integration.rs b/crates/noon/src/integration.rs
+index ebdbd826e3cbc872fc3f35ae964aaf5075d62255..d6aa649ca384f3e3a37629b7bbd272e3c580801a 100644
+--- a/crates/noon/src/integration.rs
++++ b/crates/noon/src/integration.rs
+@@ -35,8 +35,8 @@ pub use crate::execution_session::{
+     StructuralPublicationStats,
+ };
+ pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
+-pub use crate::execution_session::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
+ pub use crate::execution_session::{
++    pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported,
+     PointerSelectionClick, PointerSelectionHighlight, PointerSelectionPresentation,
+ };
+ pub use crate::host_callbacks::{
