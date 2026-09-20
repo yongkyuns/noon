@@ -98,7 +98,7 @@ impl EdgeKey {
 /// edge set in O(degree) time without scanning the full graph. Insertion order is retained in
 /// the public vertex/edge vectors for deterministic family/painter lowering by later layers.
 #[derive(Clone, Debug, Default)]
-pub struct RetainedGraphTopology {
+pub struct GraphTopology {
     next_vertex_id: u64,
     next_edge_id: u64,
     vertices: Vec<GraphVertexId>,
@@ -109,7 +109,7 @@ pub struct RetainedGraphTopology {
     incident_edges: HashMap<GraphVertexId, Vec<GraphEdgeId>>,
 }
 
-impl RetainedGraphTopology {
+impl GraphTopology {
     pub fn new() -> Self {
         Self::default()
     }
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn moving_vertex_can_resolve_only_incident_edges() {
-        let mut topology = RetainedGraphTopology::new();
+        let mut topology = GraphTopology::new();
         let a = topology.add_vertex().unwrap();
         let b = topology.add_vertex().unwrap();
         let c = topology.add_vertex().unwrap();
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn local_mutation_preserves_unrelated_vertex_and_edge_identity() {
-        let mut topology = RetainedGraphTopology::new();
+        let mut topology = GraphTopology::new();
         let a = topology.add_vertex().unwrap();
         let b = topology.add_vertex().unwrap();
         let c = topology.add_vertex().unwrap();
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn undirected_duplicate_is_endpoint_order_independent() {
-        let mut topology = RetainedGraphTopology::new();
+        let mut topology = GraphTopology::new();
         let a = topology.add_vertex().unwrap();
         let b = topology.add_vertex().unwrap();
         topology.add_edge(a, b, false).unwrap();
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn self_edge_is_indexed_once() {
-        let mut topology = RetainedGraphTopology::new();
+        let mut topology = GraphTopology::new();
         let a = topology.add_vertex().unwrap();
         let aa = topology.add_edge(a, a, false).unwrap();
         assert_eq!(topology.incident_edges(a).unwrap(), &[aa]);
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn unknown_endpoints_fail_before_topology_changes() {
-        let mut topology = RetainedGraphTopology::new();
+        let mut topology = GraphTopology::new();
         let a = topology.add_vertex().unwrap();
         let unknown = GraphVertexId(99);
         assert_eq!(
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn identity_exhaustion_fails_before_topology_mutation() {
-        let mut vertices = RetainedGraphTopology::new();
+        let mut vertices = GraphTopology::new();
         vertices.next_vertex_id = u64::MAX;
         assert_eq!(
             vertices.add_vertex(),
@@ -356,7 +356,7 @@ mod tests {
         );
         assert!(vertices.vertices().is_empty());
 
-        let mut edges = RetainedGraphTopology::new();
+        let mut edges = GraphTopology::new();
         let a = edges.add_vertex().unwrap();
         let b = edges.add_vertex().unwrap();
         edges.next_edge_id = u64::MAX;
