@@ -202,11 +202,13 @@ impl GraphSemanticBindings {
         &self,
         node: SemanticNodeId,
     ) -> Result<(), GraphBindingError> {
-        if self.vertices
+        if self
+            .vertices
             .values()
             .chain(self.edges.values())
             .chain(self.edge_lines.values())
-            .any(|&bound| bound == node) {
+            .any(|&bound| bound == node)
+        {
             Err(GraphBindingError::SemanticIdentityAlreadyBound(node))
         } else {
             Ok(())
@@ -230,9 +232,15 @@ mod tests {
         let ac = topology.add_edge(a, c, true).unwrap();
 
         let mut scene = Scene::new();
-        let va = scene.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
-        let vb = scene.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
-        let vc = scene.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
+        let va = scene
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
+        let vb = scene
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
+        let vc = scene
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
         let eab = ManimArrow::create(
             Rc::clone(scene.integration_store()),
             ManimArrowOptions::arrow(0.0, 0.0, 1.0, 0.0).unwrap(),
@@ -268,7 +276,9 @@ mod tests {
         let a = topology.add_vertex().unwrap();
         let b = topology.add_vertex().unwrap();
         let mut scene = Scene::new();
-        let vertex = scene.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
+        let vertex = scene
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
 
         let mut bindings = GraphSemanticBindings::new();
         bindings.bind_vertex(&topology, a, &vertex).unwrap();
@@ -286,8 +296,12 @@ mod tests {
         let b = topology.add_vertex().unwrap();
         let mut first = Scene::new();
         let mut second = Scene::new();
-        let va = first.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
-        let vb = second.geometry(ManimGeometryOptions::circle(0.2).unwrap()).unwrap();
+        let va = first
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
+        let vb = second
+            .geometry(ManimGeometryOptions::circle(0.2).unwrap())
+            .unwrap();
 
         let mut bindings = GraphSemanticBindings::new();
         bindings.bind_vertex(&topology, a, &va).unwrap();
