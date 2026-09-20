@@ -297,36 +297,40 @@ mod tests {
     }
 
     #[test]
-    fn axes_mapping_preserves_cubic_controls_in_a_sheared_frame() {
+    fn axes_mapping_preserves_small_span_at_large_coordinate_offset() {
         let frame = AxesFrame::new(
-            noon_geometry::NumberLineFrame::new([0.0, 2.0, 1.0], [10.0, 20.0], [14.0, 22.0])
-                .unwrap(),
-            noon_geometry::NumberLineFrame::new([0.0, 4.0, 1.0], [10.0, 20.0], [6.0, 28.0])
+            noon_geometry::NumberLineFrame::new(
+                [1_000_000_000.0, 1_000_000_010.0, 1.0],
+                [-5.0, 0.0],
+                [5.0, 0.0],
+            )
+            .unwrap(),
+            noon_geometry::NumberLineFrame::new([-1.0, 1.0, 1.0], [0.0, -1.0], [0.0, 1.0])
                 .unwrap(),
         );
-        let path = VectorPath::new()
-            .move_to(Vec2::new(0.0, 0.0))
-            .cubic_to(
-                Vec2::new(1.0, 2.0),
-                Vec2::new(2.0, 4.0),
-                Vec2::new(1.0, 4.0),
-            )
-            .close();
-        let mapped = map_coordinate_path(path, frame).unwrap();
-        assert!(matches!(
-            mapped.commands(),
-            [
-                PathCommand::MoveTo { to },
-                PathCommand::CubicTo {
-                    control1,
-                    control2,
-                    to: end,
-                },
-                PathCommand::Close,
-            ] if *to == Vec2::new(10.0, 20.0)
-                && *control1 == Vec2::new(10.0, 25.0)
-                && *control2 == Vec2::new(10.0, 30.0)
-                && *end == Vec2::new(8.0, 29.0)
-        ));
-    }
-}
+        let options = ImplicitPlotOptions {
+            bounds: IsolineBounds::new(
+                noon_geometry::IsolinePoint::new(1_000_000_000.0, -1.0),
+                noon_geometry::IsolinePoint::new(1_000_000_010.0, 1.0),
+            ),
+            contour: IsolineOptions {
+                min_depth: 3,
+                max_quads: 256,
+                tolerance: None,
+            },
+            use_smoothing: false,
+            max_leaves: 1_000,
+        };
+        let path = prepare_axes_implicit_path(frame, &options, |x, _| x - 1_000_000_005.0)
+            .unwrap();
+        let xs = path
+            .commands()
+            .iter()
+            .filter_map(|command| match command {
+                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => Some(to.x),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!xs.is_empty());
+        assert!(xs.iter().all(|x| x.abs() < 0.1), "{xs:?}");
+    }}
