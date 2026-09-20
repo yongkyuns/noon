@@ -750,3 +750,35 @@ fn failed_press_does_not_retain_a_target_or_allow_a_later_release_to_click() {
     );
     assert_eq!(session.selected_pointer_target(), Some(original));
 }
+
+#[test]
+fn desired_selection_image_is_identity_free_and_does_not_consume_publication() {
+    let (_, _, first_target, mut first) = fixture();
+    let mut store = SemanticStore::new();
+    let _unrelated = store.insert_family();
+    let root = store.insert_family();
+    let second_target = attach(&mut store, root, circle(0.0));
+    let mut second = session(&store, root);
+    assert_ne!(first_target, second_target);
+    click(&mut first, 0, 0.0);
+    click(&mut second, 0, 0.0);
+    let frame = first.frame().clone();
+    let context = first.publication_context();
+    let image = first.pointer_selection_presentation().unwrap();
+    assert_eq!(Some(image.clone()), second.pointer_selection_presentation());
+    assert_eq!(image.color, Color::rgba(1.0, 1.0, 0.0, 0.35));
+    submit(
+        &mut first,
+        2,
+        NativePointerInputKind::Move(position(3.0, 500.0)),
+    );
+    for _ in 0..100 {
+        assert_eq!(first.pointer_selection_presentation(), Some(image.clone()));
+    }
+    assert_eq!(first.frame(), &frame);
+    assert_eq!(first.publication_context(), context);
+    assert!(first.take_renderer_publication().changes().is_empty());
+    first.disable_pointer_fill_selection().unwrap();
+    assert!(first.pointer_selection_presentation().is_none());
+    assert!(first.take_renderer_publication().changes().is_empty());
+}

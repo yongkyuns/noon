@@ -47,7 +47,7 @@ fn paused_click_and_clear_request_redraw_without_scene_dirtiness_or_timeline_wor
     assert_eq!(app.session().frame(), &before);
     assert_eq!(app.session().publication_context(), context);
     // Model only a successful presentation acknowledgement, not input state.
-    app.last_selection_highlight = app.session().pointer_selection_highlight();
+    app.last_selection_presentation = app.session().pointer_selection_presentation();
     assert!(!app.publication_pending());
     click(&mut app, 160.0);
     assert!(
@@ -79,7 +79,7 @@ fn failed_acquire_keeps_overlay_pending_and_out_and_back_does_not_clear() {
     )
     .is_none());
     assert!(app.selection_overlay_pending());
-    app.last_selection_highlight = app.session().pointer_selection_highlight();
+    app.last_selection_presentation = app.session().pointer_selection_presentation();
     // An incorrectly recognized background click would erase the selection.
     app.dispatch_pointer_position(PhysicalPosition::new(10.0, 90.0), SIZE, 1.0)
         .unwrap();
@@ -130,19 +130,19 @@ fn native_surface_smoke_presents_paused_click_selection_and_clear() {
             assert!(self.app.session().wake_state().is_quiescent());
             match self.presents {
                 0 => {
-                    assert!(self.app.last_selection_highlight.is_none());
+                    assert!(self.app.last_selection_presentation.is_none());
                     click(&mut self.app, 160.0);
                     assert!(self.app.selection_overlay_pending());
                 }
                 1 => {
-                    assert!(self.app.last_selection_highlight.is_some());
+                    assert!(self.app.last_selection_presentation.is_some());
                     assert!(!self.app.publication_pending());
                     assert_eq!(self.app.last_geometry_draw_calls, 2);
                     click(&mut self.app, 10.0);
                     assert!(self.app.selection_overlay_pending());
                 }
                 2 => {
-                    assert!(self.app.last_selection_highlight.is_none());
+                    assert!(self.app.last_selection_presentation.is_none());
                     assert!(!self.app.publication_pending());
                     assert_eq!(self.app.last_geometry_draw_calls, 1);
                     event_loop.exit();

@@ -5,6 +5,9 @@ use noon_core::{
     SemanticMutationTransaction, SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId,
     SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticVec3, StoredGeometry,
 };
+use noon_core::{NativePointerCancellation, NativePointerId};
+
+const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
 
 struct PointerFixture {
     player: SemanticExecutionPlayer,
@@ -193,7 +196,7 @@ fn rejected_browser_pointer_input_does_not_acknowledge_sequence() {
     assert_eq!(f.player.next_native_event_sequence, 1);
 }
 
-fn wire(kind: &str, source: u64, pointer: i32) -> BrowserPointerInputWire {
+fn wire(kind: &str, source: u64, pointer: i32) -> BrowserPointerInput {
     let positioned = matches!(kind, "move" | "press" | "release");
     serde_json::from_value(serde_json::json!({
         "kind": kind, "source_id": source, "pointer_id": pointer, "view_revision": 2,
@@ -519,5 +522,67 @@ fn sealed_browser_input_does_not_acknowledge_and_can_retry_after_explicit_discar
     assert_eq!(
         f.player.session.effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(1.0))
+    );
+}
+
+#[test]
+fn typed_browser_and_worker_codec_reach_identical_session_input_effects() {
+    use crate::browser_pointer_input::submit_browser_pointer_input;
+    let mut worker = pointer_fixture();
+    let direct_fixture = pointer_fixture();
+    let mut direct = direct_fixture.player.session;
+    let mut binding = None;
+    let mut sequence = 0;
+    for (kind, source) in [
+        ("press", 1),
+        ("move", 1),
+        ("release", 1),
+        ("press", 1),
+        ("capture_lost", 1),
+        ("press", 2),
+        ("release", 2),
+    ] {
+        let input = wire(kind, source, 7);
+        submit_browser_pointer_input(&mut direct, &mut binding, &mut sequence, input).unwrap();
+        worker.player.submit_browser_pointer_input(input).unwrap();
+        for (a, b) in [
+            (direct_fixture.position, worker.position),
+            (direct_fixture.button, worker.button),
+            (direct_fixture.down, worker.down),
+            (direct_fixture.up, worker.up),
+        ] {
+            assert_eq!(
+                direct.effective_signal_value(a),
+                worker.player.session.effective_signal_value(b)
+            );
+        }
+        assert_eq!(sequence, worker.player.next_native_event_sequence);
+        assert_eq!(direct.frame().time, 0.0);
+    }
+    let before = direct.publication_context();
+    let rejected_sequence = sequence;
+    assert!(submit_browser_pointer_input(
+        &mut direct,
+        &mut binding,
+        &mut sequence,
+        wire("release", 1, 7)
+    )
+    .is_err());
+    assert_eq!(sequence, rejected_sequence);
+    assert_eq!(direct.publication_context(), before);
+}
+
+#[test]
+fn direct_abi_checks_identities_before_narrowing() {
+    use crate::browser_pointer_input::{dom_integer, BrowserPointerKind};
+    for value in [f64::NAN, f64::INFINITY, -1.0, 0.5, 256.0] {
+        assert!(dom_integer(value, 0.0, 255.0).is_err());
+    }
+    assert_eq!(dom_integer(255.0, 0.0, 255.0).unwrap(), 255.0);
+    assert!(dom_integer(9_007_199_254_740_992.0, 1.0, 9_007_199_254_740_991.0).is_err());
+    assert!(BrowserPointerKind::from_name("click").is_err());
+    assert_eq!(
+        BrowserPointerKind::from_name("capture_lost").unwrap(),
+        BrowserPointerKind::CaptureLost
     );
 }
