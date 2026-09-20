@@ -1,0 +1,110 @@
+diff --git a/crates/noon-web/src/execution_canvas.rs b/crates/noon-web/src/execution_canvas.rs
+--- a/crates/noon-web/src/execution_canvas.rs
++++ b/crates/noon-web/src/execution_canvas.rs
+@@ -748,7 +748,7 @@
+             };
+             self.sync_camera(camera)?;
+             self.direct_wake_clock = BrowserExecutionWakeClock::default();
+-            Ok(pending)
++            Ok(pending || self.selection_pending())
+         }
+ 
+         /// Return one direct-session browser scheduling directive. JavaScript owns
+@@ -1085,9 +1085,9 @@
+         ///
+         /// Unlike timeline advancement, native input may accumulate while a
+         /// renderer publication is pending. `ExecutionSession` unions those
+-        /// local changes and the next `render` consumes them once, matching the
+-        /// native host's pointer-state plus button-event delivery without a
+-        /// browser-owned queue or runtime mirror.
++        /// local changes and the next `render` consumes them once. Contextual
++        /// pointer occurrences use `native_pointer_input` so state and button
++        /// edges commit together without a browser-owned queue or runtime mirror.
+         pub fn set_native_state_input(
+             &mut self,
+             source: NativeStateSource,
+diff --git a/scripts/pointer-selection-direct-qualification.mjs b/scripts/pointer-selection-direct-qualification.mjs
+--- a/scripts/pointer-selection-direct-qualification.mjs
++++ b/scripts/pointer-selection-direct-qualification.mjs
+@@ -118,6 +118,23 @@
+         await click(SHAPES[1]); await settled();
+         const after = await state(); assert.deepEqual(after.frame, before.frame); assert.equal(after.time, 0);
+         assertExactPixels(await image("disabled-click"), baseline, "disabled click");
++        // Seek is a separate explicit timeline operation. Keep the no-input-
++        // mutation assertion above intact, then qualify its overlay-only clear.
++        if (!liveProgram) {
++          await page.evaluate(() => { direct.renderer.setPointerFillSelection(4); direct.driver.wake(); });
++          await settled(); prior = await state(); await click(SHAPES[0]); await changed(prior);
++          assert.deepEqual((await state()).frame, before.frame);
++          prior = await state();
++          const needsPresent = await page.evaluate(() => {
++            const changed = direct.renderer.seekDirect(0);
++            if (changed) direct.driver.wake();
++            return changed;
++          });
++          assert.equal(needsPresent, true, "same-time seek must report its selection clear");
++          await changed(prior);
++          assert.equal((await state()).time, 0);
++          assertExactPixels(await image("seek-clear"), baseline, "same-time seek clear");
++        }
+         result.status = "passed";
+         console.log(`[PASS] ${prefix}: direct typed selection, autonomous wake, cancellation, clear, and exact Python pixels`);
+       } catch (error) { result.status = "failed"; result.error = String(error.stack ?? error); throw error; }
+diff --git a/web/native-inputs.js b/web/native-inputs.js
+--- a/web/native-inputs.js
++++ b/web/native-inputs.js
+@@ -109,9 +109,9 @@
+     guarded("nativeWheel", delta.x, delta.y);
+   };
+ 
+-  canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault });
+-  keyboardTarget.addEventListener("keydown", keyDown);
+-  keyboardTarget.addEventListener("keyup", keyUp);
++  canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault, signal: controller.signal });
++  keyboardTarget.addEventListener("keydown", keyDown, { signal: controller.signal });
++  keyboardTarget.addEventListener("keyup", keyUp, { signal: controller.signal });
+ 
+   return () => {
+     if (attached) {
+@@ -163,8 +163,9 @@
+  * Adapt the genuine semantic execution-worker boundary to the DOM host shape.
+  *
+  * Pointer records use the same occurrence-local route as the ordinary authoring
+- * client. JavaScript performs no scene-coordinate conversion or split pointer
+- * state/event writes. The execution client's existing bound remains authoritative.
++ * client. If that client already owns the canvas pointer collector, attach this
++ * host with `pointer: false`. JavaScript performs no scene-coordinate conversion
++ * or split pointer state/event writes. The execution client's existing bound remains authoritative.
+  */
+ export function createExecutionWorkerNativeInputHost(
+   client,
+diff --git a/web/native-inputs.test.mjs b/web/native-inputs.test.mjs
+--- a/web/native-inputs.test.mjs
++++ b/web/native-inputs.test.mjs
+@@ -318,5 +318,7 @@
+   keyboardTarget.dispatch("keyup", { code: "Space" });
+   assert.equal(calls, 1);
+   assert.deepEqual(errors, [failure]);
+-  detach();
+-});
++  assert.ok([...canvas.listeners.values()].every(listeners => listeners.length === 0));
++  assert.ok([...keyboardTarget.listeners.values()].every(listeners => listeners.length === 0));
++  detach();
++});
+diff --git a/crates/noon/src/execution_session/selection.rs b/crates/noon/src/execution_session/selection.rs
+--- a/crates/noon/src/execution_session/selection.rs
++++ b/crates/noon/src/execution_session/selection.rs
+@@ -48,9 +48,10 @@
+ 
+ /// The desired selection image, independent of semantic identity and publication.
+ ///
+-/// Equality means the same overlay pixels are requested. Hosts retain this value
+-/// at their own delivery/presentation boundary; they never infer image changes
+-/// from target identity or a frame epoch. This is not authored scene content.
++/// Equality describes the same world-space overlay content. Hosts still handle
++/// camera/surface invalidation and retain this value at their own delivery or
++/// presentation boundary. Target identity and frame epoch are not image-change
++/// signals. This is not authored scene content.
+ #[derive(Clone, Debug, PartialEq)]
+ pub struct PointerSelectionPresentation {
+     pub geometry: GeometryRef,

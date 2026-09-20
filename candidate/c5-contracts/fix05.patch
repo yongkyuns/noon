@@ -1,0 +1,144 @@
+diff --git a/web/native-inputs.js b/web/native-inputs.js
+--- a/web/native-inputs.js
++++ b/web/native-inputs.js
+@@ -53,7 +53,7 @@
+     pointer = true,
+   } = {},
+ ) {
+-  validateHost(host);
++  validateHost(host, pointer ? ["nativePointerInput", "nativeKey", "nativeWheel"] : ["nativeKey", "nativeWheel"]);
+   if (!canvas) throw new TypeError("host and canvas are required");
+   if (typeof onError !== "function") throw new TypeError("onError must be a function");
+   if (typeof onInput !== "function") throw new TypeError("onInput must be a function");
+@@ -132,7 +132,7 @@
+   name,
+   { onError = defaultInputError } = {},
+ ) {
+-  validateHost(player);
++  validateHost(player, ["nativeControl", "nativeControlCommit"]);
+   if (!element) throw new TypeError("host and element are required");
+   if (typeof onError !== "function") throw new TypeError("onError must be a function");
+   if (typeof name !== "string" || name.trim().length === 0) {
+@@ -172,7 +172,6 @@
+   { maxInFlight = 64 } = {},
+ ) {
+   if (
+-    typeof client?.submitBrowserPointerInput !== "function" ||
+     typeof client?.setNativeStateInput !== "function" ||
+     typeof client?.emitNativeEvent !== "function"
+   ) {
+@@ -203,14 +202,7 @@
+   const state = (source, value) => () => client.setNativeStateInput(source, value);
+   const event = (source) => () => client.emitNativeEvent(source);
+ 
+-  return Object.freeze({
+-    nativePointerInput(kind, source_id, pointer_id, view_revision,
+-      surface_x, surface_y, viewport_width, viewport_height, button, shift, control, alt, meta) {
+-      return submit([() => client.submitBrowserPointerInput({
+-        kind, source_id, pointer_id, view_revision, surface_x, surface_y,
+-        viewport_width, viewport_height, button, shift, control, alt, meta,
+-      })]);
+-    },
++  const host = {
+     nativeKey(code, pressed) {
+       return submit([
+         state({ kind: "key", code }, { kind: "bool", value: pressed }),
+@@ -229,18 +221,24 @@
+     nativeControlCommit(name) {
+       return submit([event({ kind: "control_commit", name })]);
+     },
+-  });
+-}
+-
+-function validateHost(host) {
++  };
++  // AuthoringExecutionClient already owns its canvas pointer collector. Expose
++  // this entry only for a client that actually supports explicit pointer input;
++  // nonpointer/control adapters must not create a bypass around that ownership.
++  if (typeof client.submitBrowserPointerInput === "function") {
++    host.nativePointerInput = (kind, source_id, pointer_id, view_revision,
++      surface_x, surface_y, viewport_width, viewport_height, button, shift, control, alt, meta) =>
++      submit([() => client.submitBrowserPointerInput({
++        kind, source_id, pointer_id, view_revision, surface_x, surface_y,
++        viewport_width, viewport_height, button, shift, control, alt, meta,
++      })]);
++  }
++  return Object.freeze(host);
++}
++
++function validateHost(host, methods) {
+   if (!host) throw new TypeError("canonical native input host is required");
+-  for (const method of [
+-    "nativePointerInput",
+-    "nativeKey",
+-    "nativeWheel",
+-    "nativeControl",
+-    "nativeControlCommit",
+-  ]) {
++  for (const method of methods) {
+     if (typeof host[method] !== "function") {
+       throw new TypeError(`canonical native input host requires ${method}`);
+     }
+diff --git a/web/native-inputs.test.mjs b/web/native-inputs.test.mjs
+--- a/web/native-inputs.test.mjs
++++ b/web/native-inputs.test.mjs
+@@ -322,3 +322,38 @@
+   assert.ok([...keyboardTarget.listeners.values()].every(listeners => listeners.length === 0));
+   detach();
+ });
++
++test("authoring facade with its own pointer collector accepts nonpointer controls only", async () => {
++  const calls = [];
++  const client = {
++    setNativeStateInput(source, value) { calls.push(["state", source, value]); return Promise.resolve(); },
++    emitNativeEvent(source) { calls.push(["event", source]); return Promise.resolve(); },
++  };
++  const host = createExecutionWorkerNativeInputHost(client);
++  assert.equal(host.nativePointerInput, undefined, "do not fabricate a second pointer ingress");
++  const canvas = new FakeCanvas(), keyboardTarget = new FakeTarget();
++  assert.throws(() => attachNativeInputs(host, canvas, { keyboardTarget }), /nativePointerInput/);
++  const detach = attachNativeInputs(host, canvas, { pointer: false, keyboardTarget });
++  keyboardTarget.dispatch("keydown", { code: "Space" });
++  canvas.dispatch("wheel", wheelEvent(1, 2, 0));
++  const control = new FakeTarget(); control.value = "0.5";
++  const detachControl = bindNativeControl(host, control, "opacity");
++  control.dispatch("input", {});
++  await Promise.resolve();
++  assert.equal(calls.length, 6);
++  assert.ok(calls.some(([kind, source]) => kind === "state" && source.kind === "key"));
++  assert.ok(calls.some(([kind, source]) => kind === "state" && source.kind === "control"));
++  assert.ok(!(canvas.listeners.get("pointerdown")?.length));
++  detach(); detachControl();
++});
++
++test("control-only binding does not require unrelated pointer keyboard or wheel APIs", () => {
++  const calls = [], control = new FakeTarget(); control.value = "0.5";
++  const detach = bindNativeControl({
++    nativeControl: (...args) => calls.push(["value", ...args]),
++    nativeControlCommit: (...args) => calls.push(["commit", ...args]),
++  }, control, "opacity");
++  control.dispatch("change", {});
++  assert.deepEqual(calls, [["value", "opacity", 0.5], ["value", "opacity", 0.5], ["commit", "opacity"]]);
++  detach();
++});
+diff --git a/crates/noon-web/src/browser_pointer_input.rs b/crates/noon-web/src/browser_pointer_input.rs
+--- a/crates/noon-web/src/browser_pointer_input.rs
++++ b/crates/noon-web/src/browser_pointer_input.rs
+@@ -310,7 +310,7 @@
+ 
+ /// Validate DOM numeric identities before narrowing at the JavaScript ABI.
+ /// This function is shared by direct-WASM qualification and the scalar binding.
+-#[cfg(any(target_arch = "wasm32", test))]
++#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+ pub(crate) fn dom_integer(value: f64, min: f64, max: f64) -> Result<f64, String> {
+     if !value.is_finite() || value.fract() != 0.0 || value < min || value > max {
+         return Err("DOM pointer identity/button must be an exact in-range integer".into());
+@@ -318,7 +318,7 @@
+     Ok(value)
+ }
+ 
+-#[cfg(any(target_arch = "wasm32", test))]
++#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+ impl BrowserPointerKind {
+     pub(crate) fn from_name(name: &str) -> Result<Self, String> {
+         match name {
