@@ -351,6 +351,10 @@ def _reconcile_completed_family_bindings(
     for wrapper, reservation, handle in reservations:
         _commit_typed_binding(wrapper, scene, reservation, handle)
     _membership_registry(scene).update(wrappers)
+    if detached and hasattr(scene, "foreground_mobjects"):
+        scene.foreground_mobjects = _base.Scene._restructure_foreground(
+            scene.foreground_mobjects, tuple(detached)
+        )
     for wrapper in detached:
         wrapper._canonical_live_target_context = context
         wrapper._scene = None
@@ -372,7 +376,10 @@ def _canonical_edit_membership(
     *,
     key: str | None = None,
 ) -> None:
-    if key is not None and (kind != "add" or len(values) != 1 or isinstance(values[0], _compat.Group)):
+    if key is not None and (kind != "add" or not values or isinstance(values[0], _compat.Group)):
+        # Scene.add validates that the caller supplied exactly one keyed object.
+        # Additional values here can only be its already-authored foreground
+        # projection; only the first reservation receives the explicit key.
         raise ValueError("an explicit key requires one ordinary Mobject add")
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
