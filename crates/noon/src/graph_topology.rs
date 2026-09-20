@@ -345,6 +345,7 @@ mod tests {
         assert!(topology.edges().is_empty());
         assert!(topology.incident_edges(a).unwrap().is_empty());
     }
+
     #[test]
     fn identity_exhaustion_fails_before_topology_mutation() {
         let mut vertices = RetainedGraphTopology::new();
@@ -367,5 +368,4 @@ mod tests {
         assert!(edges.incident_edges(a).unwrap().is_empty());
         assert!(edges.incident_edges(b).unwrap().is_empty());
     }
-
 }
