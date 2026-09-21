@@ -375,6 +375,9 @@ pub struct SemanticNode {
     /// no painter ordering, so one ordered identity set provides deterministic
     /// traversal and local membership insertion/removal without a mirror index.
     scoped_signals: BTreeSet<SemanticNodeId>,
+    /// Ordered foreground declarations for this family-root scope. These are
+    /// soft references, not display membership, parent edges or painter order.
+    foreground_members: Vec<SemanticNodeId>,
 }
 
 impl SemanticNode {
@@ -517,6 +520,19 @@ impl SemanticNode {
 
     pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<SemanticUpdaterRegistration> {
         &mut self.host_updaters
+    }
+
+    /// Ordered foreground declarations, independent of current display membership.
+    ///
+    /// Only family roots can own this metadata. Mutate it through
+    /// [`SemanticMutationTransaction::set_foreground_members`]; changing this list
+    /// alone neither adds renderable objects nor changes their painter order.
+    pub fn foreground_members(&self) -> &[SemanticNodeId] {
+        &self.foreground_members
+    }
+
+    pub(crate) fn foreground_members_mut(&mut self) -> &mut Vec<SemanticNodeId> {
+        &mut self.foreground_members
     }
 
     pub fn scoped_signals(&self) -> &BTreeSet<SemanticNodeId> {
@@ -797,6 +813,7 @@ impl SemanticStore {
             members: OrderedFamilyMembers::default(),
             host_updaters: Vec::new(),
             scoped_signals: BTreeSet::new(),
+            foreground_members: Vec::new(),
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {

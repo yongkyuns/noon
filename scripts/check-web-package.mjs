@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { animatedPlottingCases } from "./animated-plotting-samples.mjs";
 
 const packageDirectory = join(process.cwd(), "web", "pkg");
 const javascriptPath = join(packageDirectory, "noon_web.js");
@@ -391,6 +392,12 @@ const expectedTypeSurface = [
 // when this checker is run directly against an already generated package.
 if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
+  // Keep the package contract tied to the animated qualification registry. A
+  // missing bootstrap must fail the build, not a later zero-sample raster run.
+  for (const { factory } of Object.values(animatedPlottingCases)) {
+    expectedJavascriptSurface.push(`export function ${factory}(`);
+    expectedTypeSurface.push(`export function ${factory}(`);
+  }
   expectedJavascriptSurface.push(
     "export function verifyDirectExecutionReplay(",
     "export function createDirectTypstTextSmokeRenderer(",
