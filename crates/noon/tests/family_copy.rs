@@ -268,3 +268,42 @@ fn detached_references_copy_atomically_without_changing_family_membership() {
         .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
 }
+
+
+#[test]
+fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
+    let mut scene = Scene::new();
+    let graph = scene
+        .graph(
+            [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
+            [("a", "b")],
+        )
+        .unwrap();
+    let a_id = graph.vertex_id(&"a").unwrap();
+    let b_id = graph.vertex_id(&"b").unwrap();
+    let ab_id = graph.edge_id(&"a", &"b").unwrap();
+    let source_a = graph.vertex(&"a").unwrap();
+    let source_b = graph.vertex(&"b").unwrap();
+    let source_edge = graph.edge(&"a", &"b").unwrap();
+
+    let copied = graph.family().copy_family().unwrap();
+    let copied_a = copied.mobject(source_a).unwrap();
+    let copied_b = copied.mobject(source_b).unwrap();
+    let copied_edge_family = copied.family(source_edge.family()).unwrap();
+    let copied_line = copied.mobject(source_edge.line()).unwrap();
+
+    let store = scene.integration_store().borrow();
+    let declaration = store
+        .semantic_graph_declaration(copied.root().node_id())
+        .unwrap()
+        .expect("copied graph root retains graph semantics");
+
+    assert_eq!(declaration.vertex_node(a_id), Some(copied_a.node_id()));
+    assert_eq!(declaration.vertex_node(b_id), Some(copied_b.node_id()));
+    assert_eq!(declaration.edge_between(b_id, a_id, false), Some(ab_id));
+    let binding = declaration.edge_binding(ab_id).unwrap();
+    assert_eq!(binding.family(), copied_edge_family.node_id());
+    assert_eq!(binding.line(), copied_line.node_id());
+    assert_ne!(binding.family(), source_edge.family().node_id());
+    assert_ne!(binding.line(), source_edge.line().node_id());
+}
