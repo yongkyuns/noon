@@ -6,6 +6,7 @@ mod family_transform_tests;
 mod input;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
+    PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
