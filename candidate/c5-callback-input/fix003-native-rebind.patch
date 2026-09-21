@@ -1,0 +1,14 @@
+--- a/crates/noon-native/src/pointer_input.rs
++++ b/crates/noon-native/src/pointer_input.rs
+@@ -256,6 +256,11 @@
+             NativeHostError::Platform("native pointer view revision exhausted".to_owned())
+         })?;
+         if self.pointer.configured {
++            // View replacement terminates the old contact through the same
++            // callback-aware input transaction before rebinding. This avoids a
++            // binding reset silently changing held-button signals around required
++            // callbacks, while preserving sequence/callback failure atomicity.
++            self.cancel_pointer(NativePointerCancellation::Cancelled)?;
+             self.execution
+                 .configure_native_pointer_input(WINDOW_CURSOR, next)?;
+         }
