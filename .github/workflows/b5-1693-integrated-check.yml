@@ -1,0 +1,112 @@
+name: B5 1693 integrated qualification
+on:
+  push:
+    branches: [codex/b5-1693-precision-check-20260920]
+    paths: [.github/workflows/b5-1693-integrated-check.yml]
+permissions:
+  contents: write
+concurrency:
+  group: b5-1693-integrated-check
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SOURCE: 1f771b3fb1ba200b1e606765b1709eda0d22356b
+      BASE: bf776186325640496e58eac91962573811740356
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Reconcile only the inspected export conflicts and add browser regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/1693_integrate_patch.py /tmp/1693_integrate_patch.py
+          mkdir -p /tmp/noon-1693-integrated-evidence
+          git fetch --no-tags --depth=150 origin "$SOURCE" "$BASE"
+          git checkout --detach "$SOURCE"
+          git config user.name 'Noon validation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          set +e
+          git merge --no-commit --no-ff "$BASE" > /tmp/noon-1693-integrated-evidence/merge.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/noon-1693-integrated-evidence/merge.log
+          test "$result" -eq 1
+          python3 /tmp/1693_integrate_patch.py
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff HEAD --name-only > /tmp/expected-integrated-files
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Format and freeze the exact merged candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff HEAD --name-only | diff - /tmp/expected-integrated-files
+          node --check web/plotting-smoke.js
+          git diff --check
+          git add -u
+          git commit -m 'B5: reconcile NumberPlane and implicit precision with current master'
+          git rev-parse HEAD | tee /tmp/noon-1693-integrated-evidence/tested-head.txt
+          git diff --stat "$BASE" HEAD | tee /tmp/noon-1693-integrated-evidence/scope.txt
+          git diff "$SOURCE" HEAD -- crates/noon/src/lib.rs web/python/noon.py web/plotting-smoke.js > /tmp/noon-1693-integrated-evidence/integration.patch
+          test -z "$(git ls-tree -r --name-only HEAD | grep -E '^.github/(1693_|workflows/b5-1693-)' || true)"
+      - name: Install native and browser software rendering dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libvulkan1 mesa-vulkan-drivers
+          mkdir -p /tmp/noon-xdg
+          chmod 700 /tmp/noon-xdg
+          echo XDG_RUNTIME_DIR=/tmp/noon-xdg >> "$GITHUB_ENV"
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run full repository gate against current master
+        shell: bash
+        run: |
+          set -euo pipefail
+          xvfb-run -a bash scripts/check.sh full "$BASE" > /tmp/noon-1693-integrated-evidence/full.log 2>&1 || { tail -n 160 /tmp/noon-1693-integrated-evidence/full.log; exit 1; }
+          tail -n 45 /tmp/noon-1693-integrated-evidence/full.log
+          git diff --exit-code
+      - name: Install repository-pinned browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Execute actual WASM and Pyodide regression path
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/noon-1693-integrated-evidence/browser.log
+          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/noon-1693-integrated-evidence/errors.log
+          git diff --exit-code
+      - name: Publish only fully checked integration candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/noon-1693-integrated-evidence/tested-head.txt)"
+          git merge-base --is-ancestor "$SOURCE" HEAD
+          git merge-base --is-ancestor "$BASE" HEAD
+          git push origin HEAD:refs/heads/codex/b5-1693-integrated-verified-20260920
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: b5-1693-integrated-evidence
+          path: /tmp/noon-1693-integrated-evidence
+          if-no-files-found: error
+          retention-days: 7
