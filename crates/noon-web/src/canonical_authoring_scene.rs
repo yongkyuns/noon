@@ -2499,13 +2499,13 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         let store = self.scene.integration_store().borrow();
-        let root = store
-            .node(self.scene.root())
-            .ok_or_else(|| AuthoringFailure::new(
+        let root = store.node(self.scene.root()).ok_or_else(|| {
+            AuthoringFailure::new(
                 "state",
                 "scene.root_missing",
                 "semantic scene root is no longer live",
-            ))?;
+            )
+        })?;
         Ok(root
             .foreground_members()
             .iter()
@@ -7706,8 +7706,16 @@ mod tests {
         assert_eq!(
             context.root_foreground_keys().unwrap(),
             vec![
-                format!("{}:{}", first.node_id().slot(), first.node_id().generation()),
-                format!("{}:{}", second.node_id().slot(), second.node_id().generation()),
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
             ]
         );
 
@@ -7721,9 +7729,21 @@ mod tests {
         assert_eq!(
             context.root_membership_keys().unwrap(),
             vec![
-                format!("{}:{}", later.node_id().slot(), later.node_id().generation()),
-                format!("{}:{}", first.node_id().slot(), first.node_id().generation()),
-                format!("{}:{}", second.node_id().slot(), second.node_id().generation()),
+                format!(
+                    "{}:{}",
+                    later.node_id().slot(),
+                    later.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
             ]
         );
         assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
