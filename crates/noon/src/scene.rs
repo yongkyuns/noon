@@ -305,6 +305,44 @@ impl Scene {
             .map_err(AuthoringError::from)
     }
 
+    /// Run fallible resource preparation and exactly one semantic transaction
+    /// inside the Scene-owned publication boundary.
+    ///
+    /// Composite constructors use this when resources and transaction-local
+    /// identities must share one rollback/commit scope. The caller may prepare
+    /// against the borrowed store, but durable semantic mutation is only allowed
+    /// through the supplied publisher.
+    pub(crate) fn with_semantic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        if let Some(execution) = self.execution.as_mut() {
+            let mut store = store_rc.borrow_mut();
+            let mut publish = |store: &mut SemanticStore,
+                               transaction: SemanticMutationTransaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            };
+            return operation(&mut store, &mut publish);
+        }
+
+        let mut store = store_rc.borrow_mut();
+        let mut publish = |store: &mut SemanticStore,
+                           transaction: SemanticMutationTransaction| {
+            transaction.apply(store).map_err(AuthoringError::from)
+        };
+        operation(&mut store, &mut publish)
+    }
+
     fn with_running_execution<T>(
         &mut self,
         operation: impl FnOnce(
