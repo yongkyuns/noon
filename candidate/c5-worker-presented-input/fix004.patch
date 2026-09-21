@@ -1,0 +1,56 @@
+diff --git a/web/execution-worker-client.js b/web/execution-worker-client.js
+index 44c163cc8fc75a27b7b36f3531c6ec41bdf1f29d..9733d630f8ba18ad693d5e053e6c02d501f68581 100644
+--- a/web/execution-worker-client.js
++++ b/web/execution-worker-client.js
+@@ -421,6 +421,10 @@ export class ExecutionWorkerClient {
+     this.#engineWorker = candidate;
+     this.#attachCurrentWorkerEvents(candidate, ENGINE_CHANNEL, "engine");
+     this.#session = nextSession;
++    // Equal platform dimensions still require registration in the new owner.
++    // Neither a view nor a receipt is replayed across transport sessions.
++    this.#pointerView = null;
++    this.#pointerReceipt = null;
+     this.#rejectOwner("engine", reconnectError);
+ 
+     try {
+diff --git a/web/execution-worker-client.test.mjs b/web/execution-worker-client.test.mjs
+index e1b5bb249faef490dc5a0d5cc3e438a09418be37..8eb0943d587f910f21ccc84f414fddbb477d8b55 100644
+--- a/web/execution-worker-client.test.mjs
++++ b/web/execution-worker-client.test.mjs
+@@ -716,3 +716,36 @@ test("late invalidation cannot clear a newer successful presentation", async ()
+     assert.equal(client.pointerPresentation, null);
+   } finally { client.terminate(); }
+ });
++
++for (const operation of ["engine-restart", "semantic-replacement"]) {
++  test(`${operation} must re-register an unchanged view without reusing its receipt`, async () => {
++    const { client, authoring, engine: oldEngine, render } = await startClient();
++    let pending;
++    try {
++      await registerPointerView(client, oldEngine);
++      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
++      const replacing = operation === "engine-restart"
++        ? client.restart({ failedOwner: "engine" })
++        : client.switchToSemanticExecution("replacement", authoring);
++      const renderRequest = await waitForRequest(render, "rebuild_engine");
++      replyRender(render, renderRequest, "engine_rebuilt");
++      const ready = await replacing;
++      assert.equal(ready.session, 2);
++      const engine = authoring.attachments.at(-1).controlPort.peer;
++      assert.equal(client.pointerPresentation, null);
++      const currentReceipt = pointerReceipt(2, 0, 3, 2);
++      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
++      assert.equal(client.pointerPresentation, null, "replacement needs its own platform registration");
++      pending = client.setBrowserPointerView(3, 800, 400);
++      const registration = await waitForRequest(engine, "browser_pointer_view");
++      assert.deepEqual(registration.view, { revision: 3, width: 800, height: 400 });
++      engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
++      await pending;
++      assert.equal(client.pointerPresentation, null, "registration is not presentation");
++      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(10) }));
++      assert.equal(client.pointerPresentation, null);
++      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
++      assert.deepEqual(client.pointerPresentation, currentReceipt);
++    } finally { client.terminate(); await pending?.catch(() => {}); }
++  });
++}
