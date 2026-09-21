@@ -20,3 +20,6 @@ pub use native_input_runtime::*;
 
 mod native_inputs;
 pub use native_inputs::*;
+
+mod native_pointer_input;
+pub use native_pointer_input::*;

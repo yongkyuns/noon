@@ -30,6 +30,8 @@ pub enum ReplayError {
     NotRecording,
     Incomplete,
     UnsupportedDomain,
+    /// A live reactive input changed without a recorded input history.
+    UnrecordedInput,
     RetentionLimit,
     InvalidRange,
 }
@@ -95,12 +97,19 @@ impl SceneInstance {
             .is_some_and(|history| history.failure.is_none())
     }
     pub fn invalidate_replay_domain(&mut self) {
+        self.invalidate_replay(ReplayError::UnsupportedDomain);
+    }
+    pub(crate) fn invalidate_replay_input(&mut self) {
+        self.invalidate_replay(ReplayError::UnrecordedInput);
+    }
+    fn invalidate_replay(&mut self, reason: ReplayError) {
         if let Some(history) = self
             .replay_history
             .as_mut()
             .filter(|history| history.end.is_none())
         {
-            history.failure = Some(ReplayError::UnsupportedDomain);
+            // Keep the first reason a retained range became unavailable.
+            history.failure.get_or_insert(reason);
             history.revisions.clear();
             history.applied = 0;
             history.stats = ReplayStats::default();
@@ -331,3 +340,6 @@ impl SceneInstance {
         true
     }
 }
+
+#[cfg(test)]
+mod input_tests;

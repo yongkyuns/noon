@@ -50,6 +50,7 @@ impl ExecutionSession {
     /// execution identities. The historical projection cannot be edited in place.
     pub fn discard_replay_retention(&mut self) {
         self.runtime.discard_replay_retention();
+        self.pointer_selection.reset();
         self.sync_spatial_index();
         self.release_replay_slots();
     }

@@ -45,6 +45,16 @@ impl SemanticExecutionIndex {
         self.object_ids.get(&semantic_id).copied()
     }
 
+    /// Resolve a derived compatibility key back to its indexed semantic identity.
+    ///
+    /// Decode the existing one-to-one encoding, then check membership in this
+    /// compiler-owned bridge. No reverse map, scan, or second identity allocator
+    /// is needed. Detachment preserves identity; node removal invalidates it.
+    pub fn semantic_object_id(&self, object: ObjectId) -> Option<SemanticNodeId> {
+        let node = SemanticNodeId::new(object.get() as u32, (object.get() >> 32) as u32);
+        (self.execution_object_id(node) == Some(object)).then_some(node)
+    }
+
     /// Install execution identities for objects reaching execution for the first time.
     pub fn apply_reachability_update(
         &mut self,
@@ -569,6 +579,24 @@ mod tests {
         let id = store.insert_semantic_object(state);
         store.attach_to_scene(id).unwrap();
         id
+    }
+
+    #[test]
+    fn reverse_compatibility_lookup_validates_membership_and_generation() {
+        let mut index = SemanticExecutionIndex::new();
+        let node = SemanticNodeId::new(17, 9);
+        let key = index.ensure_object(node);
+        assert_eq!(index.semantic_object_id(key), Some(node));
+        assert_eq!(
+            index.semantic_object_id(compatibility_object_id(SemanticNodeId::new(17, 8))),
+            None
+        );
+        assert_eq!(
+            index.semantic_object_id(compatibility_object_id(SemanticNodeId::new(18, 9))),
+            None
+        );
+        index.object_ids.remove(&node);
+        assert_eq!(index.semantic_object_id(key), None);
     }
 
     #[test]

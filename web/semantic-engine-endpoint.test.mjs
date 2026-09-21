@@ -73,6 +73,9 @@ function fixture(
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
+    submitBrowserPointerInputJson: (value) => {
+      nativeInputs.push({ type: "pointer", value: JSON.parse(value) });
+    },
     liveSegmentWake: () => ({
       presentNow: true,
       cadence: "animation_frame",
@@ -942,6 +945,27 @@ test("native state and event controls reach the leased player in accepted order"
     });
     assert.equal(event.type, "native_event");
     assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 2);
+    const pointerInput = {
+      kind: "move",
+      surface_x: 10,
+      surface_y: 20,
+      viewport_width: 800,
+      viewport_height: 400,
+      button: null,
+      view_revision: 3,
+      shift: false,
+      control: false,
+      alt: false,
+      meta: false,
+    };
+    const pointer = await request(
+      f.control.port2,
+      "browser_pointer_input",
+      22,
+      pointerInput,
+    );
+    assert.equal(pointer.type, "browser_pointer_input");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 3);
     assert.deepEqual(f.stats().nativeInputs, [
       {
         type: "state",
@@ -951,19 +975,20 @@ test("native state and event controls reach the leased player in accepted order"
         },
       },
       { type: "event", value: { source: { kind: "pointer_down", button: 0 } } },
+      { type: "pointer", value: pointerInput },
     ]);
 
     f.player.setNativeStateInputJson = () => { throw new Error("native value rejected"); };
-    const rejected = await request(f.control.port2, "native_state_input", 22, {
+    const rejected = await request(f.control.port2, "native_state_input", 23, {
       source: { kind: "control", name: "opacity" },
       value: { kind: "bool", value: true },
     });
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /native value rejected/);
-    assert.equal(f.stats().nativeInputs.length, 2);
+    assert.equal(f.stats().nativeInputs.length, 3);
     assert.equal(
       f.stats().executionWakeTimes.length,
-      initialWakeObservations + 2,
+      initialWakeObservations + 3,
       "failed input does not publish or replace the current Rust wake",
     );
   } finally { endpoint?.stop(); f.close(); }
@@ -1804,6 +1829,148 @@ for (const pacing of ["realtime", "external_samples"]) {
   });
 }
 
+// Input must observe the active Rust wake owner, not the independently paused
+// ordinary playback clock. Cover animation and pure-wait leases on every lane.
+const continuationWakeInputCases = [
+  ["native_state_input", {
+    source: { kind: "control", name: "opacity" },
+    value: { kind: "scalar", value: 0.75 },
+  }],
+  ["native_event", { source: { kind: "wheel" } }],
+  ["browser_pointer_input", {
+    kind: "move", surface_x: 200, surface_y: 100,
+    viewport_width: 800, viewport_height: 400, view_revision: 0,
+  }],
+];
+
+for (const [inputType, fields] of continuationWakeInputCases) {
+  for (const cadence of ["animation_frame", "timer"]) {
+    test(`native input preserves active continuation wake: ${inputType}/${cadence}`, { timeout: 5000 }, async () => {
+      let completed;
+      let failed;
+      const completion = new Promise((resolve, reject) => { completed = resolve; failed = reject; });
+      const f = fixture("transferable", null, {
+        generation: 71,
+        onComplete: completed,
+        onError: (_generation, error) => failed(error),
+      });
+      let endpoint;
+      let ordinaryReads = 0;
+      let segmentReads = 0;
+      let delay = 250;
+      try {
+        // A real live drive pauses the ordinary clock while its segment remains
+        // active. A generic executionWake would therefore report idle here.
+        f.player.pause();
+        f.player.executionWake = () => {
+          ordinaryReads += 1;
+          return { cadence: "idle", timerAfterMilliseconds: undefined };
+        };
+        f.player.liveSegmentWake = () => {
+          segmentReads += 1;
+          return { cadence, timerAfterMilliseconds: cadence === "timer" ? delay : undefined };
+        };
+        const ready = next(f.control.port2);
+        const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+        const initialWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
+        endpoint = await f.attach();
+        await ready;
+        assert.equal((await initialWake).cadence, cadence);
+        const publication = await initial;
+        f.render.port2.postMessage({ type: "execution_ack", session: publication.session, sequence: publication.sequence });
+        f.render.port2.postMessage({ type: "execution_presented", session: publication.session, sequence: publication.sequence });
+        await turn();
+
+        const inputWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
+        const reply = await request(f.control.port2, inputType, 170, fields);
+        assert.equal(reply.type, inputType, reply.message);
+        const wake = await inputWake;
+        assert.equal(wake.cadence, cadence, "input must not replace an active segment wake with idle");
+        assert.equal(wake.timerAfterMilliseconds, cadence === "timer" ? delay : null);
+        assert.equal(ordinaryReads, 0, "input cannot observe the ordinary playback clock during a lease");
+        assert.equal(segmentReads, 2);
+        assert.equal(f.stats().nativeInputs.length, 1);
+        assert.equal(f.player.time(), 0, "input never advances authored time");
+        assert.equal(f.stats().completedSegments, 0);
+        assert.equal(f.stats().returned, 0);
+
+        // The next due platform wake still reaches shared segment completion,
+        // instead of requiring another input or an unrelated timer to unstick it.
+        delay = 0;
+        f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+        assert.equal(await completion, 71);
+        assert.equal(f.stats().completedSegments, 1);
+        assert.equal(f.stats().returned, 1);
+        assert.equal(f.player.time(), 1);
+      } finally { endpoint?.stop(); f.close(); }
+    });
+  }
+}
+
+test("external sample input never arms a realtime continuation wake", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, {
+    generation: 72, onComplete: () => {}, onError: () => {},
+  }, { pacing: "external_samples" });
+  let endpoint;
+  let wakeReads = 0;
+  const wakes = [];
+  try {
+    f.player.executionWake = f.player.liveSegmentWake = () => {
+      wakeReads += 1;
+      return { cadence: "animation_frame" };
+    };
+    f.render.port2.on("message", (message) => {
+      if (message.type === "execution_wake") wakes.push(message.cadence);
+    });
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    let requestId = 180;
+    for (const [inputType, fields] of continuationWakeInputCases) {
+      const reply = await request(f.control.port2, inputType, requestId++, fields);
+      assert.equal(reply.type, inputType, reply.message);
+    }
+    await turn();
+    assert.deepEqual(wakes, ["idle"]);
+    assert.equal(wakeReads, 0);
+    assert.equal(f.player.time(), 0);
+    assert.equal(f.stats().completedSegments, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("rejected continuation pointer input preserves its existing wake", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, {
+    generation: 73, onComplete: () => {}, onError: () => {},
+  });
+  let endpoint;
+  let ordinaryReads = 0;
+  let segmentReads = 0;
+  const wakes = [];
+  try {
+    f.player.executionWake = () => { ordinaryReads += 1; return { cadence: "idle" }; };
+    f.player.liveSegmentWake = () => {
+      segmentReads += 1;
+      return { cadence: "timer", timerAfterMilliseconds: 250 };
+    };
+    f.player.submitBrowserPointerInputJson = () => { throw new Error("pointer rejected"); };
+    f.render.port2.on("message", (message) => {
+      if (message.type === "execution_wake") wakes.push(message.cadence);
+    });
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const reply = await request(f.control.port2, "browser_pointer_input", 190, continuationWakeInputCases[2][1]);
+    assert.equal(reply.type, "error");
+    assert.match(reply.message, /pointer rejected/);
+    await turn();
+    assert.deepEqual(wakes, ["timer"]);
+    assert.equal(segmentReads, 1);
+    assert.equal(ordinaryReads, 0);
+    assert.equal(f.stats().nativeInputs.length, 0);
+    assert.equal(f.player.time(), 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 
 test("unavailable replay preserves final presentation and rejects transport commands", async () => {
   const f = fixture();
@@ -1833,7 +2000,7 @@ test("source continuation never seals a still-growing execution plan", async () 
   } finally { endpoint?.stop(); f.close(); }
 });
 
-for (const reason of ["Incomplete", "UnsupportedDomain", "RetentionLimit"]) {
+for (const reason of ["Incomplete", "UnsupportedDomain", "UnrecordedInput", "RetentionLimit"]) {
   test(`replay rejection (${reason}) preserves paused forward observation without enabling rewind`, async () => {
     const f = fixture();
     f.player.sealReplay = () => { throw new Error(reason); };
@@ -1985,5 +2152,160 @@ test("seek acknowledgements retain the exact evaluated time", async () => {
     const ready = next(f.control.port2);
     endpoint = await f.attach(); await ready;
     assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("callback-stalled pointer controls keep bounded order and occurrence-local motion evidence", async () => {
+  let release;
+  let entered;
+  const callbackStarted = new Promise(resolve => { entered = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  const f = fixture("transferable", async phase => {
+    entered();
+    await barrier;
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  let endpoint;
+  try {
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    const first = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+    f.player.tickCallbackPhaseJson = () => JSON.stringify({ token: { sequence: 1 }, time: 0 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await callbackStarted;
+    const inputs = Array.from({ length: MAX_PENDING_SEMANTIC_CONTROLS }, (_, i) => ({
+      kind: i === 0 ? "press" : i === MAX_PENDING_SEMANTIC_CONTROLS - 1 ? "release" : "move",
+      surface_x: i === 1 ? 700 : 20,
+      surface_y: 40,
+      viewport_width: 800, viewport_height: 400,
+      button: i === 0 || i === MAX_PENDING_SEMANTIC_CONTROLS - 1 ? 0 : null,
+      view_revision: 3,
+      shift: i === 0, control: false, alt: false, meta: false,
+    }));
+    const replies = [];
+    f.control.port2.on("message", message => {
+      if (message.type === "browser_pointer_input") replies.push(message.requestId);
+    });
+    const overflow = nextMatching(f.control.port2, message => message.type === "error");
+    for (let i = 0; i <= inputs.length; i += 1) {
+      f.control.port2.postMessage({
+        channel: "noon.engine", protocolVersion: 1, type: "browser_pointer_input",
+        requestId: i, ...inputs[i % inputs.length],
+      });
+    }
+    const rejection = await overflow;
+    assert.equal(rejection.requestId, inputs.length);
+    assert.match(rejection.message, /control queue is full/);
+    assert.deepEqual(f.stats().nativeInputs, [], "input must not bypass the required callback barrier");
+    assert.deepEqual(replies, []);
+    const drained = nextMatching(f.control.port2, message => message.requestId === inputs.length - 1);
+    release();
+    await drained;
+    assert.equal(f.stats().committedPhases, 1);
+    assert.deepEqual(replies, inputs.map((_, i) => i));
+    assert.deepEqual(f.stats().nativeInputs, inputs.map(value => ({ type: "pointer", value })));
+    assert.equal(f.player.time(), 0, "delivery does not advance authored time");
+  } finally { release(); endpoint?.stop(); f.close(); }
+});
+
+for (const transportMode of ["transferable", "shared"]) {
+  test(`selection presentation uses ordinary ${transportMode} ordering while paused`, { timeout: 5000 }, async () => {
+    const f = fixture(transportMode, null, null, { initiallyPaused: true });
+    let endpoint;
+    let reader;
+    let sequence = 1;
+    let pending = null;
+    const deltas = [];
+    const configurations = [];
+    // This test doubles the Rust boundary, not picking or renderer semantics.
+    const overlay = {
+      geometry: { kind: "circle", radius: 1 },
+      transform: { translation: { x: 0, y: 0 }, scale: { x: -2, y: 0.5 }, rotation: 0.7 },
+    };
+    f.player.setPointerFillSelection = value => { configurations.push(value); };
+    f.player.drainDeltaJson = () => {
+      if (pending === null) return null;
+      const delta = pending;
+      pending = null;
+      return JSON.stringify(delta);
+    };
+    const receive = json => {
+      const delta = JSON.parse(json);
+      deltas.push(delta);
+      f.render.port2.postMessage({ type: "execution_ack", session: 7, sequence: delta.sequence });
+      f.render.port2.postMessage({ type: "transport_writable" });
+      return true;
+    };
+    f.render.port2.on("message", message => {
+      if (message.type === "transport_setup") {
+        reader = new SharedExecutionDeltaReader(message.mailbox);
+        reader.drain(receive);
+      } else if (message.type === "shared_delta") reader.drain(receive);
+      else if (message.type === "execution_delta") receive(decodeTransferableExecutionDelta(message).json);
+    });
+    const waitForDeltas = async count => {
+      for (let n = 0; n < 50 && deltas.length < count; n += 1) await turn();
+      assert.equal(deltas.length, count);
+    };
+    try {
+      const ready = next(f.control.port2);
+      endpoint = await f.attach();
+      await ready;
+      await waitForDeltas(1);
+      assert.equal((await request(f.control.port2, "pointer_fill_selection", 1, { maxMovement: 4 })).type, "pointer_fill_selection");
+      assert.deepEqual(configurations, [4]);
+      assert.equal(deltas.length, 1, "configuration without an image change emits nothing");
+      // Supply exact output from the mocked shared session after admission. JS
+      // must forward this verbatim; it must not invent IDs, rows, or a new clock.
+      pending = { channel: "noon.execution.retained", protocol_version: 5,
+        session: 7, sequence: sequence++, snapshot: false, time: 0,
+        objects: [], selection_overlay: overlay };
+      const selected = await request(f.control.port2, "browser_pointer_input", 2, { kind: "release" });
+      assert.equal(selected.type, "browser_pointer_input");
+      await waitForDeltas(2);
+      assert.deepEqual(deltas[1].selection_overlay, overlay);
+      assert.deepEqual(deltas[1].objects, []);
+      assert.equal(selected.time, 0);
+      assert.equal(selected.playing, false);
+      pending = { channel: "noon.execution.retained", protocol_version: 5,
+        session: 7, sequence: sequence++, snapshot: false, time: 0, objects: [] };
+      const cleared = await request(f.control.port2, "pointer_fill_selection", 3, { maxMovement: null });
+      assert.equal(cleared.type, "pointer_fill_selection");
+      await waitForDeltas(3);
+      assert.deepEqual(configurations, [4, null]);
+      assert.deepEqual(deltas.map(d => d.sequence), [0, 1, 2]);
+      assert.equal(deltas[2].selection_overlay, undefined);
+      assert.deepEqual(deltas.map(d => d.time), [0, 0, 0]);
+      assert.equal(cleared.playing, false);
+      assert.equal(f.stats().continuationDriveTimes.length, 0);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
+test("selection configuration rejection does not drain or replace the current wake", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let endpoint;
+  let calls = 0;
+  f.player.setPointerFillSelection = () => { calls += 1; throw new Error("required callback barrier"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const before = f.stats();
+    for (const [index, maxMovement] of [undefined, -1, Infinity, NaN, "4", {}, true].entries()) {
+      const response = await request(f.control.port2, "pointer_fill_selection", index + 10, { maxMovement });
+      assert.equal(response.type, "error");
+      assert.match(response.message, /selection tolerance/);
+    }
+    assert.equal(calls, 0, "malformed transport never reaches Rust");
+    const response = await request(f.control.port2, "pointer_fill_selection", 20, { maxMovement: 4 });
+    assert.equal(response.type, "error");
+    assert.match(response.message, /required callback barrier/);
+    assert.equal(calls, 1);
+    assert.equal(f.stats().drained, before.drained);
+    assert.equal(f.stats().executionWakeTimes.length, before.executionWakeTimes.length);
+    assert.equal(f.player.time(), 0);
   } finally { endpoint?.stop(); f.close(); }
 });

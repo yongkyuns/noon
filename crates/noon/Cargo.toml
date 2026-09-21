@@ -48,3 +48,8 @@ pollster = "=1.0.1"
 [[test]]
 name = "retained_images"
 required-features = ["image-decode"]
+
+# The mixed-content raster fixture uses native shaping and its deterministic font.
+[[test]]
+name = "selection_overlay_raster"
+required-features = ["native-text", "bundled-fonts"]

@@ -1,6 +1,8 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
+#[cfg(any(target_arch = "wasm32", test))]
+mod pointer_input;
 use crate::authoring_error::AuthoringFailure;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
@@ -18,6 +20,8 @@ use noon_core::{
     NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
     Vec2,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use pointer_input::{BrowserPointerBinding, BrowserPointerInputWire};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -113,6 +117,9 @@ pub struct SemanticExecutionPlayer {
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
     snapshot_sent: bool,
+    /// Last emitted presentation only. The session remains selection authority;
+    /// renderer acknowledgement and retry belong to the existing transport.
+    last_sent_selection_overlay: Option<crate::SelectionOverlayPresentation>,
     /// Exact phase metadata needed only to re-anchor presentation after the
     /// session atomically commits its own pending callback phase. The session
     /// remains the sole owner of callback progression and termination.
@@ -135,6 +142,11 @@ pub struct SemanticExecutionPlayer {
     /// boundary. Returning and re-leasing this player preserves the sequence.
     #[cfg(any(target_arch = "wasm32", test))]
     next_native_event_sequence: u64,
+    /// Browser control-port pointer binding. The DOM adapter supplies CSS-pixel
+    /// surface coordinates and a monotonically changing view revision; the
+    /// shared session remains the admission/publication authority.
+    #[cfg(any(target_arch = "wasm32", test))]
+    browser_pointer_binding: Option<BrowserPointerBinding>,
 }
 
 /// A host continuation receipt retains its endpoint after completion for renderer
@@ -280,6 +292,7 @@ impl SemanticExecutionPlayer {
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
@@ -291,6 +304,8 @@ impl SemanticExecutionPlayer {
             live_wake_clock: BrowserExecutionWakeClock::default(),
             #[cfg(any(target_arch = "wasm32", test))]
             next_native_event_sequence: 0,
+            #[cfg(any(target_arch = "wasm32", test))]
+            browser_pointer_binding: None,
         })
     }
 
@@ -317,12 +332,14 @@ impl SemanticExecutionPlayer {
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
             live_segment: None,
             live_wake_clock: BrowserExecutionWakeClock::default(),
             next_native_event_sequence: 0,
+            browser_pointer_binding: None,
         })
     }
 
@@ -2201,9 +2218,21 @@ impl SemanticExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        let overlay = self
+            .session
+            .pointer_selection_highlight()
+            .as_ref()
+            .map(crate::SelectionOverlayPresentation::from_highlight)
+            .transpose()
+            .map_err(|error| error.to_string())?;
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let publication = self.session.take_renderer_publication();
-        let changes = publication.changes().clone();
+        let mut changes = publication.changes().clone();
+        if changes.is_empty() && overlay != self.last_sent_selection_overlay {
+            // Presentation-only transport work, not authored/runtime dirtiness.
+            // Reuse the existing sequence and backpressure; never invent a row.
+            changes = noon_runtime::FrameChanges::presentation_redraw();
+        }
         let frame = publication.frame();
         let planned = publication.planned_family_frame();
         let plans = publication.family_animation_plans();
@@ -2292,6 +2321,8 @@ impl SemanticExecutionPlayer {
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
+        delta.selection_overlay = overlay;
+        self.last_sent_selection_overlay = overlay;
         Ok(Some(delta))
     }
 
@@ -2927,6 +2958,29 @@ impl SemanticExecutionPlayer {
         let input: NativeStateInputWire = serde_json::from_str(json)
             .map_err(|error| format!("invalid native state input JSON: {error}"))?;
         self.set_native_state_input(input.source, input.value.into())
+    }
+
+    /// Configure session/editor fill selection, never an authored interaction binding.
+    /// Configuration is ordered with native input and is not replayed into a new scene.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
+    pub fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), String> {
+        match max_movement {
+            Some(value) => self.session.enable_pointer_fill_selection(value),
+            None => self.session.disable_pointer_fill_selection(),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    /// Decode one contextual browser pointer occurrence at the genuine worker
+    /// control-port boundary. Coordinates are CSS pixels relative to the content
+    /// viewport; conversion and admission happen against one session publication.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
+    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<(), String> {
+        let input: BrowserPointerInputWire = serde_json::from_str(json)
+            .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
+        self.submit_browser_pointer_input(input)
     }
 
     /// Decode one ordered native event at the genuine worker control-port boundary.

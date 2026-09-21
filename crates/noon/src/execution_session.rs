@@ -3,6 +3,16 @@ mod completion;
 mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
+mod input;
+pub use input::{
+    ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
+};
+mod picking;
+pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
+mod selection;
+pub use selection::{
+    pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
+};
 mod publication;
 mod replay;
 mod signal_timeline;
@@ -46,9 +56,8 @@ use noon_compile::{
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
-    NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, RateFunction, ReactiveError,
-    ReactiveValue, Rect, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    AnimationOptions, Camera2DState, ObjectId, RateFunction, ReactiveError, ReactiveValue, Rect,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticFamilyTransformMode,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
     SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
@@ -59,8 +68,6 @@ use noon_runtime::{
     FrameChanges, FrameState, RendererPublication, RuntimeWakeState, SceneInstance,
     SpatialIndexUpdateStats, SpatialQueryStats,
 };
-
-const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
 fn resolve_committed_node(
     node: SemanticTransactionNodeRef,
@@ -281,78 +288,6 @@ impl ExecutionViewportQuery {
 
     pub const fn spatial_stats(&self) -> SpatialQueryStats {
         self.spatial_stats
-    }
-}
-
-/// Error produced when semantic/native reactive input cannot be applied to this execution session.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ExecutionSessionInputError {
-    RequiredCallbackPending,
-    RequiredCallbacksConfigured,
-    UnknownSemanticSignal(SemanticNodeId),
-    NativeInput(NativeInputRuntimeError),
-    NativeEventOutOfOrder { previous: u64, next: u64 },
-    Reactive(ReactiveError),
-    Evaluation(EvaluationError),
-    TimelineOwnedSignal { signal: SemanticNodeId },
-    NativeOwnedSignal { signal: SemanticNodeId },
-}
-
-impl std::fmt::Display for ExecutionSessionInputError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RequiredCallbackPending => {
-                formatter.write_str("a required callback publication is pending")
-            }
-            Self::RequiredCallbacksConfigured => formatter.write_str(
-                "direct native/reactive input is unsupported while required callbacks are configured",
-            ),
-            Self::UnknownSemanticSignal(signal) => write!(
-                formatter,
-                "semantic signal {}:{} is not present in this execution session",
-                signal.slot(),
-                signal.generation()
-            ),
-            Self::NativeInput(error) => error.fmt(formatter),
-            Self::NativeEventOutOfOrder { previous, next } => write!(
-                formatter,
-                "native input event sequence must increase: previous {previous}, next {next}"
-            ),
-            Self::Reactive(error) => error.fmt(formatter),
-            Self::Evaluation(error) => error.fmt(formatter),
-            Self::TimelineOwnedSignal { signal } => write!(
-                formatter,
-                "semantic signal {}:{} is timeline-owned and cannot be set directly",
-                signal.slot(),
-                signal.generation()
-            ),
-            Self::NativeOwnedSignal { signal } => write!(
-                formatter,
-                "semantic signal {}:{} is native-owned and cannot be set directly",
-                signal.slot(),
-                signal.generation()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ExecutionSessionInputError {}
-
-impl From<NativeInputRuntimeError> for ExecutionSessionInputError {
-    fn from(value: NativeInputRuntimeError) -> Self {
-        Self::NativeInput(value)
-    }
-}
-
-impl From<ReactiveError> for ExecutionSessionInputError {
-    fn from(value: ReactiveError) -> Self {
-        Self::Reactive(value)
-    }
-}
-
-impl From<EvaluationError> for ExecutionSessionInputError {
-    fn from(value: EvaluationError) -> Self {
-        Self::Evaluation(value)
     }
 }
 
@@ -687,6 +622,8 @@ pub struct ExecutionSession {
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
+    pointer_input: input::PointerInputState,
+    pointer_selection: selection::PointerSelectionState,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
     next_callback_sequence: Option<u64>,
@@ -723,6 +660,8 @@ impl Clone for ExecutionSession {
             camera_object: self.camera_object,
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
+            pointer_input: self.pointer_input.clone(),
+            pointer_selection: self.pointer_selection.fresh(),
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),
@@ -892,6 +831,8 @@ impl ExecutionSession {
             camera_object,
             next_activation_track_id,
             last_native_event_sequence: None,
+            pointer_input: input::PointerInputState::default(),
+            pointer_selection: selection::PointerSelectionState::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
             next_callback_sequence: Some(0),
@@ -3671,15 +3612,19 @@ impl ExecutionSession {
         time: f64,
         mode: ExecutionEvaluationMode,
     ) -> Result<&FrameState, EvaluationError> {
+        let current = self.runtime.frame().time;
+        let requires_seek = mode.requires_seek(current, time);
         if self.signal_timeline.is_empty() {
-            return match mode {
+            match mode {
                 ExecutionEvaluationMode::Evaluate => self.runtime.evaluate(time),
                 ExecutionEvaluationMode::Seek => self.runtime.seek(time),
                 ExecutionEvaluationMode::Advance => self.runtime.advance_to(time),
-            };
+            }?;
+            if requires_seek {
+                self.pointer_selection.reset();
+            }
+            return Ok(self.runtime.frame());
         }
-        let current = self.runtime.frame().time;
-        let requires_seek = mode.requires_seek(current, time);
         if !requires_seek && self.signal_timeline.is_coherent_at(current, time) {
             return Ok(self.runtime.frame());
         }
@@ -3696,93 +3641,9 @@ impl ExecutionSession {
                 .advance_to_with_reactive_inputs(time, preview.inputs())?;
         }
         self.signal_timeline.commit(preview);
-        Ok(self.runtime.frame())
-    }
-
-    /// Deliver one normalized sampled native state source through signal-owned routes.
-    ///
-    /// Source/value validation is shared with browser/native input envelopes. The
-    /// source is resolved only against routes emitted by semantic reactive lowering;
-    /// platform hosts never receive or construct execution `SignalId`s. An unbound
-    /// source is a valid no-op.
-    pub fn set_native_state_input(
-        &mut self,
-        source: NativeStateSource,
-        value: NativeInputValue,
-    ) -> Result<&FrameState, ExecutionSessionInputError> {
-        let update = NativeStateUpdate::new(source, value)?;
-        let targets = self
-            .reactive_projection
-            .native_state_targets(&update.source)
-            .to_vec();
-        if targets.is_empty() {
-            return Ok(self.runtime.frame());
+        if requires_seek {
+            self.pointer_selection.reset();
         }
-        self.ensure_direct_input_ingress_available()?;
-        let value = reactive_value_from_native(update.value);
-        self.apply_reactive_input_batch(
-            targets
-                .into_iter()
-                .map(|signal| (signal, value.clone()))
-                .collect(),
-        )
-    }
-
-    /// Deliver one explicitly ordered discrete native event occurrence.
-    ///
-    /// Occurrences are never coalesced. The session rejects duplicate/out-of-order
-    /// sequence numbers before changing any event signal, then advances each lowered
-    /// scalar event counter using the existing native-event convention.
-    pub fn emit_native_event(
-        &mut self,
-        occurrence: NativeEventOccurrence,
-    ) -> Result<&FrameState, ExecutionSessionInputError> {
-        if let Some(previous) = self.last_native_event_sequence {
-            if occurrence.sequence <= previous {
-                return Err(ExecutionSessionInputError::NativeEventOutOfOrder {
-                    previous,
-                    next: occurrence.sequence,
-                });
-            }
-        }
-
-        let targets = self
-            .reactive_projection
-            .native_event_targets(&occurrence.source)
-            .to_vec();
-        if targets.is_empty() {
-            self.last_native_event_sequence = Some(occurrence.sequence);
-            return Ok(self.runtime.frame());
-        }
-        self.ensure_direct_input_ingress_available()?;
-        let next_values = targets
-            .iter()
-            .map(|signal| {
-                let value = self
-                    .runtime
-                    .reactive_value(*signal)
-                    .expect("lowered native event target must remain a live reactive signal");
-                let ReactiveValue::Scalar(current) = value else {
-                    unreachable!(
-                        "semantic native event declaration validates a scalar input signal"
-                    )
-                };
-                if *current >= NATIVE_EVENT_SEQUENCE_WRAP {
-                    0.0
-                } else {
-                    *current + 1.0
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.apply_reactive_input_batch(
-            targets
-                .into_iter()
-                .zip(next_values)
-                .map(|(signal, next)| (signal, ReactiveValue::Scalar(next)))
-                .collect(),
-        )?;
-        self.last_native_event_sequence = Some(occurrence.sequence);
         Ok(self.runtime.frame())
     }
 
@@ -3795,26 +3656,6 @@ impl ExecutionSession {
 
     pub(crate) fn semantic_object_is_reachable(&self, node: SemanticNodeId) -> bool {
         self.reachability.is_object_reachable(node)
-    }
-
-    fn apply_reactive_input_batch(
-        &mut self,
-        inputs: Vec<(noon_core::SignalId, ReactiveValue)>,
-    ) -> Result<&FrameState, ExecutionSessionInputError> {
-        let current = self.runtime.frame().time;
-        let signal_timeline = (!self.signal_timeline.is_empty()
-            && !self.signal_timeline.is_coherent_at(current, current))
-        .then(|| self.signal_timeline.preview(current, current));
-        let mut combined = signal_timeline
-            .as_ref()
-            .map_or_else(Vec::new, |preview| preview.inputs().to_vec());
-        combined.extend(inputs);
-        self.runtime
-            .advance_to_with_reactive_inputs(current, &combined)?;
-        if let Some(preview) = signal_timeline {
-            self.signal_timeline.commit(preview);
-        }
-        Ok(self.runtime.frame())
     }
 }
 
@@ -3835,24 +3676,17 @@ fn execution_track_end_time(definition: &TrackDefinition) -> Result<f64, Timelin
     Ok(timing.start_time + timing.duration)
 }
 
-fn reactive_value_from_native(value: NativeInputValue) -> ReactiveValue {
-    match value {
-        NativeInputValue::Scalar(value) => ReactiveValue::Scalar(value),
-        NativeInputValue::Bool(value) => ReactiveValue::Bool(value),
-        NativeInputValue::Vec2(value) => ReactiveValue::Vec2(value),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, NativeEventSource, NativeStateSource, RateFunction,
-        SemanticMutationTransaction, SemanticObjectProperty, SemanticObjectRole,
-        SemanticObjectState, SemanticSignalExpr, SemanticSignalValue, SemanticVec3, StoredGeometry,
-        TrackTiming, Vec2,
+        AnimationOptions, NativeEventOccurrence, NativeEventSource, NativeInputRuntimeError,
+        NativeInputValue, NativeStateSource, RateFunction, SemanticMutationTransaction,
+        SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticSignalExpr,
+        SemanticSignalValue, SemanticVec3, StoredGeometry, TrackTiming, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
+    use super::input::NATIVE_EVENT_SEQUENCE_WRAP;
     use super::*;
 
     fn linear_second() -> AnimationOptions {

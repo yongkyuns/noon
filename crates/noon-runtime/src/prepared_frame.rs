@@ -509,7 +509,6 @@ impl SceneInstance {
         effective: PreparedEffectivePropertyBatch,
     ) -> Result<&FrameState, PreparedFrameCommitError> {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
-        self.invalidate_replay_domain();
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
@@ -525,6 +524,18 @@ impl SceneInstance {
         } else {
             None
         };
+
+        // Preparing an input is speculative. Classify only a validated commit,
+        // and do not poison finite history for an unchanged input/no-op frame.
+        let reactive_changed = prepared
+            .reactive
+            .as_ref()
+            .is_some_and(|update| !update.is_empty());
+        if reactive_changed {
+            self.invalidate_replay_input();
+        } else if may_publish {
+            self.invalidate_replay_domain();
+        }
 
         self.timeline_scheduler.advance(prepared.time);
         debug_assert_eq!(
@@ -581,7 +592,7 @@ impl SceneInstance {
         }
         self.effective_driver_rows = next_drivers;
         self.last_stats = prepared.stats;
-        if time_changed || changed {
+        if time_changed || changed || reactive_changed {
             self.publication = self.publication.with_frame_epoch(
                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
             );

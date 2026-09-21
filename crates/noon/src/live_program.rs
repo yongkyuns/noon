@@ -9,10 +9,13 @@
 use std::error::Error;
 
 use noon_core::{
-    NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
+    NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
+    NativeStateSource, PublicationContext, Rect,
 };
 
-use crate::execution_session::ExecutionViewportQuery;
+use crate::execution_session::{
+    ExecutionViewportQuery, NativePointerInputPublication, NativePointerInputToken,
+};
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
     ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
@@ -190,6 +193,48 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// Query candidate frame rows through the session-owned derived spatial index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
         self.scene.owned_execution_mut().query_viewport(bounds)
+    }
+
+    /// Configure the platform pointer projected into the existing unkeyed native signals.
+    pub fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure contextual pointer input")?;
+        let token = self
+            .scene
+            .owned_execution_mut()
+            .configure_native_pointer_input(pointer, view_revision)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(token)
+    }
+
+    /// Capture the current session context without exposing mutable execution authority.
+    pub fn native_pointer_input_token(
+        &self,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("capture contextual pointer input")?;
+        self.session()
+            .native_pointer_input_token()
+            .map_err(LiveProgramError::Input)
+    }
+
+    /// Publish one occurrence and refresh an outstanding endpoint receipt after success.
+    pub fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver contextual pointer input")?;
+        let publication = self
+            .scene
+            .owned_execution_mut()
+            .submit_native_pointer_input(token, input)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(publication)
     }
 
     /// Deliver one normalized sampled native value without exposing mutable session authority.
@@ -819,3 +864,6 @@ mod tests {
         assert_eq!(program.session().frame().time, 1.0);
     }
 }
+
+#[cfg(test)]
+mod pointer_input_tests;

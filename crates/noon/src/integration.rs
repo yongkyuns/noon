@@ -27,6 +27,10 @@ pub use crate::boolean_authoring::effective_boolean_geometry_options;
 pub use crate::compact_value_authoring::semantic_object_state_from_compact;
 pub use crate::execution_segment::{ExecutionSegmentSequence, ExecutionSegmentToken};
 pub use crate::execution_session::{
+    pointer_selection_overlay_color, PointerFillOutcome, PointerFillQuery, PointerFillUnsupported,
+    PointerSelectionClick, PointerSelectionHighlight,
+};
+pub use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
     CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
     CallbackSequence, CallbackTermination, CallbackTerminationKind,
@@ -34,6 +38,7 @@ pub use crate::execution_session::{
     EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
     StructuralPublicationStats,
 };
+pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
     effective_style_with_fill_opacity, effective_style_with_paint_opacity,
@@ -59,6 +64,10 @@ pub use noon_core::{
     SemanticSignalError, SemanticStore, SemanticStoreError, SemanticStoreIdentity,
     SemanticTextImportError, SemanticTransactionNodeRef, TextResource, TextResourceArena,
     TextResourceHandle,
+};
+pub use noon_core::{
+    NativeInputModifiers, NativePointerCancellation, NativePointerContext, NativePointerId,
+    NativePointerInput, NativePointerInputKind, NativePointerPosition,
 };
 pub use noon_runtime::{
     EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState, RendererPublication,
