@@ -1,0 +1,124 @@
+--- a/web/execution-worker-client.js
++++ b/web/execution-worker-client.js
+@@ -48,6 +48,7 @@
+   #pending = new Map();
+   #nativeInputsInFlight = 0;
+   #pointerView = null;
++  #pointerViewRegistration = null;
+   #pointerReceipt = null;
+   #session = 0;
+   #loopDurationSeconds = 4;
+@@ -424,6 +425,7 @@
+     // Equal platform dimensions still require registration in the new owner.
+     // Neither a view nor a receipt is replayed across transport sessions.
+     this.#pointerView = null;
++    this.#pointerViewRegistration = null;
+     this.#pointerReceipt = null;
+     this.#rejectOwner("engine", reconnectError);
+ 
+@@ -587,11 +589,38 @@
+       if (this.#pointerView.width !== width || this.#pointerView.height !== height) {
+         throw new TypeError("browser pointer view revision reused with different geometry");
+       }
++      if (this.#pointerViewRegistration?.view === this.#pointerView) {
++        return this.#pointerViewRegistration.delivery;
++      }
+       return Promise.resolve({ type: "browser_pointer_view" });
+     }
+-    this.#pointerView = Object.freeze({ revision, width, height });
++    const view = Object.freeze({ revision, width, height });
++    this.#pointerView = view;
+     this.#pointerReceipt = null;
+-    return this.#requestNativeInput("browser_pointer_view", { view: this.#pointerView });
++    const requested = this.#requestNativeInput("browser_pointer_view", { view });
++    let delivery;
++    delivery = requested.then(
++      result => {
++        if (this.#pointerViewRegistration?.delivery === delivery) {
++          this.#pointerViewRegistration = null;
++        }
++        return result;
++      },
++      error => {
++        if (this.#pointerViewRegistration?.delivery === delivery) {
++          this.#pointerViewRegistration = null;
++          if (this.#pointerView === view) {
++            // The DOM mapping changed, so never restore the old receipt. Leave
++            // registration absent so the exact same revision can be retried.
++            this.#pointerView = null;
++            this.#pointerReceipt = null;
++          }
++        }
++        throw error;
++      },
++    );
++    this.#pointerViewRegistration = { view, delivery };
++    return delivery;
+   }
+ 
+   get pointerPresentation() {
+@@ -714,6 +743,7 @@
+     this.#renderWorker = null;
+     this.#pointerReceipt = null;
+     this.#pointerView = null;
++    this.#pointerViewRegistration = null;
+     this.#renderPrepared = null;
+     this.#preparedStartReservation = null;
+     this.#ready = null;
+@@ -1002,6 +1032,7 @@
+     this.#renderWorker = null;
+     this.#pointerReceipt = null;
+     this.#pointerView = null;
++    this.#pointerViewRegistration = null;
+     this.#renderPrepared = null;
+     this.#ready = null;
+     for (const pending of this.#pending.values()) {
+--- a/web/execution-worker-client.test.mjs
++++ b/web/execution-worker-client.test.mjs
+@@ -511,6 +511,46 @@
+   } finally { client.terminate(); }
+ });
+ 
++test("failed pointer view reservation stays unregistered and the same revision can retry", async () => {
++  const { client, engine } = await startClient();
++  const held = [];
++  try {
++    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
++      held.push(observeResult(client.emitNativeEvent({ kind: "control_commit", name: `held-${i}` })));
++    }
++    await new Promise(resolve => setImmediate(resolve));
++    const failed = observeResult(client.setBrowserPointerView(9, 800, 400));
++    assert.match((await failed).error?.message ?? "", /native input.*full/i);
++    assert.equal(client.pointerPresentation, null);
++
++    const first = await waitForRequest(engine, "native_event", 1);
++    engine.emitMessage(engineMessage(first.type, { requestId: first.requestId }));
++    await held[0];
++
++    const retry = client.setBrowserPointerView(9, 800, 400);
++    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
++    assert.deepEqual(registration.view, { revision: 9, width: 800, height: 400 });
++    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
++    await retry;
++  } finally {
++    client.terminate();
++    await Promise.all(held);
++  }
++});
++
++test("duplicate pointer view registration shares the pending bounded delivery", async () => {
++  const { client, engine } = await startClient();
++  try {
++    const first = client.setBrowserPointerView(11, 800, 400);
++    const duplicate = client.setBrowserPointerView(11, 800, 400);
++    await new Promise(resolve => setImmediate(resolve));
++    assert.equal(engine.messages.filter(message => message.type === "browser_pointer_view").length, 1);
++    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
++    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
++    await Promise.all([first, duplicate]);
++  } finally { client.terminate(); }
++});
++
+ test("native input cannot cross a scene switch during its readiness await", async () => {
+   const { client, engine: oldEngine, render } = await startClient();
+   const input = observeResult(client.submitBrowserPointerInput({ kind: "cancel", view_revision: 1 }));
