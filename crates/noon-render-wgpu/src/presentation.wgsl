@@ -27,17 +27,6 @@ fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
-fn fs_present_identity(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let dimensions = textureDimensions(scene_texture);
-    let pixel = clamp(
-        vec2<i32>(position.xy),
-        vec2<i32>(0),
-        vec2<i32>(dimensions) - vec2<i32>(1),
-    );
-    return textureLoad(scene_texture, pixel, 0);
-}
-
-@fragment
 fn fs_present(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let dimensions = textureDimensions(scene_texture);
     let pixel = clamp(

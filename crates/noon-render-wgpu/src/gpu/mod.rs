@@ -492,6 +492,7 @@ struct FramePassOptions<'a> {
     clear_color: wgpu::Color,
     query_set: Option<&'a wgpu::QuerySet>,
     overlay: Option<&'a OverlayGpuState>,
+    finalize: bool,
 }
 impl<'a> FramePassOptions<'a> {
     fn new(clear_color: wgpu::Color, query_set: Option<&'a wgpu::QuerySet>) -> Self {
@@ -499,6 +500,16 @@ impl<'a> FramePassOptions<'a> {
             clear_color,
             query_set,
             overlay: None,
+            finalize: true,
+        }
+    }
+
+    fn deferred(clear_color: wgpu::Color, query_set: Option<&'a wgpu::QuerySet>) -> Self {
+        Self {
+            clear_color,
+            query_set,
+            overlay: None,
+            finalize: false,
         }
     }
 }
@@ -1106,43 +1117,75 @@ impl GpuRenderer {
         )
     }
 
-    /// Encode one secondary view from the already uploaded retained frame.
+    /// Encode one complete retained composition in presentation order.
     ///
-    /// This performs no geometry upload or preparation. The descriptor has already
-    /// been validated against the renderer output size; the pass is clipped to its
-    /// destination and uses a renderer-owned secondary camera binding so primary
-    /// camera command encoding is unaffected.
-    pub fn encode_secondary_viewport(
+    /// The primary scene is encoded first without finalization, then every
+    /// secondary analytic viewport is appended, then the optional session overlay
+    /// is drawn once and the output is presented once. All secondary requests are
+    /// validated before the primary pass begins, so a rejected composition leaves
+    /// the target untouched.
+    ///
+    /// GPU timestamps, when supplied, cover the primary scene pass only.
+    pub fn encode_composed_frame(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
-        secondary: SecondaryViewport,
+        presentations: Option<&PreparedDerivedDisplay>,
+        secondary_viewports: &[SecondaryViewport],
+        overlay: Option<&OverlayGpuState>,
+        clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
     ) -> Result<DrawStats, SecondaryViewportError> {
-        self.encode_secondary_viewport_inner(device, encoder, view, prepared, None, secondary)
-    }
+        for secondary in secondary_viewports {
+            SecondaryViewport::new(
+                secondary.camera,
+                secondary.destination,
+                self.viewport_size,
+            )?;
+        }
+        if !secondary_viewports.is_empty()
+            && Self::secondary_viewport_requires_multisampling(prepared, presentations)
+        {
+            return Err(SecondaryViewportError::MultisampledContentUnsupported);
+        }
 
-    pub fn encode_secondary_viewport_with_transient_presentations(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        prepared: &PreparedFrame<'_>,
-        presentations: &PreparedDerivedDisplay,
-        secondary: SecondaryViewport,
-    ) -> Result<DrawStats, SecondaryViewportError> {
-        self.encode_secondary_viewport_inner(
-            device,
+        let mut stats = self.encode_inner(
             encoder,
             view,
             prepared,
-            Some(presentations),
-            secondary,
-        )
+            presentations,
+            FramePassOptions::deferred(clear_color, query_set),
+        );
+        for secondary in secondary_viewports {
+            stats += self.encode_secondary_viewport_validated(
+                device,
+                encoder,
+                view,
+                prepared,
+                presentations,
+                *secondary,
+            );
+        }
+        stats += self.finalize_frame(encoder, view, overlay);
+        Ok(stats)
     }
 
-    fn encode_secondary_viewport_inner(
+    fn secondary_viewport_requires_multisampling(
+        prepared: &PreparedFrame<'_>,
+        presentations: Option<&PreparedDerivedDisplay>,
+    ) -> bool {
+        ordered_render_sample_count(prepared.path_batches) != 1
+            || presentations.is_some_and(|presentations| {
+                presentations
+                    .path_batches
+                    .iter()
+                    .any(|batch| !batch.index_range.is_empty())
+            })
+    }
+
+    fn encode_secondary_viewport_validated(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1150,26 +1193,8 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         presentations: Option<&PreparedDerivedDisplay>,
         secondary: SecondaryViewport,
-    ) -> Result<DrawStats, SecondaryViewportError> {
-        let secondary =
-            SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
+    ) -> DrawStats {
         let [x, y, width, height] = secondary.destination;
-        let has_transient_paths = presentations.is_some_and(|presentations| {
-            presentations
-                .path_batches
-                .iter()
-                .any(|batch| !batch.index_range.is_empty())
-        });
-        let multisampled =
-            ordered_render_sample_count(prepared.path_batches) != 1 || has_transient_paths;
-        // Reject before touching the shared secondary camera uniform. This keeps
-        // failed encoding side-effect free for any earlier encoded secondary pass.
-        if multisampled {
-            return Err(SecondaryViewportError::MultisampledContentUnsupported);
-        }
-        // Encode against a call-local immutable camera resource. Command buffers
-        // therefore retain the camera that belonged to this viewport even when
-        // several secondary views are encoded before one queue submission.
         let camera_uniform = secondary.camera.uniform([width, height]);
         let secondary_camera_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1185,9 +1210,9 @@ impl GpuRenderer {
                 resource: secondary_camera_buffer.as_entire_binding(),
             }],
         });
-        let scene_view = self.presentation.scene_view(view);
+
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: scene_view,
+            view: self.presentation.scene_view(view),
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -1205,27 +1230,21 @@ impl GpuRenderer {
         });
         pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
         pass.set_scissor_rect(x, y, width, height);
-        let stats = match presentations {
+        match presentations {
             Some(presentations) => self.draw_with_derived_camera(
                 &mut pass,
                 prepared,
                 presentations,
-                !multisampled,
+                true,
                 &secondary_camera_bind_group,
             ),
             None => self.draw_ordered_with_camera(
                 &mut pass,
                 prepared,
-                !multisampled,
+                true,
                 &secondary_camera_bind_group,
             ),
-        };
-        drop(pass);
-        // Browser/WebGL uses an intermediate scene target. Re-present after the
-        // secondary composition so callers cannot accidentally publish the
-        // pre-secondary scene. Direct output is a no-op here.
-        self.presentation.encode_present(encoder, view);
-        Ok(stats)
+        }
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
@@ -1258,6 +1277,7 @@ impl GpuRenderer {
             clear_color,
             query_set,
             overlay,
+            finalize,
         } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = if derived.is_some_and(|presentations| {
@@ -1332,7 +1352,19 @@ impl GpuRenderer {
             }
         };
         let mut stats = stats;
-        stats += self.encode_overlay(encoder, view, overlay);
+        if finalize {
+            stats += self.finalize_frame(encoder, view, overlay);
+        }
+        stats
+    }
+
+    pub(crate) fn finalize_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        overlay: Option<&OverlayGpuState>,
+    ) -> DrawStats {
+        let stats = self.encode_overlay(encoder, view, overlay);
         self.presentation.encode_present(encoder, view);
         stats
     }
