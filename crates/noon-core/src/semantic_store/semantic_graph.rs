@@ -152,6 +152,21 @@ impl SemanticGraphDeclaration {
                 .flat_map(|edge| [edge.family(), edge.line()]),
         )
     }
+
+    pub(crate) fn transaction_declaration(&self) -> SemanticTransactionGraphDeclaration {
+        SemanticTransactionGraphDeclaration::new(
+            self.data.topology.clone(),
+            self.vertices(),
+            self.edges().map(|(edge, binding)| {
+                debug_assert_eq!(edge.id, binding.id());
+                SemanticTransactionGraphEdgeBinding::new(
+                    edge.id,
+                    binding.family().into(),
+                    binding.line().into(),
+                )
+            }),
+        )
+    }
 }
 
 /// Transaction-local semantic binding for one stable graph edge identity.
