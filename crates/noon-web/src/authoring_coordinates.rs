@@ -98,6 +98,23 @@ impl WasmCoordinateOptions {
         };
     }
 
+    #[wasm_bindgen(js_name = setElongatedTicks)]
+    pub fn set_elongated_ticks(&mut self, values: &[f64], multiple: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberLine(options) = &mut self.request else {
+            return Err(js_error("elongated ticks require a NumberLine"));
+        };
+        if values.len() > options.ticks.limit
+            || values.iter().any(|x| !x.is_finite())
+            || !multiple.is_finite()
+            || multiple < 0.0
+        {
+            return Err(js_error("invalid elongated ticks"));
+        }
+        options.numbers_with_elongated_ticks = values.to_vec();
+        options.longer_tick_multiple = multiple;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(
         &mut self,

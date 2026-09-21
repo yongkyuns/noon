@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable
+from enum import Enum
 
 from _noon_errors import (
     NoonError,
@@ -148,6 +149,12 @@ DEFAULT_MOBJECT_TO_EDGE_BUFFER = MED_LARGE_BUFF
 DEFAULT_MOBJECT_TO_MOBJECT_BUFFER = MED_SMALL_BUFF
 DEFAULT_FRAME_HEIGHT = 8.0
 DEFAULT_FRAME_WIDTH = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0
+
+
+class SectionType(str, Enum):
+    NORMAL = "normal"
+    SKIP = "skip"
+
 
 
 def _hex_color(value: int) -> Color:
@@ -591,8 +598,16 @@ class Scene:
     def mobjects(self) -> list[object]:
         return _scene_operations()._canonical_scene_mobjects(self)
 
-    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
-        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+    def _edit_membership(
+        self, kind: str, values: tuple[object, ...] = (), *,
+        key=None, key_mobject: Mobject | None = None,
+    ) -> None:
+        if key_mobject is None:
+            _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+        else:
+            _scene_operations()._canonical_edit_membership(
+                self, kind, values, key=key, key_mobject=key_mobject
+            )
 
     @staticmethod
     def _identity_list_update(current: list[object], additions: tuple[object, ...]) -> list[object]:
@@ -623,8 +638,15 @@ class Scene:
         """Dissolve affected Groups while retaining unaffected foreground siblings."""
         from _manim_compat import Group
 
+        def removal_contains(candidate: object, value: object) -> bool:
+            if candidate is value:
+                return True
+            return isinstance(candidate, Group) and any(
+                removal_contains(child, value) for child in candidate.submobjects
+            )
+
         def removed(value: object) -> bool:
-            return any(value is target for target in removals)
+            return any(removal_contains(target, value) for target in removals)
 
         def contains_removed(value: object) -> bool:
             if removed(value):
@@ -654,10 +676,15 @@ class Scene:
         # foreground projection changes the authoritative membership batch.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
-        if key is not None and len(mobjects) != 1:
+        if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
             raise ValueError("an explicit key requires one ordinary Mobject add")
         ordered = self._foreground_add_order(mobjects, self.foreground_mobjects)
-        self._edit_membership("add", ordered, key=key)
+        if key is not None and self.foreground_mobjects:
+            # A key belongs to the caller's wrapper, not the first member after
+            # foreground projection. Keep that identity explicit at the boundary.
+            self._edit_membership("add", ordered, key=key, key_mobject=mobjects[0])
+        else:
+            self._edit_membership("add", ordered, key=key)
         return leaves[0] if len(leaves) == 1 else self
 
     def add_foreground_mobjects(self, *mobjects: object) -> Scene:
@@ -708,6 +735,9 @@ class Scene:
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
         self._edit_membership("replace", (old_mobject, new_mobject))
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, (old_mobject,)
+        )
         return self
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
@@ -725,6 +755,15 @@ class Scene:
     @property
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
+
+    def next_section(
+        self, name: str = "", type: SectionType = SectionType.NORMAL
+    ) -> Scene:
+        return _scene_operations()._canonical_next_section(self, name, type)
+
+    @property
+    def sections(self) -> list[dict[str, object]]:
+        return _scene_operations()._canonical_sections(self)
 
     def value_tracker(self, value: float = 0.0) -> Any:
         return _scene_operations()._canonical_value_tracker(self, value)
@@ -812,6 +851,7 @@ Object = Mobject
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "NumberLine": "_manim_plotting",
+    "UnitInterval": "_manim_plotting",
     "Axes": "_manim_plotting",
     "FunctionGraph": "_manim_plotting",
     "ParametricFunction": "_manim_plotting",
@@ -877,6 +917,8 @@ _PUBLIC_EXPORTS = {
     "ArcBetweenPoints": "_manim_arc",
     "Brace": "_manim_brace",
     "BraceBetweenPoints": "_manim_brace",
+    "BraceLabel": "_manim_brace",
+    "BraceText": "_manim_brace",
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",

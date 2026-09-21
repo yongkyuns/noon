@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Stable identity for one retained graph vertex.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -216,9 +216,30 @@ impl GraphTopology {
             .get(&id)
             .ok_or(GraphTopologyError::UnknownVertex(id))?;
         let incident = self.incident_edges.get(&id).cloned().unwrap_or_default();
+        let removed_ids: HashSet<_> = incident.iter().copied().collect();
         let mut removed_edges = Vec::with_capacity(incident.len());
-        for edge in incident {
-            removed_edges.push(self.remove_edge(edge)?);
+        for edge_id in &incident {
+            removed_edges.push(
+                self.edge(*edge_id)
+                    .ok_or(GraphTopologyError::UnknownEdge(*edge_id))?,
+            );
+        }
+
+        // Remove all incident edges in one stable compaction. Repeated Vec::remove
+        // would shift/reindex the same suffix once per incident edge and becomes
+        // quadratic for high-degree vertices.
+        for edge in &removed_edges {
+            self.edge_keys
+                .remove(&EdgeKey::new(edge.start, edge.end, edge.directed));
+            self.edge_positions.remove(&edge.id);
+        }
+        self.edges.retain(|edge| !removed_ids.contains(&edge.id));
+        self.edge_positions.clear();
+        for (position, edge) in self.edges.iter().enumerate() {
+            self.edge_positions.insert(edge.id, position);
+        }
+        for edges in self.incident_edges.values_mut() {
+            edges.retain(|edge| !removed_ids.contains(edge));
         }
 
         self.incident_edges.remove(&id);
@@ -344,6 +365,39 @@ mod tests {
         );
         assert!(topology.edges().is_empty());
         assert!(topology.incident_edges(a).unwrap().is_empty());
+    }
+
+    #[test]
+    fn high_degree_vertex_removal_preserves_edge_order_with_one_compaction() {
+        let mut topology = GraphTopology::new();
+        let center = topology.add_vertex().unwrap();
+        let mut leaves = Vec::new();
+        for _ in 0..1_000 {
+            leaves.push(topology.add_vertex().unwrap());
+        }
+        let unrelated_a = topology.add_vertex().unwrap();
+        let unrelated_b = topology.add_vertex().unwrap();
+        let before = topology.add_edge(unrelated_a, unrelated_b, false).unwrap();
+        for leaf in &leaves {
+            topology.add_edge(center, *leaf, false).unwrap();
+        }
+        let after = topology.add_edge(unrelated_b, leaves[0], true).unwrap();
+
+        let removed = topology.remove_vertex(center).unwrap();
+        assert_eq!(removed.len(), 1_000);
+        assert_eq!(
+            topology
+                .edges()
+                .iter()
+                .map(|edge| edge.id)
+                .collect::<Vec<_>>(),
+            vec![before, after]
+        );
+        assert_eq!(topology.incident_edges(unrelated_a).unwrap(), &[before]);
+        assert_eq!(
+            topology.incident_edges(unrelated_b).unwrap(),
+            &[before, after]
+        );
     }
 
     #[test]
