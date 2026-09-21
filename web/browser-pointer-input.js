@@ -5,7 +5,7 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, windowTarget = window,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, windowTarget = window,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -27,6 +27,10 @@ export function attachBrowserPointerInput(canvas, {
     if (!active()) return;
     cancel();
     view = null;
+    if (onView) {
+      advanceView();
+      onView(viewRevision(), 0, 0);
+    }
   };
   const currentView = () => {
     const rect = canvas.getBoundingClientRect();
@@ -35,11 +39,13 @@ export function attachBrowserPointerInput(canvas, {
       invalidateView();
       return null;
     }
-    if (view !== null && next.some((value, i) => value !== view[i])) {
+    const changed = view === null || next.some((value, i) => value !== view[i]);
+    if (view !== null && changed) {
       cancel();
       advanceView();
     }
     view = next;
+    if (changed) onView?.(viewRevision(), rect.width, rect.height);
     return rect;
   };
   const receive = (type, event, receiptRect = null) => {
@@ -92,7 +98,7 @@ export function attachBrowserPointerInput(canvas, {
       return;
     }
     const contact = selected;
-    send({
+    const admitted = send({
       kind, source_id: contact.source, pointer_id: contact.id,
       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
       viewport_width: rect.width, viewport_height: rect.height,
@@ -100,6 +106,13 @@ export function attachBrowserPointerInput(canvas, {
       shift: event.shiftKey === true, control: event.ctrlKey === true,
       alt: event.altKey === true, meta: event.metaKey === true,
     });
+    // A synchronous direct host can reject a stale displayed frame. Rust has
+    // already cancelled its contact. Retire this DOM source without another
+    // cancellation, edge reconstruction, queued replay, or fatal detachment.
+    if (admitted === false) {
+      if (selected === contact) selected = null;
+      return false;
+    }
     // Delivery can synchronously retire the attachment/contact (for example,
     // when a presentation notification fails after Rust admitted the press).
     // Do not mutate a cancelled or replacement contact on return from send.
@@ -146,6 +159,20 @@ export function attachBrowserPointerInput(canvas, {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  if (onView) {
+    // Register before the first paint; input collection never invents a receipt.
+    // Scroll/resize/element resize can invalidate mapping without pointer motion.
+    advanceView();
+    const refresh = guard(() => { if (active()) currentView(); });
+    windowTarget.addEventListener("resize", refresh, { signal });
+    windowTarget.addEventListener("scroll", refresh, { capture: true, signal });
+    if (typeof windowTarget.ResizeObserver === "function") {
+      const observer = new windowTarget.ResizeObserver(refresh);
+      observer.observe(canvas);
+      signal.addEventListener("abort", () => observer.disconnect(), { once: true });
+    }
+    refresh();
+  }
   return { invalidateView };
 }
 

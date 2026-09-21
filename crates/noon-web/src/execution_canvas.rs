@@ -16,6 +16,7 @@ mod wasm {
     use crate::browser_pointer_input::{
         self, BrowserPointerBinding, BrowserPointerInput, BrowserPointerKind, BrowserPointerTarget,
     };
+    use crate::direct_pointer_presentation::DirectPointerPresentation;
     use noon::integration::{
         NativePointerInputPublication, NativePointerInputToken, PointerSelectionPresentation,
         RendererPublication,
@@ -382,21 +383,36 @@ mod wasm {
             Ok(())
         }
 
-        fn submit_browser_pointer(&mut self, input: BrowserPointerInput) -> Result<(), JsValue> {
+        fn submit_browser_pointer(
+            &mut self,
+            input: BrowserPointerInput,
+            presentation: &mut DirectPointerPresentation,
+        ) -> Result<bool, JsValue> {
             let binding = &mut self.browser_pointer_binding;
             let sequence = &mut self.next_native_event_sequence;
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    browser_pointer_input::submit_browser_pointer_input(
-                        session, binding, sequence, input,
-                    )
+                    presentation.submit(session, binding, sequence, input)
                 }
                 DirectSourceAuthority::Program(program) => {
-                    browser_pointer_input::submit_browser_pointer_input(
+                    presentation.submit(program.as_mut(), binding, sequence, input)
+                }
+            }
+            .map_err(js_error)
+        }
+
+        fn cancel_browser_pointer(&mut self) -> Result<(), JsValue> {
+            let binding = &mut self.browser_pointer_binding;
+            let sequence = &mut self.next_native_event_sequence;
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence)
+                }
+                DirectSourceAuthority::Program(program) => {
+                    browser_pointer_input::cancel_browser_pointer_input(
                         program.as_mut(),
                         binding,
                         sequence,
-                        input,
                     )
                 }
             }
@@ -465,6 +481,7 @@ mod wasm {
         webgl_loss_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
         webgl_restore_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
         surface_frame_pending: bool,
+        pointer_presentation: DirectPointerPresentation,
         selection_overlay: OverlayGpuState,
         last_selection_presentation: Option<PointerSelectionPresentation>,
     }
@@ -478,6 +495,7 @@ mod wasm {
             if self.backend != wgpu::Backend::Gl || !self.webgl_recovery_pending.get() {
                 return Ok(false);
             }
+            self.pointer_presentation.invalidate();
             let next_generation = self
                 .gpu_generation
                 .checked_add(1)
@@ -543,6 +561,7 @@ mod wasm {
                 return Ok(false);
             }
 
+            self.pointer_presentation.invalidate();
             let lost_generation = self.gpu_generation;
             let next_generation = lost_generation
                 .checked_add(1)
@@ -601,9 +620,11 @@ mod wasm {
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lost.get() {
+                self.pointer_presentation.invalidate();
                 return Ok(false);
             }
             if self.webgl_recovery_pending.get() {
+                self.pointer_presentation.invalidate();
                 return Ok(false);
             }
             if self.backend == wgpu::Backend::BrowserWebGpu
@@ -611,10 +632,12 @@ mod wasm {
                     .gpu_diagnostics
                     .device_loss_pending(self.gpu_generation)
             {
+                self.pointer_presentation.invalidate();
                 return Ok(false);
             }
             let changes_pending = self.source.session().wake_state().frame_pending()
                 || self.surface_frame_pending
+                || self.pointer_presentation.refresh_pending
                 || self.selection_pending();
             if !self.drawable || !changes_pending {
                 return Ok(false);
@@ -627,10 +650,14 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
                     wgpu::CurrentSurfaceTexture::Outdated => {
+                        self.pointer_presentation.invalidate();
+                        self.surface_frame_pending = true;
                         self.surface.configure(&self.device, &self.config);
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
+                        self.pointer_presentation.invalidate();
+                        self.surface_frame_pending = true;
                         if self.backend == wgpu::Backend::Gl {
                             self.webgl_recovery_pending.set(true);
                         } else {
@@ -645,11 +672,7 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            let rendered = self.render_direct(surface_texture, reconfigure_after_present)?;
-            if rendered {
-                self.surface_frame_pending = false;
-            }
-            Ok(rendered)
+            self.render_direct(surface_texture, reconfigure_after_present)
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
@@ -657,6 +680,8 @@ mod wasm {
             if self.canvas.width() == width && self.canvas.height() == height {
                 return Ok(());
             }
+            self.pointer_presentation.invalidate();
+            self.surface_frame_pending = true;
             self.canvas.set_width(width);
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
@@ -801,6 +826,7 @@ mod wasm {
                 present_now: self.drawable
                     && (directive.present_now()
                         || self.surface_frame_pending
+                        || self.pointer_presentation.refresh_pending
                         || self.selection_pending()),
                 cadence,
                 delay_ms,
@@ -893,7 +919,7 @@ mod wasm {
             control: bool,
             alt: bool,
             meta: bool,
-        ) -> Result<bool, JsValue> {
+        ) -> Result<Option<bool>, JsValue> {
             let exact = browser_pointer_input::dom_integer;
             let input = BrowserPointerInput {
                 kind: BrowserPointerKind::from_name(&kind).map_err(js_error)?,
@@ -916,9 +942,48 @@ mod wasm {
                 meta,
             };
             if !self.source.session().has_native_pointer_subscribers() {
+                return Ok(Some(false));
+            }
+            if !self.drawable
+                || self.webgl_context_lost.get()
+                || self.webgl_recovery_pending.get()
+                || self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
+                self.pointer_presentation.invalidate();
+            }
+            let admitted = self
+                .source
+                .submit_browser_pointer(input, &mut self.pointer_presentation)?;
+            let pending = self.finish_direct_native_input()?;
+            // Undefined is a recoverable rejection, not an admitted clean sample.
+            // The synchronous DOM caller retires the contact and requests redraw.
+            Ok(admitted.then_some(pending))
+        }
+
+        /// Register the DOM content view before presentation. JavaScript supplies
+        /// only platform coordinates; the Rust host captures its own frame.
+        #[wasm_bindgen(js_name = setPointerView)]
+        pub fn set_pointer_view(
+            &mut self,
+            revision: f64,
+            width: f32,
+            height: f32,
+        ) -> Result<bool, JsValue> {
+            let revision =
+                browser_pointer_input::dom_integer(revision, 0.0, 9_007_199_254_740_991.0)
+                    .map_err(js_error)? as u64;
+            if !self
+                .pointer_presentation
+                .set_view(revision, Vec2::new(width, height))
+                .map_err(js_error)?
+            {
                 return Ok(false);
             }
-            self.apply_direct_native_input(|direct| direct.submit_browser_pointer(input))
+            self.source.cancel_browser_pointer()?;
+            self.update_camera()?;
+            Ok(true)
         }
 
         #[wasm_bindgen(js_name = setPointerFillSelection)]
@@ -934,6 +999,19 @@ mod wasm {
         #[wasm_bindgen(js_name = debugSelectionFrameJson)]
         pub fn debug_selection_frame_json(&self) -> String {
             noon::diagnostics::execution_frame_value(self.source.session()).to_string()
+        }
+
+        /// Read-only qualification evidence, never used to construct an input token.
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = debugPointerPresentationJson)]
+        pub fn debug_pointer_presentation_json(&self) -> String {
+            serde_json::json!({
+                "current": self.source.session().publication_context().frame_epoch().get().to_string(),
+                "presented": self.pointer_presentation.presented.as_ref().map(|frame|
+                    frame.publication().frame_epoch().get().to_string()),
+                "refreshPending": self.pointer_presentation.refresh_pending,
+                "view": self.pointer_presentation.viewport().map(|view| [view.x, view.y]),
+            }).to_string()
         }
 
         /// Deliver one keyboard state sample followed by its ordered edge event.
@@ -1170,14 +1248,16 @@ mod wasm {
             &mut self,
             apply: impl FnOnce(&mut DirectExecutionSource) -> Result<(), JsValue>,
         ) -> Result<bool, JsValue> {
-            let (pending, camera) = {
-                let direct = &mut self.source;
-                apply(direct)?;
-                let camera = direct.session().camera().map_err(js_error)?;
-                (direct.session().wake_state().frame_pending(), camera)
-            };
+            apply(&mut self.source)?;
+            self.finish_direct_native_input()
+        }
+
+        fn finish_direct_native_input(&mut self) -> Result<bool, JsValue> {
+            let session = self.source.session();
+            let pending = session.wake_state().frame_pending();
+            let camera = session.camera().map_err(js_error)?;
             self.sync_camera(camera)?;
-            Ok(pending || self.selection_pending())
+            Ok(pending || self.selection_pending() || self.pointer_presentation.refresh_pending)
         }
 
         fn selection_pending(&self) -> bool {
@@ -1266,6 +1346,7 @@ mod wasm {
                 webgl_loss_listener,
                 webgl_restore_listener,
                 surface_frame_pending: false,
+                pointer_presentation: DirectPointerPresentation::default(),
                 selection_overlay: OverlayGpuState::default(),
                 last_selection_presentation: None,
             };
@@ -1295,6 +1376,16 @@ mod wasm {
                 .map_err(js_error)?
             };
             let camera = self.renderer.camera();
+            let pointer_frame = self
+                .pointer_presentation
+                .capture(
+                    self.source.session(),
+                    Camera2DState {
+                        center: camera.center,
+                        height: camera.world_size.y,
+                    },
+                )
+                .map_err(js_error)?;
             let half_extent = camera.world_size * 0.5;
             let presentation = self.source.session().pointer_selection_presentation();
             let overlay = presentation
@@ -1398,11 +1489,15 @@ mod wasm {
                 draw
             };
             self.queue.present(surface_texture);
+            self.pointer_presentation.did_present(pointer_frame);
+            self.surface_frame_pending = false;
             self.last_selection_presentation = presentation;
             self.last_draw_calls = draw.draw_calls();
             self.last_text_draw_calls = draw.text.draw_calls;
             self.last_instances_drawn = draw.instances_drawn();
             if reconfigure_after_present {
+                self.pointer_presentation.invalidate();
+                self.surface_frame_pending = true;
                 self.surface.configure(&self.device, &self.config);
             }
             let resumed = self
@@ -1426,10 +1521,15 @@ mod wasm {
         }
 
         fn update_camera(&mut self) -> Result<(), JsValue> {
+            self.pointer_presentation.invalidate();
             if !self.drawable {
                 return Ok(());
             }
-            let aspect = self.config.width as f32 / self.config.height as f32;
+            let logical = self.pointer_presentation.viewport().unwrap_or(Vec2::new(
+                self.config.width as f32,
+                self.config.height as f32,
+            ));
+            let aspect = logical.x / logical.y;
             let camera = Camera2D::new(
                 self.camera_center,
                 Vec2::new(self.camera_height * aspect, self.camera_height),

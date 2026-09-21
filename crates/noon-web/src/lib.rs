@@ -36,6 +36,8 @@ mod clock;
 mod determinism;
 #[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
 mod direct_execution_smoke;
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+mod direct_pointer_presentation;
 #[cfg(feature = "renderer")]
 mod execution_canvas;
 mod execution_transport;
