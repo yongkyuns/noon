@@ -215,6 +215,9 @@ def _membership_leaf_bindings(
         if member._scene is not None and member._scene is not scene:
             raise ValueError("Mobject already belongs to another Scene")
         if member._scene is scene:
+            existing_key = scene._object_keys[member._object.id]
+            if key is not None and _ir._authoring_key("key", key, existing_key) != existing_key:
+                raise ValueError("a re-added canonical Mobject keeps its existing key")
             reservation = _TypedBindingReservation(
                 member._object,
                 scene._object_keys[member._object.id],
@@ -375,19 +378,26 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
+    key_mobject: _base.Mobject | None = None,
 ) -> None:
-    if key is not None and (kind != "add" or not values or isinstance(values[0], _compat.Group)):
-        # Scene.add validates that the caller supplied exactly one keyed object.
-        # Additional values here can only be its already-authored foreground
-        # projection; only the first reservation receives the explicit key.
-        raise ValueError("an explicit key requires one ordinary Mobject add")
+    if key is not None:
+        if kind != "add" or not values or (key_mobject is None and len(values) != 1):
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+        if key_mobject is None:
+            key_mobject = values[0]
+        if not isinstance(key_mobject, _base.Mobject) or sum(
+            value is key_mobject for value in values
+        ) != 1:
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+    elif key_mobject is not None:
+        raise ValueError("a designated keyed Mobject requires an explicit key")
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     next_object_id = scene._next_object_id
     reservations = []
     binding_keys = set()
     request_keys = set()
-    for index, value in enumerate(values):
+    for value in values:
         request_key = _semantic_wrapper_key(value)
         if request_key in request_keys:
             raise ValueError("membership request contains a duplicate Mobject or Group")
@@ -399,7 +409,7 @@ def _canonical_edit_membership(
             next_object_id=next_object_id,
             binding_keys=binding_keys,
             reserve_bindings=kind in {"add", "replace"},
-            key=key if index == 0 else None,
+            key=key if value is key_mobject else None,
         )
         reservations.extend(appended)
     engine_call(context.editMembership, batch, operation="Scene." + kind)
