@@ -1,0 +1,132 @@
+diff --git a/crates/noon-web/src/browser_pointer_input.rs b/crates/noon-web/src/browser_pointer_input.rs
+--- a/crates/noon-web/src/browser_pointer_input.rs
++++ b/crates/noon-web/src/browser_pointer_input.rs
+@@ -227,6 +227,46 @@
+         })
+     }
+ 
++    /// Pure shape/source validation, including when no frame has been presented.
++    /// Missing display state must not relax a retired source or manufacture an edge.
++    pub(crate) fn needs_binding(self, binding: Option<BrowserPointerBinding>) -> Result<bool, String> {
++        let pointer = self.pointer()?;
++        let coordinates = self.coordinates()?;
++        let needs_binding = match binding {
++        None => true,
++        Some(binding) => {
++            if pointer.source < binding.pointer.source {
++                return Err("browser pointer source has been retired".into());
++            }
++            if pointer.source == binding.pointer.source {
++                if pointer != binding.pointer
++                    || self.view_revision != binding.view_revision
++                    || binding.retired
++                {
++                    return Err(
++                        "browser pointer identity/view does not match its live source".into(),
++                    );
++                }
++                if coordinates.is_some_and(|(_, viewport)| viewport != binding.viewport) {
++                    return Err("browser pointer viewport changed without a new source/view".into());
++                }
++                false
++            } else {
++                true
++            }
++        }
++    };
++    if needs_binding
++        && !matches!(
++            self.kind,
++            BrowserPointerKind::Move | BrowserPointerKind::Press
++        )
++    {
++        return Err("browser pointer release/cancellation requires its existing source".into());
++    }
++        Ok(needs_binding)
++    }
++
+     pub(crate) fn coordinates(self) -> Result<Option<(Vec2, Vec2)>, String> {
+         if self.cancellation().is_some() {
+             if self.surface_x.is_some()
+@@ -301,38 +341,7 @@
+     let next = sequence
+         .checked_add(1)
+         .ok_or("native input event sequence exhausted")?;
+-    let needs_binding = match *binding {
+-        None => true,
+-        Some(binding) => {
+-            if pointer.source < binding.pointer.source {
+-                return Err("browser pointer source has been retired".into());
+-            }
+-            if pointer.source == binding.pointer.source {
+-                if pointer != binding.pointer
+-                    || wire.view_revision != binding.view_revision
+-                    || binding.retired
+-                {
+-                    return Err(
+-                        "browser pointer identity/view does not match its live source".into(),
+-                    );
+-                }
+-                if coordinates.is_some_and(|(_, viewport)| viewport != binding.viewport) {
+-                    return Err("browser pointer viewport changed without a new source/view".into());
+-                }
+-                false
+-            } else {
+-                true
+-            }
+-        }
+-    };
+-    if needs_binding
+-        && !matches!(
+-            wire.kind,
+-            BrowserPointerKind::Move | BrowserPointerKind::Press
+-        )
+-    {
+-        return Err("browser pointer release/cancellation requires its existing source".into());
+-    }
++    let needs_binding = wire.needs_binding(*binding)?;
+     if let Some((surface, viewport)) = coordinates {
+         // Direct hosts validate the displayed publication before configuration;
+         // resetting held signals may itself change execution. Worker association
+ diff --git a/crates/noon-web/src/direct_pointer_presentation.rs b/crates/noon-web/src/direct_pointer_presentation.rs
+--- a/crates/noon-web/src/direct_pointer_presentation.rs
++++ b/crates/noon-web/src/direct_pointer_presentation.rs
+@@ -43,8 +43,7 @@
+         input: BrowserPointerInput,
+     ) -> Result<bool, String> {
+         // Bad records are not recoverable display races, even before first paint.
+-        input.pointer()?;
+-        input.coordinates()?;
++        input.needs_binding(*binding)?;
+         sequence.checked_add(1).ok_or("native input event sequence exhausted")?;
+         if input.cancellation().is_some() {
+             browser_pointer_input::submit_browser_pointer_input(target, binding, sequence, input)?;
+ diff --git a/crates/noon-web/src/direct_pointer_presentation/tests.rs b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+--- a/crates/noon-web/src/direct_pointer_presentation/tests.rs
++++ b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+@@ -265,3 +265,14 @@
+         assert!(f.binding.is_none()); assert_eq!(f.host.refresh_pending, refresh);
+     }
+ }
++
++#[test]
++fn missing_receipt_cannot_relax_retired_sources_or_invent_initial_release() {
++    let mut f = Fixture::new();
++    assert!(f.send(input(BrowserPointerKind::Release)).is_err());
++    f.present(); assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
++    assert!(f.send(input(BrowserPointerKind::Cancel)).unwrap());
++    f.host.invalidate(); let sequence = f.sequence;
++    assert!(f.send(input(BrowserPointerKind::Release)).is_err());
++    assert_eq!(f.sequence, sequence);
++}
+ diff --git a/scripts/direct-pointer-presentation-qualification.mjs b/scripts/direct-pointer-presentation-qualification.mjs
+--- a/scripts/direct-pointer-presentation-qualification.mjs
++++ b/scripts/direct-pointer-presentation-qualification.mjs
+@@ -80,6 +80,7 @@
+         assert.equal(first.beforePaint.length, 1, "rejected press must suppress its release");
+         assert.equal(first.beforePaint[0].admitted, false);
+         await settled();
++        assert.equal(await page.evaluate(() => receiptTest.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
+         let status = await receipt(); assert.equal(status.presented, status.current); assert.equal(status.refreshPending, false);
+         result.checks.push("unpresented-input-rejected", "successful-presentation-installs-exact-receipt");
+         const baseline = await image("baseline");
