@@ -4,7 +4,9 @@
 //! callback is not retained and never participates in seek or runtime work.
 
 use crate::{ManimGeometryOptions, Mobject, PlotAuthoringError, PlotPreparationError, Scene};
-use noon_core::{PathCommand, Vec2, VectorPath};
+#[cfg(test)]
+use noon_core::PathCommand;
+use noon_core::{Vec2, VectorPath};
 use noon_geometry::{
     change_path_anchor_mode_with_boundary, plan_isoline, validate_isoline_request, AxesFrame,
     IsolineBounds, IsolineOptions, IsolinePathError, SplineBoundary,
@@ -99,7 +101,9 @@ pub(crate) fn prepare_axes_implicit_path(
     // narrowing. This preserves small spans at large coordinate offsets.
     let mut path = VectorPath::new();
     for curve in &plan.curves {
-        let Some(first) = curve.first().copied() else { continue };
+        let Some(first) = curve.first().copied() else {
+            continue;
+        };
         path = path.move_to(map_isoline_point(frame, first)?);
         let closed = curve.len() > 2 && curve.first() == curve.last();
         let end = if closed { curve.len() - 1 } else { curve.len() };
@@ -171,7 +175,6 @@ fn implicit_path_error(error: IsolinePathError) -> PlotPreparationError {
         },
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -305,8 +308,7 @@ mod tests {
                 [5.0, 0.0],
             )
             .unwrap(),
-            noon_geometry::NumberLineFrame::new([-1.0, 1.0, 1.0], [0.0, -1.0], [0.0, 1.0])
-                .unwrap(),
+            noon_geometry::NumberLineFrame::new([-1.0, 1.0, 1.0], [0.0, -1.0], [0.0, 1.0]).unwrap(),
         );
         let options = ImplicitPlotOptions {
             bounds: IsolineBounds::new(
@@ -321,8 +323,7 @@ mod tests {
             use_smoothing: false,
             max_leaves: 1_000,
         };
-        let path = prepare_axes_implicit_path(frame, &options, |x, _| x - 1_000_000_005.0)
-            .unwrap();
+        let path = prepare_axes_implicit_path(frame, &options, |x, _| x - 1_000_000_005.0).unwrap();
         let xs = path
             .commands()
             .iter()

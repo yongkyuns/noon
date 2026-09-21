@@ -1,7 +1,8 @@
 //! One retained coordinate grid, curve and marker, paired with number_plane.py.
-use crate::{
-    ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, BLUE, GREEN, YELLOW,
-};
+use crate::{ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, BLUE, GREEN, YELLOW};
+
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+use crate::Text;
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -38,6 +39,19 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let content = scene.family(&[plane.family().into(), (&curve).into(), (&marker).into()])?;
     content.scale(0.85, 0.85)?;
     content.shift(0.0, -0.1)?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    {
+        let mut title =
+            scene.text(Text::new("NumberPlane: a shared coordinate grid").with_font_size(28.0))?;
+        title.shift(0.0, 3.0)?;
+        let mut caption = scene.text(
+            Text::new("Major lines + subdivisions | y = 0.35 x² - 1 | point (1, -0.65)")
+                .with_font_size(20.0),
+        )?;
+        caption.shift(0.0, -3.0)?;
+        scene.add_many(&[(&content).into(), (&title).into(), (&caption).into()])?;
+    }
+    #[cfg(not(all(feature = "native-text", feature = "bundled-fonts")))]
     scene.add_many(&[(&content).into()])?;
     Ok(scene)
 }
@@ -65,7 +79,14 @@ mod tests {
             .stats();
         let mut session = scene.execution_session().unwrap();
         assert!(!session.has_required_callbacks());
-        assert_eq!(session.frame().objects.len(), 24);
+        assert_eq!(
+            session.frame().objects.len(),
+            if cfg!(all(feature = "native-text", feature = "bundled-fonts")) {
+                24
+            } else {
+                22
+            }
+        );
         session.take_renderer_publication();
         session.seek(1.0).unwrap();
         assert_eq!(scene.revision(), revision);

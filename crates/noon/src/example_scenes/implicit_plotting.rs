@@ -1,8 +1,11 @@
 //! Paired implicit-contour gallery: two scalar fields become retained paths.
 use crate::{
-    ExecutionSession, ImplicitPlotOptions, ManimAxesOptions, ManimGeometryOptions, Scene,
-    BLUE, YELLOW,
+    ExecutionSession, ImplicitPlotOptions, ManimAxesOptions, ManimGeometryOptions, Scene, BLUE,
+    YELLOW,
 };
+
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+use crate::Text;
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -36,8 +39,24 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         YELLOW.blue.into(),
         1.0,
     )?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    {
+        let mut title = scene
+            .text(Text::new("Implicit curves: sampled once, retained").with_font_size(28.0))?;
+        title.shift(0.0, 3.1)?;
+        let mut caption =
+            scene.text(Text::new("x² + y² = 2.25     |     xy = 0.65").with_font_size(24.0))?;
+        caption.shift(0.0, -3.1)?;
+        scene.add_many(&[
+            axes.family().into(),
+            (&circle).into(),
+            (&hyperbola).into(),
+            (&title).into(),
+            (&caption).into(),
+        ])?;
+    }
+    #[cfg(not(all(feature = "native-text", feature = "bundled-fonts")))]
     scene.add_many(&[axes.family().into(), (&circle).into(), (&hyperbola).into()])?;
-
     Ok(scene)
 }
 
@@ -60,7 +79,14 @@ mod tests {
             .geometry_resources()
             .stats();
         let mut execution = scene.execution_session().unwrap();
-        assert_eq!(execution.frame().objects.len(), 16);
+        assert_eq!(
+            execution.frame().objects.len(),
+            if cfg!(all(feature = "native-text", feature = "bundled-fonts")) {
+                16
+            } else {
+                14
+            }
+        );
         assert!(!execution.has_required_callbacks());
         execution.take_renderer_publication();
         execution.seek(0.75).unwrap();
