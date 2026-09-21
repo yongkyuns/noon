@@ -34,7 +34,8 @@ pub use semantic_scene_operations::*;
 
 mod semantic_scene_restructure;
 pub use semantic_scene_restructure::{
-    plan_semantic_scene_membership, semantic_scene_root_contains, SemanticSceneMembershipRequest,
+    plan_semantic_scene_membership, semantic_scene_root_contains,
+    stage_semantic_foreground_removal, SemanticSceneMembershipRequest,
 };
 
 mod semantic_declarations;
