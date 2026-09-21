@@ -90,6 +90,42 @@ impl SemanticStore {
             .is_some_and(|incoming| incoming.contains(&reference))
     }
 
+    /// Return graph declaration owners whose validity directly depends on
+    /// `target`, plus `target` itself when it owns a graph declaration.
+    ///
+    /// Work is proportional to the target's reverse-reference aliases; unrelated
+    /// graph roots and scene nodes are never scanned.
+    pub(crate) fn semantic_graph_owners_for_invariant_target(
+        &self,
+        target: SemanticNodeId,
+    ) -> Vec<SemanticNodeId> {
+        let mut owners = Vec::new();
+        if self
+            .node(target)
+            .and_then(SemanticNode::graph_declaration)
+            .is_some()
+        {
+            owners.push(target);
+        }
+        if let Some(incoming) = self.incoming_references.get(&target) {
+            for reference in incoming.iter().copied() {
+                if reference.kind != SemanticReferenceKind::GraphDependency
+                    || owners.contains(&reference.owner)
+                    || self.node(reference.owner).is_none()
+                    || !self.owner_still_references(
+                        reference.owner,
+                        target,
+                        SemanticReferenceKind::GraphDependency,
+                    )
+                {
+                    continue;
+                }
+                owners.push(reference.owner);
+            }
+        }
+        owners
+    }
+
     pub(crate) fn register_semantic_scoped_signal_reference(
         &mut self,
         scope: SemanticNodeId,
