@@ -560,7 +560,7 @@ where
         if vertex_lookup.contains_key(&key) {
             return Err(GraphAuthoringError::DuplicateVertexKey { vertex_index });
         }
-        let id = topology.add_vertex()?;
+        let id = topology.add_vertex();
         let object = vertex_options(position, &options)?;
         vertex_lookup.insert(key.clone(), planned_vertices.len());
         positions.push(position);
@@ -934,7 +934,10 @@ mod tests {
         let a = graph.vertex_id(&"a").unwrap();
         let b = graph.vertex_id(&"b").unwrap();
         let c = graph.vertex_id(&"c").unwrap();
-        assert_eq!(graph.topology().vertices(), &[a, b, c]);
+        assert_eq!(
+            graph.topology().vertices().collect::<Vec<_>>(),
+            vec![a, b, c]
+        );
         assert_eq!(
             graph.bindings().vertex_node(a),
             Some(graph.vertex(&"a").unwrap().node_id())
@@ -1097,7 +1100,6 @@ mod tests {
             graph
                 .topology()
                 .edges()
-                .iter()
                 .map(|edge| (edge.start, edge.end))
                 .collect::<Vec<_>>()
         );
