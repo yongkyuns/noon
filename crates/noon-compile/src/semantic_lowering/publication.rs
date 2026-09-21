@@ -315,6 +315,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
+                | SemanticMutation::SetGraphDeclaration { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::ReorderMember { .. }
@@ -638,7 +639,8 @@ fn lower_semantic_publication(
             | SemanticMutation::AddScalarSignalTrack { .. }
             | SemanticMutation::SetScalarSignalAt { .. }
             | SemanticMutation::ScopeSignal { .. }
-            | SemanticMutation::SetForegroundMembers { .. } => {}
+            | SemanticMutation::SetForegroundMembers { .. }
+            | SemanticMutation::SetGraphDeclaration { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
