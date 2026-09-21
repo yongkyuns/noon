@@ -96,6 +96,10 @@ mod family_style;
 mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
+mod graph_semantic_bindings;
+mod graph_topology;
+pub use graph_semantic_bindings::*;
+pub use graph_topology::*;
 mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
@@ -150,6 +154,7 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
     ManimNumberLineOptions,
@@ -218,7 +223,7 @@ pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::Scene;
+pub use scene::{Scene, SceneSection, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use state_replacement::ManimBecomeOptions;

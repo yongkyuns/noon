@@ -14,6 +14,7 @@ pub(crate) enum SemanticReferenceKind {
     SignalDependency,
     SignalBinding { property: SemanticObjectProperty },
     ScopedSignal,
+    ForegroundMember,
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
@@ -34,6 +35,9 @@ impl SemanticIncomingReference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticRemoveNodeEffect {
     NodeRemoved(SemanticNodeId),
+    ForegroundMembersChanged {
+        scope: SemanticNodeId,
+    },
     SubscriptionRemoved {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
@@ -90,6 +94,45 @@ impl SemanticStore {
         let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
         let incoming = self.incoming_references.entry(signal).or_default();
         if !incoming.contains(&reference) {
+            incoming.push(reference);
+        }
+    }
+
+    /// Replace only this declaration's reverse edges. Do not enumerate this
+    /// root's display members, signals, or any unrelated semantic scopes.
+    pub(crate) fn replace_semantic_foreground_members(
+        &mut self,
+        scope: SemanticNodeId,
+        members: Vec<SemanticNodeId>,
+    ) {
+        let previous = std::mem::replace(
+            self.node_mut(scope)
+                .expect("preflighted foreground scope")
+                .foreground_members_mut(),
+            members,
+        );
+        let reference =
+            SemanticIncomingReference::new(scope, SemanticReferenceKind::ForegroundMember);
+        for member in previous {
+            let empty = if let Some(incoming) = self.incoming_references.get_mut(&member) {
+                incoming.retain(|candidate| *candidate != reference);
+                incoming.is_empty()
+            } else {
+                false
+            };
+            if empty {
+                self.incoming_references.remove(&member);
+            }
+        }
+        // Split borrows across node storage and the reverse-reference index.
+        let declared = &self.slots[scope.slot() as usize]
+            .node
+            .as_ref()
+            .expect("preflighted foreground scope")
+            .foreground_members;
+        for &member in declared {
+            let incoming = self.incoming_references.entry(member).or_default();
+            debug_assert!(!incoming.contains(&reference));
             incoming.push(reference);
         }
     }
@@ -171,7 +214,8 @@ impl SemanticStore {
                 }
                 match reference.kind {
                     SemanticReferenceKind::SignalBinding { .. }
-                    | SemanticReferenceKind::ScopedSignal => {}
+                    | SemanticReferenceKind::ScopedSignal
+                    | SemanticReferenceKind::ForegroundMember => {}
                     SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
@@ -262,6 +306,21 @@ impl SemanticStore {
                             });
                     }
                 }
+                SemanticReferenceKind::ForegroundMember => {
+                    let scope = reference.owner;
+                    let members = self
+                        .node_mut(scope)
+                        .expect("indexed foreground owner is live")
+                        .foreground_members_mut();
+                    let previous_len = members.len();
+                    members.retain(|member| *member != id);
+                    if members.len() != previous_len {
+                        outcome.written_slots.insert(scope);
+                        outcome
+                            .effects
+                            .push(SemanticRemoveNodeEffect::ForegroundMembersChanged { scope });
+                    }
+                }
                 SemanticReferenceKind::ScopedSignal => {
                     let scope = reference.owner;
                     let removed = self
@@ -300,6 +359,11 @@ impl SemanticStore {
         target: SemanticNodeId,
         kind: SemanticReferenceKind,
     ) -> bool {
+        if kind == SemanticReferenceKind::ForegroundMember {
+            return self
+                .node(owner)
+                .is_some_and(|node| node.foreground_members().contains(&target));
+        }
         self.semantic_outgoing_references(owner)
             .into_iter()
             .any(|candidate| candidate == (target, kind))
@@ -325,6 +389,13 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             .iter()
             .copied()
             .map(|signal| (signal, SemanticReferenceKind::ScopedSignal)),
+    );
+
+    references.extend(
+        node.foreground_members()
+            .iter()
+            .copied()
+            .map(|member| (member, SemanticReferenceKind::ForegroundMember)),
     );
 
     match node.kind() {

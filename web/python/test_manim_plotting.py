@@ -26,6 +26,16 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_unit_interval_adapts_only_constructor_defaults(self):
+        with patch.object(plotting.NumberLine, "__init__", return_value=None) as create:
+            plotting.UnitInterval()
+        create.assert_called_once_with((0, 1, 0.1), unit_size=10,
+                                       numbers_with_elongated_ticks=(0, 1))
+        with patch.object(plotting.NumberLine, "__init__", return_value=None) as create:
+            plotting.UnitInterval(unit_size=4, numbers_with_elongated_ticks=[], include_ticks=False)
+        create.assert_called_once_with((0, 1, 0.1), unit_size=4,
+                                       numbers_with_elongated_ticks=[], include_ticks=False)
+
     def setUp(self):
         self.array_bridge = patch.object(plotting, "_to_js", lambda values: values)
         self.array_bridge.start()

@@ -111,6 +111,13 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         signal: SemanticTransactionNodeRef,
     },
+    /// Replace one family's ordered foreground declarations without changing
+    /// display membership. A membership planner must author any corresponding
+    /// family edits in this same transaction.
+    SetForegroundMembers {
+        scope: SemanticTransactionNodeRef,
+        members: Vec<SemanticTransactionNodeRef>,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -152,6 +159,9 @@ impl SemanticMutation {
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
             Self::ScopeSignal { scope, signal } => vec![*scope, *signal],
+            Self::SetForegroundMembers { scope, members } => std::iter::once(*scope)
+                .chain(members.iter().copied())
+                .collect(),
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -198,7 +208,9 @@ impl SemanticMutation {
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => target.existing(),
-            Self::ScopeSignal { scope, .. } => scope.existing(),
+            Self::ScopeSignal { scope, .. } | Self::SetForegroundMembers { scope, .. } => {
+                scope.existing()
+            }
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -232,7 +244,8 @@ impl SemanticMutation {
             Self::AddUpdater { .. }
             | Self::RemoveUpdater { .. }
             | Self::ClearUpdaters { .. }
-            | Self::ScopeSignal { .. } => None,
+            | Self::ScopeSignal { .. }
+            | Self::SetForegroundMembers { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -315,6 +328,11 @@ pub enum SemanticMutationImpact {
         scope: SemanticNodeId,
         signal: SemanticNodeId,
     },
+    /// Declaration-only metadata. Execution membership and painter order are
+    /// unchanged unless separate ordinary family impacts accompany it.
+    ForegroundMembers {
+        scope: SemanticNodeId,
+    },
     FamilyMemberAdded {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -356,6 +374,7 @@ pub(super) struct SemanticTransactionPreflight {
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
     pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
     staged_signal_scope_additions: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
+    staged_foreground: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     removed_existing: HashSet<SemanticNodeId>,
     removed_pending: HashSet<SemanticLocalNodeToken>,
 }
@@ -569,6 +588,24 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ScopeSignal {
             scope: scope.into(),
             signal: signal.into(),
+        });
+        self
+    }
+
+    /// Replace one root's ordered foreground declarations atomically.
+    ///
+    /// Members must be distinct object/family references, may be provisional,
+    /// and must survive this transaction. The scope itself cannot be a member.
+    /// Equal declarations are an exact no-op. Display membership and ordering
+    /// remain separate family edits, so this primitive is not `Scene.add_foreground`.
+    pub fn set_foreground_members(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        members: impl IntoIterator<Item = impl Into<SemanticTransactionNodeRef>>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetForegroundMembers {
+            scope: scope.into(),
+            members: members.into_iter().map(Into::into).collect(),
         });
         self
     }
@@ -1359,6 +1396,7 @@ impl SemanticMutationTransaction {
             HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTimelineEntry>>::new();
         let mut staged_signal_scope_additions = Vec::new();
         let mut staged_signal_scope_membership = HashSet::new();
+        let mut staged_foreground = HashMap::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -1819,6 +1857,56 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetForegroundMembers { scope, members } => {
+                    catalog.ensure_family(*scope, index)?;
+                    if staged_foreground.contains_key(scope) {
+                        return Err(SemanticMutationTransactionError::DuplicateForegroundScope {
+                            index,
+                            scope: *scope,
+                        });
+                    }
+                    let mut seen = HashSet::with_capacity(members.len());
+                    for &member in members {
+                        catalog.ensure_authoring_node(member, index)?;
+                        if member == *scope || !seen.insert(member) {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidForegroundMember {
+                                    index,
+                                    scope: *scope,
+                                    member,
+                                },
+                            );
+                        }
+                        let removed = match member {
+                            SemanticTransactionNodeRef::Existing(id) => removed_nodes.contains(&id),
+                            SemanticTransactionNodeRef::Pending(token) => {
+                                removed_pending.contains(&token)
+                            }
+                        };
+                        if removed {
+                            return Err(
+                                SemanticMutationTransactionError::ForegroundUsesRemovedNode {
+                                    index,
+                                    scope: *scope,
+                                    member,
+                                },
+                            );
+                        }
+                    }
+                    let unchanged = match scope {
+                        SemanticTransactionNodeRef::Existing(id) => store
+                            .node(*id)
+                            .expect("validated family")
+                            .foreground_members()
+                            .iter()
+                            .copied()
+                            .map(SemanticTransactionNodeRef::from)
+                            .eq(members.iter().copied()),
+                        SemanticTransactionNodeRef::Pending(_) => members.is_empty(),
+                    };
+                    staged_foreground.insert(*scope, members.clone());
+                    changed.push(!unchanged);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -1911,6 +1999,7 @@ impl SemanticMutationTransaction {
             staged_updaters,
             family_edges,
             staged_signal_scope_additions,
+            staged_foreground,
             pending_creations,
             pending_animations,
             removed_existing: removed_nodes,
@@ -2158,6 +2247,20 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    DuplicateForegroundScope {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+    },
+    InvalidForegroundMember {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    },
+    ForegroundUsesRemovedNode {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    },
     NonFiniteZIndex {
         index: usize,
         node: SemanticTransactionNodeRef,
@@ -2482,6 +2585,15 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DuplicateForegroundScope { index, scope } => write!(
+                formatter, "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
+            ),
+            Self::InvalidForegroundMember { index, scope, member } => write!(
+                formatter, "semantic transaction mutation {index} has duplicate or self foreground reference {member:?} under {scope:?}"
+            ),
+            Self::ForegroundUsesRemovedNode { index, scope, member } => write!(
+                formatter, "semantic transaction mutation {index} declares removed foreground member {member:?} under {scope:?}"
+            ),
             Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
             Self::InsertionOrderExhausted => {
                 write!(formatter, "Noon semantic insertion-order space exhausted")
@@ -2965,3 +3077,6 @@ mod signal_scope_tests;
 
 #[cfg(test)]
 mod z_index_tests;
+
+#[cfg(test)]
+mod foreground_tests;
