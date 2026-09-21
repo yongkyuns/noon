@@ -6,6 +6,23 @@ use crate::{
 };
 
 impl Scene {
+    /// Add ordinary object/family targets with persistent foreground ordering.
+    /// Membership and declarations commit together through the shared planner.
+    pub fn add_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.edit_membership(SceneMembershipRequest::AddForeground(members))
+    }
+
+    /// End foreground persistence without removing or reordering visible objects.
+    pub fn remove_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.edit_membership(SceneMembershipRequest::RemoveForeground(members))
+    }
+
     /// Move one object/family projection to the front of painter order.
     ///
     /// ManimCE v0.21 defines `bring_to_front()` through ordinary `add()` semantics,
@@ -40,6 +57,23 @@ impl Scene {
 }
 
 impl<'a> LiveSession<'a> {
+    /// Add ordinary object/family targets with persistent foreground ordering.
+    /// Membership and declarations commit together through the shared planner.
+    pub fn add_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::AddForeground(members))
+    }
+
+    /// End foreground persistence without removing or reordering visible objects.
+    pub fn remove_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::RemoveForeground(members))
+    }
+
     /// Move one live object projection to the front through ordinary add semantics.
     pub fn bring_to_front(
         &mut self,

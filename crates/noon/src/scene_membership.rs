@@ -11,6 +11,8 @@ use crate::{AuthoringError, MobjectTarget};
 #[derive(Clone, Copy)]
 pub enum SceneMembershipRequest<'a> {
     Add(&'a [MobjectTarget<'a>]),
+    AddForeground(&'a [MobjectTarget<'a>]),
+    RemoveForeground(&'a [MobjectTarget<'a>]),
     BringToBack(&'a [MobjectTarget<'a>]),
     Remove(&'a [MobjectTarget<'a>]),
     Clear,
@@ -35,6 +37,21 @@ pub(crate) fn prepare_scene_membership(
                 .map(validate)
                 .collect::<Result<Vec<_>, _>>()?;
             plan_semantic_scene_membership(&store, root, SemanticSceneMembershipRequest::Add(&ids))
+        }
+        SceneMembershipRequest::AddForeground(members)
+        | SceneMembershipRequest::RemoveForeground(members) => {
+            let ids = members
+                .iter()
+                .copied()
+                .map(validate)
+                .collect::<Result<Vec<_>, _>>()?;
+            let request = match request {
+                SceneMembershipRequest::AddForeground(_) => {
+                    SemanticSceneMembershipRequest::AddForeground(&ids)
+                }
+                _ => SemanticSceneMembershipRequest::RemoveForeground(&ids),
+            };
+            plan_semantic_scene_membership(&store, root, request)
         }
         SceneMembershipRequest::BringToBack(members) => {
             let ids = members
