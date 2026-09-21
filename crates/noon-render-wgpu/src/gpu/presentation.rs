@@ -149,10 +149,6 @@ impl PresentationBridge {
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("../presentation.wgsl"));
-        let fragment_entry = match self.transfer {
-            OutputTransfer::Direct => "fs_present_identity",
-            OutputTransfer::BrowserWebGlSrgb => "fs_present",
-        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Noon presentation pipeline"),
             layout: Some(&pipeline_layout),
@@ -164,7 +160,7 @@ impl PresentationBridge {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some(fragment_entry),
+                entry_point: Some("fs_present"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
