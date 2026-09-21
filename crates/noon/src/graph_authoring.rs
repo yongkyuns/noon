@@ -1,7 +1,7 @@
 //! Public retained Graph/DiGraph authoring over shared topology and ordinary semantics.
 //!
 //! This layer owns host/user-key adaptation and the lifetime coupling between one
-//! `GraphTopology`, its `GraphSemanticBindings`, and the ordinary semantic
+//! the shared stable `GraphTopology` and ordinary semantic
 //! mobjects/families used to render vertices and edges. It deliberately does not
 //! add a graph renderer, layout engine, or per-frame edge updater.
 //!
@@ -13,14 +13,13 @@ use crate::{
     arrow_authoring::{
         resolve_staged_arrow, stage_prepared_arrow, CommittedArrow, PreparedArrow, StagedArrow,
     },
-    AuthoringError, GraphEdge, GraphEdgeId, GraphSemanticBindings, GraphTopology,
-    GraphTopologyError, GraphVertexId, ManimArrow, ManimArrowOptions, ManimGeometryOptions,
-    Mobject, MobjectFamily, Scene,
+    AuthoringError, GraphEdge, GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId,
+    ManimArrow, ManimArrowOptions, ManimGeometryOptions, Mobject, MobjectFamily, Scene,
 };
 use noon_core::{
     Color, GeometryResourceHandle, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticNodeId, SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
-    SemanticTransactionGraphEdge, BLUE, WHITE,
+    SemanticTransactionGraphEdgeBinding, BLUE, WHITE,
 };
 use std::{collections::HashMap, hash::Hash, rc::Rc};
 
@@ -172,8 +171,6 @@ struct GraphEdgeEntry {
 
 struct RetainedGraph<K> {
     directed: bool,
-    topology: GraphTopology,
-    bindings: GraphSemanticBindings,
     family: MobjectFamily,
     vertices: Vec<GraphVertexEntry<K>>,
     vertex_lookup: HashMap<K, usize>,
@@ -186,12 +183,8 @@ impl<K: Eq + Hash> RetainedGraph<K> {
         &self.family
     }
 
-    fn topology(&self) -> &GraphTopology {
-        &self.topology
-    }
-
-    fn bindings(&self) -> &GraphSemanticBindings {
-        &self.bindings
+    fn topology(&self) -> GraphTopology {
+        self.semantic_declaration().topology().clone()
     }
 
     fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
@@ -219,7 +212,13 @@ impl<K: Eq + Hash> RetainedGraph<K> {
     fn edge_id(&self, start: &K, end: &K) -> Option<GraphEdgeId> {
         let start = self.vertex_id(start)?;
         let end = self.vertex_id(end)?;
-        self.topology.edge_between(start, end, self.directed)
+        self.family
+            .integration_store()
+            .borrow()
+            .semantic_graph_declaration(self.family.node_id())
+            .ok()
+            .flatten()?
+            .edge_between(start, end, self.directed)
     }
 
     fn edge(&self, start: &K, end: &K) -> Option<&GraphEdgeMobject> {
@@ -240,8 +239,8 @@ impl<K: Eq + Hash> RetainedGraph<K> {
 
 /// Explicit-position undirected retained graph.
 ///
-/// User keys and GraphVertexId/GraphEdgeId are authoring-side indexes only. The
-/// authoritative topology/dependency declaration lives on the semantic graph root
+/// User keys are frontend lookup convenience only. Stable GraphVertexId/GraphEdgeId
+/// identities and the topology/dependency declaration live on the semantic graph root
 /// and survives this wrapper. Moving a vertex does not yet update its edge
 /// endpoints automatically.
 pub struct Graph<K> {
@@ -280,14 +279,9 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         self.inner.family()
     }
 
-    pub fn topology(&self) -> &GraphTopology {
+    /// Snapshot the authoritative semantic Graph topology.
+    pub fn topology(&self) -> GraphTopology {
         self.inner.topology()
-    }
-
-    /// Derived authoring index retained for GraphVertexId/GraphEdgeId lookup.
-    /// Authoritative topology remains in `semantic_declaration()`.
-    pub fn bindings(&self) -> &GraphSemanticBindings {
-        self.inner.bindings()
     }
 
     pub fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
@@ -360,14 +354,9 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         self.inner.family()
     }
 
-    pub fn topology(&self) -> &GraphTopology {
+    /// Snapshot the authoritative semantic Graph topology.
+    pub fn topology(&self) -> GraphTopology {
         self.inner.topology()
-    }
-
-    /// Derived authoring index retained for GraphVertexId/GraphEdgeId lookup.
-    /// Authoritative topology remains in `semantic_declaration()`.
-    pub fn bindings(&self) -> &GraphSemanticBindings {
-        self.inner.bindings()
     }
 
     pub fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
@@ -640,11 +629,11 @@ where
         }
 
         if paths.is_empty() {
-            return publish_prepared_graph(store, vertices, edges, &[], publish);
+            return publish_prepared_graph(store, &topology, vertices, edges, &[], publish);
         }
 
         store.with_geometry_paths(paths, |store, handles| {
-            publish_prepared_graph(store, vertices, edges, handles, publish)
+            publish_prepared_graph(store, &topology, vertices, edges, handles, publish)
         })
     })?;
 
@@ -683,23 +672,6 @@ where
         })
         .collect::<Vec<_>>();
 
-    // These admission checks are assertions over the exact graph transaction we
-    // just constructed. No fallible user operation occurs after semantic commit.
-    let mut bindings = GraphSemanticBindings::new();
-    for vertex in &semantic_vertices {
-        bindings
-            .bind_vertex(&topology, vertex.id, &vertex.object)
-            .expect("graph transaction produces valid vertex bindings");
-    }
-    for edge in &semantic_edges {
-        bindings
-            .bind_edge(&topology, edge.edge.id, edge.object.family())
-            .expect("graph transaction produces valid edge family bindings");
-        bindings
-            .bind_edge_line(&topology, edge.edge.id, edge.object.line())
-            .expect("graph transaction produces valid edge Line bindings");
-    }
-
     let edge_lookup = semantic_edges
         .iter()
         .enumerate()
@@ -708,8 +680,6 @@ where
 
     Ok(RetainedGraph {
         directed,
-        topology,
-        bindings,
         family,
         vertices: semantic_vertices,
         vertex_lookup,
@@ -720,6 +690,7 @@ where
 
 fn publish_prepared_graph<K>(
     store: &mut SemanticStore,
+    topology: &GraphTopology,
     vertices: Vec<PreparedVertex<K>>,
     edges: Vec<PreparedEdge>,
     handles: &[GeometryResourceHandle],
@@ -787,27 +758,19 @@ fn publish_prepared_graph<K>(
     // The graph declaration itself is authored Semantic Scene state. The public
     // Graph<K> key/index tables below are only frontend convenience and can be
     // dropped without losing topology or endpoint dependencies.
-    let vertex_nodes = staged_vertices
+    let graph_vertices = staged_vertices
         .iter()
-        .map(|vertex| (vertex.id, vertex.node))
-        .collect::<HashMap<_, _>>();
-    let graph_vertices = staged_vertices.iter().map(|vertex| vertex.node);
+        .map(|vertex| (vertex.id, vertex.node));
     let graph_edges = staged_edges.iter().map(|edge| {
         let (family, line) = match &edge.geometry {
             StagedEdgeGeometry::Line { family, line } => (*family, *line),
             StagedEdgeGeometry::Arrow(arrow) => (arrow.family, arrow.shaft),
         };
-        SemanticTransactionGraphEdge::new(
-            family.into(),
-            line.into(),
-            vertex_nodes[&edge.edge.start].into(),
-            vertex_nodes[&edge.edge.end].into(),
-            edge.edge.directed,
-        )
+        SemanticTransactionGraphEdgeBinding::new(edge.edge.id, family.into(), line.into())
     });
     transaction.set_graph_declaration(
         root,
-        SemanticTransactionGraphDeclaration::new(graph_vertices, graph_edges),
+        SemanticTransactionGraphDeclaration::new(topology.clone(), graph_vertices, graph_edges),
     );
 
     let result = publish(store, transaction)?;
@@ -939,20 +902,18 @@ mod tests {
             vec![a, b, c]
         );
         assert_eq!(
-            graph.bindings().vertex_node(a),
+            graph.semantic_declaration().vertex_node(a),
             Some(graph.vertex(&"a").unwrap().node_id())
         );
 
         let ab = graph.edge_id(&"a", &"b").unwrap();
         assert_eq!(graph.edge_id(&"b", &"a"), Some(ab));
+        let binding = graph.semantic_declaration().edge_binding(ab).unwrap();
         assert_eq!(
-            graph.bindings().edge_node(ab),
-            Some(graph.edge(&"a", &"b").unwrap().family().node_id())
+            binding.family(),
+            graph.edge(&"a", &"b").unwrap().family().node_id()
         );
-        assert_eq!(
-            graph.bindings().edge_line_node(ab),
-            Some(graph.edge(&"a", &"b").unwrap().line().node_id())
-        );
+        assert_eq!(binding.line(), graph.edge(&"a", &"b").unwrap().line().node_id());
 
         let store = scene.integration_store().borrow();
         let root_members = store
@@ -971,12 +932,11 @@ mod tests {
         let semantic_b = graph.vertex(&"b").unwrap().node_id();
         let edge_family = graph.edge(&"a", &"b").unwrap().family().node_id();
         let declaration = graph.semantic_declaration();
+        assert_eq!(declaration.vertex_node(a), Some(semantic_a));
+        assert_eq!(declaration.vertex_node(b), Some(semantic_b));
+        assert_eq!(declaration.edge_between(b, a, false), Some(ab));
         assert_eq!(
-            declaration.edge_between(semantic_b, semantic_a, false),
-            Some(edge_family)
-        );
-        assert_eq!(
-            declaration.incident_edges(semantic_b).unwrap().len(),
+            declaration.incident_edge_nodes(b).unwrap().len(),
             2,
             "semantic adjacency is authored independently of the wrapper index"
         );
@@ -987,7 +947,8 @@ mod tests {
                 .semantic_graph_declaration(root)
                 .unwrap()
                 .unwrap()
-                .edge_between(semantic_a, semantic_b, false),
+                .edge_binding(ab)
+                .map(|binding| binding.family()),
             Some(edge_family)
         );
     }
@@ -1010,8 +971,8 @@ mod tests {
         assert!(graph.edge(&"a", &"b").unwrap().arrow().is_some());
         assert!(graph.edge(&"b", &"a").unwrap().arrow().is_some());
         assert_eq!(
-            graph.bindings().edge_line_node(ab),
-            Some(graph.edge(&"a", &"b").unwrap().line().node_id())
+            graph.semantic_declaration().edge_binding(ab).unwrap().line(),
+            graph.edge(&"a", &"b").unwrap().line().node_id()
         );
     }
 
