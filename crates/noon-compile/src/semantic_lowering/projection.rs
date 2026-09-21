@@ -89,6 +89,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
+                | SemanticMutationImpact::ForegroundMembers { .. }
                 | SemanticMutationImpact::FamilyMemberAdded { .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
