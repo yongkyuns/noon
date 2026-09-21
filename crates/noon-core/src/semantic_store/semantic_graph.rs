@@ -192,13 +192,16 @@ pub struct SemanticTransactionGraphDeclaration {
 }
 
 impl SemanticTransactionGraphDeclaration {
-    pub fn new(
+    pub fn new<V, I, E>(
         topology: GraphTopology,
-        vertices: impl IntoIterator<
-            Item = (GraphVertexId, impl Into<SemanticTransactionNodeRef>),
-        >,
-        edges: impl IntoIterator<Item = SemanticTransactionGraphEdgeBinding>,
-    ) -> Self {
+        vertices: I,
+        edges: E,
+    ) -> Self
+    where
+        V: Into<SemanticTransactionNodeRef>,
+        I: IntoIterator<Item = (GraphVertexId, V)>,
+        E: IntoIterator<Item = SemanticTransactionGraphEdgeBinding>,
+    {
         Self {
             topology,
             vertices: vertices
