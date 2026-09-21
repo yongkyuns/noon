@@ -1,0 +1,223 @@
+# Temporary PR #1705 repair/qualification job; remove before merge (#697).
+# Only this same-repository branch may publish, and every push is fast-forward.
+name: Graph authoring repair qualification
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: write
+concurrency:
+  group: graph-authoring-repair-1705
+  cancel-in-progress: true
+jobs:
+  repair-and-qualify:
+    if: github.event.pull_request.number == 1705 && github.event.pull_request.head.repo.full_name == 'yongkyuns/noon' && github.event.pull_request.head.ref == 'codex/b5-public-graph-explicit-layout'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BRANCH: codex/b5-public-graph-explicit-layout
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: true
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: Fetch exact review base
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+      - name: Install pinned Rust
+        run: rustup install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: Linux-cargo-sources-graph-1705
+          restore-keys: Linux-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      - name: Apply reviewed compiler and final-state validation fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          for name in ('projection', 'reachability'):
+              path = Path(f'crates/noon-compile/src/semantic_lowering/{name}.rs')
+              text = path.read_text()
+              if 'SemanticMutationImpact::GraphDeclaration' not in text:
+                  pattern = r'(?m)^(\s*)\| SemanticMutationImpact::ForegroundMembers \{ \.\. \}\n'
+                  text, count = re.subn(pattern, lambda m: m.group(0) + m.group(1) + '| SemanticMutationImpact::GraphDeclaration { .. }\n', text)
+                  assert count == 1, (path, count)
+                  path.write_text(text)
+
+          path = Path('crates/noon-core/src/semantic_store/semantic_transaction.rs')
+          text = path.read_text()
+          marker = '// Graph declarations must observe the final shared transaction overlay.'
+          if marker not in text:
+              old = '        let mut staged_graph_scopes = HashSet::new();\n'
+              assert text.count(old) == 1
+              text = text.replace(old, '')
+              pattern = r'                SemanticMutation::SetGraphDeclaration \{ scope, graph \} => \{\n                    validate_graph_declaration\(.*?\n                    \)\?;\n                    changed.push\(true\);\n                \}'
+              text, count = re.subn(pattern, '                SemanticMutation::SetGraphDeclaration { .. } => {\n                    changed.push(true);\n                }', text, flags=re.S)
+              assert count == 1, count
+              old = '        Ok(SemanticTransactionPreflight {\n'
+              assert text.count(old) == 1
+              text = text.replace(old, '        let preflight = SemanticTransactionPreflight {\n')
+              old = '            removed_pending,\n        })\n    }\n}\n\nfn validate_graph_declaration('
+              assert text.count(old) == 1
+              text = text.replace(old, '''            removed_pending,
+                  };
+                  // Graph declarations must observe the final shared transaction overlay.
+                  let mut staged_graph_scopes = HashSet::new();
+                  for (index, mutation) in self.mutations.iter().enumerate() {
+                      if let SemanticMutation::SetGraphDeclaration { scope, graph } = mutation {
+                          validate_graph_declaration(
+                              &preflight, store, &catalog, &mut staged_graph_scopes,
+                              *scope, graph, index,
+                          )?;
+                      }
+                  }
+                  Ok(preflight)
+              }
+          }
+
+          fn validate_graph_declaration(''')
+              start = text.index('fn validate_graph_declaration(')
+              end = text.index('\nfn object_property_value(', start)
+              helper = text[start:end]
+              header_end = helper.index('    let invalid =')
+              body = helper[header_end:]
+              for field in ('family_edges', 'staged_objects', 'removed_existing', 'removed_pending'):
+                  body = re.sub(r'\b' + field + r'\b', 'preflight.' + field, body)
+              header = '''fn validate_graph_declaration(
+              preflight: &SemanticTransactionPreflight,
+              store: &SemanticStore,
+              catalog: &TransactionNodeCatalog<'_>,
+              staged_scopes: &mut HashSet<SemanticTransactionNodeRef>,
+              scope: SemanticTransactionNodeRef,
+              graph: &SemanticTransactionGraphDeclaration,
+              index: usize,
+          ) -> Result<(), SemanticMutationTransactionError> {
+          '''
+              old = '''preflight.family_edges
+                      .members_for_read(store, binding.family())
+                      .contains(&binding.line())'''
+              assert body.count(old) == 1
+              body = body.replace(old, 'preflight.family_edges.contains(catalog, binding.family(), binding.line())')
+              text = text[:start] + header + body + text[end:]
+              path.write_text(text)
+              path = Path('crates/noon-core/src/semantic_store/semantic_transaction/family_edges.rs')
+              text = path.read_text()
+              old = '    fn contains(\n'
+              assert text.count(old) == 1
+              path.write_text(text.replace(old, '    pub(super) fn contains(\n'))
+
+          path = Path('crates/noon-core/src/semantic_store/semantic_transaction/graph_tests.rs')
+          text = path.read_text()
+          if 'final_graph_validation_rejects_later_content_replacement' not in text:
+              text += '''
+          fn valid_pending_graph() -> (
+              Transaction, crate::SemanticLocalNodeToken, crate::SemanticLocalNodeToken,
+          ) {
+              let mut topology = GraphTopology::new();
+              let a_id = topology.add_vertex();
+              let b_id = topology.add_vertex();
+              let edge_id = topology.add_edge(a_id, b_id, false).unwrap();
+              let mut tx = Transaction::new();
+              let root = tx.create_node(SemanticNodeCreation::family());
+              let edge = tx.create_node(SemanticNodeCreation::family());
+              let shaft = tx.create_node(SemanticNodeCreation::object(line()));
+              let a = tx.create_node(SemanticNodeCreation::object(circle()));
+              let b = tx.create_node(SemanticNodeCreation::object(circle()));
+              tx.add_member(edge, shaft).add_member(root, edge)
+                  .add_member(root, a).add_member(root, b)
+                  .set_graph_declaration(root, SemanticTransactionGraphDeclaration::new(
+                      topology, [(a_id, a), (b_id, b)],
+                      [SemanticTransactionGraphEdgeBinding::new(edge_id, edge.into(), shaft.into())],
+                  ));
+              (tx, root, shaft)
+          }
+
+          #[test]
+          fn final_graph_validation_rejects_later_content_replacement() {
+              let mut store = SemanticStore::new();
+              let revision = store.scene_revision();
+              let next = store.preview_node_allocations().next();
+              let (mut tx, _, shaft) = valid_pending_graph();
+              tx.replace_content(shaft, StoredGeometry::Circle { radius: 0.5 });
+              assert!(matches!(tx.apply(&mut store), Err(Error::InvalidGraphDeclaration { .. })));
+              assert_eq!(store.len(), 0);
+              assert_eq!(store.scene_revision(), revision);
+              assert_eq!(store.preview_node_allocations().next(), next);
+          }
+
+          #[test]
+          fn final_graph_validation_rejects_later_extra_root_member() {
+              let mut store = SemanticStore::new();
+              let revision = store.scene_revision();
+              let (mut tx, root, _) = valid_pending_graph();
+              let extra = tx.create_node(SemanticNodeCreation::object(circle()));
+              tx.add_member(root, extra);
+              assert!(matches!(tx.apply(&mut store), Err(Error::InvalidGraphDeclaration { .. })));
+              assert_eq!(store.len(), 0);
+              assert_eq!(store.scene_revision(), revision);
+          }
+
+          #[test]
+          fn graph_declaration_can_precede_membership_in_the_same_transaction() {
+              let mut store = SemanticStore::new();
+              let mut topology = GraphTopology::new();
+              let vertex_id = topology.add_vertex();
+              let mut tx = Transaction::new();
+              let root = tx.create_node(SemanticNodeCreation::family());
+              let vertex = tx.create_node(SemanticNodeCreation::object(circle()));
+              tx.set_graph_declaration(root, SemanticTransactionGraphDeclaration::new(
+                  topology, [(vertex_id, vertex)],
+                  std::iter::empty::<SemanticTransactionGraphEdgeBinding>(),
+              ));
+              tx.add_member(root, vertex);
+              let result = tx.apply(&mut store).unwrap();
+              let root = result.resolve(root).unwrap();
+              assert_eq!(store.semantic_graph_declaration(root).unwrap().unwrap()
+                  .vertex_node(vertex_id), result.resolve(vertex));
+          }
+          '''
+              path.write_text(text)
+          PY
+      - name: Format with repository-pinned rustfmt
+        run: cargo fmt --all
+      - name: Publish only reviewed Rust paths without overwriting newer work
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess as sp
+          def git(*args):
+              return sp.check_output(['git', *args], text=True).strip()
+          allowed = set(git('diff', '--name-only', os.environ['BASE_SHA'], os.environ['EXPECTED_HEAD'], '--', '*.rs').splitlines())
+          allowed.update({
+              'crates/noon-compile/src/semantic_lowering/projection.rs',
+              'crates/noon-compile/src/semantic_lowering/reachability.rs',
+              'crates/noon-core/src/semantic_store/semantic_transaction/family_edges.rs',
+          })
+          changed = set(git('diff', '--name-only').splitlines())
+          assert changed <= allowed, f'Unexpected formatter changes: {changed - allowed}'
+          if changed:
+              remote = git('ls-remote', 'origin', 'refs/heads/' + os.environ['BRANCH']).split()[0]
+              assert remote == os.environ['EXPECTED_HEAD'], 'Branch advanced; refusing to overwrite newer work'
+              sp.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+              sp.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+              sp.run(['git', 'add', '--', *sorted(changed)], check=True)
+              sp.run(['git', 'commit', '-m', 'B5: validate final graph declarations and complete compiler integration'], check=True)
+              sp.run(['git', 'push', 'origin', 'HEAD:refs/heads/' + os.environ['BRANCH']], check=True)
+          print('QUALIFICATION_HEAD=' + git('rev-parse', 'HEAD'))
+          PY
+      - name: Run repository fast validation
+        run: bash scripts/check.sh fast "$BASE_SHA"

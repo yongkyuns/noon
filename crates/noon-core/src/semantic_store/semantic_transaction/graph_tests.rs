@@ -100,10 +100,12 @@ fn invalid_graph_declarations_do_not_publish_pending_nodes_or_revision() {
             tx.add_member(root, b);
         }
 
+        // The declaration constructor performs the conversion. Keeping tokens
+        // here avoids an unconstrained intermediate Into target type.
         let vertices = match mode {
-            2 => vec![(a_id, a.into())],
-            3 => vec![(a_id, a.into()), (a_id, b.into())],
-            _ => vec![(a_id, a.into()), (b_id, b.into())],
+            2 => vec![(a_id, a)],
+            3 => vec![(a_id, a), (a_id, b)],
+            _ => vec![(a_id, a), (b_id, b)],
         };
         tx.set_graph_declaration(
             root,
