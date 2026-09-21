@@ -5,16 +5,23 @@
 //! mobjects/families used to render vertices and edges. It deliberately does not
 //! add a graph renderer, layout engine, or per-frame edge updater.
 //!
-//! Initial construction accepts explicit authored positions only. Persistent
-//! topology mutation and effective endpoint following are later #697 slices.
+//! Initial construction accepts explicit authored positions only. The complete
+//! graph is published through one semantic transaction. Persistent topology
+//! mutation and effective endpoint following are later #697 slices.
 
 use crate::{
-    AuthoringError, GraphBindingError, GraphEdge, GraphEdgeId, GraphSemanticBindings,
-    GraphTopology, GraphTopologyError, GraphVertexId, ManimArrow, ManimArrowOptions,
-    ManimGeometryOptions, Mobject, MobjectFamily, MobjectTarget, Scene,
+    arrow_authoring::{
+        resolve_staged_arrow, stage_prepared_arrow, CommittedArrow, PreparedArrow, StagedArrow,
+    },
+    AuthoringError, GraphEdge, GraphEdgeId, GraphSemanticBindings, GraphTopology,
+    GraphTopologyError, GraphVertexId, ManimArrow, ManimArrowOptions, ManimGeometryOptions,
+    Mobject, MobjectFamily, Scene,
 };
-use noon_core::{Color, BLUE, WHITE};
-use std::{collections::HashMap, hash::Hash};
+use noon_core::{
+    Color, GeometryResourceHandle, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectState, SemanticStore, BLUE, WHITE,
+};
+use std::{collections::HashMap, hash::Hash, rc::Rc};
 
 pub const DEFAULT_GRAPH_VERTEX_RADIUS: f64 = 0.15;
 pub const DEFAULT_GRAPH_VERTEX_STROKE_WIDTH: f64 = 0.02;
@@ -60,7 +67,6 @@ pub enum GraphEndpoint {
 pub enum GraphAuthoringError {
     Authoring(AuthoringError),
     Topology(GraphTopologyError),
-    Binding(GraphBindingError),
     DuplicateVertexKey {
         vertex_index: usize,
     },
@@ -82,18 +88,11 @@ impl From<GraphTopologyError> for GraphAuthoringError {
     }
 }
 
-impl From<GraphBindingError> for GraphAuthoringError {
-    fn from(value: GraphBindingError) -> Self {
-        Self::Binding(value)
-    }
-}
-
 impl std::fmt::Display for GraphAuthoringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Topology(error) => error.fmt(formatter),
-            Self::Binding(error) => error.fmt(formatter),
             Self::DuplicateVertexKey { vertex_index } => write!(
                 formatter,
                 "graph vertex at input index {vertex_index} repeats an existing user key"
@@ -118,7 +117,6 @@ impl std::error::Error for GraphAuthoringError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Topology(error) => Some(error),
-            Self::Binding(error) => Some(error),
             Self::DuplicateVertexKey { .. } | Self::UnknownEdgeEndpoint { .. } => None,
         }
     }
@@ -449,6 +447,72 @@ struct PlannedEdge {
     geometry: PlannedEdgeGeometry,
 }
 
+struct PreparedVertex<K> {
+    key: K,
+    id: GraphVertexId,
+    state: SemanticObjectState,
+}
+
+enum PreparedEdgeGeometry {
+    Line(SemanticObjectState),
+    Arrow(PreparedArrow),
+}
+
+struct PreparedEdge {
+    edge: GraphEdge,
+    geometry: PreparedEdgeGeometry,
+}
+
+struct StagedVertex<K> {
+    key: K,
+    id: GraphVertexId,
+    node: noon_core::SemanticLocalNodeToken,
+}
+
+enum StagedEdgeGeometry {
+    Line {
+        family: noon_core::SemanticLocalNodeToken,
+        line: noon_core::SemanticLocalNodeToken,
+    },
+    Arrow(StagedArrow),
+}
+
+struct StagedEdge {
+    edge: GraphEdge,
+    geometry: StagedEdgeGeometry,
+}
+
+struct StagedGraph<K> {
+    root: noon_core::SemanticLocalNodeToken,
+    vertices: Vec<StagedVertex<K>>,
+    edges: Vec<StagedEdge>,
+}
+
+struct CommittedVertex<K> {
+    key: K,
+    id: GraphVertexId,
+    node: SemanticNodeId,
+}
+
+enum CommittedEdgeGeometry {
+    Line {
+        family: SemanticNodeId,
+        line: SemanticNodeId,
+    },
+    Arrow(CommittedArrow),
+}
+
+struct CommittedEdge {
+    edge: GraphEdge,
+    geometry: CommittedEdgeGeometry,
+}
+
+struct CommittedGraph<K> {
+    root: SemanticNodeId,
+    vertices: Vec<CommittedVertex<K>>,
+    edges: Vec<CommittedEdge>,
+}
+
 fn build_graph<K, V, E>(
     scene: &mut Scene,
     vertices: V,
@@ -461,9 +525,8 @@ where
     V: IntoIterator<Item = (K, (f64, f64))>,
     E: IntoIterator<Item = (K, K)>,
 {
-    // Finish all deterministic input/topology/constructor validation before the
-    // Scene receives a semantic mutation. This keeps duplicate/missing endpoints
-    // and invalid authored geometry from leaving partial graph state.
+    // Finish deterministic input/topology/constructor validation before the
+    // Scene receives any semantic mutation.
     let mut topology = GraphTopology::new();
     let mut vertex_lookup = HashMap::new();
     let mut planned_vertices = Vec::new();
@@ -512,52 +575,105 @@ where
         planned_edges.push(PlannedEdge { edge, geometry });
     }
 
-    // Edge families are authored before vertices so the graph root's painter
-    // order keeps vertex disks above their connecting Lines/Arrows.
-    let mut semantic_edges = Vec::with_capacity(planned_edges.len());
-    for planned in planned_edges {
-        let object = match planned.geometry {
-            PlannedEdgeGeometry::Line(options) => {
-                let line = scene.geometry(options)?;
-                let family = scene.family(&[MobjectTarget::Object(&line)])?;
-                GraphEdgeMobject::Line { family, line }
+    let store_rc = Rc::clone(scene.integration_store());
+    let committed = scene.with_semantic_publication(|store, publish| {
+        let vertices = planned_vertices
+            .into_iter()
+            .map(|vertex| {
+                Ok(PreparedVertex {
+                    key: vertex.key,
+                    id: vertex.id,
+                    state: vertex.options.into_state(store)?,
+                })
+            })
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+        let edges = planned_edges
+            .into_iter()
+            .map(|edge| {
+                let geometry = match edge.geometry {
+                    PlannedEdgeGeometry::Line(options) => {
+                        PreparedEdgeGeometry::Line(options.into_state(store)?)
+                    }
+                    PlannedEdgeGeometry::Arrow(options) => {
+                        PreparedEdgeGeometry::Arrow(options.prepare(store)?)
+                    }
+                };
+                Ok(PreparedEdge {
+                    edge: edge.edge,
+                    geometry,
+                })
+            })
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+
+        let mut paths = Vec::new();
+        for edge in &edges {
+            if let PreparedEdgeGeometry::Arrow(arrow) = &edge.geometry {
+                paths.push(arrow.end_tip.clone());
+                if let Some(start_tip) = &arrow.start_tip {
+                    paths.push(start_tip.clone());
+                }
             }
-            PlannedEdgeGeometry::Arrow(options) => {
-                GraphEdgeMobject::Arrow(scene.manim_arrow(options)?)
+        }
+
+        if paths.is_empty() {
+            return publish_prepared_graph(store, vertices, edges, &[], publish);
+        }
+
+        store.with_geometry_paths(paths, |store, handles| {
+            publish_prepared_graph(store, vertices, edges, handles, publish)
+        })
+    })?;
+
+    let family = MobjectFamily::from_node(Rc::clone(&store_rc), committed.root)
+        .expect("committed graph root remains a family");
+    let semantic_vertices = committed
+        .vertices
+        .into_iter()
+        .map(|vertex| GraphVertexEntry {
+            key: vertex.key,
+            id: vertex.id,
+            object: Mobject::from_node(Rc::clone(&store_rc), vertex.node)
+                .expect("committed graph vertex remains an object"),
+        })
+        .collect::<Vec<_>>();
+    let semantic_edges = committed
+        .edges
+        .into_iter()
+        .map(|edge| {
+            let object = match edge.geometry {
+                CommittedEdgeGeometry::Line { family, line } => GraphEdgeMobject::Line {
+                    family: MobjectFamily::from_node(Rc::clone(&store_rc), family)
+                        .expect("committed graph edge root remains a family"),
+                    line: Mobject::from_node(Rc::clone(&store_rc), line)
+                        .expect("committed graph edge Line remains an object"),
+                },
+                CommittedEdgeGeometry::Arrow(arrow) => GraphEdgeMobject::Arrow(
+                    ManimArrow::from_committed(Rc::clone(&store_rc), arrow)
+                        .expect("committed graph Arrow remains structurally valid"),
+                ),
+            };
+            GraphEdgeEntry {
+                edge: edge.edge,
+                object,
             }
-        };
-        semantic_edges.push(GraphEdgeEntry {
-            edge: planned.edge,
-            object,
-        });
-    }
+        })
+        .collect::<Vec<_>>();
 
-    let mut semantic_vertices = Vec::with_capacity(planned_vertices.len());
-    for planned in planned_vertices {
-        let object = scene.geometry(planned.options)?;
-        semantic_vertices.push(GraphVertexEntry {
-            key: planned.key,
-            id: planned.id,
-            object,
-        });
-    }
-
-    let mut root_members = Vec::with_capacity(semantic_edges.len() + semantic_vertices.len());
-    for edge in &semantic_edges {
-        root_members.push(MobjectTarget::Family(edge.object.family()));
-    }
-    for vertex in &semantic_vertices {
-        root_members.push(MobjectTarget::Object(&vertex.object));
-    }
-    let family = scene.family(&root_members)?;
-
+    // These admission checks are assertions over the exact graph transaction we
+    // just constructed. No fallible user operation occurs after semantic commit.
     let mut bindings = GraphSemanticBindings::new();
     for vertex in &semantic_vertices {
-        bindings.bind_vertex(&topology, vertex.id, &vertex.object)?;
+        bindings
+            .bind_vertex(&topology, vertex.id, &vertex.object)
+            .expect("graph transaction produces valid vertex bindings");
     }
     for edge in &semantic_edges {
-        bindings.bind_edge(&topology, edge.edge.id, edge.object.family())?;
-        bindings.bind_edge_line(&topology, edge.edge.id, edge.object.line())?;
+        bindings
+            .bind_edge(&topology, edge.edge.id, edge.object.family())
+            .expect("graph transaction produces valid edge family bindings");
+        bindings
+            .bind_edge_line(&topology, edge.edge.id, edge.object.line())
+            .expect("graph transaction produces valid edge Line bindings");
     }
 
     let edge_lookup = semantic_edges
@@ -575,6 +691,120 @@ where
         vertex_lookup,
         edges: semantic_edges,
         edge_lookup,
+    })
+}
+
+fn publish_prepared_graph<K>(
+    store: &mut SemanticStore,
+    vertices: Vec<PreparedVertex<K>>,
+    edges: Vec<PreparedEdge>,
+    handles: &[GeometryResourceHandle],
+    publish: &mut dyn FnMut(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<CommittedGraph<K>, AuthoringError> {
+    let mut transaction = SemanticMutationTransaction::new();
+    let root = transaction.create_node(SemanticNodeCreation::family());
+    let mut staged_edges = Vec::with_capacity(edges.len());
+    let mut handle_index = 0usize;
+
+    // Edges precede vertices in the root family so equal-priority vertices paint
+    // above their connectors without encoding graph knowledge in the renderer.
+    for edge in edges {
+        let geometry = match edge.geometry {
+            PreparedEdgeGeometry::Line(state) => {
+                let line = transaction.create_node(SemanticNodeCreation::object(state));
+                let family = transaction.create_node(SemanticNodeCreation::family());
+                transaction.add_member(family, line);
+                transaction.add_member(root, family);
+                StagedEdgeGeometry::Line { family, line }
+            }
+            PreparedEdgeGeometry::Arrow(arrow) => {
+                let end_tip = handles
+                    .get(handle_index)
+                    .copied()
+                    .expect("one resource handle per prepared Arrow end tip");
+                handle_index += 1;
+                let start_tip = if arrow.start_tip.is_some() {
+                    let handle = handles
+                        .get(handle_index)
+                        .copied()
+                        .expect("one resource handle per prepared Arrow start tip");
+                    handle_index += 1;
+                    Some(handle)
+                } else {
+                    None
+                };
+                let staged =
+                    stage_prepared_arrow(&mut transaction, &arrow, end_tip, start_tip);
+                transaction.add_member(root, staged.family);
+                StagedEdgeGeometry::Arrow(staged)
+            }
+        };
+        staged_edges.push(StagedEdge {
+            edge: edge.edge,
+            geometry,
+        });
+    }
+    debug_assert_eq!(handle_index, handles.len());
+
+    let mut staged_vertices = Vec::with_capacity(vertices.len());
+    for vertex in vertices {
+        let node = transaction.create_node(SemanticNodeCreation::object(vertex.state));
+        transaction.add_member(root, node);
+        staged_vertices.push(StagedVertex {
+            key: vertex.key,
+            id: vertex.id,
+            node,
+        });
+    }
+
+    let result = publish(store, transaction)?;
+    let root = result
+        .resolve(root)
+        .ok_or(AuthoringError::UnresolvedCreatedNode(root))?;
+    let vertices = staged_vertices
+        .into_iter()
+        .map(|vertex| {
+            Ok(CommittedVertex {
+                key: vertex.key,
+                id: vertex.id,
+                node: result
+                    .resolve(vertex.node)
+                    .ok_or(AuthoringError::UnresolvedCreatedNode(vertex.node))?,
+            })
+        })
+        .collect::<Result<Vec<_>, AuthoringError>>()?;
+    let edges = staged_edges
+        .into_iter()
+        .map(|edge| {
+            let geometry = match edge.geometry {
+                StagedEdgeGeometry::Line { family, line } => {
+                    CommittedEdgeGeometry::Line {
+                        family: result
+                            .resolve(family)
+                            .ok_or(AuthoringError::UnresolvedCreatedNode(family))?,
+                        line: result
+                            .resolve(line)
+                            .ok_or(AuthoringError::UnresolvedCreatedNode(line))?,
+                    }
+                }
+                StagedEdgeGeometry::Arrow(arrow) => CommittedEdgeGeometry::Arrow(
+                    resolve_staged_arrow(arrow, |token| result.resolve(token))?,
+                ),
+            };
+            Ok(CommittedEdge {
+                edge: edge.edge,
+                geometry,
+            })
+        })
+        .collect::<Result<Vec<_>, AuthoringError>>()?;
+
+    Ok(CommittedGraph {
+        root,
+        vertices,
+        edges,
     })
 }
 
@@ -642,12 +872,14 @@ mod tests {
     #[test]
     fn explicit_graph_binds_user_keys_to_stable_topology_and_semantic_identity() {
         let mut scene = Scene::new();
+        let before = scene.revision();
         let graph = scene
             .graph(
                 [("a", (-2.0, 0.0)), ("b", (0.0, 1.0)), ("c", (2.0, 0.0))],
                 [("a", "b"), ("b", "c")],
             )
             .unwrap();
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
 
         let a = graph.vertex_id(&"a").unwrap();
         let b = graph.vertex_id(&"b").unwrap();
@@ -683,14 +915,16 @@ mod tests {
     }
 
     #[test]
-    fn digraph_reuses_arrow_family_and_preserves_direction() {
+    fn digraph_reuses_arrow_family_and_publishes_once() {
         let mut scene = Scene::new();
+        let before = scene.revision();
         let graph = scene
             .digraph(
                 [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
                 [("a", "b"), ("b", "a")],
             )
             .unwrap();
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
 
         let ab = graph.edge_id(&"a", &"b").unwrap();
         let ba = graph.edge_id(&"b", &"a").unwrap();
