@@ -75,26 +75,60 @@ mod tests {
         let (leaves, resources) = {
             let store = scene.integration_store().borrow();
             let roots = store.semantic_family_members_checked(scene.root()).unwrap();
-            let text_count = if cfg!(all(feature = "native-text", feature = "bundled-fonts")) { 2 } else { 0 };
+            let text_count = if cfg!(all(feature = "native-text", feature = "bundled-fonts")) {
+                2
+            } else {
+                0
+            };
             assert_eq!(roots.len(), 1 + text_count);
             let content = store.semantic_family_members_checked(roots[0]).unwrap();
-            assert_eq!(content.len(), 3, "plane, curve and marker remain distinct children");
+            assert_eq!(
+                content.len(),
+                3,
+                "plane, curve and marker remain distinct children"
+            );
             let plane = store.semantic_family_members_checked(content[0]).unwrap();
             assert_eq!(plane.len(), 4, "faded, major, x-axis and y-axis families");
             // Eleven vertical and seven horizontal half-unit lines; six are
             // major and twelve faded, including the two lines at zero.
-            assert_eq!(store.semantic_family_members_checked(plane[0]).unwrap().len(), 12);
-            assert_eq!(store.semantic_family_members_checked(plane[1]).unwrap().len(), 6);
+            assert_eq!(
+                store
+                    .semantic_family_members_checked(plane[0])
+                    .unwrap()
+                    .len(),
+                12
+            );
+            assert_eq!(
+                store
+                    .semantic_family_members_checked(plane[1])
+                    .unwrap()
+                    .len(),
+                6
+            );
             for axis in &plane[2..] {
                 let members = store.semantic_family_members_checked(*axis).unwrap();
                 assert_eq!(members.len(), 2, "shaft and empty tick family");
-                assert!(store.semantic_family_members_checked(members[1]).unwrap().is_empty());
+                assert!(store
+                    .semantic_family_members_checked(members[1])
+                    .unwrap()
+                    .is_empty());
             }
             let leaves = store.ordered_leaf_nodes(scene.root()).unwrap();
-            let geometry_count = leaves.iter().filter(|&&node| {
-                store.semantic_object_state_checked(node).unwrap().content.geometry().is_some()
-            }).count();
-            assert_eq!(geometry_count, 22, "18 grid lines, two axes, curve and marker");
+            let geometry_count = leaves
+                .iter()
+                .filter(|&&node| {
+                    store
+                        .semantic_object_state_checked(node)
+                        .unwrap()
+                        .content
+                        .geometry()
+                        .is_some()
+                })
+                .count();
+            assert_eq!(
+                geometry_count, 22,
+                "18 grid lines, two axes, curve and marker"
+            );
             assert_eq!(leaves.len(), geometry_count + text_count);
             (leaves, store.geometry_resources().stats())
         };
