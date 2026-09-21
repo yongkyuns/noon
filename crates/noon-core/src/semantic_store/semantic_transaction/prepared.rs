@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-use crate::SceneRevision;
+use crate::{SceneRevision, SemanticGraphDeclaration, SemanticGraphEdge};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTransactionReadError {
@@ -717,6 +717,36 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     store.replace_semantic_foreground_members(scope, members);
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::ForegroundMembers { scope });
+                }
+                SemanticMutation::SetGraphDeclaration { scope, graph } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let vertices = graph
+                        .vertices()
+                        .iter()
+                        .copied()
+                        .map(|vertex| resolve_node_ref(vertex, &committed_nodes))
+                        .collect::<Vec<_>>();
+                    let edges = graph
+                        .edges()
+                        .iter()
+                        .copied()
+                        .map(|edge| {
+                            SemanticGraphEdge::from_resolved(
+                                resolve_node_ref(edge.family(), &committed_nodes),
+                                resolve_node_ref(edge.line(), &committed_nodes),
+                                resolve_node_ref(edge.start(), &committed_nodes),
+                                resolve_node_ref(edge.end(), &committed_nodes),
+                                edge.directed(),
+                            )
+                        })
+                        .collect();
+                    let graph = SemanticGraphDeclaration::from_resolved(vertices, edges);
+                    let previous = store
+                        .replace_semantic_graph_declaration(scope, Some(graph))
+                        .expect("preflighted graph scope remains a family");
+                    debug_assert!(previous.is_none());
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::GraphDeclaration { scope });
                 }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
