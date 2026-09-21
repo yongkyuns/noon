@@ -22,9 +22,20 @@ pub enum PlotPreparationError {
     InvalidDiscontinuity,
     SampleLimitExceeded,
     AllocationFailed,
-    SampleCountMismatch { expected: usize, actual: usize },
-    InvalidPoint { sample_index: usize },
+    SampleCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidPoint {
+        sample_index: usize,
+    },
     SmoothingFailed,
+    InvalidImplicitOptions,
+    ImplicitLeafLimitExceeded,
+    InvalidImplicitPoint {
+        curve_index: usize,
+        point_index: usize,
+    },
 }
 
 impl std::fmt::Display for PlotPreparationError {
@@ -49,6 +60,19 @@ impl std::fmt::Display for PlotPreparationError {
                 )
             }
             Self::SmoothingFailed => formatter.write_str("shared plot path smoothing failed"),
+            Self::InvalidImplicitOptions => {
+                formatter.write_str("invalid implicit-curve bounds or contour options")
+            }
+            Self::ImplicitLeafLimitExceeded => {
+                formatter.write_str("implicit-curve leaf admission limit exceeded")
+            }
+            Self::InvalidImplicitPoint {
+                curve_index,
+                point_index,
+            } => write!(
+                formatter,
+                "implicit-curve point {point_index} in curve {curve_index} is not a finite renderable 2D point"
+            ),
         }
     }
 }

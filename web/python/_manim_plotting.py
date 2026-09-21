@@ -415,6 +415,11 @@ class Axes(_compat.Group):
                 )
 
 
+    def plot_implicit_curve(self, func, min_depth=5, max_quads=1500, **kwargs):
+        from _manim_implicit import plot_implicit_curve
+        return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
+
+
 def _callable(function):
     if not callable(function):
         raise TypeError("plot function must be callable")

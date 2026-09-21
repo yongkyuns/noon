@@ -100,6 +100,8 @@ mod graph_semantic_bindings;
 mod graph_topology;
 pub use graph_semantic_bindings::*;
 pub use graph_topology::*;
+mod implicit_plotting;
+pub use implicit_plotting::ImplicitPlotOptions;
 mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
@@ -157,7 +159,7 @@ pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;

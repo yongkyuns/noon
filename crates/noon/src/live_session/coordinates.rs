@@ -1,10 +1,12 @@
 //! Coordinate construction through the ordinary running publication transaction.
 use super::*;
-use crate::coordinate_authoring::{prepare_axes, prepare_number_line, resolve_family};
+use crate::coordinate_authoring::{
+    prepare_axes, prepare_number_line, prepare_number_plane, resolve_family,
+};
 use crate::AuthoringError;
 use crate::{
     AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, NumberLineFrame,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, NumberLineFrame,
 };
 
 impl LiveSession<'_> {
@@ -30,6 +32,17 @@ impl LiveSession<'_> {
         ManimNumberLine::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
     }
 
+    /// Construct a detached retained NumberPlane through this execution's
+    /// ordinary publication transaction.
+    pub fn number_plane(
+        &mut self,
+        options: &ManimNumberPlaneOptions,
+    ) -> Result<ManimNumberPlane, CoordinateAuthoringError> {
+        let (transaction, root) = prepare_number_plane(options)?;
+        let result = self.apply(transaction)?;
+        ManimNumberPlane::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
+    }
+
     /// Observe both shafts through one coherent publication. Reachable shafts
     /// use effective path state; detached shafts have no execution row and use
     /// their validated authored state, as with ordinary detached target capture.
@@ -41,6 +54,22 @@ impl LiveSession<'_> {
         self.require_family(axes.family())?;
         self.require_target_capture()?;
         axes.snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))
+    }
+
+    pub fn effective_number_plane_frame(
+        &self,
+        plane: &ManimNumberPlane,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        self.require_family(plane.family())?;
+        self.require_target_capture()?;
+        Ok(AxesFrame::new(
+            plane
+                .x_axis()?
+                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
+            plane
+                .y_axis()?
+                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
+        ))
     }
 
     pub fn effective_number_line_frame(

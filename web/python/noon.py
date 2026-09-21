@@ -852,8 +852,10 @@ Object = Mobject
 _PUBLIC_EXPORTS = {
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
+    "NumberPlane": "_manim_number_plane",
     "Axes": "_manim_plotting",
     "FunctionGraph": "_manim_plotting",
+    "ImplicitFunction": "_manim_implicit",
     "ParametricFunction": "_manim_plotting",
     "Transform": "_manim_animate",
     "ReplacementTransform": "_manim_animate",
