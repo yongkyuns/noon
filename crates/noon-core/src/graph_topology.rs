@@ -148,6 +148,20 @@ impl GraphTopology {
             .and_then(|&index| self.edges[index])
     }
 
+    /// Resolve one existing edge by endpoint identity without scanning the graph.
+    ///
+    /// Undirected lookup normalizes endpoint order exactly like insertion.
+    pub fn edge_between(
+        &self,
+        start: GraphVertexId,
+        end: GraphVertexId,
+        directed: bool,
+    ) -> Option<GraphEdgeId> {
+        self.edge_keys
+            .get(&EdgeKey::new(start, end, directed))
+            .copied()
+    }
+
     pub fn add_vertex(&mut self) -> GraphVertexId {
         let id = GraphVertexId::new(self.next_vertex_id);
         self.next_vertex_id = self
@@ -376,6 +390,20 @@ mod tests {
             })
         );
         assert!(topology.add_edge(b, a, true).is_ok());
+    }
+
+    #[test]
+    fn edge_lookup_uses_insertion_key_semantics_without_scanning() {
+        let mut topology = GraphTopology::new();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
+        let undirected = topology.add_edge(a, b, false).unwrap();
+        let directed = topology.add_edge(b, a, true).unwrap();
+
+        assert_eq!(topology.edge_between(a, b, false), Some(undirected));
+        assert_eq!(topology.edge_between(b, a, false), Some(undirected));
+        assert_eq!(topology.edge_between(b, a, true), Some(directed));
+        assert_eq!(topology.edge_between(a, b, true), None);
     }
 
     #[test]
