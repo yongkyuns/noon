@@ -1,0 +1,107 @@
+diff --git a/crates/noon-native/src/pointer_input/tests.rs b/crates/noon-native/src/pointer_input/tests.rs
+index 6e1168984805008b3892a344f6d597eb00a9fbc3..a9ee0f4e2e5af08373ac96c7ce24003ff161215d 100644
+--- a/crates/noon-native/src/pointer_input/tests.rs
++++ b/crates/noon-native/src/pointer_input/tests.rs
+@@ -382,7 +382,7 @@ fn idle_callback_only_program_does_not_activate_pointer_ingress() {
+ 
+ #[test]
+ fn native_mapping_uses_the_shared_snapshot_projection_for_outside_coordinates() {
+-    let mut scene = noon::Scene::new();
++    let scene = noon::Scene::new();
+     // Test the shared projection contract, not a second native formula.
+     let session = scene.execution_session().unwrap();
+     let view = PointerFrameView::new(0, Vec2::new(800.0, 400.0), session.camera().unwrap()).unwrap();
+@@ -480,7 +480,7 @@ fn stale_presented_frame_cancels_press_without_releasing_or_retagging_coordinate
+     assert!(f.app.pointer.surface.is_none());
+     assert!(f.app.pointer.refresh_pending);
+     assert_eq!(f.app.session().frame().time, 0.25);
+-    assert!(f.app.session().publication_context().frame_epoch() >= before.frame_epoch());
++    assert!(f.app.session().publication_context().frame_epoch().get() >= before.frame_epoch().get());
+     assert_eq!(f.app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0).unwrap(), PointerDispatch::Cancelled);
+     assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
+     f.move_to(600.0, 300.0);
+@@ -569,3 +569,22 @@ fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalida
+     assert!(!app.force_full_redraw);
+     assert!(app.static_session_mut().take_renderer_publication().changes().is_empty());
+ }
++
++#[test]
++fn binding_reset_that_changes_publication_cannot_retag_the_first_positional_input() {
++    let mut f = Fixture::new();
++    f.app.dispatch_state(NativeStateSource::PointerButton { button: 0 }, NativeInputValue::Bool(true)).unwrap();
++    f.present();
++    let displayed = f.app.pointer.presented.clone();
++    assert!(!f.app.pointer.configured);
++    assert!(matches!(f.app.dispatch_pointer_position(PhysicalPosition::new(200.0, 100.0), SIZE, 1.0).unwrap(), PointerDispatch::RejectedFrame(_)));
++    assert_eq!(f.value(f.button), &ReactiveValue::Bool(false), "configuration resets held state");
++    assert_eq!(f.value(f.position), &ReactiveValue::Vec2(Vec2::ZERO), "offered coordinates were never admitted");
++    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(0.0));
++    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
++    assert!(f.app.pointer.surface.is_none());
++    assert_eq!(f.app.pointer.presented, displayed);
++    assert!(f.app.pointer.refresh_pending);
++    f.move_to(200.0, 100.0);
++    assert_eq!(f.value(f.position), &ReactiveValue::Vec2(Vec2::new(-4.0, 2.0)));
++}
+diff --git a/crates/noon-native/src/selection_overlay/tests.rs b/crates/noon-native/src/selection_overlay/tests.rs
+index d83e252feb41042f92f6d215e0b72cb25a78303a..932963933ca9ae196c78b322fe11025de05ab6f6 100644
+--- a/crates/noon-native/src/selection_overlay/tests.rs
++++ b/crates/noon-native/src/selection_overlay/tests.rs
+@@ -126,7 +126,8 @@ fn native_surface_smoke_presents_paused_click_selection_and_clear() {
+             assert!(self.app.pointer.presented.is_none());
+             assert_eq!(self.app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0).unwrap(),
+                 crate::pointer_input::PointerDispatch::AwaitingPresentation);
+-            assert!(!self.app.pointer.configured);
++            assert!(matches!(self.app.session().native_pointer_input_token(),
++                Err(noon::ExecutionSessionInputError::PointerNotConfigured)));
+             assert_eq!(self.app.next_input_sequence, 0);
+         }
+         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+@@ -210,3 +211,25 @@ fn native_surface_smoke_presents_paused_click_selection_and_clear() {
+     assert_eq!(harness.presents, 6);
+     assert_eq!(harness.app.session().frame().time, 0.0);
+ }
++
++#[test]
++fn rejected_motion_cancels_click_even_after_fresh_display_and_return_to_press_point() {
++    let mut app = app();
++    app.static_session_mut().take_renderer_publication();
++    app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
++    app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0).unwrap();
++    app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0).unwrap();
++    app.static_session_mut().evaluate(0.25).unwrap();
++    // The movement threshold must not accidentally supply the cancellation:
++    // this excursion is rejected before it reaches the session gesture state.
++    assert!(matches!(app.dispatch_pointer_position(PhysicalPosition::new(260.0, 90.0), SIZE, 1.0).unwrap(),
++        crate::pointer_input::PointerDispatch::RejectedFrame(_)));
++    app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
++    app.pointer.refresh_pending = false;
++    app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0).unwrap();
++    app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0).unwrap();
++    assert!(app.session().selected_pointer_target().is_none(), "rejected motion must retire the prior press");
++    click(&mut app, 160.0);
++    assert!(app.session().selected_pointer_target().is_some(), "fresh click must recover");
++    assert_eq!(app.session().frame().time, 0.25);
++}
+diff --git a/crates/noon/src/execution_session/input/presentation/tests.rs b/crates/noon/src/execution_session/input/presentation/tests.rs
+index 9c4440e4f9525e0120e09f3b373fba72a008cd2b..365de042d0443a4aec83806704efaf2a47636b90 100644
+--- a/crates/noon/src/execution_session/input/presentation/tests.rs
++++ b/crates/noon/src/execution_session/input/presentation/tests.rs
+@@ -588,7 +588,7 @@ fn a_frame_snapshot_does_not_bypass_the_live_program_terminal_barrier() {
+ 
+ #[test]
+ fn captured_frame_can_be_validated_before_any_pointer_binding_without_side_effects() {
+-    let mut scene = Scene::new();
++    let scene = Scene::new();
+     let mut session = scene.execution_session().unwrap();
+     let frame = session.capture_pointer_frame(view()).unwrap();
+     let publication = session.publication_context();
+@@ -602,7 +602,7 @@ fn captured_frame_can_be_validated_before_any_pointer_binding_without_side_effec
+ 
+ #[test]
+ fn prebinding_validation_cannot_refresh_a_stale_frame() {
+-    let mut scene = Scene::new();
++    let scene = Scene::new();
+     let mut session = scene.execution_session().unwrap();
+     let frame = session.capture_pointer_frame(view()).unwrap();
+     session.evaluate(0.25).unwrap();
