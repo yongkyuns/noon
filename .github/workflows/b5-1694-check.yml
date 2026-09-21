@@ -1,0 +1,86 @@
+name: Isolated B5 1694 validation
+on:
+  push:
+    branches: [codex/b5-1694-check-20260920]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE: b869d7f2fc2ffa2f9d6d60eaa61c15f532a482b1
+      BASE: f62f3c98e1efe0dfd10c61a628a9cff57b04fd34
+      RESULT_REF: refs/heads/codex/b5-1694-checked-candidate-20260920
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout isolated helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 3
+      - name: Prepare failing regressions against exact source
+        run: |
+          cp .github/ci/b5-1694-repair.py /tmp/b5-1694-repair.py
+          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE"
+          git checkout --detach "$SOURCE"
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          python3 /tmp/b5-1694-repair.py tests
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose
+      - name: Cache Cargo sources
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Prove three original contract failures
+        shell: bash
+        run: |
+          set -uo pipefail
+          cargo test -p noon --no-default-features --lib graph_semantic_bindings::tests::line_binding_ 2>&1 | tee /tmp/b5-before.log
+          result=${PIPESTATUS[0]}
+          test "$result" -ne 0
+          python3 - <<'PY'
+          from pathlib import Path
+          log = Path('/tmp/b5-before.log').read_text()
+          assert 'test result: FAILED' in log, 'Expected assertion failures, not compilation failure'
+          for name in ('line_binding_rejects_non_line_without_changing_bindings_or_scene', 'line_binding_rejects_line_outside_bound_family', 'line_binding_rejects_silent_component_replacement'):
+              assert f'{name} ... FAILED' in log, name
+          print('All three new regressions failed at their original incorrect admissions.')
+          PY
+      - name: Repair and format exact candidate
+        id: candidate
+        run: |
+          python3 /tmp/b5-1694-repair.py repair
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert changed <= {'crates/noon/src/graph_semantic_bindings.rs', 'crates/noon/src/graph_topology.rs'}, changed
+          PY
+          git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'fix: validate graph Line component identity and family membership'
+          git push origin "HEAD:$RESULT_REF"
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "Candidate commit: $(git rev-parse HEAD)"
+          echo "Candidate tree: $(git rev-parse HEAD^{tree})"
+      - name: Verify focused repaired regressions
+        run: cargo test -p noon --no-default-features --lib graph_semantic_bindings
+      - name: Validate repository fast gate
+        run: bash scripts/check.sh fast "$BASE"
+      - name: Compile shared graph code on WASM
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
+        run: cargo check -p noon --no-default-features --target wasm32-unknown-unknown
+      - name: Record exact candidate
+        if: always()
+        run: |
+          echo "Candidate: ${CANDIDATE_SHA:-not-created}"
+          echo 'No active PR or master ref changed by this validation job.'
