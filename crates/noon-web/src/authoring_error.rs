@@ -492,6 +492,9 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
             E::AmbiguousCrossRootAlias(_) => {
                 ("unsupported_operation", "membership.cross_root_alias")
             }
+            E::GraphMutationRequiresTransaction(_) => {
+                ("unsupported_operation", "graph.requires_transaction")
+            }
             E::Store(cause) => return Self::caused_by("semantic.store", message, cause.into()),
         };
         Self::new(category, code, message)
@@ -940,6 +943,11 @@ mod tests {
                 .category,
             "unsupported_operation"
         );
+        let graph = AuthoringFailure::from(
+            SemanticSceneOperationError::GraphMutationRequiresTransaction(node),
+        );
+        assert_eq!(graph.category, "unsupported_operation");
+        assert_eq!(graph.code, "graph.requires_transaction");
         assert_eq!(
             AuthoringFailure::from(ExecutionSessionPublicationError::RequiredCallbackPending)
                 .category,
