@@ -103,6 +103,7 @@ jobs:
           cd "$CANDIDATE"
           cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-noon.log"
           cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-web.log"
+          cargo check -p noon-web --features renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-renderer.log"
           echo passed > "$PROOF/qualification.txt"
 
       - name: Retain qualification evidence
