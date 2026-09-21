@@ -4,81 +4,31 @@ on:
     branches: [review/reconcile-b6-secondary-20260921]
     paths: [.github/workflows/review-reconcile-b6-secondary.yml]
 permissions:
-  contents: write
+  contents: read
 jobs:
-  reconcile:
+  focused:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
-      MASTER: 24e9aeba09324efc2d910b00f89b4c112a36c633
-      SOURCE: 46edaa5ce93f37084104240e647c0f3ec59e362c
-      CANDIDATE_BRANCH: review/1690-integrated-20260921
       CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 46edaa5ce93f37084104240e647c0f3ec59e362c
-          fetch-depth: 0
+          ref: 2196bc15aca8abc50578bf4ccafce9bcfa20cc1a
           persist-credentials: false
-      - name: Merge exact current master
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'Noon reconciliation'
-          git config user.email 'reconciliation@users.noreply.github.com'
-          if ! git merge --no-commit --no-ff "$MASTER"; then
-            git status --short
-            git diff --name-only --diff-filter=U
-            exit 1
-          fi
-          git add -A
-          git diff --cached --check
-          git commit -m "Reconcile B6 secondary viewport stack with current master"
-          echo "CANDIDATE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "TREE=$(git rev-parse HEAD^{tree})" >> "$GITHUB_ENV"
-          printf 'master=%s\nsource=%s\ncandidate=%s\ntree=%s\n' "$MASTER" "$SOURCE" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee /tmp/identity.txt
-      - name: Install pinned toolchain
+      - name: Install repository-pinned Rust and software Vulkan
         run: |
           rustup install
           rustup show active-toolchain
-      - name: Qualify secondary viewport contract
-        shell: bash
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      - name: Check renderer source and all targets
         run: |
-          set -euo pipefail
           cargo fmt --all -- --check
-          cargo test -p noon-render-wgpu --test secondary_viewport -- --nocapture
-          python3 - <<'PY'
-          from pathlib import Path
-          source = Path('crates/noon-render-wgpu/src/gpu/mod.rs').read_text()
-          start = source.index('fn encode_secondary_viewport_inner(')
-          end = source.index('    /// Encodes a render pass with beginning/end GPU timestamp writes.', start)
-          body = source[start:end]
-          assert 'queue.write_buffer' not in body
-          assert 'device.create_buffer_init' in body
-          reject = body.index('if multisampled')
-          create = body.index('device.create_buffer_init')
-          assert reject < create
-          assert 'self.presentation.encode_present(encoder, view);' in body
-          print('secondary viewport rejection/camera/presentation structure qualified')
-          PY
-      - name: Full integrated repository gate
-        shell: bash
+          cargo check -p noon-render-wgpu --all-targets
+      - name: Exercise secondary composition on software Vulkan
         run: |
-          set -euo pipefail
-          bash scripts/check.sh full "$MASTER"
-      - name: Publish validated candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$CANDIDATE"
-          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "$CANDIDATE:refs/heads/$CANDIDATE_BRANCH"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: review-b6-secondary-evidence
-          path: /tmp/identity.txt
-          retention-days: 7
-          if-no-files-found: error
+          cargo test -p noon-render-wgpu --test secondary_viewport \
+            -- --include-ignored --nocapture --test-threads=1
