@@ -2,6 +2,10 @@ name: B5 1693 exact precision check
 on:
   push:
     branches: [codex/b5-1693-precision-check-20260920]
+    paths: [.github/workflows/b5-1693-precision-check.yml]
+concurrency:
+  group: b5-1693-precision-check
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
@@ -22,12 +26,14 @@ jobs:
         run: |
           set -euo pipefail
           cp .github/1693_precision_patch.py /tmp/1693_precision_patch.py
+          cp .github/1693_geometry_patch.py /tmp/1693_geometry_patch.py
           git fetch --no-tags --depth=120 origin "$SOURCE" "$BASE" "$CURRENT_MASTER"
           git checkout --detach "$SOURCE"
           test "$(git rev-parse HEAD)" = "$SOURCE"
           mkdir -p /tmp/noon-1693-evidence
           git ls-files '*AGENTS*' > /tmp/noon-1693-evidence/agent-paths.txt
           python3 /tmp/1693_precision_patch.py
+          python3 /tmp/1693_geometry_patch.py
       - name: Use repository-pinned Rust
         run: rustup install
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -43,14 +49,37 @@ jobs:
           set -euo pipefail
           cargo fmt --all
           cargo fmt --all -- --check
-          test "$(git diff --name-only)" = crates/noon/src/implicit_plotting.rs
+          printf '%s\n' crates/noon-geometry/src/lib.rs crates/noon-geometry/src/smoothing.rs crates/noon/src/implicit_plotting.rs > /tmp/expected-files
+          git diff --name-only | diff - /tmp/expected-files
           git diff --check
           git diff > /tmp/noon-1693-evidence/precision.patch
-      - name: Prove regressions detect premature f32 lowering
+      - name: Prove source-space boundary regression fails against previous candidate
         shell: bash
         run: |
           set -euo pipefail
           cp crates/noon/src/implicit_plotting.rs /tmp/implicit_plotting.fixed.rs
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          p = Path('crates/noon/src/implicit_plotting.rs')
+          tests = p.read_text().split('#[cfg(test)]\nmod tests {', 1)[1]
+          old = subprocess.check_output(['git', 'show', os.environ['SOURCE'] + ':' + str(p)], text=True)
+          old_production = old.split('#[cfg(test)]\nmod tests {', 1)[0]
+          p.write_text(old_production + '#[cfg(test)]\nmod tests {' + tests)
+          PY
+          set +e
+          cargo test -p noon --all-features --lib implicit_plotting::tests::axes_smoothing_boundary -- --nocapture > /tmp/noon-1693-evidence/old-boundary.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/implicit_plotting.fixed.rs crates/noon/src/implicit_plotting.rs
+          tail -n 30 /tmp/noon-1693-evidence/old-boundary.log
+          test "$result" -ne 0
+          grep -F 'test result: FAILED' /tmp/noon-1693-evidence/old-boundary.log
+          grep -F 'axes_smoothing_boundary_is_selected_before_frame_mapping ... FAILED' /tmp/noon-1693-evidence/old-boundary.log
+      - name: Prove regressions detect premature f32 lowering
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/noon/src/implicit_plotting.rs')
@@ -64,6 +93,7 @@ jobs:
           result=$?
           set -e
           cp /tmp/implicit_plotting.fixed.rs crates/noon/src/implicit_plotting.rs
+          tail -n 25 /tmp/noon-1693-evidence/old-narrowing.log
           test "$result" -ne 0
           grep -F 'test result: FAILED' /tmp/noon-1693-evidence/old-narrowing.log
           grep -F 'axes_mapping_preserves_small_spans_at_large_positive_and_negative_offsets ... FAILED' /tmp/noon-1693-evidence/old-narrowing.log
@@ -72,7 +102,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p noon --all-features --lib implicit_plotting::tests::axes_mapping_ -- --nocapture 2>&1 | tee /tmp/noon-1693-evidence/precision.log
+          cargo test -p noon --all-features --lib implicit_plotting::tests::axes_ -- --nocapture 2>&1 | tee /tmp/noon-1693-evidence/precision.log
           bash scripts/check.sh fast "$BASE" > /tmp/noon-1693-evidence/fast.log 2>&1 || { tail -n 120 /tmp/noon-1693-evidence/fast.log; exit 1; }
           tail -n 40 /tmp/noon-1693-evidence/fast.log
           cargo test --workspace --all-features --lib -- --test-threads=1 > /tmp/noon-1693-evidence/serial.log 2>&1 || { tail -n 100 /tmp/noon-1693-evidence/serial.log; exit 1; }
@@ -87,12 +117,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE"
-          test "$(git diff --name-only)" = crates/noon/src/implicit_plotting.rs
+          git diff --name-only | diff - /tmp/expected-files
           git diff --check
           git config user.name 'Noon validation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/noon/src/implicit_plotting.rs
-          git commit -m 'test: qualify implicit precision in coherent axes frames'
+          git add crates/noon-geometry/src/lib.rs crates/noon-geometry/src/smoothing.rs crates/noon/src/implicit_plotting.rs
+          git commit -m 'fix: preserve coordinate precision and spline boundary through implicit mapping'
           git rev-parse HEAD | tee /tmp/noon-1693-evidence/qualified-head.txt
           git push origin HEAD:refs/heads/codex/b5-1693-precision-verified-20260920
       - name: Inspect current-master reconciliation without publishing it
