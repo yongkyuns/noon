@@ -1,0 +1,137 @@
+name: B6 foreground replacement proof
+on:
+  push:
+    branches: [codex/validate-b6-foreground-replacement]
+permissions:
+  contents: write
+concurrency:
+  group: b6-foreground-replacement-proof
+  cancel-in-progress: false
+env:
+  BASE: 99a01edcec3f479fc35fdd07ffe7d743a45371d2
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: "READ_ONLY"
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BASE }}
+          path: candidate
+          fetch-depth: 0
+      - name: Verify and apply bounded review repair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/b6-replacement"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          data = gzip.decompress(base64.b64decode(Path('../tooling/.b6-replacement.patch.b64').read_text()))
+          assert hashlib.sha256(data).hexdigest() == '46d7ef98f4ebdcce5590613583d83a30073915d7fb2dd5bcc51f344d8f8ca62c'
+          Path(os.environ['RUNNER_TEMP'], 'b6-replacement', 'input.patch').write_bytes(data)
+          PY
+          git apply --check "$RUNNER_TEMP/b6-replacement/input.patch"
+          git apply "$RUNNER_TEMP/b6-replacement/input.patch"
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain exact three-file source
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git add crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground.rs crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs crates/noon/tests/foreground_membership.rs
+          git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs',
+              'crates/noon/tests/foreground_membership.rs',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert actual == expected, actual ^ expected
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          PY
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'B6: retire replaced foreground descendants without demoting surviving targets'
+          git rev-parse HEAD HEAD^{tree} HEAD^ | tee "$RUNNER_TEMP/b6-replacement/identity.txt"
+          git diff "$BASE" HEAD > "$RUNNER_TEMP/b6-replacement/feature.patch"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/b6-replacement/source.tar.gz"
+      - name: Negative control on original production code and unchanged new tests
+        run: |
+          set -euo pipefail
+          path=crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground.rs
+          git show "$BASE:$path" > "$path"
+          set +e
+          cargo test -p noon-core --lib semantic_scene_restructure::foreground_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-replacement/before.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          git checkout HEAD -- "$path"
+          test "$status" -ne 0
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text = Path(os.environ['RUNNER_TEMP'], 'b6-replacement', 'before.log').read_text()
+          required = [
+              'replacing_partially_demoted_family_retires_descendant_declarations',
+              'replacing_nested_family_keeps_only_unaffected_foreground_branches',
+              'replacing_declared_family_prunes_independent_descendants_at_source_slot',
+          ]
+          assert 'test result: FAILED.' in text
+          assert 'could not compile' not in text
+          for name in required:
+              assert any(line.startswith('test ') and name in line and line.endswith('FAILED') for line in text.splitlines()), name
+          PY
+      - name: Shared membership and declaration regressions
+        run: |
+          set -euo pipefail
+          cargo test -p noon-core --lib semantic_scene_restructure -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-replacement/core.log"
+          cargo test -p noon-core --lib semantic_transaction::foreground_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-replacement/declarations.log"
+      - name: Typed cold and live membership and lifecycle regressions
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --test foreground_membership --test foreground_declarations --test root_order_acceptance --test root_order_transaction_regressions -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-replacement/live.log"
+      - name: Direct Rust WASM compilation
+        run: |
+          set -euo pipefail
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/b6-replacement/wasm.log"
+      - name: Complete repository Rust gate
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh rust "$BASE" 2>&1 | tee "$RUNNER_TEMP/b6-replacement/rust.log"
+          git diff --exit-code
+      - name: Publish only validated code-only child
+        run: git push origin HEAD:refs/heads/codex/validated-b6-foreground-replacement
+      - name: Retain executable source evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: b6-foreground-replacement-proof
+          path: ${{ runner.temp }}/b6-replacement/
+          if-no-files-found: error
+          retention-days: 14
