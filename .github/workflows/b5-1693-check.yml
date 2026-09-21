@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE: 605b36f05b8dc4fb56ca7cf4024af58f2ec4d16e
+      SOURCE: 4298f3d4d06385ef7fb34a7924430289244f6708
       BASE: 8b3286475869960e59928372cfb47662f0a28b11
       RESULT_REF: refs/heads/codex/b5-1693-checked-candidate-20260920
       CARGO_INCREMENTAL: "0"
@@ -55,7 +55,7 @@ jobs:
           print('Formatted files:', *sorted(changed), sep='\n')
           PY
           if ! git diff --quiet; then
-            git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'style: apply pinned formatter to NumberPlane ownership tests'
+            git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'style: apply pinned formatter to NumberPlane grid tests'
           fi
           git push origin "HEAD:$RESULT_REF"
           echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
