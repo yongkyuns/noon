@@ -188,6 +188,46 @@ assert.equal(
   20,
 );
 
+const interactive = normalizeGalleryManifest({
+  entries: [{
+    id: "interactive-selection",
+    title: "Interactive selection",
+    status: "ready",
+    reuse: "manim-compatible-parity-v0.21",
+    path: "python/examples/interactive.py",
+    thumbnail: "thumbnails/manim/interactive.svg",
+    features: ["Circle", "pointer selection"],
+    parity_status: "candidate",
+    interaction: { type: "pointer-fill-selection", max_movement: 4 },
+  }],
+}).examples[0];
+assert.deepEqual(
+  interactive.interaction,
+  { type: "pointer-fill-selection", maxMovement: 4 },
+  "gallery interaction metadata must normalize without embedding host behavior in Python source",
+);
+assert.equal(
+  filterGalleryExamples([interactive], { query: "pointer-fill-selection" }).length,
+  1,
+  "interaction type participates in gallery search",
+);
+assert.throws(
+  () => normalizeGalleryManifest({
+    entries: [{
+      id: "bad-interaction",
+      title: "Bad interaction",
+      status: "ready",
+      reuse: "manim-compatible-parity-v0.21",
+      path: "python/examples/bad.py",
+      thumbnail: "thumbnails/manim/bad.svg",
+      features: ["Circle"],
+      parity_status: "candidate",
+      interaction: { type: "dom-click-handler" },
+    }],
+  }),
+  /unsupported gallery interaction/,
+);
+
 const insertedFallbacks = [];
 const fakeImage = {
   tagName: "IMG",
