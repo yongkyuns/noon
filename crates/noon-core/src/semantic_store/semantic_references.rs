@@ -100,23 +100,25 @@ impl SemanticStore {
         target: SemanticNodeId,
     ) -> Vec<SemanticNodeId> {
         let mut owners = Vec::new();
+        let mut seen = HashSet::new();
         if self
             .node(target)
             .and_then(SemanticNode::graph_declaration)
             .is_some()
+            && seen.insert(target)
         {
             owners.push(target);
         }
         if let Some(incoming) = self.incoming_references.get(&target) {
             for reference in incoming.iter().copied() {
                 if reference.kind != SemanticReferenceKind::GraphDependency
-                    || owners.contains(&reference.owner)
                     || self.node(reference.owner).is_none()
                     || !self.owner_still_references(
                         reference.owner,
                         target,
                         SemanticReferenceKind::GraphDependency,
                     )
+                    || !seen.insert(reference.owner)
                 {
                     continue;
                 }
