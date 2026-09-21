@@ -1,34 +1,50 @@
-name: Isolated B5 1693 final validation
+name: Isolated B5 1693 suite diagnosis
 on:
   push:
     branches: [codex/b5-1693-check-20260920]
 permissions:
   contents: read
 jobs:
-  validate:
+  diagnose:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       SOURCE: e186555ef306f76acabfca91a3e6b7e75022479c
-      BASE: 8b3286475869960e59928372cfb47662f0a28b11
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Checkout exact uninstrumented candidate
+      - name: Checkout exact source and add diagnostic output only
         run: |
-          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE"
+          git fetch --no-tags --depth=1 origin "$SOURCE"
           git checkout --detach "$SOURCE"
           test "$(git rev-parse HEAD)" = "$SOURCE"
-          test "$(git rev-parse HEAD:crates/noon/src/coordinate_authoring/number_plane.rs)" = 65d80cb8ad4aef07f1042f74d1ecbddef261c8aa
-          test "$(git rev-parse HEAD:crates/noon/src/example_scenes/number_plane.rs)" = d4e9b4ba272f5ef8ea4b7ea069ad0d4949bce385
-          git diff --exit-code
-      - name: Use repository-pinned Rust
-        run: |
-          rustup install
-          rustc --version --verbose
-          cargo fmt --all -- --check
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/example_scenes/number_plane.rs')
+          s = p.read_text()
+          anchor = '    let plane = scene.number_plane(&options)?;'
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, '    eprintln!("GRID INPUT thread={:?} options={options:?}", std::thread::current().name());\n' + anchor)
+          anchor = '            assert_eq!(plane.len(), 4, "faded, major, x-axis and y-axis families");'
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, anchor + '''
+                      for (kind, node) in plane.iter().enumerate() {
+                          let members = store.semantic_family_members_checked(*node).unwrap();
+                          eprintln!("GRID MEMBERS kind={kind} id={node:?} count={}", members.len());
+                          for child in members.iter().take(3) {
+                              if let Ok(state) = store.semantic_object_state_checked(*child) {
+                                  eprintln!("GRID SAMPLE kind={kind} id={child:?} content={:?} transform={:?}", state.content, state.transform);
+                              }
+                          }
+                      }
+          ''')
+          p.write_text(s)
+          PY
+          git diff --stat
+      - name: Use pinned Rust
+        run: rustup install
       - name: Cache Cargo sources
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -38,32 +54,45 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-      - name: Repeat geometry-only NumberPlane and implicit examples
+      - name: Compile workspace library tests once
         run: |
-          for repeat in 1 2 3; do
-            cargo test -p noon --no-default-features --lib example_scenes::number_plane
-            cargo test -p noon --no-default-features --lib example_scenes::implicit_plotting
+          cargo test --workspace --all-features --lib --no-run --message-format=json > /tmp/workspace-tests.jsonl
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          rows = [json.loads(x) for x in Path('/tmp/workspace-tests.jsonl').read_text().splitlines()]
+          matches = [r['executable'] for r in rows if r.get('reason') == 'compiler-artifact' and r.get('target', {}).get('name') == 'noon' and r.get('profile', {}).get('test') and r.get('executable')]
+          assert len(matches) == 1, matches
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('NOON_TEST_BINARY=' + matches[0] + '\n')
+          print('EXACT TEST BINARY', matches[0])
+          PY
+      - name: Compare full parallel, full serial and isolated execution of identical binary
+        shell: bash
+        run: |
+          set +e
+          "$NOON_TEST_BINARY" --nocapture > /tmp/full-parallel.log 2>&1
+          parallel=$?
+          "$NOON_TEST_BINARY" --test-threads=1 --nocapture > /tmp/full-serial.log 2>&1
+          serial=$?
+          "$NOON_TEST_BINARY" example_scenes::number_plane --nocapture > /tmp/isolated.log 2>&1
+          isolated=$?
+          set -e
+          printf 'EXECUTION RESULTS parallel=%s serial=%s isolated=%s\n' "$parallel" "$serial" "$isolated"
+          for file in /tmp/full-parallel.log /tmp/full-serial.log /tmp/isolated.log; do
+            echo "===== $file ====="
+            grep -E 'GRID |FAILED|panicked|assertion|left:|right:|test result:' "$file" || true
+            tail -n 16 "$file"
           done
-      - name: Validate ordinary full fast gate
-        run: bash scripts/check.sh fast "$BASE"
-      - name: Repeat text-enabled NumberPlane and implicit examples
-        if: ${{ !cancelled() }}
+          echo 'Diagnostic comparison complete; exit codes above are not suppressed test successes.'
+      - name: Run standard workspace test command with diagnostics
+        shell: bash
         run: |
-          for repeat in 1 2 3; do
-            cargo test -p noon --all-features --lib example_scenes::number_plane
-            cargo test -p noon --all-features --lib example_scenes::implicit_plotting
-          done
-      - name: Compile actual WASM adapter
-        if: ${{ !cancelled() }}
-        run: cargo check -p noon-web --all-features --target wasm32-unknown-unknown
-      - name: Validate Python facade tests
-        if: ${{ !cancelled() }}
-        run: |
-          python3 -m unittest discover -s web/python -p test_manim_number_plane.py
-          python3 -m unittest discover -s web/python -p test_manim_implicit.py
-      - name: Verify exact source was unchanged
-        if: always()
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE"
-          git diff --exit-code
-          echo "Validated source $SOURCE without code edits or assertion changes."
+          set +e
+          cargo test --workspace --all-features --lib > /tmp/full-workspace.log 2>&1
+          result=$?
+          set -e
+          echo "WORKSPACE RESULT=$result"
+          grep -E 'GRID |FAILED|panicked|assertion|left:|right:|test result:' /tmp/full-workspace.log || true
+          tail -n 60 /tmp/full-workspace.log
+          exit "$result"
