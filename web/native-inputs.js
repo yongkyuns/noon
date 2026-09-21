@@ -82,6 +82,29 @@ export function attachNativeInputs(
     const result = host[method](...args);
     if (result && typeof result.then === "function") result.then(notify, fail);
     else notify(result);
+    return result;
+  };
+  const directPointer = typeof host.setPointerView === "function";
+  let pointerNotificationQueued = false;
+  const invokePointer = (method, ...args) => {
+    if (!directPointer) return invoke(method, ...args);
+    if (!attached) return;
+    const result = host[method](...args);
+    if (result && typeof result.then === "function") {
+      throw new TypeError("direct pointer admission must be synchronous");
+    }
+    // Notify only after this DOM callback/coalesced packet has finished. A
+    // synchronous driver.wake() here could present newer execution between two
+    // already-collected samples and silently freshen their admission receipt.
+    // This schedules presentation only; no input, publication, or scene is queued.
+    if (!pointerNotificationQueued) {
+      pointerNotificationQueued = true;
+      queueMicrotask(() => {
+        pointerNotificationQueued = false;
+        notify(result);
+      });
+    }
+    return result;
   };
   const guarded = (method, ...args) => {
     try { invoke(method, ...args); } catch (error) { fail(error); }
@@ -98,11 +121,22 @@ export function attachNativeInputs(
     advanceView: () => increment("view"), maxSamples: MAX_DIRECT_POINTER_SAMPLES,
     windowTarget: canvas.ownerDocument?.defaultView ?? keyboardTarget,
     onError: fail,
-    send: sample => invoke("nativePointerInput", sample.kind, sample.source_id,
-      sample.pointer_id, sample.view_revision, sample.surface_x ?? undefined,
-      sample.surface_y ?? undefined, sample.viewport_width ?? undefined,
-      sample.viewport_height ?? undefined, sample.button ?? undefined,
-      sample.shift === true, sample.control === true, sample.alt === true, sample.meta === true),
+    // Only the same-context canvas can synchronously associate this platform
+    // view with its Rust presentation. Worker receipts remain a transport concern.
+    onView: directPointer
+      ? (revision, width, height) => invokePointer("setPointerView", revision, width, height)
+      : undefined,
+    send: sample => {
+      const result = invokePointer("nativePointerInput", sample.kind, sample.source_id,
+        sample.pointer_id, sample.view_revision, sample.surface_x ?? undefined,
+        sample.surface_y ?? undefined, sample.viewport_width ?? undefined,
+        sample.viewport_height ?? undefined, sample.button ?? undefined,
+        sample.shift === true, sample.control === true, sample.alt === true, sample.meta === true);
+      // The direct ABI distinguishes an admitted clean sample (false) from a
+      // recoverable presentation rejection (undefined). Do not apply this rule
+      // to the asynchronous worker ABI or treat missing replies as receipts.
+      return !directPointer || result !== undefined;
+    },
   }) : null;
   const keyDown = (event) => guarded("nativeKey", event.code, true);
   const keyUp = (event) => guarded("nativeKey", event.code, false);

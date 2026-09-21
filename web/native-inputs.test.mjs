@@ -236,7 +236,9 @@ test("DOM collector and direct canvas expose canonical native ingress", async ()
   }
   assert.ok(!directCanvas.includes("normalized_pointer_world_position"));
   assert.ok(!directCanvas.includes("nativePointerButton"));
-  assert.ok(directCanvas.includes("submit_browser_pointer_input"));
+  assert.ok(directCanvas.includes("DirectPointerPresentation"));
+  assert.ok(directCanvas.includes("presentation.submit"));
+  assert.ok(directCanvas.includes("setPointerView"));
   assert.ok(directCanvas.includes("NativeEventOccurrence::new"));
 });
 
