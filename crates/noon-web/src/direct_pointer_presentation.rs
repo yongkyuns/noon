@@ -1,11 +1,12 @@
 //! Direct canvas receipt lifecycle. Constant-size platform metadata only; no
 //! geometry, input queue, clock, or semantic state. A capture is not presentation.
+use crate::browser_pointer_input::recoverable_frame_error;
 use crate::browser_pointer_input::{
     self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
     BrowserPointerTarget,
 };
 use noon::integration::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
-use noon::{ExecutionSession, ExecutionSessionInputError};
+use noon::ExecutionSession;
 use noon_core::{Camera2DState, Vec2};
 
 #[derive(Default)]
@@ -119,18 +120,6 @@ impl DirectPointerPresentation {
         self.presented = frame;
         self.refresh_pending = false;
     }
-}
-
-pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
-    matches!(
-        error,
-        PointerFrameError::ViewChanged
-            | PointerFrameError::CameraMismatch
-            | PointerFrameError::Input(
-                ExecutionSessionInputError::ForeignPointerRuntime
-                    | ExecutionSessionInputError::StalePointerPublication { .. }
-            )
-    )
 }
 
 #[cfg(test)]

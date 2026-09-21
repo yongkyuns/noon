@@ -20,7 +20,7 @@ fn player() -> SemanticExecutionPlayer {
 
 fn input(player: &mut SemanticExecutionPlayer, kind: &str, x: f32) {
     player
-        .submit_browser_pointer_input_json(
+        .submit_test_frame_json(
             &serde_json::json!({
                 "kind": kind, "source_id": 1, "pointer_id": 7, "view_revision": 0,
                 "surface_x": x, "surface_y": 200.0,
