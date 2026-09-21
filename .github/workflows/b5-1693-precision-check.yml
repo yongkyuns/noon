@@ -1,0 +1,119 @@
+name: B5 1693 exact precision check
+on:
+  push:
+    branches: [codex/b5-1693-precision-check-20260920]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE: e186555ef306f76acabfca91a3e6b7e75022479c
+      BASE: 8b3286475869960e59928372cfb47662f0a28b11
+      CURRENT_MASTER: bf776186325640496e58eac91962573811740356
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare exact source without retaining helper files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/1693_precision_patch.py /tmp/1693_precision_patch.py
+          git fetch --no-tags --depth=120 origin "$SOURCE" "$BASE" "$CURRENT_MASTER"
+          git checkout --detach "$SOURCE"
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          mkdir -p /tmp/noon-1693-evidence
+          git ls-files '*AGENTS*' > /tmp/noon-1693-evidence/agent-paths.txt
+          python3 /tmp/1693_precision_patch.py
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Apply pinned formatter and check exact change scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          test "$(git diff --name-only)" = crates/noon/src/implicit_plotting.rs
+          git diff --check
+          git diff > /tmp/noon-1693-evidence/precision.patch
+      - name: Prove regressions detect premature f32 lowering
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp crates/noon/src/implicit_plotting.rs /tmp/implicit_plotting.fixed.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/implicit_plotting.rs')
+          s = p.read_text()
+          old = 'frame.coords_to_point(point.x, point.y)?'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'frame.coords_to_point(f64::from(point.x as f32), f64::from(point.y as f32))?'))
+          PY
+          set +e
+          cargo test -p noon --all-features --lib implicit_plotting::tests::axes_mapping_ -- --nocapture > /tmp/noon-1693-evidence/old-narrowing.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/implicit_plotting.fixed.rs crates/noon/src/implicit_plotting.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED' /tmp/noon-1693-evidence/old-narrowing.log
+          grep -F 'axes_mapping_preserves_small_spans_at_large_positive_and_negative_offsets ... FAILED' /tmp/noon-1693-evidence/old-narrowing.log
+          grep -F 'axes_mapping_preserves_tiny_domains_and_values_outside_f32_range ... FAILED' /tmp/noon-1693-evidence/old-narrowing.log
+      - name: Run corrected precision tests and complete fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --all-features --lib implicit_plotting::tests::axes_mapping_ -- --nocapture 2>&1 | tee /tmp/noon-1693-evidence/precision.log
+          bash scripts/check.sh fast "$BASE" > /tmp/noon-1693-evidence/fast.log 2>&1 || { tail -n 120 /tmp/noon-1693-evidence/fast.log; exit 1; }
+          tail -n 40 /tmp/noon-1693-evidence/fast.log
+          cargo test --workspace --all-features --lib -- --test-threads=1 > /tmp/noon-1693-evidence/serial.log 2>&1 || { tail -n 100 /tmp/noon-1693-evidence/serial.log; exit 1; }
+      - name: Check shared WASM and Python facades
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/noon-1693-evidence/wasm.log 2>&1 || { tail -n 100 /tmp/noon-1693-evidence/wasm.log; exit 1; }
+          PYTHONPATH=web/python python3 -m unittest test_manim_number_plane test_manim_implicit 2>&1 | tee /tmp/noon-1693-evidence/python.log
+      - name: Publish only the verified candidate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test "$(git diff --name-only)" = crates/noon/src/implicit_plotting.rs
+          git diff --check
+          git config user.name 'Noon validation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon/src/implicit_plotting.rs
+          git commit -m 'test: qualify implicit precision in coherent axes frames'
+          git rev-parse HEAD | tee /tmp/noon-1693-evidence/qualified-head.txt
+          git push origin HEAD:refs/heads/codex/b5-1693-precision-verified-20260920
+      - name: Inspect current-master reconciliation without publishing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/noon-1693-merge HEAD
+          cd /tmp/noon-1693-merge
+          set +e
+          git merge --no-commit --no-ff "$CURRENT_MASTER" > /tmp/noon-1693-evidence/merge.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/noon-1693-evidence/merge.log
+          echo "MERGE_RESULT=$result"
+          git diff --name-only --diff-filter=U | tee /tmp/noon-1693-evidence/conflicts.txt
+          git diff > /tmp/noon-1693-evidence/master-merge.diff
+          git merge --abort
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: b5-1693-precision-evidence
+          path: /tmp/noon-1693-evidence
+          if-no-files-found: error
+          retention-days: 7
