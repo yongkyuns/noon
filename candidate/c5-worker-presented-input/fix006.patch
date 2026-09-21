@@ -1,0 +1,24 @@
+--- a/scripts/check-web-package.mjs
++++ b/scripts/check-web-package.mjs
+@@ -48,6 +48,9 @@
+   "resourceBundleBytes(",
+   "setPointerFillSelection(",
+   "submitBrowserPointerInputJson(",
++  "setBrowserPointerViewJson(",
++  "notePointerPresentationJson(",
++  "invalidatePointerPresentationJson(",
+   "nativePointerInput(",
+   "advanceForwardToCallbackPhaseJson(",
+   "requiredCallbackReadJson(",
+@@ -217,7 +220,10 @@
+   "export class SemanticExecutionPlayer",
+   "resourceBundleBytes(): Uint8Array",
+   "setPointerFillSelection(max_movement?: number | null): void",
+-  "submitBrowserPointerInputJson(json: string): void",
++  "submitBrowserPointerInputJson(json: string): boolean",
++  "setBrowserPointerViewJson(json: string): void",
++  "notePointerPresentationJson(json: string): boolean",
++  "invalidatePointerPresentationJson(json: string): boolean",
+   "advanceForwardToCallbackPhaseJson(time: number): string | undefined",
+   "requiredCallbackReadJson(token_json: string, request_json: string): string",
+   "export class WasmExecutionWake",
