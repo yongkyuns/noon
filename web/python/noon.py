@@ -599,15 +599,9 @@ class Scene:
         return _scene_operations()._canonical_scene_foreground_mobjects(self)
 
     def _edit_membership(
-        self, kind: str, values: tuple[object, ...] = (), *,
-        key=None, key_mobject: Mobject | None = None,
+        self, kind: str, values: tuple[object, ...] = (), *, key=None
     ) -> None:
-        if key_mobject is None:
-            _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
-        else:
-            _scene_operations()._canonical_edit_membership(
-                self, kind, values, key=key, key_mobject=key_mobject
-            )
+        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
 
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
