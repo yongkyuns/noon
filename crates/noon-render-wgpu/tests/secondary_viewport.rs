@@ -1,8 +1,8 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
 use noon_render_wgpu::{
-    AnalyticOverlay, Camera2D, FramePreparer, GpuRenderer, OverlayGpuState, SecondaryViewport,
-    SecondaryViewportError,
+    AnalyticOverlay, Camera2D, FrameComposition, FramePreparer, GpuRenderer, OverlayGpuState,
+    SecondaryViewport, SecondaryViewportError,
 };
 use noon_runtime::SceneInstance;
 
@@ -186,12 +186,14 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
                 &device,
                 &mut encoder,
                 &view,
-                &prepared,
-                None,
-                &secondary,
-                Some(&overlay_state),
-                wgpu::Color::BLACK,
-                None,
+                FrameComposition {
+                    prepared: &prepared,
+                    presentations: None,
+                    secondary_viewports: &secondary,
+                    overlay: Some(&overlay_state),
+                    clear_color: wgpu::Color::BLACK,
+                    query_set: None,
+                },
             )
             .unwrap();
         let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
@@ -258,12 +260,14 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
                     &device,
                     &mut encoder,
                     &view,
-                    &path_prepared,
-                    None,
-                    &secondary[..1],
-                    None,
-                    wgpu::Color::BLACK,
-                    None,
+                    FrameComposition {
+                        prepared: &path_prepared,
+                        presentations: None,
+                        secondary_viewports: &secondary[..1],
+                        overlay: None,
+                        clear_color: wgpu::Color::BLACK,
+                        query_set: None,
+                    },
                 )
                 .unwrap_err(),
             SecondaryViewportError::MultisampledContentUnsupported
