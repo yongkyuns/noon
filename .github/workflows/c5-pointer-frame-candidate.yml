@@ -30,6 +30,8 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/candidate" c6be1da0c76f6ebc76c85d0c8e1964a75d5188b3
           git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
           git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/candidate/pointer-frame-fix.patch"
+          cp candidate/pointer-frame-fix.patch proof/
           echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
           echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
       - name: Use repository-pinned Rust

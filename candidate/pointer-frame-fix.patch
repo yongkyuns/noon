@@ -1,0 +1,59 @@
+diff --git a/crates/noon/src/execution_session/input/presentation/tests.rs b/crates/noon/src/execution_session/input/presentation/tests.rs
+--- a/crates/noon/src/execution_session/input/presentation/tests.rs
++++ b/crates/noon/src/execution_session/input/presentation/tests.rs
+@@ -17,7 +17,8 @@
+ 
+ fn fixture() -> (Scene, SemanticNodeId, ExecutionSession) {
+     let mut scene = Scene::new();
+-    let circle = scene.circle(1.0).unwrap();
++    let mut circle = scene.circle(1.0).unwrap();
++    circle.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+     scene.add(&circle).unwrap();
+     let mut session = scene.execution_session().unwrap();
+     session.configure_native_pointer_input(POINTER, VIEW).unwrap();
+@@ -280,11 +281,12 @@
+ }
+ 
+ #[test]
+-fn a_frame_snapshot_does_not_bypass_the_live_program_continuation_barrier() {
++fn finished_program_accepts_frame_qualified_input_without_advancing_time() {
+     let (scene, _, _) = fixture();
+     let mut program = scene.into_live_program(Finish).unwrap();
+     let frame = program.session().capture_pointer_frame(view()).unwrap();
+-    assert!(program.configure_native_pointer_input(POINTER, VIEW).is_err());
++    program.configure_native_pointer_input(POINTER, VIEW).unwrap();
++    assert_eq!(program.status(), crate::LiveProgramStatus::ReadyToResume);
+     program.resume().unwrap();
+     program.configure_native_pointer_input(POINTER, VIEW).unwrap();
+     let token = frame.input_token(program.session(), view()).unwrap();
+@@ -316,3 +318,30 @@
+         Err(ExecutionSessionInputError::StalePointerBinding));
+     assert_eq!(session.last_native_event_sequence, None);
+ }
++
++struct Fail;
++impl LiveContinuation for Fail {
++    type Error = &'static str;
++    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
++        Err("intentional terminal continuation")
++    }
++}
++
++#[test]
++fn a_frame_snapshot_does_not_bypass_the_live_program_terminal_barrier() {
++    let (scene, _, _) = fixture();
++    let mut program = scene.into_live_program(Fail).unwrap();
++    program.configure_native_pointer_input(POINTER, VIEW).unwrap();
++    let frame = program.session().capture_pointer_frame(view()).unwrap();
++    let token = frame.input_token(program.session(), view()).unwrap();
++    assert!(program.resume().is_err());
++    let before = program.session().frame().clone();
++    // A frame is read-only metadata, not permission to resume a terminated program.
++    assert!(frame.input_token(program.session(), view()).is_ok());
++    for kind in [press(&frame), NativePointerInputKind::Cancel(NativePointerCancellation::Cancelled)] {
++        assert!(matches!(program.submit_native_pointer_input(&token, input(&token, 0, kind)),
++            Err(LiveProgramError::InvalidState { .. })));
++    }
++    assert_eq!(program.session().frame(), &before);
++    assert_eq!(program.session().last_native_event_sequence, None);
++}
