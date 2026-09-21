@@ -3380,6 +3380,7 @@ impl GpuRenderer {
             clear_color,
             query_set,
             overlay: Some(frame.overlay),
+            finalize: true,
         };
         if let Some(derived) = frame.transient.filter(|value| !value.slots.is_empty()) {
             self.encode_retained_derived_inner(encoder, view, frame.prepared, derived, options)
@@ -3429,6 +3430,7 @@ impl GpuRenderer {
             clear_color,
             query_set,
             overlay,
+            finalize,
         } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = retained_sample_count(prepared.render_items);
@@ -3516,8 +3518,9 @@ impl GpuRenderer {
             }
         }
         drop(pass);
-        stats.geometry += self.encode_overlay(encoder, view, overlay);
-        self.presentation.encode_present(encoder, view);
+        if finalize {
+            stats.geometry += self.finalize_frame(encoder, view, overlay);
+        }
         Ok(stats)
     }
 
