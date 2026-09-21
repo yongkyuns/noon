@@ -39,6 +39,7 @@ pub use crate::execution_session::{
     StructuralPublicationStats,
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
+pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
     effective_style_with_fill_opacity, effective_style_with_paint_opacity,
