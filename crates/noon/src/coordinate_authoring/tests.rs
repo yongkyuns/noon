@@ -401,3 +401,56 @@ fn exact_tick_capacity_constructs_and_one_less_rejects_atomically() {
     assert_eq!(line.shaft().unwrap().state().unwrap(), shaft_before);
     assert_eq!(resources(&scene), 0);
 }
+
+#[test]
+fn unit_interval_elongates_endpoints_and_preserves_coordinate_range() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::unit_interval())
+        .unwrap();
+    let frame = line.authored_frame().unwrap();
+    assert_eq!(frame.range(), [0.0, 1.0, 0.1]);
+    near(frame.number_to_point(0.25).unwrap(), [-2.5, 0.0]);
+    let ticks = line.ticks().unwrap();
+    let ids = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(ticks.node_id())
+        .unwrap();
+    assert_eq!(ids.len(), 11);
+    for (index, id) in ids.into_iter().enumerate() {
+        let tick = Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap();
+        let length = tick.path_query().unwrap().arc_length(None).unwrap();
+        let expected = if index == 0 || index == 10 { 0.4 } else { 0.2 };
+        assert!((length - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn elongated_tick_offsets_match_pinned_tolerance_and_validate_atomically() {
+    let mut options = ManimNumberLineOptions::new([1_000.0, 1_001.0, 0.5]);
+    options.numbers_with_elongated_ticks = vec![1_000.000000001, 1_000.500001];
+    options.longer_tick_multiple = 3.0;
+    let mut scene = Scene::new();
+    let line = scene.number_line(&options).unwrap();
+    let ids = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(line.ticks().unwrap().node_id())
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    for (index, id) in ids.into_iter().enumerate() {
+        let tick = Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap();
+        let length = tick.path_query().unwrap().arc_length(None).unwrap();
+        let expected = if index < 2 { 0.6 } else { 0.2 };
+        assert!((length - expected).abs() < 1e-6);
+    }
+    let revision = scene.revision();
+    options.longer_tick_multiple = f64::INFINITY;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    options.longer_tick_multiple = 2.0;
+    options.ticks.limit = 1;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+}

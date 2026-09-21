@@ -156,7 +156,8 @@ class NumberLine(_compat.Group):
 
     def __init__(self, x_range, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
-                 include_tip=False, color=None, **kwargs):
+                 include_tip=False, numbers_with_elongated_ticks=None,
+                 longer_tick_multiple=2, color=None, **kwargs):
         context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
@@ -166,6 +167,9 @@ class NumberLine(_compat.Group):
         )
         try:
             engine_call(options.setTicks, bool(include_ticks), float(tick_size), bool(exclude_origin_tick))
+            engine_call(options.setElongatedTicks,
+                        _array(() if numbers_with_elongated_ticks is None else numbers_with_elongated_ticks),
+                        float(longer_tick_multiple))
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
@@ -242,6 +246,18 @@ class NumberLine(_compat.Group):
                 texts = tuple(str(x) for x in engine_call(plan.texts))
                 points = _point_pairs(engine_call(plan.points))
                 return tuple(_NumberLabel(*entry) for entry in zip(values, texts, points, strict=True))
+
+
+class UnitInterval(NumberLine):
+    """Unit interval with shared Rust endpoint ticks and coordinate queries.
+
+    Numeric label formatting remains the explicit NumberLine native-Text API.
+    """
+
+    def __init__(self, unit_size=10, numbers_with_elongated_ticks=None, **kwargs):
+        super().__init__((0, 1, 0.1), unit_size=unit_size,
+                         numbers_with_elongated_ticks=(0, 1) if numbers_with_elongated_ticks is None
+                         else numbers_with_elongated_ticks, **kwargs)
 
 
 class Axes(_compat.Group):
@@ -397,6 +413,11 @@ class Axes(_compat.Group):
                     tuple(float(x) for x in engine_call(plan.durations)),
                     float(engine_call(plan.runTime)),
                 )
+
+
+    def plot_implicit_curve(self, func, min_depth=5, max_quads=1500, **kwargs):
+        from _manim_implicit import plot_implicit_curve
+        return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
 def _callable(function):

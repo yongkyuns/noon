@@ -3302,3 +3302,6 @@ pub mod boolean_geometry;
 pub mod path_alignment;
 
 pub mod animated_priority;
+
+pub mod implicit_plotting;
+pub mod number_plane;

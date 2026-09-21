@@ -402,6 +402,53 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
     }
 
+    /// Read final foreground declarations without inspecting display membership.
+    /// Structural deletion removes soft references in the staged view as well
+    /// as at commit; abandoned preparation leaves the published list untouched.
+    pub fn foreground_members(
+        &self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let scope = scope.into();
+        let published = match scope {
+            SemanticTransactionNodeRef::Existing(id) => {
+                if self.preflight.removed_existing.contains(&id) {
+                    return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+                }
+                let node = self
+                    .store
+                    .node(id)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?;
+                if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                    return Err(SemanticTransactionReadError::NotFamily(scope));
+                }
+                node.foreground_members()
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+                match self.pending_creation(token) {
+                    Some(SemanticNodeCreation::Family { .. }) => &[][..],
+                    Some(_) => return Err(SemanticTransactionReadError::NotFamily(scope)),
+                    None if self.preflight.pending_animations.contains_key(&token) => {
+                        return Err(SemanticTransactionReadError::NotFamily(scope));
+                    }
+                    None => return Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+                }
+            }
+        };
+        let mut members = self
+            .preflight
+            .staged_foreground
+            .get(&scope)
+            .cloned()
+            .unwrap_or_else(|| published.iter().copied().map(Into::into).collect());
+        members.retain(|member| !self.is_removed_ref(*member));
+        Ok(members)
+    }
+
     /// Read final signal associations for one family root through the staged view.
     pub fn scoped_signals(
         &self,
@@ -661,6 +708,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(target);
                     impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
                 }
+                SemanticMutation::SetForegroundMembers { scope, members } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let members = members
+                        .into_iter()
+                        .map(|member| resolve_node_ref(member, &committed_nodes))
+                        .collect();
+                    store.replace_semantic_foreground_members(scope, members);
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::ForegroundMembers { scope });
+                }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
                     let signal = resolve_node_ref(signal, &committed_nodes);
@@ -740,6 +797,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         match effect {
                             SemanticRemoveNodeEffect::NodeRemoved(node) => {
                                 impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
+                            }
+                            SemanticRemoveNodeEffect::ForegroundMembersChanged { scope } => {
+                                impacts.push(SemanticMutationImpact::ForegroundMembers {
+                                    scope: *scope,
+                                });
                             }
                             SemanticRemoveNodeEffect::SubscriptionRemoved { object, property } => {
                                 impacts.push(SemanticMutationImpact::Subscription {

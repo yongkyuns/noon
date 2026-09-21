@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable
+from enum import Enum
 
 from _noon_errors import (
     NoonError,
@@ -148,6 +149,12 @@ DEFAULT_MOBJECT_TO_EDGE_BUFFER = MED_LARGE_BUFF
 DEFAULT_MOBJECT_TO_MOBJECT_BUFFER = MED_SMALL_BUFF
 DEFAULT_FRAME_HEIGHT = 8.0
 DEFAULT_FRAME_WIDTH = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0
+
+
+class SectionType(str, Enum):
+    NORMAL = "normal"
+    SKIP = "skip"
+
 
 
 def _hex_color(value: int) -> Color:
@@ -570,6 +577,10 @@ class Scene:
         self._object_keys: dict[int, str] = {}
         self._object_key_ids: dict[str, int] = {}
         self._next_object_id = 0
+        # Manim compatibility metadata only. Authoritative painter order remains
+        # the shared Rust scene root; Scene.add projects these wrappers through
+        # the same atomic membership edit as newly added objects.
+        self.foreground_mobjects: list[object] = []
 
     def setup(self) -> None:
         pass
@@ -587,18 +598,117 @@ class Scene:
     def mobjects(self) -> list[object]:
         return _scene_operations()._canonical_scene_mobjects(self)
 
-    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
-        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+    def _edit_membership(
+        self, kind: str, values: tuple[object, ...] = (), *,
+        key=None, key_mobject: Mobject | None = None,
+    ) -> None:
+        if key_mobject is None:
+            _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+        else:
+            _scene_operations()._canonical_edit_membership(
+                self, kind, values, key=key, key_mobject=key_mobject
+            )
+
+    @staticmethod
+    def _identity_list_update(current: list[object], additions: tuple[object, ...]) -> list[object]:
+        """Manim-style list update using wrapper identity, preserving the last occurrence."""
+        result = [value for value in current if all(value is not item for item in additions)]
+        for value in additions:
+            result = [item for item in result if item is not value]
+            result.append(value)
+        return result
+
+    @staticmethod
+    def _foreground_add_order(
+        additions: tuple[object, ...], foreground: list[object]
+    ) -> tuple[object, ...]:
+        # Foreground wrappers are submitted last to the one shared Rust membership
+        # edit. Exact duplicates are removed from the ordinary prefix so the typed
+        # boundary never receives a duplicate request member.
+        prefix = [
+            value for value in additions
+            if all(value is not foreground_value for foreground_value in foreground)
+        ]
+        return tuple(prefix + foreground)
+
+    @staticmethod
+    def _restructure_foreground(
+        foreground: list[object], removals: tuple[object, ...]
+    ) -> list[object]:
+        """Dissolve affected Groups while retaining unaffected foreground siblings."""
+        from _manim_compat import Group
+
+        def removal_contains(candidate: object, value: object) -> bool:
+            if candidate is value:
+                return True
+            return isinstance(candidate, Group) and any(
+                removal_contains(child, value) for child in candidate.submobjects
+            )
+
+        def removed(value: object) -> bool:
+            return any(removal_contains(target, value) for target in removals)
+
+        def contains_removed(value: object) -> bool:
+            if removed(value):
+                return True
+            return isinstance(value, Group) and any(
+                contains_removed(child) for child in value.submobjects
+            )
+
+        def retain(value: object, output: list[object]) -> None:
+            if removed(value):
+                return
+            if isinstance(value, Group) and contains_removed(value):
+                for child in value.submobjects:
+                    retain(child, output)
+            else:
+                output.append(value)
+
+        output: list[object] = []
+        for value in foreground:
+            retain(value, output)
+        return output
 
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
             return self
-        self._edit_membership("add", mobjects, key=key)
-
-        # Python returns the wrapper for a single leaf, or the Scene for a batch.
+        # Preserve the ordinary facade's validation/return contract before the
+        # foreground projection changes the authoritative membership batch.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+        ordered = self._foreground_add_order(mobjects, self.foreground_mobjects)
+        if key is not None and self.foreground_mobjects:
+            # A key belongs to the caller's wrapper, not the first member after
+            # foreground projection. Keep that identity explicit at the boundary.
+            self._edit_membership("add", ordered, key=key, key_mobject=mobjects[0])
+        else:
+            self._edit_membership("add", ordered, key=key)
         return leaves[0] if len(leaves) == 1 else self
+
+    def add_foreground_mobjects(self, *mobjects: object) -> Scene:
+        if not mobjects:
+            return self
+        candidate = self._identity_list_update(self.foreground_mobjects, mobjects)
+        ordered = self._foreground_add_order(mobjects, candidate)
+        # Commit compatibility metadata only after the authoritative Rust edit
+        # succeeds, so rejected foreign/stale/duplicate handles leave no residue.
+        self._edit_membership("add", ordered)
+        self.foreground_mobjects = candidate
+        return self
+
+    def add_foreground_mobject(self, mobject: object) -> Scene:
+        return self.add_foreground_mobjects(mobject)
+
+    def remove_foreground_mobjects(self, *mobjects: object) -> Scene:
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, mobjects
+        )
+        return self
+
+    def remove_foreground_mobject(self, mobject: object) -> Scene:
+        return self.remove_foreground_mobjects(mobject)
 
     def bring_to_front(self, *mobjects: object) -> Scene:
         self.add(*mobjects)
@@ -606,18 +716,28 @@ class Scene:
 
     def bring_to_back(self, *mobjects: object) -> Scene:
         self._edit_membership("bring_to_back", mobjects)
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, mobjects
+        )
         return self
 
     def remove(self, *mobjects: object) -> Scene:
         self._edit_membership("remove", mobjects)
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, mobjects
+        )
         return self
 
     def clear(self) -> Scene:
         self._edit_membership("clear")
+        self.foreground_mobjects = []
         return self
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
         self._edit_membership("replace", (old_mobject, new_mobject))
+        self.foreground_mobjects = self._restructure_foreground(
+            self.foreground_mobjects, (old_mobject,)
+        )
         return self
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
@@ -635,6 +755,15 @@ class Scene:
     @property
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
+
+    def next_section(
+        self, name: str = "", type: SectionType = SectionType.NORMAL
+    ) -> Scene:
+        return _scene_operations()._canonical_next_section(self, name, type)
+
+    @property
+    def sections(self) -> list[dict[str, object]]:
+        return _scene_operations()._canonical_sections(self)
 
     def value_tracker(self, value: float = 0.0) -> Any:
         return _scene_operations()._canonical_value_tracker(self, value)
@@ -722,8 +851,11 @@ Object = Mobject
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "NumberLine": "_manim_plotting",
+    "UnitInterval": "_manim_plotting",
+    "NumberPlane": "_manim_number_plane",
     "Axes": "_manim_plotting",
     "FunctionGraph": "_manim_plotting",
+    "ImplicitFunction": "_manim_implicit",
     "ParametricFunction": "_manim_plotting",
     "Transform": "_manim_animate",
     "ReplacementTransform": "_manim_animate",
@@ -787,6 +919,8 @@ _PUBLIC_EXPORTS = {
     "ArcBetweenPoints": "_manim_arc",
     "Brace": "_manim_brace",
     "BraceBetweenPoints": "_manim_brace",
+    "BraceLabel": "_manim_brace",
+    "BraceText": "_manim_brace",
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",

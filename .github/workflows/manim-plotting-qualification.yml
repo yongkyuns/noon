@@ -39,6 +39,23 @@ jobs:
         with:
           preflight: 'true'
           cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Verify animated plotting factories in the built package
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import * as wasm from './web/pkg/noon_web.js';
+          import { animatedPlottingCases } from './scripts/animated-plotting-samples.mjs';
+          // Inspect the generated module, not Rust source text. Keep the expected
+          // names with the real qualification cases instead of a duplicate list.
+          const cases = Object.entries(animatedPlottingCases);
+          assert.ok(cases.length > 0, 'animated plotting qualification cases are empty');
+          for (const [mode, { factory }] of cases) {
+            assert.equal(typeof wasm[factory], 'function', `${mode}: missing WASM factory ${factory}`);
+          }
+          console.log(`Verified built animated plotting factories: ${cases.map(([mode]) => mode).join(', ')}`);
+          JS
       # Run before npm and screenshot output create untracked files. The shared
       # architecture gate must inspect source, not generated browser dependencies.
       - name: Validate full integrated repository
