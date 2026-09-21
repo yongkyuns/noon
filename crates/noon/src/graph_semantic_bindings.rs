@@ -281,9 +281,9 @@ mod tests {
     #[test]
     fn semantic_bindings_preserve_topology_identity_and_incident_locality() {
         let mut topology = GraphTopology::new();
-        let a = topology.add_vertex().unwrap();
-        let b = topology.add_vertex().unwrap();
-        let c = topology.add_vertex().unwrap();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
+        let c = topology.add_vertex();
         let ab = topology.add_edge(a, b, false).unwrap();
         let ac = topology.add_edge(a, c, true).unwrap();
 
@@ -329,8 +329,8 @@ mod tests {
     #[test]
     fn duplicate_semantic_identity_fails_without_partial_binding() {
         let mut topology = GraphTopology::new();
-        let a = topology.add_vertex().unwrap();
-        let b = topology.add_vertex().unwrap();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
         let mut scene = Scene::new();
         let vertex = scene
             .geometry(ManimGeometryOptions::circle(0.2).unwrap())
@@ -348,8 +348,8 @@ mod tests {
     #[test]
     fn bindings_reject_cross_scene_identity_before_mutation() {
         let mut topology = GraphTopology::new();
-        let a = topology.add_vertex().unwrap();
-        let b = topology.add_vertex().unwrap();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
         let mut first = Scene::new();
         let mut second = Scene::new();
         let va = first
@@ -370,8 +370,8 @@ mod tests {
 
     fn line_fixture() -> (GraphTopology, GraphEdgeId, Scene, GraphSemanticBindings) {
         let mut topology = GraphTopology::new();
-        let a = topology.add_vertex().unwrap();
-        let b = topology.add_vertex().unwrap();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
         let edge = topology.add_edge(a, b, false).unwrap();
         (topology, edge, Scene::new(), GraphSemanticBindings::new())
     }
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn line_binding_accepts_explicit_arrow_shaft_without_assuming_child_order() {
         let (mut topology, _, scene, mut bindings) = line_fixture();
-        let vertices = topology.vertices().to_vec();
+        let vertices = topology.vertices().collect::<Vec<_>>();
         let edge = topology.add_edge(vertices[0], vertices[1], true).unwrap();
         let arrow = ManimArrow::create(
             Rc::clone(scene.integration_store()),
