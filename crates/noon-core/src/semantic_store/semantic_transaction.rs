@@ -3300,3 +3300,6 @@ mod z_index_tests;
 
 #[cfg(test)]
 mod foreground_tests;
+
+#[cfg(test)]
+mod graph_tests;
