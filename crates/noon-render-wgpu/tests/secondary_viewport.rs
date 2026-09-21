@@ -1,7 +1,5 @@
 use noon_compile::{CompiledObject, CompiledScene};
-use noon_core::{
-    Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath,
-};
+use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
 use noon_render_wgpu::{
     AnalyticOverlay, Camera2D, FramePreparer, GpuRenderer, OverlayGpuState, SecondaryViewport,
     SecondaryViewportError,
@@ -200,23 +198,17 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
 
         let left_secondary = rgba(&pixels, 40, HEIGHT / 2);
         assert!(
-            left_secondary[0] > 240
-                && left_secondary[1] > 240
-                && left_secondary[2] > 240,
+            left_secondary[0] > 240 && left_secondary[1] > 240 && left_secondary[2] > 240,
             "first secondary camera must retain its own visible circle: {left_secondary:?}"
         );
         let right_secondary = rgba(&pixels, 96, HEIGHT / 2);
         assert!(
-            right_secondary[0] < 10
-                && right_secondary[1] < 10
-                && right_secondary[2] < 10,
+            right_secondary[0] < 10 && right_secondary[1] < 10 && right_secondary[2] < 10,
             "second secondary camera must independently look away: {right_secondary:?}"
         );
         let overlay_pixel = rgba(&pixels, 32, HEIGHT / 2);
         assert!(
-            overlay_pixel[0] > 220
-                && overlay_pixel[1] < 200
-                && overlay_pixel[2] < 200,
+            overlay_pixel[0] > 220 && overlay_pixel[1] < 200 && overlay_pixel[2] < 200,
             "session overlay must be composed after every secondary view: {overlay_pixel:?}"
         );
 
