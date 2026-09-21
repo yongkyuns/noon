@@ -232,6 +232,19 @@ impl SemanticMutation {
         }
     }
 
+    /// Existing semantic node whose final state can invalidate an already
+    /// committed graph declaration. This intentionally excludes transform/style,
+    /// painter order and other edits that do not change graph admission invariants.
+    const fn graph_invariant_target(&self) -> Option<SemanticNodeId> {
+        match self {
+            Self::ReplaceContent { object, .. } => object.existing(),
+            Self::AddMember { family, .. } | Self::RemoveMember { family, .. } => {
+                family.existing()
+            }
+            _ => None,
+        }
+    }
+
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
@@ -2042,6 +2055,9 @@ impl SemanticMutationTransaction {
             removed_pending,
         };
         // Graph declarations must observe the final shared transaction overlay.
+        // Validate both declarations staged by this transaction and any committed
+        // declaration touched by generic content/family edits. Reverse references
+        // keep the latter proportional to the edited node's graph dependents.
         let mut staged_graph_scopes = HashSet::new();
         for (index, mutation) in self.mutations.iter().enumerate() {
             if let SemanticMutation::SetGraphDeclaration { scope, graph } = mutation {
@@ -2053,8 +2069,43 @@ impl SemanticMutationTransaction {
                     *scope,
                     graph,
                     index,
+                    false,
                 )?;
             }
+        }
+
+        let mut existing_graph_scopes = HashMap::<SemanticNodeId, usize>::new();
+        for (index, mutation) in self.mutations.iter().enumerate() {
+            let Some(target) = mutation.graph_invariant_target() else {
+                continue;
+            };
+            for scope in store.semantic_graph_owners_for_invariant_target(target) {
+                existing_graph_scopes.entry(scope).or_insert(index);
+            }
+        }
+        for (scope, index) in existing_graph_scopes {
+            if preflight.removed_existing.contains(&scope)
+                || staged_graph_scopes.contains(&SemanticTransactionNodeRef::Existing(scope))
+            {
+                continue;
+            }
+            let Some(graph) = store
+                .semantic_graph_declaration(scope)
+                .map_err(|error| SemanticMutationTransactionError::Node { index, error })?
+            else {
+                continue;
+            };
+            let graph = graph.transaction_declaration();
+            validate_graph_declaration(
+                &preflight,
+                store,
+                &catalog,
+                &mut staged_graph_scopes,
+                scope.into(),
+                &graph,
+                index,
+                true,
+            )?;
         }
         Ok(preflight)
     }
@@ -2068,6 +2119,7 @@ fn validate_graph_declaration(
     scope: SemanticTransactionNodeRef,
     graph: &SemanticTransactionGraphDeclaration,
     index: usize,
+    allow_existing: bool,
 ) -> Result<(), SemanticMutationTransactionError> {
     let invalid = |reason| SemanticMutationTransactionError::InvalidGraphDeclaration {
         index,
@@ -2078,15 +2130,17 @@ fn validate_graph_declaration(
     if !staged_scopes.insert(scope) {
         return Err(SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope });
     }
-    if let SemanticTransactionNodeRef::Existing(scope_id) = scope {
-        if store
-            .node(scope_id)
-            .and_then(|node| node.graph_declaration())
-            .is_some()
-        {
-            return Err(
-                SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope },
-            );
+    if !allow_existing {
+        if let SemanticTransactionNodeRef::Existing(scope_id) = scope {
+            if store
+                .node(scope_id)
+                .and_then(|node| node.graph_declaration())
+                .is_some()
+            {
+                return Err(
+                    SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope },
+                );
+            }
         }
     }
 
