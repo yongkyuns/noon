@@ -307,6 +307,20 @@ pub struct SecondaryViewport {
     pub destination: [u32; 4],
 }
 
+/// One complete retained-frame composition request.
+///
+/// Grouping the frame inputs makes composition ownership explicit without
+/// proliferating renderer entry-point arguments. The request only borrows
+/// prepared CPU-side state; GPU resources remain owned by the renderer.
+pub struct FrameComposition<'a, 'frame> {
+    pub prepared: &'a PreparedFrame<'frame>,
+    pub presentations: Option<&'a PreparedDerivedDisplay>,
+    pub secondary_viewports: &'a [SecondaryViewport],
+    pub overlay: Option<&'a OverlayGpuState>,
+    pub clear_color: wgpu::Color,
+    pub query_set: Option<&'a wgpu::QuerySet>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecondaryViewportError {
     EmptyDestination,
@@ -1131,13 +1145,17 @@ impl GpuRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        prepared: &PreparedFrame<'_>,
-        presentations: Option<&PreparedDerivedDisplay>,
-        secondary_viewports: &[SecondaryViewport],
-        overlay: Option<&OverlayGpuState>,
-        clear_color: wgpu::Color,
-        query_set: Option<&wgpu::QuerySet>,
+        composition: FrameComposition<'_, '_>,
     ) -> Result<DrawStats, SecondaryViewportError> {
+        let FrameComposition {
+            prepared,
+            presentations,
+            secondary_viewports,
+            overlay,
+            clear_color,
+            query_set,
+        } = composition;
+
         for secondary in secondary_viewports {
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
