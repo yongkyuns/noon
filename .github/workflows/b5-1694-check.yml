@@ -44,8 +44,10 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           cargo test -p noon --no-default-features --lib graph_semantic_bindings::tests::line_binding_ 2>&1 | tee /tmp/b5-before.log
           result=${PIPESTATUS[0]}
+          set -e
           test "$result" -ne 0
           python3 - <<'PY'
           from pathlib import Path
