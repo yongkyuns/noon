@@ -196,6 +196,92 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertIs(target._object, original)
         self.assertEqual(self.scene._object_keys, {original.id: "stable"})
 
+    def test_existing_key_cannot_change_when_foreground_group_contains_target(self):
+        target = self.mobject(10)
+        self.scene.add(target, key="stable")
+        group = Group(100, target)
+        self.scene.add_foreground_mobjects(group, target)
+        self.assert_rejected_without_changes(
+            lambda: self.scene.add(target, key="replacement"), "existing key")
+
+    def test_matching_key_in_overlapping_foreground_uses_one_binding(self):
+        first, target = self.mobject(10), self.mobject(11)
+        self.scene.add(target, key="stable")
+        group = Group(100, first, target)
+        self.scene.add_foreground_mobjects(group, target)
+        original = target._object
+        before_keys = dict(self.scene._object_keys)
+        self.assertIs(self.scene.add(target, key="stable"), target)
+        self.assertIs(target._object, original)
+        self.assertEqual(self.scene._object_keys, before_keys)
+        self.assertEqual([slot for _, slot in self.context.edits[-1][1]], [10, 11])
+        self.assertEqual([slot for _, slot in self.context.edits[-1][2]], [100, 11])
+
+    def test_new_key_is_bound_at_first_occurrence_inside_a_group(self):
+        first, target, last = self.mobject(10), self.mobject(11), self.mobject(12)
+        group = Group(100, first, Group(101, target), last)
+        self.ns["_canonical_edit_membership"](
+            self.scene, "add", (group, target), key="target", key_mobject=target)
+        self.assertEqual(self.scene._object_keys[target.id], "target")
+        self.assertEqual(self.scene._next_object_id, 3)
+        self.assertEqual([slot for _, slot in self.context.edits[-1][1]], [10, 11, 12])
+        self.assertEqual(self.context.edits[-1][2], ((None, 100), (str(target.id), 11)))
+        self.assertIs(self.scene._binding_handles[target.id], target._semantic_handle)
+        self.assertEqual(self.scene._object_keys[first.id], "@object:0")
+        self.assertEqual(self.scene._object_keys[last.id], "@object:2")
+
+    def test_duplicate_new_key_inside_group_is_rejected_without_publication(self):
+        front, target = self.mobject(10), self.mobject(11)
+        self.scene.add(front, key="occupied")
+        group = Group(100, target)
+        self.assert_rejected_without_changes(
+            lambda: self.ns["_canonical_edit_membership"](
+                self.scene, "add", (group, target), key="occupied", key_mobject=target),
+            "duplicate object key")
+
+    def test_detached_readd_key_cannot_be_ignored_after_a_group(self):
+        target = self.mobject(10)
+        self.scene.add(target, key="stable")
+        # Model the existing completion boundary: detach retains the export identity.
+        target._scene = None
+        group = Group(100, target)
+        self.assert_rejected_without_changes(
+            lambda: self.ns["_canonical_edit_membership"](
+                self.scene, "add", (group, target), key="replacement", key_mobject=target),
+            "existing key")
+        original = target._object
+        self.ns["_canonical_edit_membership"](
+            self.scene, "add", (group, target), key="stable", key_mobject=target)
+        self.assertIs(target._object, original)
+        self.assertIs(target._scene, self.scene)
+        self.assertEqual(self.scene._next_object_id, 1)
+
+    def test_rejected_group_and_keyed_leaf_batch_keeps_all_reservations_speculative(self):
+        first, target = self.mobject(10), self.mobject(11)
+        group = Group(100, first, target)
+        self.context.reject = True
+        before = self.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "publication rejection"):
+            self.ns["_canonical_edit_membership"](
+                self.scene, "add", (group, target), key="target", key_mobject=target)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_explicit_key_cannot_collide_with_an_earlier_pending_default_key(self):
+        first, target = self.mobject(10), self.mobject(11)
+        group = Group(100, first, target)
+        self.assert_rejected_without_changes(
+            lambda: self.ns["_canonical_edit_membership"](
+                self.scene, "add", (group, target), key="@object:0", key_mobject=target),
+            "duplicate object key")
+
+    def test_explicit_key_cannot_collide_with_a_later_pending_default_key(self):
+        first, target, last = self.mobject(10), self.mobject(11), self.mobject(12)
+        group = Group(100, first, target, last)
+        self.assert_rejected_without_changes(
+            lambda: self.ns["_canonical_edit_membership"](
+                self.scene, "add", (group, target), key="@object:2", key_mobject=target),
+            "duplicate object key")
+
 
 if __name__ == "__main__":
     unittest.main()
