@@ -81,33 +81,42 @@ pub(crate) fn submit_presented_browser_pointer_input(
     submit_pointer(target, binding, next_sequence, wire, Some(frame))
 }
 
-/// Retire only the existing contact. Cancellation needs no positional receipt,
-/// but still goes through the target's ordinary binding/sequence/program gates.
+/// Cancel the current gesture through the ordinary binding/sequence/program gates.
+/// DOM cancellation and rejected input retire the source; a surface transition
+/// keeps it available for a subsequent physical release, but never restores the
+/// cancelled gesture. No positional receipt or synthetic release is involved.
 #[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 pub(crate) fn cancel_browser_pointer_input(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
     next_sequence: &mut u64,
+    retire_source: bool,
 ) -> Result<(), String> {
-    let Some(contact) = binding.filter(|contact| !contact.retired) else {
+    let Some(contact) = binding.as_mut().filter(|contact| !contact.retired) else {
         return Ok(());
     };
-    let wire = BrowserPointerInput {
-        kind: BrowserPointerKind::Cancel,
-        source_id: contact.pointer.source,
-        pointer_id: (contact.pointer.pointer as u32).cast_signed(),
-        surface_x: None,
-        surface_y: None,
-        viewport_width: None,
-        viewport_height: None,
-        button: None,
-        view_revision: contact.view_revision,
-        shift: false,
-        control: false,
-        alt: false,
-        meta: false,
-    };
-    submit_browser_pointer_input(target, binding, next_sequence, wire)
+    let token = target.pointer_token()?;
+    if token.pointer() != contact.pointer || token.context().view_revision != contact.view_revision
+    {
+        return Err("browser pointer session binding has been replaced".into());
+    }
+    let sequence = *next_sequence;
+    let next = sequence
+        .checked_add(1)
+        .ok_or("native input event sequence exhausted")?;
+    target.submit_pointer(
+        &token,
+        NativePointerInput::new(
+            sequence,
+            token.pointer(),
+            token.context(),
+            NativeInputModifiers::default(),
+            NativePointerInputKind::Cancel(NativePointerCancellation::Cancelled),
+        ),
+    )?;
+    *next_sequence = next;
+    contact.retired = retire_source;
+    Ok(())
 }
 
 impl BrowserPointerTarget for ExecutionSession {

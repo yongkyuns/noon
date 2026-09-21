@@ -428,3 +428,154 @@ fn missing_receipt_cannot_relax_retired_sources_or_invent_initial_release() {
     assert!(f.send(input(BrowserPointerKind::Release)).is_err());
     assert_eq!(f.sequence, sequence);
 }
+
+#[test]
+fn surface_repaint_without_input_cannot_revive_a_stationary_gesture() {
+    let mut f = Fixture::new();
+    f.present();
+    let authored = f.session.frame().clone();
+    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
+    f.host.invalidate();
+    browser_pointer_input::cancel_browser_pointer_input(
+        &mut f.session,
+        &mut f.binding,
+        &mut f.sequence,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        f.sequence, 2,
+        "press and cancellation only; no invented release"
+    );
+    // No occurrence is offered while the surface is unavailable. A matching
+    // replacement receipt must not make the original press eligible again.
+    f.present();
+    assert!(f.send(input(BrowserPointerKind::Release)).unwrap());
+    assert_eq!(f.sequence, 3);
+    assert_eq!(f.session.selected_pointer_target(), None);
+    assert_eq!(f.session.frame(), &authored);
+    for kind in [BrowserPointerKind::Press, BrowserPointerKind::Release] {
+        let mut wire = input(kind);
+        wire.source_id = 2;
+        assert!(f.send(wire).unwrap());
+    }
+    assert_eq!(f.session.selected_pointer_target(), Some(f.target));
+}
+
+#[test]
+fn surface_gesture_cleanup_preserves_callback_and_sequence_barriers() {
+    let mut f = Fixture::new();
+    f.present();
+    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
+    let binding = f.binding;
+    let sequence = f.sequence;
+    let phase = f
+        .session
+        .begin_required_callback_phase(0.0, [f.target])
+        .unwrap();
+    assert!(browser_pointer_input::cancel_browser_pointer_input(
+        &mut f.session,
+        &mut f.binding,
+        &mut f.sequence,
+        false,
+    )
+    .is_err());
+    assert_eq!(f.binding, binding);
+    assert_eq!(f.sequence, sequence);
+    f.session
+        .commit_required_callback_phase(phase.finish())
+        .unwrap();
+    f.sequence = u64::MAX;
+    assert!(browser_pointer_input::cancel_browser_pointer_input(
+        &mut f.session,
+        &mut f.binding,
+        &mut f.sequence,
+        false,
+    )
+    .is_err());
+    assert_eq!(f.binding, binding);
+    assert_eq!(f.sequence, u64::MAX);
+    f.sequence = sequence;
+    browser_pointer_input::cancel_browser_pointer_input(
+        &mut f.session,
+        &mut f.binding,
+        &mut f.sequence,
+        false,
+    )
+    .unwrap();
+    f.present();
+    assert!(f.send(input(BrowserPointerKind::Release)).unwrap());
+    assert_eq!(f.session.selected_pointer_target(), None);
+}
+
+#[test]
+fn surface_cleanup_does_not_relax_explicit_source_retirement() {
+    let mut f = Fixture::new();
+    f.present();
+    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
+    assert!(f.send(input(BrowserPointerKind::Cancel)).unwrap());
+    let sequence = f.sequence;
+    browser_pointer_input::cancel_browser_pointer_input(
+        &mut f.session,
+        &mut f.binding,
+        &mut f.sequence,
+        false,
+    )
+    .unwrap();
+    assert_eq!(f.sequence, sequence);
+    f.present();
+    assert!(f.send(input(BrowserPointerKind::Release)).is_err());
+}
+
+#[test]
+fn signal_only_publication_requests_receipt_refresh_without_scene_dirtiness() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let source = NativeStateSource::Control {
+        name: "receipt-only".into(),
+    };
+    signal(
+        &mut store,
+        root,
+        source.clone(),
+        SemanticSignalValue::Scalar(0.0),
+    );
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let mut host = DirectPointerPresentation::default();
+    host.set_view(1, SIZE).unwrap();
+    let frame = host.capture(&session, session.camera().unwrap()).unwrap();
+    session.take_renderer_publication();
+    host.did_present(frame);
+    let displayed = session.publication_context();
+    assert!(!host.needs_refresh(&session));
+    session
+        .set_native_state_input(source, NativeInputValue::Scalar(1.0))
+        .unwrap();
+    assert_ne!(displayed, session.publication_context());
+    assert!(session.take_renderer_publication().changes().is_empty());
+    assert!(!session.wake_state().frame_pending());
+    for _ in 0..128 {
+        assert!(host.needs_refresh(&session));
+        assert!(
+            !session.wake_state().frame_pending(),
+            "receipt refresh is not scene invalidation"
+        );
+    }
+    let frame = host.capture(&session, session.camera().unwrap()).unwrap();
+    host.did_present(frame);
+    assert!(!host.needs_refresh(&session));
+}
+
+#[test]
+fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
+    let mut f = Fixture::new();
+    f.present();
+    let phase = f
+        .session
+        .begin_required_callback_phase(0.0, [f.target])
+        .unwrap();
+    assert!(!f.host.needs_refresh(&f.session));
+    f.session
+        .commit_required_callback_phase(phase.finish())
+        .unwrap();
+}

@@ -401,18 +401,24 @@ mod wasm {
             .map_err(js_error)
         }
 
-        fn cancel_browser_pointer(&mut self) -> Result<(), JsValue> {
+        fn cancel_browser_pointer(&mut self, retire_source: bool) -> Result<(), JsValue> {
             let binding = &mut self.browser_pointer_binding;
             let sequence = &mut self.next_native_event_sequence;
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence)
+                    browser_pointer_input::cancel_browser_pointer_input(
+                        session,
+                        binding,
+                        sequence,
+                        retire_source,
+                    )
                 }
                 DirectSourceAuthority::Program(program) => {
                     browser_pointer_input::cancel_browser_pointer_input(
                         program.as_mut(),
                         binding,
                         sequence,
+                        retire_source,
                     )
                 }
             }
@@ -495,7 +501,7 @@ mod wasm {
             if self.backend != wgpu::Backend::Gl || !self.webgl_recovery_pending.get() {
                 return Ok(false);
             }
-            self.pointer_presentation.invalidate();
+            self.invalidate_pointer_surface()?;
             let next_generation = self
                 .gpu_generation
                 .checked_add(1)
@@ -561,7 +567,7 @@ mod wasm {
                 return Ok(false);
             }
 
-            self.pointer_presentation.invalidate();
+            self.invalidate_pointer_surface()?;
             let lost_generation = self.gpu_generation;
             let next_generation = lost_generation
                 .checked_add(1)
@@ -637,7 +643,9 @@ mod wasm {
             }
             let changes_pending = self.source.session().wake_state().frame_pending()
                 || self.surface_frame_pending
-                || self.pointer_presentation.refresh_pending
+                || self
+                    .pointer_presentation
+                    .needs_refresh(self.source.session())
                 || self.selection_pending();
             if !self.drawable || !changes_pending {
                 return Ok(false);
@@ -650,13 +658,13 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
                     wgpu::CurrentSurfaceTexture::Outdated => {
-                        self.pointer_presentation.invalidate();
+                        self.invalidate_pointer_surface()?;
                         self.surface_frame_pending = true;
                         self.surface.configure(&self.device, &self.config);
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
-                        self.pointer_presentation.invalidate();
+                        self.invalidate_pointer_surface()?;
                         self.surface_frame_pending = true;
                         if self.backend == wgpu::Backend::Gl {
                             self.webgl_recovery_pending.set(true);
@@ -680,7 +688,7 @@ mod wasm {
             if self.canvas.width() == width && self.canvas.height() == height {
                 return Ok(());
             }
-            self.pointer_presentation.invalidate();
+            self.invalidate_pointer_surface()?;
             self.surface_frame_pending = true;
             self.canvas.set_width(width);
             self.canvas.set_height(height);
@@ -826,7 +834,9 @@ mod wasm {
                 present_now: self.drawable
                     && (directive.present_now()
                         || self.surface_frame_pending
-                        || self.pointer_presentation.refresh_pending
+                        || self
+                            .pointer_presentation
+                            .needs_refresh(self.source.session())
                         || self.selection_pending()),
                 cadence,
                 delay_ms,
@@ -981,7 +991,7 @@ mod wasm {
             {
                 return Ok(false);
             }
-            self.source.cancel_browser_pointer()?;
+            self.source.cancel_browser_pointer(true)?;
             self.update_camera()?;
             Ok(true)
         }
@@ -1009,7 +1019,7 @@ mod wasm {
                 "current": self.source.session().publication_context().frame_epoch().get().to_string(),
                 "presented": self.pointer_presentation.presented.as_ref().map(|frame|
                     frame.publication().frame_epoch().get().to_string()),
-                "refreshPending": self.pointer_presentation.refresh_pending,
+                "refreshPending": self.pointer_presentation.needs_refresh(self.source.session()),
                 "view": self.pointer_presentation.viewport().map(|view| [view.x, view.y]),
             }).to_string()
         }
@@ -1257,7 +1267,11 @@ mod wasm {
             let pending = session.wake_state().frame_pending();
             let camera = session.camera().map_err(js_error)?;
             self.sync_camera(camera)?;
-            Ok(pending || self.selection_pending() || self.pointer_presentation.refresh_pending)
+            Ok(pending
+                || self.selection_pending()
+                || self
+                    .pointer_presentation
+                    .needs_refresh(self.source.session()))
         }
 
         fn selection_pending(&self) -> bool {
@@ -1496,7 +1510,7 @@ mod wasm {
             self.last_text_draw_calls = draw.text.draw_calls;
             self.last_instances_drawn = draw.instances_drawn();
             if reconfigure_after_present {
-                self.pointer_presentation.invalidate();
+                self.invalidate_pointer_surface()?;
                 self.surface_frame_pending = true;
                 self.surface.configure(&self.device, &self.config);
             }
@@ -1509,6 +1523,15 @@ mod wasm {
                 self.direct_wake_clock = BrowserExecutionWakeClock::default();
             }
             Ok(true)
+        }
+
+        /// A surface transition ends a held gesture even when no DOM event is
+        /// delivered before the replacement frame. Keep the physical source so
+        /// its real release remains harmless instead of faulting the collector.
+        fn invalidate_pointer_surface(&mut self) -> Result<(), JsValue> {
+            self.pointer_presentation.invalidate();
+            self.apply_direct_native_input(|source| source.cancel_browser_pointer(false))?;
+            Ok(())
         }
 
         fn sync_camera(&mut self, camera: Camera2DState) -> Result<(), JsValue> {
