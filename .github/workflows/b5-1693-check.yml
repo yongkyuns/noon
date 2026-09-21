@@ -1,66 +1,54 @@
-name: Isolated B5 1693 validation
+name: Isolated B5 1693 grid diagnosis
 on:
   push:
     branches: [codex/b5-1693-check-20260920]
 permissions:
-  contents: write
-concurrency:
-  group: b5-1693-isolated-validation
-  cancel-in-progress: true
+  contents: read
 jobs:
-  validate:
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
-      SOURCE: 4298f3d4d06385ef7fb34a7924430289244f6708
-      BASE: 8b3286475869960e59928372cfb47662f0a28b11
-      RESULT_REF: refs/heads/codex/b5-1693-checked-candidate-20260920
+      SOURCE: e186555ef306f76acabfca91a3e6b7e75022479c
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
-      - name: Checkout isolated helper
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 3
-      - name: Checkout exact source candidate
-        shell: bash
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Inspect exact candidate bytes
         run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE"
+          git fetch --no-tags --depth=1 origin "$SOURCE"
           git checkout --detach "$SOURCE"
-          test "$(git rev-parse HEAD)" = "$SOURCE"
-      - name: Use repository-pinned Rust
-        run: |
-          rustup install
-          rustup show active-toolchain
-          rustc --version --verbose
-      - name: Format once and preserve reviewable candidate
-        id: candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --all
-          cargo fmt --all -- --check
-          git diff --check
+          git rev-parse HEAD
+          git rev-parse HEAD:crates/noon/src/coordinate_authoring/number_plane.rs
+          git rev-parse HEAD:crates/noon/src/example_scenes/number_plane.rs
+          sed -n '1,32p' crates/noon/src/example_scenes/number_plane.rs
+          sed -n '225,404p' crates/noon/src/coordinate_authoring/number_plane.rs
           python3 - <<'PY'
-          import os, subprocess
-          def names(*args):
-              return set(subprocess.check_output(['git', *args], text=True).splitlines())
-          allowed = names('diff', '--name-only', os.environ['BASE'], os.environ['SOURCE'])
-          changed = names('diff', '--name-only')
-          unexpected = changed - allowed
-          assert not unexpected, f'Unexpected formatter scope: {sorted(unexpected)}'
-          assert not any(p.startswith('.github/') for p in changed)
-          print('Formatted files:', *sorted(changed), sep='\n')
+          from pathlib import Path
+          path = Path('crates/noon/src/example_scenes/number_plane.rs')
+          s = path.read_text()
+          old = '    let plane = scene.number_plane(&options)?;'
+          assert s.count(old) == 1
+          s = s.replace(old, '    eprintln!("ACTUAL OPTIONS {options:?}");\n' + old)
+          anchor = '            assert_eq!(plane.len(), 4, "faded, major, x-axis and y-axis families");'
+          assert s.count(anchor) == 1
+          diag = '''
+                      for (kind, group) in plane.iter().enumerate() {
+                          let children = store.semantic_family_members_checked(*group).unwrap();
+                          eprintln!("GROUP {kind} count={}", children.len());
+                          for child in children.iter().take(6) {
+                              if let Ok(state) = store.semantic_object_state_checked(*child) {
+                                  eprintln!("SAMPLE {kind} content={:?} transform={:?}", state.content, state.transform);
+                              }
+                          }
+                      }
+          '''
+          s = s.replace(anchor, anchor + diag)
+          path.write_text(s)
           PY
-          if ! git diff --quiet; then
-            git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'style: apply pinned formatter to NumberPlane grid tests'
-          fi
-          git push origin "HEAD:$RESULT_REF"
-          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "Candidate commit: $(git rev-parse HEAD)"
-          echo "Candidate tree: $(git rev-parse HEAD^{tree})"
+      - name: Use repository-pinned Rust
+        run: rustup install
       - name: Cache Cargo sources
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -70,23 +58,5 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-      - name: Validate ordinary repository fast gate
-        run: bash scripts/check.sh fast "$BASE"
-      - name: Check actual WASM compilation
-        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
-        run: cargo check -p noon-web --all-features --target wasm32-unknown-unknown
-      - name: Validate feature-poor geometry examples
-        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
-        run: |
-          cargo test -p noon --no-default-features --lib example_scenes::number_plane
-          cargo test -p noon --no-default-features --lib example_scenes::implicit_plotting
-      - name: Validate Python facade regressions
-        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
-        run: |
-          python3 -m unittest discover -s web/python -p test_manim_number_plane.py
-          python3 -m unittest discover -s web/python -p test_manim_implicit.py
-      - name: Record exact result
-        if: always()
-        run: |
-          echo "Exact source candidate: ${CANDIDATE_SHA:-not-created}"
-          echo 'No active PR or master branch was changed by this validation job.'
+      - name: Run unchanged grid assertions with diagnostic output
+        run: cargo test -p noon --no-default-features --lib example_scenes::number_plane -- --nocapture
