@@ -388,20 +388,14 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
-    key_mobject: _base.Mobject | None = None,
 ) -> None:
-    if key is not None:
-        if kind != "add" or not values or (key_mobject is None and len(values) != 1):
-            raise ValueError("an explicit key requires one ordinary Mobject add")
-        if key_mobject is None:
-            key_mobject = values[0]
-        if not isinstance(key_mobject, _base.Mobject) or sum(
-            value is key_mobject for value in values
-        ) != 1:
-            raise ValueError("an explicit key requires one ordinary Mobject add")
-    elif key_mobject is not None:
-        raise ValueError("a designated keyed Mobject requires an explicit key")
-    key_binding = None if key is None else (_semantic_wrapper_key(key_mobject), key)
+    if key is not None and (
+        kind != "add"
+        or len(values) != 1
+        or not isinstance(values[0], _base.Mobject)
+    ):
+        raise ValueError("an explicit key requires one ordinary Mobject add")
+    key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     next_object_id = scene._next_object_id
