@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-use crate::{SceneRevision, SemanticGraphDeclaration, SemanticGraphEdge};
+use crate::{SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTransactionReadError {
@@ -724,23 +724,27 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .vertices()
                         .iter()
                         .copied()
-                        .map(|vertex| resolve_node_ref(vertex, &committed_nodes))
+                        .map(|(id, vertex)| {
+                            (id, resolve_node_ref(vertex, &committed_nodes))
+                        })
                         .collect::<Vec<_>>();
                     let edges = graph
                         .edges()
                         .iter()
                         .copied()
                         .map(|edge| {
-                            SemanticGraphEdge::from_resolved(
+                            SemanticGraphEdgeBinding::from_resolved(
+                                edge.id(),
                                 resolve_node_ref(edge.family(), &committed_nodes),
                                 resolve_node_ref(edge.line(), &committed_nodes),
-                                resolve_node_ref(edge.start(), &committed_nodes),
-                                resolve_node_ref(edge.end(), &committed_nodes),
-                                edge.directed(),
                             )
                         })
                         .collect();
-                    let graph = SemanticGraphDeclaration::from_resolved(vertices, edges);
+                    let graph = SemanticGraphDeclaration::from_resolved(
+                        graph.topology().clone(),
+                        vertices,
+                        edges,
+                    );
                     let previous = store
                         .replace_semantic_graph_declaration(scope, Some(graph))
                         .expect("preflighted graph scope remains a family");
