@@ -40,6 +40,12 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/candidate" bb7c12c75f2389fc696d25b0e2b657ad410daac2
           git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
           git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          for patch in "$GITHUB_WORKSPACE"/candidate/c5-callback-input/fix*.patch; do
+            if [ -f "$patch" ]; then
+              git -C "$RUNNER_TEMP/candidate" apply "$patch"
+              cp "$patch" "$GITHUB_WORKSPACE/proof/"
+            fi
+          done
           echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
           echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
 
