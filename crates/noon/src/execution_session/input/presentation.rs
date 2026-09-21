@@ -160,23 +160,17 @@ impl PointerFrameSnapshot {
             .map_err(|_| PointerFrameError::PositionOutOfRange)
     }
 
-    /// Obtain the existing input token only while this captured frame is current.
+    /// Validate the captured publication/view before configuring a pointer source.
     ///
-    /// This never refreshes a stale snapshot to the session's newer publication.
-    /// The returned token goes through ordinary precise-picking and atomic input
-    /// admission. If execution advances after this call, that admission rejects
-    /// the positional occurrence again. The configured source/binding and callback
-    /// rules are unchanged. Use `position` for the occurrence's coordinates.
-    ///
-    /// Cancellation does NOT require this positional check: use the contact's
-    /// previously captured token with `NativePointerInputKind::Cancel`. The normal
-    /// ingress permits its older publication while still enforcing runtime,
-    /// binding, sequence and callback barriers. No automatic replay is performed.
-    pub fn input_token(
+    /// Unlike `input_token`, this does not require a configured pointer binding.
+    /// Hosts call it before any binding reset, then call `input_token` afterwards:
+    /// configuration may itself change effective state. Neither call refreshes the
+    /// captured frame or claims that it was presented.
+    pub fn validate_current(
         &self,
         session: &ExecutionSession,
         current_view: PointerFrameView,
-    ) -> Result<NativePointerInputToken, PointerFrameError> {
+    ) -> Result<(), PointerFrameError> {
         session
             .ensure_direct_input_ingress_available()
             .map_err(PointerFrameError::Input)?;
@@ -200,6 +194,27 @@ impl PointerFrameSnapshot {
         if self.view.camera != session.camera().map_err(PointerFrameError::Camera)? {
             return Err(PointerFrameError::CameraMismatch);
         }
+        Ok(())
+    }
+
+    /// Obtain the existing input token only while this captured frame is current.
+    ///
+    /// This never refreshes a stale snapshot to the session's newer publication.
+    /// The returned token goes through ordinary precise-picking and atomic input
+    /// admission. If execution advances after this call, that admission rejects
+    /// the positional occurrence again. The configured source/binding and callback
+    /// rules are unchanged. Use `position` for the occurrence's coordinates.
+    ///
+    /// Cancellation does NOT require this positional check: use the contact's
+    /// previously captured token with `NativePointerInputKind::Cancel`. The normal
+    /// ingress permits its older publication while still enforcing runtime,
+    /// binding, sequence and callback barriers. No automatic replay is performed.
+    pub fn input_token(
+        &self,
+        session: &ExecutionSession,
+        current_view: PointerFrameView,
+    ) -> Result<NativePointerInputToken, PointerFrameError> {
+        self.validate_current(session, current_view)?;
         let token = session
             .native_pointer_input_token()
             .map_err(PointerFrameError::Input)?;

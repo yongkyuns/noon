@@ -584,3 +584,42 @@ fn a_frame_snapshot_does_not_bypass_the_live_program_terminal_barrier() {
     assert_eq!(program.session().frame(), &before);
     assert_eq!(program.session().last_native_event_sequence, None);
 }
+
+#[test]
+fn captured_frame_can_be_validated_before_any_pointer_binding_without_side_effects() {
+    let scene = Scene::new();
+    let mut session = scene.execution_session().unwrap();
+    let frame = session.capture_pointer_frame(view()).unwrap();
+    let publication = session.publication_context();
+    assert_eq!(frame.validate_current(&session, view()), Ok(()));
+    assert!(matches!(
+        frame.input_token(&session, view()),
+        Err(PointerFrameError::Input(
+            ExecutionSessionInputError::PointerNotConfigured
+        ))
+    ));
+    assert_eq!(session.publication_context(), publication);
+    assert!(session.take_frame_changes().is_all());
+    session
+        .configure_native_pointer_input(POINTER, VIEW)
+        .unwrap();
+    assert!(frame.input_token(&session, view()).is_ok());
+}
+
+#[test]
+fn prebinding_validation_cannot_refresh_a_stale_frame() {
+    let scene = Scene::new();
+    let mut session = scene.execution_session().unwrap();
+    let frame = session.capture_pointer_frame(view()).unwrap();
+    session.evaluate(0.25).unwrap();
+    assert!(matches!(
+        frame.validate_current(&session, view()),
+        Err(PointerFrameError::Input(
+            ExecutionSessionInputError::StalePointerPublication { .. }
+        ))
+    ));
+    assert!(matches!(
+        session.native_pointer_input_token(),
+        Err(ExecutionSessionInputError::PointerNotConfigured)
+    ));
+}
