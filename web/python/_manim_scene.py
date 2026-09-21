@@ -193,8 +193,8 @@ def _membership_leaf_bindings(
     value: object,
     *,
     next_object_id: int,
-    key: str | None,
-    binding_keys: set[str],
+    key_binding: tuple[str, str] | None,
+    binding_reservations: dict[str, _TypedBindingReservation],
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     # This walk reserves Python wrapper IDs only. The family handle below remains
     # the sole membership/order input; Rust resolves authoritative family leaves.
@@ -202,19 +202,28 @@ def _membership_leaf_bindings(
     if not leaves:
         raise ValueError("Scene membership target must contain at least one Mobject")
     reservations = []
-    for index, member in enumerate(leaves):
+    for member in leaves:
         handle = getattr(member, "_semantic_handle", None)
         if handle is None:
             raise NotImplementedError(
                 "standard Scene membership does not support retained-only Mobjects"
             )
         semantic_key = _semantic_wrapper_key(member)
-        if semantic_key in binding_keys:
-            continue
-        binding_keys.add(semantic_key)
         if member._scene is not None and member._scene is not scene:
             raise ValueError("Mobject already belongs to another Scene")
+        if semantic_key in binding_reservations:
+            continue
+        # The designated leaf may first occur inside a Group. Resolve its key
+        # on that first binding, before deduplicating later wrapper occurrences.
+        key = (
+            key_binding[1]
+            if key_binding is not None and semantic_key == key_binding[0]
+            else None
+        )
         if member._scene is scene:
+            existing_key = scene._object_keys[member._object.id]
+            if key is not None and _ir._authoring_key("key", key, existing_key) != existing_key:
+                raise ValueError("a re-added canonical Mobject keeps its existing key")
             reservation = _TypedBindingReservation(
                 member._object,
                 scene._object_keys[member._object.id],
@@ -225,14 +234,13 @@ def _membership_leaf_bindings(
                 member,
                 scene,
                 handle,
-                key if index == 0 else None,
+                key,
                 object_id=next_object_id,
             )
             if not reservation.reuse_existing_identity:
                 next_object_id += 1
-                reservations.append((member, reservation, handle))
-            else:
-                reservations.append((member, reservation, handle))
+            reservations.append((member, reservation, handle))
+        binding_reservations[semantic_key] = reservation
         engine_call(batch.reserveMobjectBinding, str(reservation.object.id), handle, operation="Scene.membership")
     return next_object_id, reservations
 
@@ -243,9 +251,9 @@ def _append_membership_value(
     value: object,
     *,
     next_object_id: int,
-    binding_keys: set[str],
+    binding_reservations: dict[str, _TypedBindingReservation],
     reserve_bindings: bool,
-    key: str | None = None,
+    key_binding: tuple[str, str] | None = None,
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     reservations = []
     if reserve_bindings:
@@ -254,8 +262,8 @@ def _append_membership_value(
             batch,
             value,
             next_object_id=next_object_id,
-            key=key,
-            binding_keys=binding_keys,
+            key_binding=key_binding,
+            binding_reservations=binding_reservations,
         )
     if isinstance(value, _compat.Group):
         family = getattr(value, "_semantic_family_handle", None)
@@ -270,12 +278,9 @@ def _append_membership_value(
             )
         object_id = ""
         if reserve_bindings:
-            assert value._object is not None or reservations
-            object_id = str(
-                value._object.id
-                if value._object is not None
-                else reservations[0][1].object.id
-            )
+            # A preceding Group may already have reserved this unbound leaf.
+            # Reuse that identity without committing any Python wrapper early.
+            object_id = str(binding_reservations[_semantic_wrapper_key(value)].object.id)
         engine_call(batch.appendMobject, object_id, handle, operation="Scene.membership")
     else:
         raise TypeError("Scene membership accepts Mobjects and Groups")
@@ -328,7 +333,7 @@ def _reconcile_completed_family_bindings(
     next_object_id = scene._next_object_id
     reservations = []
     detached = []
-    binding_keys: set[str] = set()
+    binding_reservations: dict[str, _TypedBindingReservation] = {}
     for wrapper in wrappers.values():
         if isinstance(wrapper, _compat.Group):
             continue
@@ -340,7 +345,7 @@ def _reconcile_completed_family_bindings(
         if present:
             next_object_id, appended = _membership_leaf_bindings(
                 scene, batch, wrapper, next_object_id=next_object_id,
-                key=None, binding_keys=binding_keys,
+                key_binding=None, binding_reservations=binding_reservations,
             )
             reservations.extend(appended)
         elif wrapper._scene is scene:
@@ -375,19 +380,27 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
+    key_mobject: _base.Mobject | None = None,
 ) -> None:
-    if key is not None and (kind != "add" or not values or isinstance(values[0], _compat.Group)):
-        # Scene.add validates that the caller supplied exactly one keyed object.
-        # Additional values here can only be its already-authored foreground
-        # projection; only the first reservation receives the explicit key.
-        raise ValueError("an explicit key requires one ordinary Mobject add")
+    if key is not None:
+        if kind != "add" or not values or (key_mobject is None and len(values) != 1):
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+        if key_mobject is None:
+            key_mobject = values[0]
+        if not isinstance(key_mobject, _base.Mobject) or sum(
+            value is key_mobject for value in values
+        ) != 1:
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+    elif key_mobject is not None:
+        raise ValueError("a designated keyed Mobject requires an explicit key")
+    key_binding = None if key is None else (_semantic_wrapper_key(key_mobject), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     next_object_id = scene._next_object_id
     reservations = []
-    binding_keys = set()
+    binding_reservations: dict[str, _TypedBindingReservation] = {}
     request_keys = set()
-    for index, value in enumerate(values):
+    for value in values:
         request_key = _semantic_wrapper_key(value)
         if request_key in request_keys:
             raise ValueError("membership request contains a duplicate Mobject or Group")
@@ -397,11 +410,15 @@ def _canonical_edit_membership(
             batch,
             value,
             next_object_id=next_object_id,
-            binding_keys=binding_keys,
+            binding_reservations=binding_reservations,
             reserve_bindings=kind in {"add", "replace"},
-            key=key if index == 0 else None,
+            key_binding=key_binding,
         )
         reservations.extend(appended)
+    # Existing-key checks cannot see other speculative reservations. Detect
+    # explicit/default key collisions within this batch before Rust publication.
+    if len({item.key for item in binding_reservations.values()}) != len(binding_reservations):
+        raise ValueError("duplicate object key in membership batch")
     engine_call(context.editMembership, batch, operation="Scene." + kind)
     for member, reservation, handle in reservations:
         _commit_typed_binding(member, scene, reservation, handle)

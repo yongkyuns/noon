@@ -598,8 +598,16 @@ class Scene:
     def mobjects(self) -> list[object]:
         return _scene_operations()._canonical_scene_mobjects(self)
 
-    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
-        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+    def _edit_membership(
+        self, kind: str, values: tuple[object, ...] = (), *,
+        key=None, key_mobject: Mobject | None = None,
+    ) -> None:
+        if key_mobject is None:
+            _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+        else:
+            _scene_operations()._canonical_edit_membership(
+                self, kind, values, key=key, key_mobject=key_mobject
+            )
 
     @staticmethod
     def _identity_list_update(current: list[object], additions: tuple[object, ...]) -> list[object]:
@@ -668,10 +676,15 @@ class Scene:
         # foreground projection changes the authoritative membership batch.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
-        if key is not None and len(mobjects) != 1:
+        if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
             raise ValueError("an explicit key requires one ordinary Mobject add")
         ordered = self._foreground_add_order(mobjects, self.foreground_mobjects)
-        self._edit_membership("add", ordered, key=key)
+        if key is not None and self.foreground_mobjects:
+            # A key belongs to the caller's wrapper, not the first member after
+            # foreground projection. Keep that identity explicit at the boundary.
+            self._edit_membership("add", ordered, key=key, key_mobject=mobjects[0])
+        else:
+            self._edit_membership("add", ordered, key=key)
         return leaves[0] if len(leaves) == 1 else self
 
     def add_foreground_mobjects(self, *mobjects: object) -> Scene:

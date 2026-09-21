@@ -135,15 +135,15 @@ class SceneForegroundFacadeTests(unittest.TestCase):
             compat._leaf_mobjects = lambda value: [value]
             scene = noon.Scene()
             edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
+            scene._edit_membership = lambda kind, values=(), key=None, key_mobject=None: edits.append(
+                (kind, values, key, key_mobject)
             )
-            foreground = object()
-            added = object()
+            foreground = object.__new__(noon.Mobject)
+            added = object.__new__(noon.Mobject)
             scene.foreground_mobjects = [foreground]
 
             scene.add(added, key="stable")
-            assert edits == [("add", (added, foreground), "stable")]
+            assert edits == [("add", (added, foreground), "stable", added)]
 
             try:
                 scene.add(object(), object(), key="invalid")
