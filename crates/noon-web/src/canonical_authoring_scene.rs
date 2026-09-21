@@ -2496,6 +2496,7 @@ impl CanonicalAuthoringScene {
             .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         let store = self.scene.integration_store().borrow();
         let root = store
