@@ -1,0 +1,125 @@
+name: C5 pointer frame snapshot qualification
+on:
+  push:
+    branches: [validation/c5-pointer-frame-20260920]
+permissions:
+  contents: write
+concurrency:
+  group: c5-pointer-frame-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Assemble exact code-only candidate
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          base64 -d candidate/pointer-frame.b64 | xz -d > proof/input.patch
+          echo 'fcecf1d2f479b4689eef1a1e867ef6947a895adefce030c25211ce3e9de9aeab  proof/input.patch' | sha256sum -c -
+          git worktree add --detach "$RUNNER_TEMP/candidate" c6be1da0c76f6ebc76c85d0c8e1964a75d5188b3
+          git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
+          git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
+      - name: Use repository-pinned Rust
+        run: |
+          cd "$CANDIDATE"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF/rust.txt"
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with: {version: v0.16.0}
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: c5-pointer-frame-cargo-${{ runner.os }}-${{ hashFiles('crates/**/Cargo.toml') }}
+          restore-keys: |
+            c5-contract-cargo-${{ runner.os }}-
+            ${{ runner.os }}-cargo-sources-
+      - name: Format and record source
+        run: |
+          cd "$CANDIDATE"
+          cargo fmt --all
+          git add -A
+          git diff --cached --check
+          git write-tree | tee "$PROOF/tree.txt"
+          git diff --cached --binary --full-index > "$PROOF/formatted.patch"
+          git diff --cached --stat > "$PROOF/stat.txt"
+      - name: Execute new frame-input regressions without optional frontends
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo test -p noon --no-default-features --lib execution_session::input::presentation::tests -- --nocapture 2>&1 | tee "$PROOF/frame-tests.log"
+      - name: Execute repository fast gate
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          bash scripts/check.sh fast c6be1da0c76f6ebc76c85d0c8e1964a75d5188b3 2>&1 | tee "$PROOF/fast.log"
+      - name: Compile direct Rust and reduced browser WASM
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-direct.log"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-browser.log"
+          node --test web/*.test.mjs 2>&1 | tee "$PROOF/js.log"
+      - name: Verify stale-frame regression detects a missing publication check
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          p=crates/noon/src/execution_session/input/presentation.rs
+          cp "$p" "$RUNNER_TEMP/presentation-original.rs"
+          trap 'cp "$RUNNER_TEMP/presentation-original.rs" "$p"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon/src/execution_session/input/presentation.rs')
+          s=p.read_text()
+          old='if self.publication != current {'
+          assert s.count(old)==1
+          p.write_text(s.replace(old, 'if false {'))
+          PY
+          if cargo test -p noon --no-default-features --lib a_stale_display_cannot_issue_a_token_for_the_newer_execution -- --nocapture > "$PROOF/stale-mutation.log" 2>&1; then
+            echo 'missing publication guard unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'a_stale_display_cannot_issue_a_token_for_the_newer_execution ... FAILED' "$PROOF/stale-mutation.log"
+          cp "$RUNNER_TEMP/presentation-original.rs" "$p"
+          trap - EXIT
+          git diff --exit-code -- "$p"
+          echo passed > "$PROOF/qualification.txt"
+      - uses: actions/checkout@v7
+        with:
+          ref: c6be1da0c76f6ebc76c85d0c8e1964a75d5188b3
+          path: publish
+          fetch-depth: 1
+      - name: Publish only the tested source on a staging branch
+        run: |
+          set -euo pipefail
+          cd publish
+          test "$(cat "$PROOF/qualification.txt")" = passed
+          git apply "$PROOF/formatted.patch"
+          git add -A
+          test "$(git write-tree)" = "$(cat "$PROOF/tree.txt")"
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: bind pointer input to immutable frame and view snapshots'
+          git push origin HEAD:refs/heads/staging/c5-pointer-frame-${{ github.run_id }}
+          git rev-parse HEAD | tee "$PROOF/published.txt"
+          git rev-parse HEAD^{tree} >> "$PROOF/published.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c5-pointer-frame-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
