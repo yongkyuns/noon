@@ -19,7 +19,8 @@ use crate::{
 };
 use noon_core::{
     Color, GeometryResourceHandle, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticNodeId, SemanticObjectState, SemanticStore, BLUE, WHITE,
+    SemanticNodeId, SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
+    SemanticTransactionGraphEdge, BLUE, WHITE,
 };
 use std::{collections::HashMap, hash::Hash, rc::Rc};
 
@@ -193,6 +194,16 @@ impl<K: Eq + Hash> RetainedGraph<K> {
         &self.bindings
     }
 
+    fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
+        self.family
+            .integration_store()
+            .borrow()
+            .semantic_graph_declaration(self.family.node_id())
+            .expect("graph root remains a family")
+            .expect("public Graph root retains authored graph declaration")
+            .clone()
+    }
+
     fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
         self.vertex_lookup
             .get(key)
@@ -229,9 +240,10 @@ impl<K: Eq + Hash> RetainedGraph<K> {
 
 /// Explicit-position undirected retained graph.
 ///
-/// User keys are authoring/front-end identity only. Stable graph IDs and semantic
-/// handles remain the engine-owned identities used by later mutation/dependency
-/// work. Moving a vertex does not yet update its edge endpoints automatically.
+/// User keys and GraphVertexId/GraphEdgeId are authoring-side indexes only. The
+/// authoritative topology/dependency declaration lives on the semantic graph root
+/// and survives this wrapper. Moving a vertex does not yet update its edge
+/// endpoints automatically.
 pub struct Graph<K> {
     inner: RetainedGraph<K>,
 }
@@ -272,8 +284,14 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         self.inner.topology()
     }
 
+    /// Derived authoring index retained for GraphVertexId/GraphEdgeId lookup.
+    /// Authoritative topology remains in `semantic_declaration()`.
     pub fn bindings(&self) -> &GraphSemanticBindings {
         self.inner.bindings()
+    }
+
+    pub fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
+        self.inner.semantic_declaration()
     }
 
     pub fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
@@ -304,8 +322,8 @@ impl<K: Clone + Eq + Hash> Graph<K> {
 /// Explicit-position directed retained graph.
 ///
 /// Directed edges reuse the ordinary shared Arrow implementation; the shaft Line
-/// is explicitly registered with `GraphSemanticBindings` for later endpoint
-/// dependency lowering.
+/// and endpoint vertex identities are authored on the semantic graph root for
+/// later endpoint dependency lowering.
 pub struct DiGraph<K> {
     inner: RetainedGraph<K>,
 }
@@ -346,8 +364,14 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         self.inner.topology()
     }
 
+    /// Derived authoring index retained for GraphVertexId/GraphEdgeId lookup.
+    /// Authoritative topology remains in `semantic_declaration()`.
     pub fn bindings(&self) -> &GraphSemanticBindings {
         self.inner.bindings()
+    }
+
+    pub fn semantic_declaration(&self) -> noon_core::SemanticGraphDeclaration {
+        self.inner.semantic_declaration()
     }
 
     pub fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
@@ -760,6 +784,32 @@ fn publish_prepared_graph<K>(
         });
     }
 
+    // The graph declaration itself is authored Semantic Scene state. The public
+    // Graph<K> key/index tables below are only frontend convenience and can be
+    // dropped without losing topology or endpoint dependencies.
+    let vertex_nodes = staged_vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.node))
+        .collect::<HashMap<_, _>>();
+    let graph_vertices = staged_vertices.iter().map(|vertex| vertex.node);
+    let graph_edges = staged_edges.iter().map(|edge| {
+        let (family, line) = match &edge.geometry {
+            StagedEdgeGeometry::Line { family, line } => (*family, *line),
+            StagedEdgeGeometry::Arrow(arrow) => (arrow.family, arrow.shaft),
+        };
+        SemanticTransactionGraphEdge::new(
+            family.into(),
+            line.into(),
+            vertex_nodes[&edge.edge.start].into(),
+            vertex_nodes[&edge.edge.end].into(),
+            edge.edge.directed,
+        )
+    });
+    transaction.set_graph_declaration(
+        root,
+        SemanticTransactionGraphDeclaration::new(graph_vertices, graph_edges),
+    );
+
     let result = publish(store, transaction)?;
     let root = result
         .resolve(root)
@@ -912,6 +962,31 @@ mod tests {
             graph.edge(&"a", &"b").unwrap().line().state().unwrap().content.geometry(),
             Some(StoredGeometry::Line { .. })
         ));
+
+        let root = graph.family().node_id();
+        let semantic_a = graph.vertex(&"a").unwrap().node_id();
+        let semantic_b = graph.vertex(&"b").unwrap().node_id();
+        let edge_family = graph.edge(&"a", &"b").unwrap().family().node_id();
+        let declaration = graph.semantic_declaration();
+        assert_eq!(
+            declaration.edge_between(semantic_b, semantic_a, false),
+            Some(edge_family)
+        );
+        assert_eq!(
+            declaration.incident_edges(semantic_b).unwrap().len(),
+            2,
+            "semantic adjacency is authored independently of the wrapper index"
+        );
+        drop(graph);
+        let store = scene.integration_store().borrow();
+        assert_eq!(
+            store
+                .semantic_graph_declaration(root)
+                .unwrap()
+                .unwrap()
+                .edge_between(semantic_a, semantic_b, false),
+            Some(edge_family)
+        );
     }
 
     #[test]
