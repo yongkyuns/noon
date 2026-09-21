@@ -57,6 +57,7 @@ struct GraphDeclarationData {
     topology: GraphTopology,
     vertices: HashMap<GraphVertexId, SemanticNodeId>,
     edges: HashMap<GraphEdgeId, SemanticGraphEdgeBinding>,
+    edge_lines: HashMap<SemanticNodeId, GraphEdgeId>,
 }
 
 impl SemanticGraphDeclaration {
@@ -70,6 +71,11 @@ impl SemanticGraphDeclaration {
             .into_iter()
             .map(|edge| (edge.id(), edge))
             .collect::<HashMap<_, _>>();
+        let edge_lines = edges
+            .values()
+            .map(|binding| (binding.line(), binding.id()))
+            .collect::<HashMap<_, _>>();
+        debug_assert_eq!(edge_lines.len(), edges.len());
         debug_assert_eq!(vertices.len(), topology.vertices().count());
         debug_assert_eq!(edges.len(), topology.edges().count());
         debug_assert!(topology
@@ -81,6 +87,7 @@ impl SemanticGraphDeclaration {
                 topology,
                 vertices,
                 edges,
+                edge_lines,
             }),
         }
     }
@@ -95,6 +102,12 @@ impl SemanticGraphDeclaration {
 
     pub fn edge_binding(&self, edge: GraphEdgeId) -> Option<SemanticGraphEdgeBinding> {
         self.data.edges.get(&edge).copied()
+    }
+
+    /// Resolve the stable graph edge whose designated dependency Line is `node`.
+    /// This reverse index keeps local content validation O(1).
+    pub(crate) fn edge_for_line_node(&self, node: SemanticNodeId) -> Option<GraphEdgeId> {
+        self.data.edge_lines.get(&node).copied()
     }
 
     /// Iterate semantic vertex bindings in topology insertion order.
@@ -153,20 +166,7 @@ impl SemanticGraphDeclaration {
         )
     }
 
-    pub(crate) fn transaction_declaration(&self) -> SemanticTransactionGraphDeclaration {
-        SemanticTransactionGraphDeclaration::new(
-            self.data.topology.clone(),
-            self.vertices(),
-            self.edges().map(|(edge, binding)| {
-                debug_assert_eq!(edge.id, binding.id());
-                SemanticTransactionGraphEdgeBinding::new(
-                    edge.id,
-                    binding.family().into(),
-                    binding.line().into(),
-                )
-            }),
-        )
-    }
+
 }
 
 /// Transaction-local semantic binding for one stable graph edge identity.
