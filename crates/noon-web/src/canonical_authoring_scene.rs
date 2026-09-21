@@ -34,6 +34,8 @@ enum OwnedSceneMembershipMember {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SceneMembershipBatchKind {
     Add,
+    AddForeground,
+    RemoveForeground,
     Remove,
     Clear,
     Replace,
@@ -2293,7 +2295,9 @@ impl CanonicalAuthoringScene {
                 (None, None)
                     if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) =>
                 {
                     new_bindings.push((*wrapper_id, node));
@@ -2381,7 +2385,9 @@ impl CanonicalAuthoringScene {
                         }
                     } else if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) {
                         return Err(AuthoringFailure::new(
                             "invalid_input",
@@ -2413,6 +2419,12 @@ impl CanonicalAuthoringScene {
         }
         let request = match batch.kind {
             SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),
+            SceneMembershipBatchKind::AddForeground => {
+                noon::SceneMembershipRequest::AddForeground(&borrowed)
+            }
+            SceneMembershipBatchKind::RemoveForeground => {
+                noon::SceneMembershipRequest::RemoveForeground(&borrowed)
+            }
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
             SceneMembershipBatchKind::BringToBack => {
                 noon::SceneMembershipRequest::BringToBack(&borrowed)
@@ -2482,6 +2494,22 @@ impl CanonicalAuthoringScene {
                     .collect()
             })
             .map_err(AuthoringFailure::from)
+    }
+
+    fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
+        let store = self.scene.integration_store().borrow();
+        let root = store
+            .node(self.scene.root())
+            .ok_or_else(|| AuthoringFailure::new(
+                "state",
+                "scene.root_missing",
+                "semantic scene root is no longer live",
+            ))?;
+        Ok(root
+            .foreground_members()
+            .iter()
+            .map(|node| format!("{}:{}", node.slot(), node.generation()))
+            .collect())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2890,13 +2918,15 @@ mod wasm {
         pub fn new(kind: &str) -> Result<WasmSceneMembershipBatch, JsValue> {
             let kind = match kind {
                 "add" => SceneMembershipBatchKind::Add,
+                "add_foreground" => SceneMembershipBatchKind::AddForeground,
+                "remove_foreground" => SceneMembershipBatchKind::RemoveForeground,
                 "remove" => SceneMembershipBatchKind::Remove,
                 "clear" => SceneMembershipBatchKind::Clear,
                 "replace" => SceneMembershipBatchKind::Replace,
                 "bring_to_back" => SceneMembershipBatchKind::BringToBack,
                 _ => {
                     return Err(js_error(format!(
-                        "membership batch kind must be add, remove, clear, replace, or bring_to_back; got {kind:?}"
+                        "membership batch kind must be add, add_foreground, remove_foreground, remove, clear, replace, or bring_to_back; got {kind:?}"
                     )))
                 }
             };
@@ -4450,6 +4480,11 @@ mod wasm {
         #[wasm_bindgen(js_name = rootMembershipKeys)]
         pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
             self.inner.root_membership_keys().map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = rootForegroundKeys)]
+        pub fn root_foreground_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.inner.root_foreground_keys().map_err(typed_js_error)
         }
 
         /// Query authoritative recursive membership without enumerating the scene.
