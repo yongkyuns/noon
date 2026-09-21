@@ -74,6 +74,9 @@ pub enum GraphAuthoringError {
         edge_index: usize,
         endpoint: GraphEndpoint,
     },
+    SelfEdgeUnsupported {
+        edge_index: usize,
+    },
 }
 
 impl From<AuthoringError> for GraphAuthoringError {
@@ -108,6 +111,10 @@ impl std::fmt::Display for GraphAuthoringError {
                     GraphEndpoint::End => "end",
                 }
             ),
+            Self::SelfEdgeUnsupported { edge_index } => write!(
+                formatter,
+                "graph edge at input index {edge_index} is a self-edge; public Graph self-loop geometry is not implemented yet"
+            ),
         }
     }
 }
@@ -117,7 +124,9 @@ impl std::error::Error for GraphAuthoringError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Topology(error) => Some(error),
-            Self::DuplicateVertexKey { .. } | Self::UnknownEdgeEndpoint { .. } => None,
+            Self::DuplicateVertexKey { .. }
+            | Self::UnknownEdgeEndpoint { .. }
+            | Self::SelfEdgeUnsupported { .. } => None,
         }
     }
 }
@@ -576,6 +585,9 @@ where
             })?;
         let start = planned_vertices[start_index].id;
         let end = planned_vertices[end_index].id;
+        if start == end {
+            return Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index });
+        }
         let id = topology.add_edge(start, end, directed)?;
         let edge = topology.edge(id).expect("new graph edge is present");
         let start_position = positions[start_index];
@@ -1004,6 +1016,19 @@ mod tests {
     }
 
     #[test]
+    fn self_edges_reject_before_semantic_mutation_until_loop_geometry_exists() {
+        let mut scene = Scene::new();
+        let revision = scene.revision();
+        let nodes = scene.integration_store().borrow().len();
+        assert!(matches!(
+            scene.graph([("a", (0.0, 0.0))], [("a", "a")]),
+            Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 })
+        ));
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(scene.integration_store().borrow().len(), nodes);
+    }
+
+    #[test]
     fn duplicate_edges_fail_before_semantic_mutation() {
         let mut scene = Scene::new();
         let revision = scene.revision();
@@ -1041,6 +1066,45 @@ mod tests {
             .is_err());
         assert_eq!(scene.revision(), revision);
         assert_eq!(scene.integration_store().borrow().len(), nodes);
+    }
+
+    #[test]
+    fn running_scene_graph_construction_publishes_once_and_stays_detached_until_added() {
+        let mut scene = Scene::new();
+        let sentinel = scene.circle(0.25).unwrap();
+        scene.add(&sentinel).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let before = scene.revision();
+
+        let graph = scene
+            .graph(
+                [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
+                [("a", "b")],
+            )
+            .unwrap();
+
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
+        assert_eq!(
+            scene.owned_execution().publication_context().scene_revision(),
+            scene.revision()
+        );
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(graph.vertex(&"a").unwrap().node_id())
+            .is_none());
+
+        scene
+            .add_many(&[crate::MobjectTarget::Family(graph.family())])
+            .unwrap();
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(graph.vertex(&"a").unwrap().node_id())
+            .is_some());
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(graph.edge(&"a", &"b").unwrap().line().node_id())
+            .is_some());
     }
 
     #[test]
