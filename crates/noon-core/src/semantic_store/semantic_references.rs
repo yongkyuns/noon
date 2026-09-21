@@ -18,6 +18,8 @@ pub(crate) enum SemanticReferenceKind {
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
+    /// Hard authored topology dependency owned by one graph family root.
+    GraphDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,7 +221,8 @@ impl SemanticStore {
                     SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
-                    | SemanticReferenceKind::AnimationChild => stack.push(reference.owner),
+                    | SemanticReferenceKind::AnimationChild
+                    | SemanticReferenceKind::GraphDependency => stack.push(reference.owner),
                 }
             }
         }
@@ -333,7 +336,8 @@ impl SemanticStore {
                 SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
-                | SemanticReferenceKind::AnimationChild => {
+                | SemanticReferenceKind::AnimationChild
+                | SemanticReferenceKind::GraphDependency => {
                     self.remove_node_with_reverse_cleanup_inner(
                         reference.owner,
                         outcome,
@@ -397,6 +401,14 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             .copied()
             .map(|member| (member, SemanticReferenceKind::ForegroundMember)),
     );
+
+    if let Some(graph) = node.graph_declaration() {
+        references.extend(
+            graph
+                .referenced_nodes()
+                .map(|target| (target, SemanticReferenceKind::GraphDependency)),
+        );
+    }
 
     match node.kind() {
         SemanticNodeKind::Signal(state) => {
