@@ -1,54 +1,34 @@
-name: Isolated B5 1693 grid diagnosis
+name: Isolated B5 1693 final validation
 on:
   push:
     branches: [codex/b5-1693-check-20260920]
 permissions:
   contents: read
 jobs:
-  diagnose:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       SOURCE: e186555ef306f76acabfca91a3e6b7e75022479c
+      BASE: 8b3286475869960e59928372cfb47662f0a28b11
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Inspect exact candidate bytes
+      - name: Checkout exact uninstrumented candidate
         run: |
-          git fetch --no-tags --depth=1 origin "$SOURCE"
+          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE"
           git checkout --detach "$SOURCE"
-          git rev-parse HEAD
-          git rev-parse HEAD:crates/noon/src/coordinate_authoring/number_plane.rs
-          git rev-parse HEAD:crates/noon/src/example_scenes/number_plane.rs
-          sed -n '1,32p' crates/noon/src/example_scenes/number_plane.rs
-          sed -n '225,404p' crates/noon/src/coordinate_authoring/number_plane.rs
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/noon/src/example_scenes/number_plane.rs')
-          s = path.read_text()
-          old = '    let plane = scene.number_plane(&options)?;'
-          assert s.count(old) == 1
-          s = s.replace(old, '    eprintln!("ACTUAL OPTIONS {options:?}");\n' + old)
-          anchor = '            assert_eq!(plane.len(), 4, "faded, major, x-axis and y-axis families");'
-          assert s.count(anchor) == 1
-          diag = '''
-                      for (kind, group) in plane.iter().enumerate() {
-                          let children = store.semantic_family_members_checked(*group).unwrap();
-                          eprintln!("GROUP {kind} count={}", children.len());
-                          for child in children.iter().take(6) {
-                              if let Ok(state) = store.semantic_object_state_checked(*child) {
-                                  eprintln!("SAMPLE {kind} content={:?} transform={:?}", state.content, state.transform);
-                              }
-                          }
-                      }
-          '''
-          s = s.replace(anchor, anchor + diag)
-          path.write_text(s)
-          PY
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test "$(git rev-parse HEAD:crates/noon/src/coordinate_authoring/number_plane.rs)" = 65d80cb8ad4aef07f1042f74d1ecbddef261c8aa
+          test "$(git rev-parse HEAD:crates/noon/src/example_scenes/number_plane.rs)" = d4e9b4ba272f5ef8ea4b7ea069ad0d4949bce385
+          git diff --exit-code
       - name: Use repository-pinned Rust
-        run: rustup install
+        run: |
+          rustup install
+          rustc --version --verbose
+          cargo fmt --all -- --check
       - name: Cache Cargo sources
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -58,5 +38,32 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-      - name: Run unchanged grid assertions with diagnostic output
-        run: cargo test -p noon --no-default-features --lib example_scenes::number_plane -- --nocapture
+      - name: Repeat geometry-only NumberPlane and implicit examples
+        run: |
+          for repeat in 1 2 3; do
+            cargo test -p noon --no-default-features --lib example_scenes::number_plane
+            cargo test -p noon --no-default-features --lib example_scenes::implicit_plotting
+          done
+      - name: Validate ordinary full fast gate
+        run: bash scripts/check.sh fast "$BASE"
+      - name: Repeat text-enabled NumberPlane and implicit examples
+        if: ${{ !cancelled() }}
+        run: |
+          for repeat in 1 2 3; do
+            cargo test -p noon --all-features --lib example_scenes::number_plane
+            cargo test -p noon --all-features --lib example_scenes::implicit_plotting
+          done
+      - name: Compile actual WASM adapter
+        if: ${{ !cancelled() }}
+        run: cargo check -p noon-web --all-features --target wasm32-unknown-unknown
+      - name: Validate Python facade tests
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest discover -s web/python -p test_manim_number_plane.py
+          python3 -m unittest discover -s web/python -p test_manim_implicit.py
+      - name: Verify exact source was unchanged
+        if: always()
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          git diff --exit-code
+          echo "Validated source $SOURCE without code edits or assertion changes."
