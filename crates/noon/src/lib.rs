@@ -206,7 +206,8 @@ pub use noon_core::RasterImageSampling;
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
     PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
+    SemanticFadeDirection, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState,
     SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
     SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
     StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan,
@@ -255,7 +256,8 @@ pub mod prelude {
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
         BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
-        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
+        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, Graph,
+        GraphAuthoringError, GraphEdgeMobject, GraphOptions, DiGraph, LiveContinuation,
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
         NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions, RateFunction, Scene,
