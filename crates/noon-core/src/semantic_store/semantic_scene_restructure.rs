@@ -284,11 +284,20 @@ fn plan_explicit_root_projection(
     } else {
         None
     };
-    let retained_roots: HashSet<_> = explicit
+    let mut retained_roots: HashSet<_> = explicit
         .iter()
         .copied()
         .filter(|member| root_node.contains_member(*member))
         .collect();
+    // If the replacement target is already a direct root, keep that edge and
+    // move it into the source slot instead of staging remove+add for the same
+    // family edge. Semantic transactions deliberately reject duplicate edge
+    // mutations, and a visible target already has the identity we need.
+    if let Some((_, replacement)) = replacement {
+        if root_node.contains_member(replacement) {
+            retained_roots.insert(replacement);
+        }
+    }
     let mut transaction = SemanticMutationTransaction::new();
     for (root, _, _) in &plans {
         if !retained_roots.contains(root) {
