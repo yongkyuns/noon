@@ -1,0 +1,84 @@
+name: B5 Graph binding integration qualification
+on:
+  push:
+    branches: [codex/b5-1694-integration-check-20260920]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE: 56d4e65e777e54142eb2149fddbb01f11f00f213
+      BASE: bf776186325640496e58eac91962573811740356
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Reconcile only the previously qualified binding slice
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/noon-1694-integration-evidence
+          git fetch --no-tags --depth=200 origin "$SOURCE" "$BASE"
+          git checkout --detach "$BASE"
+          git checkout "$SOURCE" -- crates/noon/src/graph_semantic_bindings.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/lib.rs')
+          text = p.read_text()
+          old = 'mod graph_topology;\npub use graph_topology::*;'
+          new = 'mod graph_semantic_bindings;\nmod graph_topology;\npub use graph_semantic_bindings::*;\npub use graph_topology::*;'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+          PY
+          git add crates/noon/src/graph_semantic_bindings.rs crates/noon/src/lib.rs
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = "$(printf '%s\n' crates/noon/src/graph_semantic_bindings.rs crates/noon/src/lib.rs)"
+          test "$(git rev-parse :crates/noon/src/graph_semantic_bindings.rs)" = "$(git rev-parse "$SOURCE":crates/noon/src/graph_semantic_bindings.rs)"
+          git config user.name 'Noon validation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          TREE=$(git write-tree)
+          CANDIDATE=$(git commit-tree "$TREE" -p "$SOURCE" -p "$BASE" -m 'B5: reconcile qualified Graph bindings with current master')
+          git checkout --detach "$CANDIDATE"
+          git rev-parse HEAD | tee /tmp/noon-1694-integration-evidence/tested-head.txt
+          git rev-parse HEAD^{tree} | tee /tmp/noon-1694-integration-evidence/tested-tree.txt
+          git diff "$BASE" HEAD --stat | tee /tmp/noon-1694-integration-evidence/source-stat.txt
+          git diff "$BASE" HEAD -- crates/noon/src/lib.rs | tee /tmp/noon-1694-integration-evidence/lib.patch
+          test "$(git rev-parse HEAD:crates/noon/src/graph_topology.rs)" = "$(git rev-parse "$BASE":crates/noon/src/graph_topology.rs)"
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Qualify exact reconciled source with full fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast "$BASE" > /tmp/noon-1694-integration-evidence/fast.log 2>&1 || { tail -n 160 /tmp/noon-1694-integration-evidence/fast.log; exit 1; }
+          tail -n 60 /tmp/noon-1694-integration-evidence/fast.log
+          cargo test -p noon --all-features --lib graph_semantic_bindings 2>&1 | tee /tmp/noon-1694-integration-evidence/binding-tests.log
+          cargo check -p noon-web --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-1694-integration-evidence/wasm.log
+      - name: Publish only unchanged qualified integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/noon-1694-integration-evidence/tested-head.txt)"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/noon-1694-integration-evidence/tested-tree.txt)"
+          git diff --exit-code
+          git diff --cached --exit-code
+          git merge-base --is-ancestor "$SOURCE" HEAD
+          git merge-base --is-ancestor "$BASE" HEAD
+          test "$(git diff --name-only "$BASE" HEAD)" = "$(printf '%s\n' crates/noon/src/graph_semantic_bindings.rs crates/noon/src/lib.rs)"
+          git push origin HEAD:refs/heads/codex/b5-1694-integrated-verified-20260920
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: b5-1694-integration-evidence
+          path: /tmp/noon-1694-integration-evidence
+          if-no-files-found: error
+          retention-days: 7
