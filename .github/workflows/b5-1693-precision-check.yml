@@ -21,7 +21,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Prepare exact source without retaining helper files
+      - name: Prepare exact source and adaptive-trace assertions
         shell: bash
         run: |
           set -euo pipefail
