@@ -92,6 +92,20 @@ try {
         await clear(); assertExactPixels(await image("clear"), baseline, "clear restores scene exactly");
         result.checks.push("precise-click-and-overlay-only-clear");
 
+        if (!program) {
+          // A publication-only change must become presented without requiring
+          // another pointer event to discover its stale receipt.
+          const oldReceipt = await receipt();
+          await page.evaluate(() => { receiptTest.renderer.seekDirect(0.25); receiptTest.driver.wake(); });
+          await settled(); status = await receipt();
+          assert.notEqual(status.current, oldReceipt.current);
+          assert.equal(status.presented, status.current, "publication-only wake refreshes the receipt");
+          assertExactPixels(await image("publication-only-refresh"), baseline, "static seek preserves pixels");
+          await page.evaluate(() => { receiptTest.renderer.seekDirect(0); receiptTest.driver.wake(); });
+          await settled();
+          result.checks.push("publication-only-wake-refresh-without-input");
+        }
+
         // The release is collected synchronously before the notification microtask
         // can paint the resize/seek. It must never be retagged to that newer frame.
         for (const invalidation of program ? ["surface"] : ["publication", "surface"]) {
@@ -117,6 +131,37 @@ try {
           assertSelectionPixels(recovered, await image(`${invalidation}-fresh`), SHAPES[0]);
           await clear(); assertExactPixels(await image(`${invalidation}-clear`), recovered, "fresh contact clears exactly");
           result.checks.push(`${invalidation}-reject-cancel-fresh-contact`);
+        }
+        // Real mouse down/up straddle a complete surface reset and repaint.
+        // No intervening pointer event can do the cancellation for the host.
+        for (const reset of ["backing-resize", "suspend-resume"]) {
+          const rect = await page.locator("#scene").boundingBox();
+          const point = shapeSurfaceCenter(SHAPES[0]);
+          await page.mouse.move(rect.x + point.x, rect.y + point.y);
+          await page.mouse.down(); await settled();
+          const beforeReset = await page.evaluate(() => ({
+            trace: receiptTest.trace.length,
+            authored: receiptTest.renderer.debugSelectionFrameJson(),
+          }));
+          await page.evaluate(reset => {
+            const t = receiptTest;
+            if (reset === "suspend-resume") t.renderer.resize(0, 0);
+            t.renderer.resize(960, 540);
+            t.driver.wake();
+          }, reset);
+          await settled();
+          assert.equal(await page.evaluate(() => receiptTest.trace.length), beforeReset.trace,
+            "surface reset/repaint must not rely on another DOM occurrence");
+          status = await receipt(); assert.equal(status.presented, status.current);
+          const repainted = await image(`${reset}-before-release`);
+          await page.mouse.up(); await settled();
+          assertExactPixels(await image(`${reset}-after-release`), repainted,
+            `repainted-surface-release-must-not-click: ${reset}`);
+          assert.equal(await page.evaluate(() => receiptTest.renderer.debugSelectionFrameJson()), beforeReset.authored);
+          await click(SHAPES[0]);
+          assertSelectionPixels(repainted, await image(`${reset}-fresh`), SHAPES[0]);
+          await clear(); assertExactPixels(await image(`${reset}-clear`), repainted, `${reset} clear`);
+          result.checks.push(`${reset}-repaint-before-release-cancels-and-recovers`);
         }
         if (!program) {
           await page.evaluate(() => { receiptTest.renderer.seekDirect(0); receiptTest.driver.wake(); }); await settled();

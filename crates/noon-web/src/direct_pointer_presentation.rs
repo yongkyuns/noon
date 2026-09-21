@@ -74,9 +74,22 @@ impl DirectPointerPresentation {
         // Separate cancellation, not acknowledgement of the rejected occurrence.
         // The caller retires the DOM contact, so held motion/release cannot resume
         // this gesture after the next frame. There is no automatic replay.
-        browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence)?;
+        browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
         self.refresh_pending = true;
         Ok(false)
+    }
+
+    /// Publication identity can change without dirty renderer rows (for example,
+    /// a signal with no visual dependents). Re-present that identity through the
+    /// normal host wake rather than making the next pointer occurrence discover
+    /// and repair the stale receipt. Callback barriers are not display races.
+    pub(crate) fn needs_refresh(&self, session: &ExecutionSession) -> bool {
+        self.refresh_pending
+            || self.presented.as_ref().is_some_and(|frame| {
+                frame
+                    .validate_current(session, frame.view())
+                    .is_err_and(|error| recoverable_frame_error(&error))
+            })
     }
 
     pub(crate) fn invalidate(&mut self) {
