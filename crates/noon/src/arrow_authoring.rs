@@ -149,7 +149,7 @@ impl ManimArrowOptions {
         self.prototype.set_object_opacity(opacity)
     }
 
-    fn prepare(self, store: &mut SemanticStore) -> Result<PreparedArrow, AuthoringError> {
+    pub(crate) fn prepare(self, store: &mut SemanticStore) -> Result<PreparedArrow, AuthoringError> {
         let ShortenedLine {
             visible_start,
             visible_end,
@@ -357,19 +357,19 @@ pub(crate) fn create_arrow_batch_family(
     Ok((family, arrows))
 }
 
-struct PreparedArrow {
-    shaft: SemanticObjectState,
-    end_tip: VectorPath,
-    start_tip: Option<VectorPath>,
-    tip_color: Color,
-    z_index: f64,
+pub(crate) struct PreparedArrow {
+    pub(crate) shaft: SemanticObjectState,
+    pub(crate) end_tip: VectorPath,
+    pub(crate) start_tip: Option<VectorPath>,
+    pub(crate) tip_color: Color,
+    pub(crate) z_index: f64,
 }
 
-struct StagedArrow {
-    family: noon_core::SemanticLocalNodeToken,
-    shaft: noon_core::SemanticLocalNodeToken,
-    end_tip: noon_core::SemanticLocalNodeToken,
-    start_tip: Option<noon_core::SemanticLocalNodeToken>,
+pub(crate) struct StagedArrow {
+    pub(crate) family: noon_core::SemanticLocalNodeToken,
+    pub(crate) shaft: noon_core::SemanticLocalNodeToken,
+    pub(crate) end_tip: noon_core::SemanticLocalNodeToken,
+    pub(crate) start_tip: Option<noon_core::SemanticLocalNodeToken>,
 }
 
 #[derive(Debug)]
@@ -415,7 +415,7 @@ pub(crate) fn publish_arrow_options(
     })
 }
 
-fn stage_prepared_arrow(
+pub(crate) fn stage_prepared_arrow(
     transaction: &mut SemanticMutationTransaction,
     prepared: &PreparedArrow,
     end_tip_handle: noon_core::GeometryResourceHandle,
@@ -451,7 +451,7 @@ fn stage_prepared_arrow(
     }
 }
 
-fn resolve_staged_arrow(
+pub(crate) fn resolve_staged_arrow(
     staged: StagedArrow,
     mut resolve: impl FnMut(noon_core::SemanticLocalNodeToken) -> Option<noon_core::SemanticNodeId>,
 ) -> Result<CommittedArrow, AuthoringError> {
