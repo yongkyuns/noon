@@ -1,0 +1,126 @@
+diff --git a/crates/noon-web/src/semantic_execution_player.rs b/crates/noon-web/src/semantic_execution_player.rs
+index 60e26605e41f9382708ae2961a600f59f7f5d3f3..21de28fc37492fe10bb4b4b8710aa8a47ed151a7 100644
+--- a/crates/noon-web/src/semantic_execution_player.rs
++++ b/crates/noon-web/src/semantic_execution_player.rs
+@@ -2993,7 +2993,8 @@ impl SemanticExecutionPlayer {
+ 
+     /// Decode one contextual browser pointer occurrence at the genuine worker
+     /// control-port boundary. Coordinates are CSS pixels relative to the content
+-    /// viewport; conversion and admission happen against one session publication.
++    /// viewport. The immutable collection-time receipt selects the issued shared
++    /// snapshot; delayed input is never projected with a newer execution camera.
+     #[cfg(any(target_arch = "wasm32", test))]
+     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
+     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+index f76ba8fc7472d9befecdc9a48b130c9b9305dc1e..a5d70b534233a9234fa99b71ef0958d0a5d0ddbd 100644
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+@@ -252,3 +252,20 @@ fn retained_pointer_view_validation_rejects_invalid_mapping_before_mirror_admiss
+     d.pointer_view=Some(PointerPresentationView{revision:1,width:800.0,height:400.0});
+     assert!(d.validate().is_ok());
+ }
++
++#[test]
++fn invalidated_receipt_cannot_be_resurrected_before_repaint() {
++    let (mut p, a) = ready();
++    assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
++    assert!(invalidate(&mut p, a));
++    let acknowledged_sequence = p.next_native_event_sequence;
++    assert!(!acknowledge(&mut p, a), "late duplicate is not a replacement presentation");
++    assert_eq!(p.next_native_event_sequence, acknowledged_sequence);
++    assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
++    assert!(p.session.selected_pointer_target().is_none());
++    let b = receipt(&delta(&mut p), 2);
++    assert!(acknowledge(&mut p, b));
++    assert!(input(&mut p, "press", 2, Some(b), 1, 400.0).unwrap());
++    assert!(input(&mut p, "release", 2, Some(b), 1, 400.0).unwrap());
++    assert!(p.session.selected_pointer_target().is_some());
++}
+diff --git a/web/semantic-engine-endpoint.js b/web/semantic-engine-endpoint.js
+index 054bebae4901549e55e743d6d409c4cbc938ce57..d0286b8b81e88e0a039c45f8d28be0ea4bcd9094 100644
+--- a/web/semantic-engine-endpoint.js
++++ b/web/semantic-engine-endpoint.js
+@@ -1001,10 +1001,11 @@ export async function attachSemanticEngine(
+         if (!Number.isSafeInteger(message.receipt.presentation) || message.receipt.presentation <= 0) {
+           fail(new Error("invalid pointer presentation invalidation")); return;
+         }
+-        if (pendingPointerInvalidation === null ||
+-            message.receipt.presentation > pendingPointerInvalidation.presentation) {
+-          pendingPointerInvalidation = message.receipt;
+-        }
++        // Until cleanup runs, Rust still owns the first acknowledged receipt.
++        // A newer repaint may itself disappear while transport is backpressured;
++        // cancel that original contact, not a receipt Rust has never accepted.
++        pendingPointerInvalidation ??= message.receipt;
++        pendingPointerPresentation = null;
+         void drain();
+       }
+       else if (message?.type === "renderer_observation") noteRendererObservation(message);
+diff --git a/web/semantic-engine-endpoint.test.mjs b/web/semantic-engine-endpoint.test.mjs
+index 4fda11bd971a41299dbdfa4e11203e83a85626eb..58aa6328be81d7e462723564c1b0073392dcc722 100644
+--- a/web/semantic-engine-endpoint.test.mjs
++++ b/web/semantic-engine-endpoint.test.mjs
+@@ -2309,3 +2309,62 @@ test("selection configuration rejection does not drain or replace the current wa
+     assert.equal(f.player.time(), 0);
+   } finally { endpoint?.stop(); f.close(); }
+ });
++
++for (const cancelFails of [false, true]) {
++  test(`worker receipt invalidations retain the acknowledged frame behind backpressure${cancelFails ? " and stop on cancellation failure" : ""}`, async () => {
++    const f = fixture();
++    let endpoint;
++    const calls = [];
++    try {
++      f.player.notePointerPresentationJson = (json) => {
++        calls.push(["presented", JSON.parse(json).presentation]);
++        return true;
++      };
++      f.player.invalidatePointerPresentationJson = (json) => {
++        calls.push(["cancel", JSON.parse(json).presentation]);
++        if (cancelFails) throw new Error("guarded cancellation failed");
++        return true;
++      };
++      const ready = next(f.control.port2);
++      const initial = nextMatching(f.render.port2, m => m.type === "execution_delta");
++      endpoint = await f.attach();
++      await ready;
++      const first = await initial;
++      const receiptA = { session: first.session, sequence: first.sequence, presentation: 1, view_revision: 1 };
++      const acknowledged = nextMatching(f.control.port2, m => m.type === "pointer_presented");
++      f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence, pointerReceipt: receiptA });
++      await acknowledged;
++      const secondDelta = nextMatching(f.render.port2, m => m.type === "execution_delta");
++      await request(f.control.port2, "seek", 401, { time: 0.5 });
++      const second = await secondDelta;
++      // Both consumed acknowledgements are withheld, so lifecycle cleanup must
++      // stay ordered behind the existing transport boundary rather than recurse.
++      const receiptB = { ...receiptA, sequence: second.sequence, presentation: 2 };
++      const invalidatedB = nextMatching(f.control.port2, m =>
++        m.type === "pointer_presentation_invalidated" && m.receipt.presentation === 2);
++      f.render.port2.postMessage({ type: "pointer_presentation_invalidated", receipt: receiptA });
++      f.render.port2.postMessage({ type: "execution_presented", session: second.session, sequence: second.sequence, pointerReceipt: receiptB });
++      f.render.port2.postMessage({ type: "pointer_presentation_invalidated", receipt: receiptB });
++      await invalidatedB;
++      assert.deepEqual(calls, [["presented", 1]], "repaint acknowledgement waits for old contact cleanup");
++      const failure = cancelFails
++        ? nextMatching(f.control.port2, m => m.type === "error" && /guarded cancellation failed/.test(m.message))
++        : null;
++      f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
++      if (failure) await failure;
++      else {
++        // A later render-port message is an ordered fence after writable delivery.
++        const receiptC = { ...receiptB, presentation: 3 };
++        const recovered = nextMatching(f.control.port2, m =>
++          m.type === "pointer_presented" && m.receipt.presentation === 3);
++        f.render.port2.postMessage({ type: "execution_presented", session: second.session, sequence: second.sequence, pointerReceipt: receiptC });
++        await recovered;
++      }
++      assert.deepEqual(calls, cancelFails
++        ? [["presented", 1], ["cancel", 1]]
++        : [["presented", 1], ["cancel", 1], ["presented", 3]],
++      "cancel frame A, never acknowledge already-invalidated frame B");
++      assert.equal(f.stats().stopped, cancelFails ? 1 : 0);
++    } finally { endpoint?.stop(); f.close(); }
++  });
++}
