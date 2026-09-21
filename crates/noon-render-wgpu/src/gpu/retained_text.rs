@@ -3380,6 +3380,7 @@ impl GpuRenderer {
             clear_color,
             query_set,
             overlay: Some(frame.overlay),
+            finalize: true,
         };
         if let Some(derived) = frame.transient.filter(|value| !value.slots.is_empty()) {
             self.encode_retained_derived_inner(encoder, view, frame.prepared, derived, options)
