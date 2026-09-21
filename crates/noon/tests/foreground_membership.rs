@@ -235,7 +235,6 @@ fn family_fade_out_retires_nested_foreground_declarations() {
     assert!(b.state().is_ok());
 }
 
-
 #[test]
 fn replacing_partially_demoted_family_never_resurrects_descendants_cold_or_live() {
     for live in [false, true] {
