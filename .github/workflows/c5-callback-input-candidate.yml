@@ -90,6 +90,7 @@ jobs:
           cd "$CANDIDATE"
           cargo test -p noon --all-features --lib execution_session::input::callback_tests -- --nocapture 2>&1 | tee "$PROOF/callback-input.log"
           cargo test -p noon --all-features --lib live_program::pointer_input_tests -- --nocapture 2>&1 | tee "$PROOF/live-pointer.log"
+          cargo test -p noon-native --lib execution_source::input_callback_tests -- --nocapture 2>&1 | tee "$PROOF/native-pointer-callbacks.log"
 
       - name: Execute repository fast gate
         run: |
