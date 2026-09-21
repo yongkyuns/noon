@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/crates/noon-native/src/execution_source/input_callback_tests.rs
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,102 @@
 +use std::cell::Cell;
 +use std::rc::Rc;
 +
