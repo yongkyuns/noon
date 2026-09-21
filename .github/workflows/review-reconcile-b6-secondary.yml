@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 2196bc15aca8abc50578bf4ccafce9bcfa20cc1a
+          ref: 0b2f891708b9933453f61649770001a1e380873a
           persist-credentials: false
       - name: Install repository-pinned Rust and software Vulkan
         run: |
