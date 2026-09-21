@@ -12,9 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE: 0a69543ed69857ca2de15768f80ca14ddc3ab383
+      SOURCE: 605b36f05b8dc4fb56ca7cf4024af58f2ec4d16e
       BASE: 8b3286475869960e59928372cfb47662f0a28b11
-      REFERENCE: cd898035a272795eaf0cdbfcd3b267943dc22d49
       RESULT_REF: refs/heads/codex/b5-1693-checked-candidate-20260920
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -24,21 +23,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 3
-      - name: Prepare exact source candidate
+      - name: Checkout exact source candidate
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/ci/b5-1693-repair.py /tmp/b5-1693-repair.py
-          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE" "$REFERENCE"
+          git fetch --no-tags --depth=1 origin "$SOURCE" "$BASE"
           git checkout --detach "$SOURCE"
           test "$(git rev-parse HEAD)" = "$SOURCE"
-          python3 /tmp/b5-1693-repair.py
       - name: Use repository-pinned Rust
         run: |
           rustup install
           rustup show active-toolchain
           rustc --version --verbose
       - name: Format once and preserve reviewable candidate
+        id: candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -50,15 +48,15 @@ jobs:
           def names(*args):
               return set(subprocess.check_output(['git', *args], text=True).splitlines())
           allowed = names('diff', '--name-only', os.environ['BASE'], os.environ['SOURCE'])
-          allowed.add('web/python/_manim_plotting.py')
           changed = names('diff', '--name-only')
           unexpected = changed - allowed
-          assert not unexpected, f'Unexpected formatter/repair scope: {sorted(unexpected)}'
+          assert not unexpected, f'Unexpected formatter scope: {sorted(unexpected)}'
           assert not any(p.startswith('.github/') for p in changed)
-          print('Candidate files:', *sorted(changed), sep='\n')
+          print('Formatted files:', *sorted(changed), sep='\n')
           PY
-          git diff --stat
-          git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'fix: qualify NumberPlane and implicit feature wiring'
+          if ! git diff --quiet; then
+            git -c user.name='Noon validation' -c user.email='noreply@github.com' commit -am 'style: apply pinned formatter to NumberPlane ownership tests'
+          fi
           git push origin "HEAD:$RESULT_REF"
           echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "Candidate commit: $(git rev-parse HEAD)"
@@ -75,12 +73,15 @@ jobs:
       - name: Validate ordinary repository fast gate
         run: bash scripts/check.sh fast "$BASE"
       - name: Check actual WASM compilation
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         run: cargo check -p noon-web --all-features --target wasm32-unknown-unknown
       - name: Validate feature-poor geometry examples
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         run: |
           cargo test -p noon --no-default-features --lib example_scenes::number_plane
           cargo test -p noon --no-default-features --lib example_scenes::implicit_plotting
       - name: Validate Python facade regressions
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         run: |
           python3 -m unittest discover -s web/python -p test_manim_number_plane.py
           python3 -m unittest discover -s web/python -p test_manim_implicit.py
