@@ -7683,6 +7683,112 @@ mod tests {
     }
 
     #[test]
+    fn canonical_foreground_batches_use_shared_membership_and_authoritative_query() {
+        let mut context = CanonicalAuthoringScene::default();
+        let first = context.scene.circle(0.5).unwrap();
+        let second = context.scene.square(0.5).unwrap();
+        let later = context.scene.rectangle(0.25, 0.75).unwrap();
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::AddForeground,
+                members: vec![
+                    membership_mobject(0, &first),
+                    membership_mobject(1, &second),
+                ],
+                bindings: vec![
+                    (ObjectId::new(0), first.clone()),
+                    (ObjectId::new(1), second.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![
+                format!("{}:{}", first.node_id().slot(), first.node_id().generation()),
+                format!("{}:{}", second.node_id().slot(), second.node_id().generation()),
+            ]
+        );
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![membership_mobject(2, &later)],
+                bindings: vec![(ObjectId::new(2), later.clone())],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_membership_keys().unwrap(),
+            vec![
+                format!("{}:{}", later.node_id().slot(), later.node_id().generation()),
+                format!("{}:{}", first.node_id().slot(), first.node_id().generation()),
+                format!("{}:{}", second.node_id().slot(), second.node_id().generation()),
+            ]
+        );
+        assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::RemoveForeground,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: first.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            )]
+        );
+        assert_eq!(context.root_membership_keys().unwrap().len(), 3);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::BringToBack,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: second.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert_eq!(
+            context.root_membership_keys().unwrap().first(),
+            Some(&format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            ))
+        );
+    }
+
+    #[test]
+    fn foreground_add_requires_binding_before_publication() {
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context.scene.circle(0.5).unwrap();
+        let before = context.scene.revision();
+        let error = context.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::AddForeground,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: object.clone(),
+            }],
+            bindings: Vec::new(),
+        });
+        assert!(error.is_err());
+        assert_eq!(context.scene.revision(), before);
+        assert!(context.root_membership_keys().unwrap().is_empty());
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert!(!context.identities.contains_key(&object.node_id()));
+    }
+
+    #[test]
     fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {
         use std::{cell::RefCell, rc::Rc};
         let store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
