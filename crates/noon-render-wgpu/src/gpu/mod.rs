@@ -1139,11 +1139,7 @@ impl GpuRenderer {
         query_set: Option<&wgpu::QuerySet>,
     ) -> Result<DrawStats, SecondaryViewportError> {
         for secondary in secondary_viewports {
-            SecondaryViewport::new(
-                secondary.camera,
-                secondary.destination,
-                self.viewport_size,
-            )?;
+            SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
         if !secondary_viewports.is_empty()
             && Self::secondary_viewport_requires_multisampling(prepared, presentations)
