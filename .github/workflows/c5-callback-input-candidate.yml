@@ -1,0 +1,153 @@
+name: C5 callback-aware pointer input qualification
+on:
+  push:
+    branches: [validation/c5-callback-input-20260921]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-callback-input-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Assemble exact callback/input candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          cat candidate/c5-callback-input/part*.b64 | base64 -d | xz -d > "$GITHUB_WORKSPACE/proof/input.patch"
+          echo '3f2396b4881c0f84508ff6f9c555da56fda1281dea3afe0f57a55bb06a2752d5  proof/input.patch' | sha256sum -c -
+          git worktree add --detach "$RUNNER_TEMP/candidate" bb7c12c75f2389fc696d25b0e2b657ad410daac2
+          git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
+          git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
+      - name: Use repository-pinned Rust
+        run: |
+          cd "$CANDIDATE"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF/rust.txt"
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with: {version: v0.16.0}
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: c5-callback-input-cargo-${{ runner.os }}-${{ hashFiles('crates/**/Cargo.toml') }}
+          restore-keys: |
+            c5-worker-presented-cargo-${{ runner.os }}-
+            c5-direct-presented-cargo-${{ runner.os }}-
+            ${{ runner.os }}-cargo-sources-
+      - name: Format and retain exact source
+        run: |
+          cd "$CANDIDATE"
+          cargo fmt --all
+          git add -A
+          git diff --cached --check
+          git write-tree | tee "$PROOF/tree.txt"
+          git diff --cached --binary --full-index > "$PROOF/formatted.patch"
+          git diff --cached --stat > "$PROOF/stat.txt"
+          git archive --format=tar --prefix=source/ "$(cat "$PROOF/tree.txt")" | gzip > "$PROOF/source.tar.gz"
+      - name: Execute callback-aware pointer regressions
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo test -p noon --all-features --lib execution_session::input::callback_tests -- --nocapture 2>&1 | tee "$PROOF/callback-input.log"
+          cargo test -p noon --all-features --lib live_program::pointer_input_tests -- --nocapture 2>&1 | tee "$PROOF/live-pointer.log"
+      - name: Execute repository fast gate
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          bash scripts/check.sh fast bb7c12c75f2389fc696d25b0e2b657ad410daac2 2>&1 | tee "$PROOF/fast.log"
+      - name: Compile reduced WASM paths
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-noon.log"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-web.log"
+      - name: Prove callback configuration is not globally bypassed
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          file=crates/noon/src/execution_session/input.rs
+          cp "$file" "$RUNNER_TEMP/input-original.rs"
+          trap 'cp "$RUNNER_TEMP/input-original.rs" "$file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon/src/execution_session/input.rs')
+          s=p.read_text()
+          before='''        let (prepared, inputs) = self.prepare_native_pointer_input(token, input)?;
+        self.begin_native_pointer_callback_phase(prepared, inputs)
+'''
+          after='''        self.ensure_direct_input_ingress_available()?;
+        let (prepared, inputs) = self.prepare_native_pointer_input(token, input)?;
+        self.begin_native_pointer_callback_phase(prepared, inputs)
+'''
+          assert s.count(before) == 1
+          p.write_text(s.replace(before, after))
+          PY
+          if cargo test -p noon --all-features --lib execution_session::input::callback_tests::input_native_effects_and_callback_writes_publish_once_together -- --nocapture > "$PROOF/configured-callback-mutation.log" 2>&1; then
+            echo 'configured callback rejection mutation unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'input_native_effects_and_callback_writes_publish_once_together ... FAILED' "$PROOF/configured-callback-mutation.log"
+          cp "$RUNNER_TEMP/input-original.rs" "$file"
+          trap - EXIT
+          cargo fmt --all -- --check
+          git add -A
+          test "$(git write-tree)" = "$(cat "$PROOF/tree.txt")"
+          echo passed > "$PROOF/qualification.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: c5-callback-input-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-tested-source:
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bb7c12c75f2389fc696d25b0e2b657ad410daac2
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: c5-callback-input-proof
+          path: ${{ runner.temp }}/proof
+      - name: Publish clean tested shared contract
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/proof"
+          test "$(cat "$proof/qualification.txt")" = passed
+          git apply "$proof/formatted.patch"
+          git add -A
+          test "$(git write-tree)" = "$(cat "$proof/tree.txt")"
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: admit pointer input through required callback transactions'
+          git push origin HEAD:refs/heads/staging/c5-callback-input-${{ github.run_id }}
+          git rev-parse HEAD > "$RUNNER_TEMP/published.txt"
+          git rev-parse HEAD^{tree} >> "$RUNNER_TEMP/published.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c5-callback-input-publication
+          path: ${{ runner.temp }}/published.txt
+          retention-days: 7
