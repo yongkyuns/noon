@@ -866,8 +866,6 @@ impl SemanticStore {
             .filter(|id| self.node(*id).is_some())
     }
 
-    /// Signals explicitly included in one family-root execution scope, ordered
-    /// by stable semantic identity rather than painter position.
     /// Return the authored Graph/DiGraph declaration attached to one family root.
     pub fn semantic_graph_declaration(
         &self,
@@ -902,6 +900,8 @@ impl SemanticStore {
         Ok(previous)
     }
 
+    /// Signals explicitly included in one family-root execution scope, ordered
+    /// by stable semantic identity rather than painter position.
     pub fn semantic_scoped_signals(
         &self,
         scope: SemanticNodeId,
