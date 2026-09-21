@@ -1,0 +1,20 @@
+diff --git a/crates/noon-web/src/semantic_execution_player.rs b/crates/noon-web/src/semantic_execution_player.rs
+index 21de28fc37492fe10bb4b4b8710aa8a47ed151a7..4708b39f05a16bbbc9b6ccf0b727679f99fb513e 100644
+--- a/crates/noon-web/src/semantic_execution_player.rs
++++ b/crates/noon-web/src/semantic_execution_player.rs
+@@ -295,7 +295,6 @@ impl SemanticExecutionPlayer {
+             resource_bundle,
+             snapshot_sent: false,
+             last_sent_selection_overlay: None,
+-            pointer_view: None,
+             pending_callback_phase: None,
+             #[cfg(any(target_arch = "wasm32", test))]
+             semantics: None,
+@@ -338,7 +337,6 @@ impl SemanticExecutionPlayer {
+             resource_bundle,
+             snapshot_sent: false,
+             last_sent_selection_overlay: None,
+-            pointer_view: None,
+             pending_callback_phase: None,
+             semantics: Some(semantics),
+             semantic_root: Some(semantic_root),
