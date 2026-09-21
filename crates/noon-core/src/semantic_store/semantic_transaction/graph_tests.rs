@@ -272,3 +272,105 @@ fn graph_declaration_can_precede_membership_in_the_same_transaction() {
         result.resolve(vertex)
     );
 }
+
+
+fn committed_graph(
+    store: &mut SemanticStore,
+) -> (
+    crate::SemanticNodeId,
+    crate::SemanticNodeId,
+    crate::SemanticNodeId,
+) {
+    let (tx, root, shaft) = valid_pending_graph();
+    let result = tx.apply(store).unwrap();
+    let root = result.resolve(root).unwrap();
+    let shaft = result.resolve(shaft).unwrap();
+    let edge_family = {
+        let declaration = store.semantic_graph_declaration(root).unwrap().unwrap();
+        let edge = declaration.topology().edges().next().unwrap();
+        declaration.edge_binding(edge.id).unwrap().family()
+    };
+    (root, edge_family, shaft)
+}
+
+#[test]
+fn committed_graph_rejects_generic_root_membership_that_would_stale_topology() {
+    let mut store = SemanticStore::new();
+    let (root, _, _) = committed_graph(&mut store);
+    let before_revision = store.scene_revision();
+    let before_members = store.node(root).unwrap().members();
+
+    let mut tx = Transaction::new();
+    let extra = tx.create_node(SemanticNodeCreation::object(circle()));
+    tx.add_member(root, extra);
+    assert!(matches!(
+        tx.apply(&mut store),
+        Err(Error::InvalidGraphDeclaration { .. })
+    ));
+
+    assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(store.node(root).unwrap().members(), before_members);
+    assert_eq!(store.len(), 5);
+}
+
+#[test]
+fn committed_graph_rejects_generic_edge_edits_that_break_line_dependency() {
+    let mut store = SemanticStore::new();
+    let (root, edge_family, shaft) = committed_graph(&mut store);
+    let before_revision = store.scene_revision();
+
+    let mut remove = Transaction::new();
+    remove.remove_member(edge_family, shaft);
+    assert!(matches!(
+        remove.apply(&mut store),
+        Err(Error::InvalidGraphDeclaration { .. })
+    ));
+    assert_eq!(store.scene_revision(), before_revision);
+    assert!(store.node(edge_family).unwrap().contains_member(shaft));
+
+    let mut replace = Transaction::new();
+    replace.replace_content(shaft, StoredGeometry::Circle { radius: 0.5 });
+    assert!(matches!(
+        replace.apply(&mut store),
+        Err(Error::InvalidGraphDeclaration { .. })
+    ));
+    assert_eq!(store.scene_revision(), before_revision);
+    assert!(matches!(
+        store
+            .semantic_object_state_checked(shaft)
+            .unwrap()
+            .content
+            .geometry(),
+        Some(StoredGeometry::Line { .. })
+    ));
+    assert!(store.semantic_graph_declaration(root).unwrap().is_some());
+}
+
+#[test]
+fn committed_graph_allows_generic_line_replacement_that_preserves_invariants() {
+    let mut store = SemanticStore::new();
+    let (root, _, shaft) = committed_graph(&mut store);
+    let before_revision = store.scene_revision();
+
+    let replacement = StoredGeometry::Line {
+        start: Vec2::new(-2.0, 1.0),
+        end: Vec2::new(2.0, 1.0),
+    };
+    let mut tx = Transaction::new();
+    tx.replace_content(shaft, replacement);
+    tx.apply(&mut store).unwrap();
+
+    assert_eq!(
+        store.scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(shaft)
+            .unwrap()
+            .content
+            .geometry(),
+        Some(replacement)
+    );
+    assert!(store.semantic_graph_declaration(root).unwrap().is_some());
+}
