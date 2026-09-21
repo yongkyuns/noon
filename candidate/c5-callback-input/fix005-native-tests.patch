@@ -1,0 +1,121 @@
+--- /dev/null
++++ b/crates/noon-native/src/execution_source/input_callback_tests.rs
+@@ -0,0 +1,92 @@
++use std::cell::Cell;
++use std::rc::Rc;
++
++use noon::RustHostCallbackTable;
++use noon_core::{
++    HostCallbackId, NativeInputModifiers, NativePointerId, NativePointerInput,
++    NativePointerInputKind, NativePointerPosition, SemanticMutationTransaction,
++    SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
++};
++
++use super::{NativeExecutionSource, StaticExecutionSource};
++
++const CALLBACK: HostCallbackId = HostCallbackId::new(1);
++const POINTER: NativePointerId = NativePointerId {
++    source: 1,
++    pointer: 0,
++};
++
++fn source_with_time_zero_callback(invocations: Rc<Cell<u32>>) -> StaticExecutionSource {
++    let mut store = SemanticStore::new();
++    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
++        radius: 1.0,
++    }));
++    store.attach_to_scene(object).unwrap();
++    let mut tx = SemanticMutationTransaction::new();
++    tx.add_updater(object, CALLBACK, 0.0, None);
++    tx.apply(&mut store).unwrap();
++
++    let invoked = Rc::clone(&invocations);
++    let mut callbacks = RustHostCallbackTable::new();
++    callbacks
++        .insert(CALLBACK, move |_context| {
++            invoked.set(invoked.get() + 1);
++            Ok::<_, std::io::Error>(())
++        })
++        .unwrap();
++    StaticExecutionSource::new(
++        noon::ExecutionSession::from_semantic_store(&store).unwrap(),
++        callbacks,
++    )
++}
++
++#[test]
++fn native_source_routes_pointer_occurrence_through_its_required_callback_table() {
++    let invocations = Rc::new(Cell::new(0));
++    let mut source = source_with_time_zero_callback(Rc::clone(&invocations));
++    let token = source.configure_native_pointer_input(POINTER, 7).unwrap();
++    let position = NativePointerPosition::new(Vec2::ZERO, Vec2::ZERO).unwrap();
++    source
++        .submit_native_pointer_input(
++            &token,
++            NativePointerInput::new(
++                0,
++                token.pointer(),
++                token.context(),
++                NativeInputModifiers::default(),
++                NativePointerInputKind::Press {
++                    position,
++                    button: 0,
++                },
++            ),
++        )
++        .unwrap();
++
++    assert_eq!(invocations.get(), 1);
++    assert_eq!(
++        source.frame_time(),
++        0.0,
++        "input callbacks do not advance authored time"
++    );
++    assert!(source.session().callback_termination().is_none());
++    assert_eq!(
++        source
++            .session()
++            .native_pointer_input_token()
++            .unwrap()
++            .context()
++            .publication,
++        source.session().publication_context()
++    );
++}
++
++#[test]
++fn native_source_callback_failure_does_not_accept_the_pointer_sequence() {
++    let mut store = SemanticStore::new();
++    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
++        radius: 1.0,
++    }));
++    store.attach_to_scene(object).unwrap();
++    let mut tx = SemanticMutationTransaction::new();
++    tx.add_updater(object, CALLBACK, 0.0, None);
++    tx.apply(&mut store).unwrap();
++
++    let mut callbacks = RustHostCallbackTable::new();
++    callbacks
++        .insert(CALLBACK, |_context| {
++            Err::<(), _>(std::io::Error::other("callback failed"))
++        })
++        .unwrap();
++    let mut source = StaticExecutionSource::new(
++        noon::ExecutionSession::from_semantic_store(&store).unwrap(),
++        callbacks,
++    );
++    let token = source.configure_native_pointer_input(POINTER, 3).unwrap();
++    let position = NativePointerPosition::new(Vec2::ZERO, Vec2::ZERO).unwrap();
++    let input = NativePointerInput::new(
++        0,
++        token.pointer(),
++        token.context(),
++        NativeInputModifiers::default(),
++        NativePointerInputKind::Press {
++            position,
++            button: 0,
++        },
++    );
++    assert!(source.submit_native_pointer_input(&token, input).is_err());
++    assert!(source.session().callback_termination().is_some());
++}
