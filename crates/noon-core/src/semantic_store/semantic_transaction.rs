@@ -2109,71 +2109,93 @@ fn validate_graph_declaration(
         .members_for_read(store, scope)
         .into_iter()
         .collect::<HashSet<_>>();
-    let mut vertices = HashSet::with_capacity(graph.vertices().len());
+
+    let mut vertices_by_id = HashMap::with_capacity(graph.vertices().len());
     let mut semantic_objects = HashSet::new();
-    for &vertex in graph.vertices() {
+    for &(vertex_id, vertex) in graph.vertices() {
+        if !graph.topology().contains_vertex(vertex_id)
+            || vertices_by_id.insert(vertex_id, vertex).is_some()
+        {
+            return Err(invalid(
+                "semantic vertex bindings must name each topology vertex exactly once",
+            ));
+        }
         catalog.ensure_object(vertex, index)?;
-        if removed(vertex) || !vertices.insert(vertex) || !semantic_objects.insert(vertex) {
+        if removed(vertex) || !semantic_objects.insert(vertex) {
             return Err(invalid("vertices must be distinct live semantic objects"));
         }
         if !root_members.contains(&vertex) {
             return Err(invalid("every graph vertex must be a direct graph-root member"));
         }
     }
+    if vertices_by_id.len() != graph.topology().vertices().count()
+        || graph
+            .topology()
+            .vertices()
+            .any(|vertex| !vertices_by_id.contains_key(&vertex))
+    {
+        return Err(invalid(
+            "semantic vertex bindings must cover the complete topology",
+        ));
+    }
 
+    let mut edge_ids = HashSet::with_capacity(graph.edges().len());
     let mut edge_families = HashSet::with_capacity(graph.edges().len());
-    let mut edge_keys =
-        HashSet::<(SemanticTransactionNodeRef, SemanticTransactionNodeRef, bool)>::new();
-    for edge in graph.edges().iter().copied() {
-        catalog.ensure_family(edge.family(), index)?;
-        catalog.ensure_object(edge.line(), index)?;
-        if removed(edge.family())
-            || removed(edge.line())
-            || removed(edge.start())
-            || removed(edge.end())
-        {
+    for binding in graph.edges().iter().copied() {
+        let Some(edge) = graph.topology().edge(binding.id()) else {
+            return Err(invalid("semantic edge binding names an unknown topology edge"));
+        };
+        if !edge_ids.insert(binding.id()) {
+            return Err(invalid("semantic edge bindings must be unique"));
+        }
+
+        catalog.ensure_family(binding.family(), index)?;
+        catalog.ensure_object(binding.line(), index)?;
+        if removed(binding.family()) || removed(binding.line()) {
             return Err(invalid("graph declarations cannot reference removed nodes"));
         }
-        if !vertices.contains(&edge.start()) || !vertices.contains(&edge.end()) {
-            return Err(invalid("graph edge endpoints must be declared graph vertices"));
-        }
-        if edge.family() == scope || !edge_families.insert(edge.family()) {
+        if binding.family() == scope || !edge_families.insert(binding.family()) {
             return Err(invalid("graph edge families must be distinct from the graph root"));
         }
-        if !semantic_objects.insert(edge.line()) {
+        if !semantic_objects.insert(binding.line()) {
             return Err(invalid("graph vertex and edge Line identities must be distinct"));
         }
-        if !root_members.contains(&edge.family()) {
+        if !root_members.contains(&binding.family()) {
             return Err(invalid("every graph edge family must be a direct graph-root member"));
         }
         if !family_edges
-            .members_for_read(store, edge.family())
-            .contains(&edge.line())
+            .members_for_read(store, binding.family())
+            .contains(&binding.line())
         {
             return Err(invalid("graph edge Line must be a direct edge-family member"));
         }
         if !matches!(
-            object_state(edge.line()).and_then(|state| state.content.geometry()),
+            object_state(binding.line()).and_then(|state| state.content.geometry()),
             Some(StoredGeometry::Line { .. })
         ) {
             return Err(invalid("graph edge dependency component must be an analytic Line"));
         }
 
-        let key = (edge.start(), edge.end(), edge.directed());
-        let duplicate = if edge.directed() {
-            !edge_keys.insert(key)
-        } else {
-            edge_keys.contains(&(edge.end(), edge.start(), false))
-                || !edge_keys.insert(key)
-        };
-        if duplicate {
-            return Err(invalid("graph endpoint/directedness edge identity must be unique"));
+        if !vertices_by_id.contains_key(&edge.start) || !vertices_by_id.contains_key(&edge.end) {
+            return Err(invalid(
+                "every graph edge endpoint must resolve through the declared vertex bindings",
+            ));
         }
     }
+    if edge_ids.len() != graph.topology().edges().count()
+        || graph
+            .topology()
+            .edges()
+            .any(|edge| !edge_ids.contains(&edge.id))
+    {
+        return Err(invalid(
+            "semantic edge bindings must cover the complete topology",
+        ));
+    }
 
-    if root_members.len() != vertices.len() + edge_families.len()
-        || !vertices
-            .iter()
+    if root_members.len() != vertices_by_id.len() + edge_families.len()
+        || !vertices_by_id
+            .values()
             .copied()
             .chain(edge_families.iter().copied())
             .all(|member| root_members.contains(&member))
