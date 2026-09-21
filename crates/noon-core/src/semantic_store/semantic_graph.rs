@@ -45,6 +45,22 @@ pub struct SemanticGraphEdge {
 }
 
 impl SemanticGraphEdge {
+    pub(crate) const fn from_resolved(
+        family: SemanticNodeId,
+        line: SemanticNodeId,
+        start: SemanticNodeId,
+        end: SemanticNodeId,
+        directed: bool,
+    ) -> Self {
+        Self {
+            family,
+            line,
+            start,
+            end,
+            directed,
+        }
+    }
+
     pub const fn family(self) -> SemanticNodeId {
         self.family
     }
