@@ -3303,5 +3303,6 @@ pub mod path_alignment;
 
 pub mod animated_priority;
 
+pub mod graph;
 pub mod implicit_plotting;
 pub mod number_plane;
