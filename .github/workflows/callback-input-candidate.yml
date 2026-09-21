@@ -1,0 +1,174 @@
+name: Callback-transaction native input qualification
+on:
+  push:
+    branches: [validation/callback-input-20260921]
+permissions:
+  contents: read
+concurrency:
+  group: callback-input-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Assemble checksum-verified candidate on exact worker receipt base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/proof"
+          base64 -d candidate/callback-input/patch.b64 | xz -d > proof/input.patch
+          echo '417dc2243abb3e3b04b02f859ef7cdb3397f54493dd692e87833f4719d28f75e  proof/input.patch' | sha256sum -c -
+          git worktree add --detach "$RUNNER_TEMP/candidate" bb7c12c75f2389fc696d25b0e2b657ad410daac2
+          git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
+          git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
+          for patch in "$GITHUB_WORKSPACE"/candidate/callback-input/fix*.patch; do
+            if [ -f "$patch" ]; then
+              git -C "$RUNNER_TEMP/candidate" apply "$patch"
+              cp "$patch" "$GITHUB_WORKSPACE/proof/"
+            fi
+          done
+          echo "CANDIDATE=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          echo "PROOF=$GITHUB_WORKSPACE/proof" >> "$GITHUB_ENV"
+      - name: Use repository-pinned Rust
+        run: |
+          cd "$CANDIDATE"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF/rust.txt"
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with: {version: v0.16.0}
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: callback-input-cargo-${{ runner.os }}-${{ hashFiles('crates/**/Cargo.toml') }}
+          restore-keys: |
+            callback-input-cargo-${{ runner.os }}-
+            c5-worker-presented-cargo-${{ runner.os }}-
+            ${{ runner.os }}-cargo-sources-
+      - name: Format and retain exact source identity
+        run: |
+          cd "$CANDIDATE"
+          cargo fmt --all
+          git add -A
+          git diff --cached --check
+          git write-tree | tee "$PROOF/tree.txt"
+          git diff --cached --binary --full-index > "$PROOF/formatted.patch"
+          git diff --cached --stat > "$PROOF/stat.txt"
+          git archive --format=tar --prefix=source/ "$(cat "$PROOF/tree.txt")" | gzip > "$PROOF/source.tar.gz"
+      - name: Execute callback-input, live endpoint, and native adapter regressions
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo test -p noon --no-default-features --lib execution_session::input::transaction::tests -- --nocapture 2>&1 | tee "$PROOF/input.log"
+          cargo test -p noon --no-default-features --lib live_program::pointer_input_tests -- --nocapture 2>&1 | tee "$PROOF/live.log"
+          cargo test -p noon-native --lib callback_input_tests -- --nocapture 2>&1 | tee "$PROOF/native.log"
+      - name: Execute repository fast gate and JavaScript regressions
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          bash scripts/check.sh fast bb7c12c75f2389fc696d25b0e2b657ad410daac2 2>&1 | tee "$PROOF/fast.log"
+          node --test web/*.test.mjs .github/ci/*.test.mjs scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$PROOF/js.log"
+      - name: Compile direct and renderer-enabled WASM adapters
+        run: |
+          set -o pipefail
+          cd "$CANDIDATE"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-direct.log"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-minimal.log"
+          cargo check -p noon-web --features renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$PROOF/wasm-renderer.log"
+      - name: Prove regression detects omitted atomic input finalization
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          file=crates/noon/src/execution_session/callback.rs
+          cp "$file" "$RUNNER_TEMP/callback-original.rs"
+          trap 'cp "$RUNNER_TEMP/callback-original.rs" "$file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon/src/execution_session/callback.rs')
+          s=p.read_text()
+          before='let input = pending.input.map(|input| self.commit_native_input(input));'
+          assert s.count(before)==1
+          p.write_text(s.replace(before,'let input = None;'))
+          PY
+          if cargo test -p noon --no-default-features --lib native_effects_callback_writes_and_input_acknowledgement_publish_once -- --nocapture > "$PROOF/finalization-mutation.log" 2>&1; then
+            echo 'missing ingress finalization unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'native_effects_callback_writes_and_input_acknowledgement_publish_once ... FAILED' "$PROOF/finalization-mutation.log"
+          cp "$RUNNER_TEMP/callback-original.rs" "$file"
+          trap - EXIT
+          git diff --exit-code
+      - name: Prove regression detects pending-input barrier bypass
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          file=crates/noon/src/execution_session.rs
+          cp "$file" "$RUNNER_TEMP/session-original.rs"
+          trap 'cp "$RUNNER_TEMP/session-original.rs" "$file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon/src/execution_session.rs')
+          s=p.read_text()
+          before='if self.pending_callback.is_some() {\n            return Err(ExecutionSessionInputError::RequiredCallbackPending);\n        }'
+          assert s.count(before)==1
+          p.write_text(s.replace(before,''))
+          PY
+          if cargo test -p noon --no-default-features --lib pending_phase_blocks_all_input_lanes_including_unsubscribed_events_and_cancellation -- --nocapture > "$PROOF/barrier-mutation.log" 2>&1; then
+            echo 'pending-input barrier bypass unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'pending_phase_blocks_all_input_lanes_including_unsubscribed_events_and_cancellation ... FAILED' "$PROOF/barrier-mutation.log"
+          cp "$RUNNER_TEMP/session-original.rs" "$file"
+          trap - EXIT
+          git diff --exit-code
+          test "$(git write-tree)" = "$(cat "$PROOF/tree.txt")"
+          echo passed > "$PROOF/qualification.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: callback-input-proof
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
+  publish-tested-source:
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bb7c12c75f2389fc696d25b0e2b657ad410daac2
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: callback-input-proof
+          path: ${{ runner.temp }}/proof
+      - name: Publish qualified code without validation ancestry
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/proof"
+          test "$(cat "$proof/qualification.txt")" = passed
+          git apply "$proof/formatted.patch"
+          git add -A
+          test "$(git write-tree)" = "$(cat "$proof/tree.txt")"
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C2: stage native input in the existing ordered callback transaction'
+          git push origin HEAD:refs/heads/staging/callback-input-${{ github.run_id }}
+          git rev-parse HEAD > "$RUNNER_TEMP/published.txt"
+          git rev-parse HEAD^{tree} >> "$RUNNER_TEMP/published.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: callback-input-publication
+          path: ${{ runner.temp }}/published.txt
+          retention-days: 7
