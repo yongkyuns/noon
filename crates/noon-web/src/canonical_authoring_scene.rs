@@ -894,6 +894,49 @@ impl CanonicalAuthoringScene {
             .unwrap_or_else(|| self.scene.time())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn next_section(&mut self, name: String, skip: bool) -> Result<(), String> {
+        if self.player_ownership.is_transferred() {
+            return Err("section declaration cannot mutate while execution is transferred".into());
+        }
+        // Validate and commit the observed cursor plus section as one Scene
+        // operation so a rejected declaration cannot advance authored metadata.
+        let time = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time());
+        self.scene
+            .next_section_at(
+                name,
+                if skip {
+                    noon::SectionType::Skip
+                } else {
+                    noon::SectionType::Normal
+                },
+                time,
+            )
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sections_json(&self) -> Result<String, String> {
+        let rows = self
+            .scene
+            .sections()
+            .iter()
+            .map(|section| {
+                serde_json::json!({
+                    "name": section.name,
+                    "type": match section.section_type {
+                        noon::SectionType::Normal => "normal",
+                        noon::SectionType::Skip => "skip",
+                    },
+                    "time": section.time,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&rows).map_err(|error| error.to_string())
+    }
+
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
@@ -5089,6 +5132,16 @@ mod wasm {
         #[wasm_bindgen(js_name = authoredDuration)]
         pub fn authored_duration(&self) -> f64 {
             self.inner.authored_duration()
+        }
+
+        #[wasm_bindgen(js_name = nextSection)]
+        pub fn next_section(&mut self, name: String, skip: bool) -> Result<(), JsValue> {
+            self.inner.next_section(name, skip).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = sectionsJson)]
+        pub fn sections_json(&self) -> Result<String, JsValue> {
+            self.inner.sections_json().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = authoredWait)]

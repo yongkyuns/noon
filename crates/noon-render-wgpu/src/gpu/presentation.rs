@@ -62,7 +62,7 @@ impl PresentationBridge {
             pipeline: None,
         };
         if transfer == OutputTransfer::BrowserWebGlSrgb {
-            result.initialize_decode_pipeline(device, surface_format);
+            result.initialize_present_pipeline(device, surface_format);
             result.recreate_scene_target(device);
         }
         result
@@ -125,13 +125,13 @@ impl PresentationBridge {
         pass.draw(0..3, 0..1);
     }
 
-    fn initialize_decode_pipeline(
+    fn initialize_present_pipeline(
         &mut self,
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
     ) {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon browser presentation bind group layout"),
+            label: Some("Noon presentation bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -144,13 +144,17 @@ impl PresentationBridge {
             }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Noon browser presentation pipeline layout"),
+            label: Some("Noon presentation pipeline layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("../presentation.wgsl"));
+        let fragment_entry = match self.transfer {
+            OutputTransfer::Direct => "fs_present_identity",
+            OutputTransfer::BrowserWebGlSrgb => "fs_present",
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Noon browser sRGB presentation pipeline"),
+            label: Some("Noon presentation pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -160,7 +164,7 @@ impl PresentationBridge {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_present"),
+                entry_point: Some(fragment_entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -180,7 +184,7 @@ impl PresentationBridge {
 
     fn recreate_scene_target(&mut self, device: &wgpu::Device) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Noon encoded browser scene target"),
+            label: Some("Noon retained scene target"),
             size: wgpu::Extent3d {
                 width: self.viewport_size[0],
                 height: self.viewport_size[1],
@@ -195,11 +199,11 @@ impl PresentationBridge {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon browser presentation bind group"),
+            label: Some("Noon presentation bind group"),
             layout: self
                 .bind_group_layout
                 .as_ref()
-                .expect("decode presentation requires a bind group layout"),
+                .expect("presentation requires a bind group layout"),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::TextureView(&view),

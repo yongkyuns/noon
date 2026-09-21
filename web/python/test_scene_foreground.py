@@ -135,15 +135,15 @@ class SceneForegroundFacadeTests(unittest.TestCase):
             compat._leaf_mobjects = lambda value: [value]
             scene = noon.Scene()
             edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
+            scene._edit_membership = lambda kind, values=(), key=None, key_mobject=None: edits.append(
+                (kind, values, key, key_mobject)
             )
-            foreground = object()
-            added = object()
+            foreground = object.__new__(noon.Mobject)
+            added = object.__new__(noon.Mobject)
             scene.foreground_mobjects = [foreground]
 
             scene.add(added, key="stable")
-            assert edits == [("add", (added, foreground), "stable")]
+            assert edits == [("add", (added, foreground), "stable", added)]
 
             try:
                 scene.add(object(), object(), key="invalid")
@@ -151,6 +151,109 @@ class SceneForegroundFacadeTests(unittest.TestCase):
                 assert "one ordinary Mobject" in str(error)
             else:
                 raise AssertionError("expected keyed batch rejection")
+        """)
+
+    def test_failed_replace_does_not_change_foreground_metadata(self):
+        self.run_source("""
+            import noon
+
+            scene = noon.Scene()
+            old = object()
+            replacement = object()
+            scene.foreground_mobjects = [old]
+
+            def reject(*args, **kwargs):
+                raise RuntimeError("rejected")
+
+            scene._edit_membership = reject
+            try:
+                scene.replace(old, replacement)
+            except RuntimeError as error:
+                assert str(error) == "rejected"
+            else:
+                raise AssertionError("expected replacement rejection")
+            assert scene.foreground_mobjects == [old]
+        """)
+
+    def test_replace_retires_foreground_before_a_later_add_can_resurrect_it(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: [value]
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
+                (kind, values, key)
+            )
+            old = object()
+            replacement = object()
+            later = object()
+            scene.foreground_mobjects = [old]
+
+            assert scene.replace(old, replacement) is scene
+            assert edits[-1] == ("replace", (old, replacement), None)
+            assert scene.foreground_mobjects == []
+
+            scene.add(later)
+            assert edits[-1] == ("add", (later,), None)
+        """)
+
+    def test_failed_group_removal_does_not_change_foreground_metadata(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            scene = noon.Scene()
+            child = object()
+            class FakeGroup:
+                def __init__(self, *members):
+                    self.submobjects = list(members)
+            compat.Group = FakeGroup
+            group = FakeGroup(child)
+            scene.foreground_mobjects = [child]
+
+            def reject(*args, **kwargs):
+                raise RuntimeError("rejected")
+
+            scene._edit_membership = reject
+            try:
+                scene.remove(group)
+            except RuntimeError as error:
+                assert str(error) == "rejected"
+            else:
+                raise AssertionError("expected removal rejection")
+            assert scene.foreground_mobjects == [child]
+        """)
+
+    def test_group_removal_retires_foreground_child_before_later_add(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: list(
+                value.submobjects if isinstance(value, compat.Group) else [value]
+            )
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
+                (kind, values, key)
+            )
+            child = object()
+            sibling = object()
+            class FakeGroup:
+                def __init__(self, *members):
+                    self.submobjects = list(members)
+            compat.Group = FakeGroup
+            group = FakeGroup(child, sibling)
+            scene.foreground_mobjects = [child]
+
+            assert scene.remove(group) is scene
+            assert scene.foreground_mobjects == []
+
+            later = object()
+            scene.add(later)
+            assert edits[-1] == ("add", (later,), None)
         """)
 
 

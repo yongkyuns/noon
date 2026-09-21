@@ -11,6 +11,22 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+/// Presentation/export intent attached to one authored section boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SectionType {
+    #[default]
+    Normal,
+    Skip,
+}
+
+/// One ordered non-rendering marker on the Scene-owned authored timeline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneSection {
+    pub name: String,
+    pub section_type: SectionType,
+    pub time: f64,
+}
+
 pub(crate) fn publish_geometry_options(
     options: crate::ManimGeometryOptions,
     store: &mut SemanticStore,
@@ -39,6 +55,7 @@ pub struct Scene {
     store: Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     cursor: f64,
+    sections: Vec<SceneSection>,
     execution: Option<ExecutionSession>,
 }
 impl Default for Scene {
@@ -67,6 +84,7 @@ impl Scene {
             store,
             root: *root,
             cursor: 0.0,
+            sections: Vec::new(),
             execution: None,
         }
     }
@@ -160,6 +178,50 @@ impl Scene {
         }
         self.cursor += duration;
         Ok(())
+    }
+
+    /// Record one non-rendering boundary at the current authored Scene time.
+    ///
+    /// Section declarations deliberately do not publish a semantic mutation: they
+    /// are ordered export/presentation metadata owned by the same Scene that owns
+    /// the authored cursor. They therefore cannot dirty or relower execution state.
+    pub fn next_section(
+        &mut self,
+        name: impl Into<String>,
+        section_type: SectionType,
+    ) -> Result<&SceneSection, String> {
+        self.next_section_at(name, section_type, self.cursor)
+    }
+
+    /// Atomically synchronize the authored metadata cursor and record a section.
+    /// Validation completes before either the cursor or section list changes.
+    pub fn next_section_at(
+        &mut self,
+        name: impl Into<String>,
+        section_type: SectionType,
+        time: f64,
+    ) -> Result<&SceneSection, String> {
+        let name = name.into();
+        if name.contains(['\n', '\r', '\0']) {
+            return Err("section name must not contain newline or NUL characters".into());
+        }
+        if !time.is_finite() {
+            return Err("section time must be finite".into());
+        }
+        if time < self.cursor {
+            return Err("section timeline cannot move backwards".into());
+        }
+        self.cursor = time;
+        self.sections.push(SceneSection {
+            name,
+            section_type,
+            time,
+        });
+        Ok(self.sections.last().expect("section was just appended"))
+    }
+
+    pub fn sections(&self) -> &[SceneSection] {
+        &self.sections
     }
     /// Construct a detached circle through the Scene-owned publication path.
     pub fn circle(&mut self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
