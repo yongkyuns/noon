@@ -1,0 +1,112 @@
+name: B5 1693 focused canonical raster qualification
+on:
+  push:
+    branches: [codex/b5-1693-precision-check-20260920]
+    paths: [.github/workflows/b5-1693-raster-check.yml]
+permissions:
+  contents: write
+concurrency:
+  group: b5-1693-focused-raster-check
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SOURCE: 0f79735cae13e0a56db3feeb1ac0323eff850dcb
+      BASE: bf776186325640496e58eac91962573811740356
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
+      NOON_MANIM_RASTER_MANIFEST: /tmp/noon-1693-focused-manifest.json
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+      NOON_MANIM_RASTER_ARTIFACTS: browser-smoke-artifacts/b5-numberplane-implicit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Register missing fixtures without changing reference source or existing policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/1693_raster_patch.py /tmp/1693_raster_patch.py
+          git fetch --no-tags --depth=150 origin "$SOURCE" "$BASE"
+          git checkout --detach "$SOURCE"
+          mkdir -p /tmp/noon-1693-raster-evidence
+          python3 /tmp/1693_raster_patch.py | tee /tmp/noon-1693-raster-evidence/registration.log
+          test "$(git diff --name-only)" = parity/manim-v0.21/manifest.json
+          git diff --check
+          git config user.name 'Noon validation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add parity/manim-v0.21/manifest.json
+          git commit -m 'test: register NumberPlane and implicit curves in the canonical Manim oracle'
+          git rev-parse HEAD | tee /tmp/noon-1693-raster-evidence/tested-head.txt
+          cp /tmp/noon-1693-focused-manifest.json /tmp/noon-1693-raster-evidence/focused-manifest.json
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install reference and software rendering dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config libvulkan1 mesa-vulkan-drivers
+          python3 -m pip install --disable-pip-version-check 'manim[typst]==0.21.0' 'typst==0.15.0'
+          mkdir -p /tmp/noon-xdg
+          chmod 700 /tmp/noon-xdg
+          echo XDG_RUNTIME_DIR=/tmp/noon-xdg >> "$GITHUB_ENV"
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Check registration and build the exact already-qualified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          bash scripts/check.sh architecture "$BASE"
+          node scripts/manim-raster-policy.test.mjs
+          python3 scripts/test_manim_raster_manifest.py
+          bash scripts/build-web-demo.sh > /tmp/noon-1693-raster-evidence/build.log 2>&1 || { tail -n 100 /tmp/noon-1693-raster-evidence/build.log; exit 1; }
+          git diff --exit-code
+      - name: Install repository-pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Render real ManimCE and both Noon backends
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/manim-raster-differential.mjs 2>&1 | tee /tmp/noon-1693-raster-evidence/raster.log
+          node scripts/manim-raster-semantic-state.mjs 2>&1 | tee /tmp/noon-1693-raster-evidence/semantic.log
+          node scripts/manim-raster-enforce.mjs 2>&1 | tee /tmp/noon-1693-raster-evidence/ratchet.log
+      - name: Verify sparse/dense effective state and exact raster identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/shared-playback-raster.mjs 2>&1 | tee /tmp/noon-1693-raster-evidence/playback.log
+          git diff --exit-code
+      - name: Publish only the fully checked fixture candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/noon-1693-raster-evidence/tested-head.txt)"
+          git merge-base --is-ancestor "$SOURCE" HEAD
+          test "$(git diff --name-only "$SOURCE" HEAD)" = parity/manim-v0.21/manifest.json
+          git push origin HEAD:refs/heads/codex/b5-1693-raster-verified-20260920
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: b5-1693-focused-raster-evidence
+          path: |
+            /tmp/noon-1693-raster-evidence
+            browser-smoke-artifacts/b5-numberplane-implicit
+          if-no-files-found: error
+          retention-days: 7
