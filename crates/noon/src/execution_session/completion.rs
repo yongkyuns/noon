@@ -4,8 +4,9 @@ use noon_compile::{
     ExecutionPatch, PreparedScalarSignalTimelineError, SemanticAnimationCompletion,
 };
 use noon_core::{
-    ReactiveValue, SemanticFadeDirection, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, SemanticStore,
+    stage_semantic_foreground_removal, ReactiveValue, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
+    SemanticSignalValue, SemanticStore,
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -48,6 +49,7 @@ pub enum ExecutionSegmentCompletionError {
     PreparedScalarTimeline(PreparedScalarSignalTimelineError),
     ScalarTimeline(super::SignalTimelineAppendError),
     InvalidFamilyReplacement,
+    ForegroundMembership(noon_core::SemanticSceneOperationError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -111,6 +113,7 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             Self::InvalidFamilyReplacement => formatter.write_str(
                 "segment family replacement is not valid for the current authored topology",
             ),
+            Self::ForegroundMembership(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -237,11 +240,13 @@ impl ExecutionSession {
         }
 
         let mut semantic = SemanticMutationTransaction::new();
+        let mut foreground_removals = BTreeMap::<SemanticNodeId, BTreeSet<SemanticNodeId>>::new();
         for entry in scalar_entries {
             semantic.set_scalar_signal_at(entry.signal, entry.authored_endpoint, actual_time);
         }
         for &(root, target) in lifecycle_removals {
             semantic.remove_member(root, target);
+            foreground_removals.entry(root).or_default().insert(target);
         }
         if let Some(replacement) = segment.family_replacement() {
             super::family_transform::stage_matching_family_completion_swap(
@@ -252,6 +257,10 @@ impl ExecutionSession {
                 &mut semantic,
             )
             .map_err(|_| ExecutionSegmentCompletionError::InvalidFamilyReplacement)?;
+            foreground_removals
+                .entry(replacement.root)
+                .or_default()
+                .insert(replacement.source);
         }
         let family_removals = lifecycle_removals
             .iter()
@@ -282,7 +291,22 @@ impl ExecutionSession {
                     ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
                 )?;
                 semantic.remove_member(root, entry.semantic_object);
+                foreground_removals
+                    .entry(root)
+                    .or_default()
+                    .insert(entry.semantic_object);
             }
+        }
+        // One declaration edit per scope, staged with endpoint release and display
+        // removals. A failed completion never leaves a partially demoted foreground.
+        for (root, removed) in foreground_removals {
+            stage_semantic_foreground_removal(
+                store,
+                root,
+                &removed.into_iter().collect::<Vec<_>>(),
+                &mut semantic,
+            )
+            .map_err(ExecutionSegmentCompletionError::ForegroundMembership)?;
         }
 
         // Paint channels carry only their exact semantic fields. Start from the
