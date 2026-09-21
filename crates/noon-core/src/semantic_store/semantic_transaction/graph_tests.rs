@@ -374,3 +374,26 @@ fn committed_graph_allows_generic_line_replacement_that_preserves_invariants() {
     );
     assert!(store.semantic_graph_declaration(root).unwrap().is_some());
 }
+
+
+#[test]
+fn shared_family_convenience_requires_transaction_for_graph_owned_structure() {
+    let mut store = SemanticStore::new();
+    let (root, edge_family, shaft) = committed_graph(&mut store);
+    let extra = store.insert_semantic_object(circle());
+    let before = store.scene_revision();
+
+    assert_eq!(
+        store.add_semantic_family_member(root, extra),
+        Err(crate::SemanticSceneOperationError::GraphMutationRequiresTransaction(root))
+    );
+    assert_eq!(
+        store.remove_semantic_family_member(edge_family, shaft),
+        Err(crate::SemanticSceneOperationError::GraphMutationRequiresTransaction(
+            edge_family
+        ))
+    );
+    assert_eq!(store.scene_revision(), before);
+    assert!(!store.node(root).unwrap().contains_member(extra));
+    assert!(store.node(edge_family).unwrap().contains_member(shaft));
+}
