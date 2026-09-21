@@ -1,0 +1,65 @@
+diff --git a/web/semantic-engine-endpoint.js b/web/semantic-engine-endpoint.js
+index d0286b8b81e88e0a039c45f8d28be0ea4bcd9094..82addbc848b372bb30f2e013542ddbfa59082006 100644
+--- a/web/semantic-engine-endpoint.js
++++ b/web/semantic-engine-endpoint.js
+@@ -790,7 +790,13 @@ export async function attachSemanticEngine(
+             pointerInputAccepted = applyNativeInput(message);
+             if (player === null) break;
+             const publication = send(player.drainDeltaJson());
+-            if (message.type === "browser_pointer_view") await awaitPresentation(publication);
++            // Unavailable mappings cannot be presented. Acknowledging their
++            // registration authorizes no input and must not block the reveal
++            // command behind an impossible surface-presentation barrier.
++            if (message.type === "browser_pointer_view" &&
++                message.view.width > 0 && message.view.height > 0) {
++              await awaitPresentation(publication);
++            }
+             // Live driving pauses the ordinary playback clock. Native input
+             // must retain the active segment's Rust-derived wake, including
+             // pure-wait deadlines, rather than accidentally publishing idle.
+diff --git a/web/semantic-engine-endpoint.test.mjs b/web/semantic-engine-endpoint.test.mjs
+index 58aa6328be81d7e462723564c1b0073392dcc722..bc2bfd94c35eee4a8d4186926247997292413d4f 100644
+--- a/web/semantic-engine-endpoint.test.mjs
++++ b/web/semantic-engine-endpoint.test.mjs
+@@ -2368,3 +2368,41 @@ for (const cancelFails of [false, true]) {
+     } finally { endpoint?.stop(); f.close(); }
+   });
+ }
++
++for (const [width, height] of [[0, 0], [0, 400], [800, 0]]) {
++  test(`unavailable pointer view ${width}x${height} cannot block registration or reveal`, async () => {
++    const f = fixture();
++    let endpoint, watchdog;
++    try {
++      f.player.setBrowserPointerViewJson = () => {};
++      f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
++      const ready = next(f.control.port2);
++      const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
++      endpoint = await f.attach(); await ready;
++      const first = await initial;
++      f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
++      f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence });
++      const hidden = nextMatching(f.render.port2, message => message.type === "execution_delta");
++      const registered = nextMatching(f.control.port2, message => message.requestId === 501);
++      f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
++        type: "browser_pointer_view", requestId: 501, view: { revision: 1, width, height } });
++      const hiddenDelta = await hidden;
++      // Consumption can succeed while a zero-sized surface cannot present.
++      f.render.port2.postMessage({ type: "execution_ack", session: hiddenDelta.session, sequence: hiddenDelta.sequence });
++      const reply = await Promise.race([registered, new Promise((_, reject) => {
++        watchdog = setTimeout(() => reject(new Error("unavailable view registration waited for impossible presentation")), 1000);
++      })]);
++      clearTimeout(watchdog);
++      assert.equal(reply.type, "browser_pointer_view");
++      const visible = nextMatching(f.render.port2, message => message.type === "execution_delta");
++      const revealed = nextMatching(f.control.port2, message => message.requestId === 502);
++      f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
++        type: "browser_pointer_view", requestId: 502, view: { revision: 2, width: 800, height: 400 } });
++      const visibleDelta = await visible;
++      f.render.port2.postMessage({ type: "execution_ack", session: visibleDelta.session, sequence: visibleDelta.sequence });
++      f.render.port2.postMessage({ type: "execution_presented", session: visibleDelta.session, sequence: visibleDelta.sequence });
++      assert.equal((await revealed).type, "browser_pointer_view");
++      assert.equal(f.player.time(), 0);
++    } finally { clearTimeout(watchdog); endpoint?.stop(); f.close(); }
++  });
++}
