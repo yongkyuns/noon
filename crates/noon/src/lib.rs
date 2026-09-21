@@ -97,15 +97,11 @@ mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
-mod graph_semantic_bindings;
-mod graph_topology;
 pub use graph_authoring::{
     DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphOptions,
     DEFAULT_GRAPH_EDGE_STROKE_WIDTH, DEFAULT_GRAPH_VERTEX_RADIUS,
     DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
 };
-pub use graph_semantic_bindings::*;
-pub use graph_topology::*;
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
 mod host_callbacks;
@@ -204,8 +200,9 @@ pub use live_session::{
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
 pub use noon_core::{
-    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
-    PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
+    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
+    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
+    RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
     SemanticFadeDirection, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
     SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle,
     SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap,
