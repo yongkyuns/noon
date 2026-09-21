@@ -56,9 +56,15 @@ jobs:
           restore-keys: |
             c5-direct-presented-cargo-${{ runner.os }}-
             ${{ runner.os }}-cargo-sources-
-      - name: Format and retain exact full source tree
+      - name: Apply reviewed surface fix and retain exact full source tree
         run: |
+          set -euo pipefail
           cd "$CANDIDATE"
+          cargo fmt --all
+          git add -A
+          test "$(git write-tree)" = e389c705ed29aa9428a445fef1792e568f47a8aa
+          git apply "$GITHUB_WORKSPACE/candidate/c5-direct-presented-input/postfmt002.patch"
+          cp "$GITHUB_WORKSPACE/candidate/c5-direct-presented-input/postfmt002.patch" "$PROOF/"
           cargo fmt --all
           git add -A
           git diff --cached --check
@@ -78,6 +84,7 @@ jobs:
           cd "$CANDIDATE"
           bash scripts/check.sh fast c7b574b8a195b1e3954fc622db9c151d3ccab09d 2>&1 | tee "$PROOF/fast.log"
           node --test web/*.test.mjs 2>&1 | tee "$PROOF/js.log"
+          node --test .github/ci/*.test.mjs scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$PROOF/contracts.log"
       - name: Compile reduced direct Rust and browser WASM
         run: |
           set -o pipefail
@@ -87,15 +94,15 @@ jobs:
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with: {tool: 'wasm-pack@0.15.0', fallback: none}
-      - name: Build actual renderer-smoke browser package
+      - name: Build actual renderer-smoke browser package with preflight
         env:
           NOON_WASM_SKIP_OPT: '1'
           NOON_RENDERER_SMOKE: '1'
-          NOON_SKIP_WEB_PREFLIGHT: '1'
         run: |
           set -o pipefail
           cd "$CANDIDATE"
           bash scripts/build-web-demo.sh 2>&1 | tee "$PROOF/browser-build.log"
+          sha256sum web/pkg/noon_web_bg.wasm > "$PROOF/wasm.sha256"
       - name: Install browser qualification dependencies
         run: |
           cd "$CANDIDATE"
@@ -110,10 +117,42 @@ jobs:
         run: |
           set -o pipefail
           cd "$CANDIDATE"
-          node --test scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$PROOF/raster-contract.log"
           node scripts/browser-pointer-input-smoke.mjs 2>&1 | tee "$PROOF/browser-dom.log"
           node scripts/pointer-selection-qualification.mjs 2>&1 | tee "$PROOF/browser-worker.log"
           node scripts/pointer-selection-direct-qualification.mjs 2>&1 | tee "$PROOF/browser-direct-parity.log"
+          node scripts/native-input-smoke.mjs 2>&1 | tee "$PROOF/reactive-input.log"
+      - name: Prove real browser regression detects omitted surface cancellation
+        env:
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_RENDERER_SMOKE: '1'
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+        run: |
+          set -euo pipefail
+          cd "$CANDIDATE"
+          file=crates/noon-web/src/execution_canvas.rs
+          cp "$file" "$RUNNER_TEMP/canvas-original.rs"
+          cp -r web/pkg "$RUNNER_TEMP/passing-pkg"
+          trap 'cp "$RUNNER_TEMP/canvas-original.rs" "$file"; rm -rf web/pkg; cp -r "$RUNNER_TEMP/passing-pkg" web/pkg' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/execution_canvas.rs')
+          s = p.read_text()
+          guard = 'self.apply_direct_native_input(|source| source.cancel_browser_pointer(false))?;'
+          assert s.count(guard) == 1
+          p.write_text(s.replace(guard, '// Deliberately omit gesture cancellation for the negative control.'))
+          PY
+          bash scripts/build-web-demo.sh > "$PROOF/surface-mutation-build.log" 2>&1
+          if NOON_POINTER_PRESENTATION_ARTIFACTS="$PROOF/surface-mutation" node scripts/direct-pointer-presentation-qualification.mjs > "$PROOF/surface-mutation.log" 2>&1; then
+            echo 'omitted surface cancellation unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'repainted-surface-release-must-not-click' "$PROOF/surface-mutation.log"
+          cp "$RUNNER_TEMP/canvas-original.rs" "$file"
+          rm -rf web/pkg
+          cp -r "$RUNNER_TEMP/passing-pkg" web/pkg
+          trap - EXIT
+          git diff --exit-code
+          sha256sum -c "$PROOF/wasm.sha256"
       - name: Prove regression detects removal of post-binding publication guard
         run: |
           set -euo pipefail
@@ -173,6 +212,9 @@ jobs:
           git apply "$proof/formatted.patch"
           git add -A
           test "$(git write-tree)" = "$(cat "$proof/tree.txt")"
+          # The Actions token cannot modify workflows. The authorized connector
+          # must restore the exact qualified permanent workflow before the PR.
+          git restore --source=HEAD --staged --worktree .github/workflows
           git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'C5: associate direct WASM pointer input with successful canvas presentation'
           git push origin HEAD:refs/heads/staging/c5-direct-presented-input-${{ github.run_id }}
           git rev-parse HEAD > "$RUNNER_TEMP/published.txt"

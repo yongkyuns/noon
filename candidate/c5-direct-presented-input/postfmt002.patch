@@ -1,0 +1,300 @@
+diff --git a/crates/noon-web/src/browser_pointer_input.rs b/crates/noon-web/src/browser_pointer_input.rs
+index aada6ada9004796d92d4c764b22096bf85261786..58beec0bd25b429733d675e8a244a5ce63687c28 100644
+--- a/crates/noon-web/src/browser_pointer_input.rs
++++ b/crates/noon-web/src/browser_pointer_input.rs
+@@ -81,33 +81,41 @@ pub(crate) fn submit_presented_browser_pointer_input(
+     submit_pointer(target, binding, next_sequence, wire, Some(frame))
+ }
+ 
+-/// Retire only the existing contact. Cancellation needs no positional receipt,
+-/// but still goes through the target's ordinary binding/sequence/program gates.
++/// Cancel the current gesture through the ordinary binding/sequence/program gates.
++/// DOM cancellation and rejected input retire the source; a surface transition
++/// keeps it available for a subsequent physical release, but never restores the
++/// cancelled gesture. No positional receipt or synthetic release is involved.
+ #[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+ pub(crate) fn cancel_browser_pointer_input(
+     target: &mut (impl BrowserPointerTarget + ?Sized),
+     binding: &mut Option<BrowserPointerBinding>,
+     next_sequence: &mut u64,
++    retire_source: bool,
+ ) -> Result<(), String> {
+-    let Some(contact) = binding.filter(|contact| !contact.retired) else {
++    let Some(contact) = binding.as_mut().filter(|contact| !contact.retired) else {
+         return Ok(());
+     };
+-    let wire = BrowserPointerInput {
+-        kind: BrowserPointerKind::Cancel,
+-        source_id: contact.pointer.source,
+-        pointer_id: (contact.pointer.pointer as u32).cast_signed(),
+-        surface_x: None,
+-        surface_y: None,
+-        viewport_width: None,
+-        viewport_height: None,
+-        button: None,
+-        view_revision: contact.view_revision,
+-        shift: false,
+-        control: false,
+-        alt: false,
+-        meta: false,
+-    };
+-    submit_browser_pointer_input(target, binding, next_sequence, wire)
++    let token = target.pointer_token()?;
++    if token.pointer() != contact.pointer || token.context().view_revision != contact.view_revision {
++        return Err("browser pointer session binding has been replaced".into());
++    }
++    let sequence = *next_sequence;
++    let next = sequence
++        .checked_add(1)
++        .ok_or("native input event sequence exhausted")?;
++    target.submit_pointer(
++        &token,
++        NativePointerInput::new(
++            sequence,
++            token.pointer(),
++            token.context(),
++            NativeInputModifiers::default(),
++            NativePointerInputKind::Cancel(NativePointerCancellation::Cancelled),
++        ),
++    )?;
++    *next_sequence = next;
++    contact.retired = retire_source;
++    Ok(())
+ }
+ 
+ impl BrowserPointerTarget for ExecutionSession {
+diff --git a/crates/noon-web/src/direct_pointer_presentation.rs b/crates/noon-web/src/direct_pointer_presentation.rs
+index 5e59c0165c3396d1b98fa31d842b35f603c80862..7d4ef08f877dc86de655fcf6845849e898f6f1a0 100644
+--- a/crates/noon-web/src/direct_pointer_presentation.rs
++++ b/crates/noon-web/src/direct_pointer_presentation.rs
+@@ -74,7 +74,7 @@ impl DirectPointerPresentation {
+         // Separate cancellation, not acknowledgement of the rejected occurrence.
+         // The caller retires the DOM contact, so held motion/release cannot resume
+         // this gesture after the next frame. There is no automatic replay.
+-        browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence)?;
++        browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+         self.refresh_pending = true;
+         Ok(false)
+     }
+diff --git a/crates/noon-web/src/direct_pointer_presentation/tests.rs b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+index e9a9f2bed77c6626688a45336c817608442d6ca6..aa407943b320bdac0d8c1a40d7e60c9fd620107b 100644
+--- a/crates/noon-web/src/direct_pointer_presentation/tests.rs
++++ b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+@@ -428,3 +428,73 @@ fn missing_receipt_cannot_relax_retired_sources_or_invent_initial_release() {
+     assert!(f.send(input(BrowserPointerKind::Release)).is_err());
+     assert_eq!(f.sequence, sequence);
+ }
++
++#[test]
++fn surface_repaint_without_input_cannot_revive_a_stationary_gesture() {
++    let mut f = Fixture::new();
++    f.present();
++    let authored = f.session.frame().clone();
++    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
++    f.host.invalidate();
++    browser_pointer_input::cancel_browser_pointer_input(
++        &mut f.session, &mut f.binding, &mut f.sequence, false,
++    ).unwrap();
++    assert_eq!(f.sequence, 2, "press and cancellation only; no invented release");
++    // No occurrence is offered while the surface is unavailable. A matching
++    // replacement receipt must not make the original press eligible again.
++    f.present();
++    assert!(f.send(input(BrowserPointerKind::Release)).unwrap());
++    assert_eq!(f.sequence, 3);
++    assert_eq!(f.session.selected_pointer_target(), None);
++    assert_eq!(f.session.frame(), &authored);
++    for kind in [BrowserPointerKind::Press, BrowserPointerKind::Release] {
++        let mut wire = input(kind);
++        wire.source_id = 2;
++        assert!(f.send(wire).unwrap());
++    }
++    assert_eq!(f.session.selected_pointer_target(), Some(f.target));
++}
++
++#[test]
++fn surface_gesture_cleanup_preserves_callback_and_sequence_barriers() {
++    let mut f = Fixture::new();
++    f.present();
++    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
++    let binding = f.binding;
++    let sequence = f.sequence;
++    let phase = f.session.begin_required_callback_phase(0.0, [f.target]).unwrap();
++    assert!(browser_pointer_input::cancel_browser_pointer_input(
++        &mut f.session, &mut f.binding, &mut f.sequence, false,
++    ).is_err());
++    assert_eq!(f.binding, binding);
++    assert_eq!(f.sequence, sequence);
++    f.session.commit_required_callback_phase(phase.finish()).unwrap();
++    f.sequence = u64::MAX;
++    assert!(browser_pointer_input::cancel_browser_pointer_input(
++        &mut f.session, &mut f.binding, &mut f.sequence, false,
++    ).is_err());
++    assert_eq!(f.binding, binding);
++    assert_eq!(f.sequence, u64::MAX);
++    f.sequence = sequence;
++    browser_pointer_input::cancel_browser_pointer_input(
++        &mut f.session, &mut f.binding, &mut f.sequence, false,
++    ).unwrap();
++    f.present();
++    assert!(f.send(input(BrowserPointerKind::Release)).unwrap());
++    assert_eq!(f.session.selected_pointer_target(), None);
++}
++
++#[test]
++fn surface_cleanup_does_not_relax_explicit_source_retirement() {
++    let mut f = Fixture::new();
++    f.present();
++    assert!(f.send(input(BrowserPointerKind::Press)).unwrap());
++    assert!(f.send(input(BrowserPointerKind::Cancel)).unwrap());
++    let sequence = f.sequence;
++    browser_pointer_input::cancel_browser_pointer_input(
++        &mut f.session, &mut f.binding, &mut f.sequence, false,
++    ).unwrap();
++    assert_eq!(f.sequence, sequence);
++    f.present();
++    assert!(f.send(input(BrowserPointerKind::Release)).is_err());
++}
+diff --git a/crates/noon-web/src/execution_canvas.rs b/crates/noon-web/src/execution_canvas.rs
+index efc8810cd999781c848b844e174c45528ba668b6..13eaf58a8226aa4953f7dcf3bdb088948a0861ab 100644
+--- a/crates/noon-web/src/execution_canvas.rs
++++ b/crates/noon-web/src/execution_canvas.rs
+@@ -401,18 +401,19 @@ mod wasm {
+             .map_err(js_error)
+         }
+ 
+-        fn cancel_browser_pointer(&mut self) -> Result<(), JsValue> {
++        fn cancel_browser_pointer(&mut self, retire_source: bool) -> Result<(), JsValue> {
+             let binding = &mut self.browser_pointer_binding;
+             let sequence = &mut self.next_native_event_sequence;
+             match &mut self.authority {
+                 DirectSourceAuthority::Session { session, .. } => {
+-                    browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence)
++                    browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence, retire_source)
+                 }
+                 DirectSourceAuthority::Program(program) => {
+                     browser_pointer_input::cancel_browser_pointer_input(
+                         program.as_mut(),
+                         binding,
+                         sequence,
++                        retire_source,
+                     )
+                 }
+             }
+@@ -495,7 +496,7 @@ mod wasm {
+             if self.backend != wgpu::Backend::Gl || !self.webgl_recovery_pending.get() {
+                 return Ok(false);
+             }
+-            self.pointer_presentation.invalidate();
++            self.invalidate_pointer_surface()?;
+             let next_generation = self
+                 .gpu_generation
+                 .checked_add(1)
+@@ -561,7 +562,7 @@ mod wasm {
+                 return Ok(false);
+             }
+ 
+-            self.pointer_presentation.invalidate();
++            self.invalidate_pointer_surface()?;
+             let lost_generation = self.gpu_generation;
+             let next_generation = lost_generation
+@@ -650,13 +651,13 @@ mod wasm {
+                     wgpu::CurrentSurfaceTexture::Timeout
+                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
+                     wgpu::CurrentSurfaceTexture::Outdated => {
+-                        self.pointer_presentation.invalidate();
++                        self.invalidate_pointer_surface()?;
+                         self.surface_frame_pending = true;
+                         self.surface.configure(&self.device, &self.config);
+                         return Ok(false);
+                     }
+                     wgpu::CurrentSurfaceTexture::Lost => {
+-                        self.pointer_presentation.invalidate();
++                        self.invalidate_pointer_surface()?;
+                         self.surface_frame_pending = true;
+                         if self.backend == wgpu::Backend::Gl {
+                             self.webgl_recovery_pending.set(true);
+@@ -680,7 +681,7 @@ mod wasm {
+             if self.canvas.width() == width && self.canvas.height() == height {
+                 return Ok(());
+             }
+-            self.pointer_presentation.invalidate();
++            self.invalidate_pointer_surface()?;
+             self.surface_frame_pending = true;
+             self.canvas.set_width(width);
+             self.canvas.set_height(height);
+@@ -981,7 +982,7 @@ mod wasm {
+             {
+                 return Ok(false);
+             }
+-            self.source.cancel_browser_pointer()?;
++            self.source.cancel_browser_pointer(true)?;
+             self.update_camera()?;
+             Ok(true)
+         }
+@@ -1496,7 +1497,7 @@ mod wasm {
+             self.last_text_draw_calls = draw.text.draw_calls;
+             self.last_instances_drawn = draw.instances_drawn();
+             if reconfigure_after_present {
+-                self.pointer_presentation.invalidate();
++                self.invalidate_pointer_surface()?;
+                 self.surface_frame_pending = true;
+                 self.surface.configure(&self.device, &self.config);
+             }
+@@ -1511,6 +1512,15 @@ mod wasm {
+             Ok(true)
+         }
+ 
++        /// A surface transition ends a held gesture even when no DOM event is
++        /// delivered before the replacement frame. Keep the physical source so
++        /// its real release remains harmless instead of faulting the collector.
++        fn invalidate_pointer_surface(&mut self) -> Result<(), JsValue> {
++            self.pointer_presentation.invalidate();
++            self.apply_direct_native_input(|source| source.cancel_browser_pointer(false))?;
++            Ok(())
++        }
++
+         fn sync_camera(&mut self, camera: Camera2DState) -> Result<(), JsValue> {
+             if camera.center == self.camera_center && camera.height == self.camera_height {
+                 return Ok(());
+diff --git a/scripts/direct-pointer-presentation-qualification.mjs b/scripts/direct-pointer-presentation-qualification.mjs
+index fa73d37f0e1c2af131c38a6f75bf97d74e26ddb1..90aeb5e0377aa2a1dfe9de70677d3a4e1f7c9ebe 100644
+--- a/scripts/direct-pointer-presentation-qualification.mjs
++++ b/scripts/direct-pointer-presentation-qualification.mjs
+@@ -118,6 +118,37 @@ try {
+           await clear(); assertExactPixels(await image(`${invalidation}-clear`), recovered, "fresh contact clears exactly");
+           result.checks.push(`${invalidation}-reject-cancel-fresh-contact`);
+         }
++        // Real mouse down/up straddle a complete surface reset and repaint.
++        // No intervening pointer event can do the cancellation for the host.
++        for (const reset of ["backing-resize", "suspend-resume"]) {
++          const rect = await page.locator("#scene").boundingBox();
++          const point = shapeSurfaceCenter(SHAPES[0]);
++          await page.mouse.move(rect.x + point.x, rect.y + point.y);
++          await page.mouse.down(); await settled();
++          const beforeReset = await page.evaluate(() => ({
++            trace: receiptTest.trace.length,
++            authored: receiptTest.renderer.debugSelectionFrameJson(),
++          }));
++          await page.evaluate(reset => {
++            const t = receiptTest;
++            if (reset === "suspend-resume") t.renderer.resize(0, 0);
++            t.renderer.resize(960, 540);
++            t.driver.wake();
++          }, reset);
++          await settled();
++          assert.equal(await page.evaluate(() => receiptTest.trace.length), beforeReset.trace,
++            "surface reset/repaint must not rely on another DOM occurrence");
++          status = await receipt(); assert.equal(status.presented, status.current);
++          const repainted = await image(`${reset}-before-release`);
++          await page.mouse.up(); await settled();
++          assertExactPixels(await image(`${reset}-after-release`), repainted,
++            `repainted-surface-release-must-not-click: ${reset}`);
++          assert.equal(await page.evaluate(() => receiptTest.renderer.debugSelectionFrameJson()), beforeReset.authored);
++          await click(SHAPES[0]);
++          assertSelectionPixels(repainted, await image(`${reset}-fresh`), SHAPES[0]);
++          await clear(); assertExactPixels(await image(`${reset}-clear`), repainted, `${reset} clear`);
++          result.checks.push(`${reset}-repaint-before-release-cancels-and-recovers`);
++        }
+         if (!program) {
+           await page.evaluate(() => { receiptTest.renderer.seekDirect(0); receiptTest.driver.wake(); }); await settled();
+         }
