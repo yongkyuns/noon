@@ -12,7 +12,9 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
-    SignalBinding { property: SemanticObjectProperty },
+    SignalBinding {
+        property: SemanticObjectProperty,
+    },
     ScopedSignal,
     ForegroundMember,
     AnimationTarget,

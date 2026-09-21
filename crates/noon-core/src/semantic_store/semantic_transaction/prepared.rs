@@ -724,9 +724,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .vertices()
                         .iter()
                         .copied()
-                        .map(|(id, vertex)| {
-                            (id, resolve_node_ref(vertex, &committed_nodes))
-                        })
+                        .map(|(id, vertex)| (id, resolve_node_ref(vertex, &committed_nodes)))
                         .collect::<Vec<_>>();
                     let edges = graph
                         .edges()

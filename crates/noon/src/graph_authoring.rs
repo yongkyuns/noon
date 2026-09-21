@@ -10,11 +10,11 @@ mod construction;
 #[cfg(test)]
 mod tests;
 
-use construction::build_graph;
 use crate::{
     AuthoringError, GraphEdge, GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId,
     ManimArrow, Mobject, MobjectFamily, Scene,
 };
+use construction::build_graph;
 use noon_core::{Color, SemanticGraphDeclaration, SemanticNodeId, SemanticStoreError, BLUE, WHITE};
 use std::{cell::Ref, collections::HashMap, hash::Hash};
 
@@ -68,9 +68,16 @@ pub enum GraphAuthoringError {
     StoreBorrowed,
     /// The live root has no authored graph declaration.
     MissingDeclaration(SemanticNodeId),
-    DuplicateVertexKey { vertex_index: usize },
-    UnknownEdgeEndpoint { edge_index: usize, endpoint: GraphEndpoint },
-    SelfEdgeUnsupported { edge_index: usize },
+    DuplicateVertexKey {
+        vertex_index: usize,
+    },
+    UnknownEdgeEndpoint {
+        edge_index: usize,
+        endpoint: GraphEndpoint,
+    },
+    SelfEdgeUnsupported {
+        edge_index: usize,
+    },
 }
 
 impl From<AuthoringError> for GraphAuthoringError {
@@ -131,7 +138,10 @@ impl std::error::Error for GraphAuthoringError {
 #[derive(Clone, Debug)]
 pub enum GraphEdgeMobject {
     /// An analytic Line inside a one-member family.
-    Line { family: MobjectFamily, line: Mobject },
+    Line {
+        family: MobjectFamily,
+        line: Mobject,
+    },
     /// The existing shared retained Arrow family.
     Arrow(ManimArrow),
 }
@@ -180,40 +190,59 @@ struct RetainedGraph<K> {
 }
 
 impl<K: Eq + Hash> RetainedGraph<K> {
-    fn semantic_declaration(&self) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+    fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
         let root = self.family.node_id();
-        let store = self.family.integration_store().try_borrow()
+        let store = self
+            .family
+            .integration_store()
+            .try_borrow()
             .map_err(|_| GraphAuthoringError::StoreBorrowed)?;
         // Preserve the typed stale-root/wrong-kind error before projecting the
         // borrow. The exclusive mutation boundary cannot change this proof while
         // the returned Ref is alive.
-        store.semantic_graph_declaration(root).map_err(GraphAuthoringError::Store)?;
+        store
+            .semantic_graph_declaration(root)
+            .map_err(GraphAuthoringError::Store)?;
         Ref::filter_map(store, |store| {
             store.node(root).and_then(|node| node.graph_declaration())
-        }).map_err(|_| GraphAuthoringError::MissingDeclaration(root))
+        })
+        .map_err(|_| GraphAuthoringError::MissingDeclaration(root))
     }
 
     fn topology(&self) -> Result<Ref<'_, GraphTopology>, GraphAuthoringError> {
-        Ok(Ref::map(self.semantic_declaration()?, SemanticGraphDeclaration::topology))
+        Ok(Ref::map(
+            self.semantic_declaration()?,
+            SemanticGraphDeclaration::topology,
+        ))
     }
 
     fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
-        self.vertex_lookup.get(key).map(|&index| self.vertices[index].id)
+        self.vertex_lookup
+            .get(key)
+            .map(|&index| self.vertices[index].id)
     }
 
     fn vertex(&self, key: &K) -> Option<&Mobject> {
-        self.vertex_lookup.get(key).map(|&index| &self.vertices[index].object)
+        self.vertex_lookup
+            .get(key)
+            .map(|&index| &self.vertices[index].object)
     }
 
     fn edge_id(&self, start: &K, end: &K) -> Option<GraphEdgeId> {
         let start = self.vertex_id(start)?;
         let end = self.vertex_id(end)?;
-        self.semantic_declaration().ok()?.edge_between(start, end, self.directed)
+        self.semantic_declaration()
+            .ok()?
+            .edge_between(start, end, self.directed)
     }
 
     fn edge(&self, start: &K, end: &K) -> Option<&GraphEdgeMobject> {
         let id = self.edge_id(start, end)?;
-        self.edge_lookup.get(&id).map(|&index| &self.edges[index].object)
+        self.edge_lookup
+            .get(&id)
+            .map(|&index| &self.edges[index].object)
     }
 
     fn vertex_keys(&self) -> impl Iterator<Item = &K> {
@@ -254,7 +283,9 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         V: IntoIterator<Item = (K, (f64, f64))>,
         E: IntoIterator<Item = (K, K)>,
     {
-        Ok(Self { inner: build_graph(scene, vertices, edges, false, options)? })
+        Ok(Self {
+            inner: build_graph(scene, vertices, edges, false, options)?,
+        })
     }
 }
 
@@ -271,7 +302,9 @@ impl<K: Eq + Hash> Graph<K> {
 
     /// Borrow the authoritative declaration in O(1). Stale roots and conflicting
     /// integration borrows return typed errors rather than panicking.
-    pub fn semantic_declaration(&self) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+    pub fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
         self.inner.semantic_declaration()
     }
 
@@ -326,7 +359,9 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         V: IntoIterator<Item = (K, (f64, f64))>,
         E: IntoIterator<Item = (K, K)>,
     {
-        Ok(Self { inner: build_graph(scene, vertices, edges, true, options)? })
+        Ok(Self {
+            inner: build_graph(scene, vertices, edges, true, options)?,
+        })
     }
 }
 
@@ -341,7 +376,9 @@ impl<K: Eq + Hash> DiGraph<K> {
     }
 
     /// Borrow the authoritative declaration without cloning or stale-root panic.
-    pub fn semantic_declaration(&self) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+    pub fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
         self.inner.semantic_declaration()
     }
 
@@ -381,7 +418,10 @@ impl Scene {
     }
 
     pub fn graph_with_options<K, V, E>(
-        &mut self, vertices: V, edges: E, options: GraphOptions,
+        &mut self,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
     ) -> Result<Graph<K>, GraphAuthoringError>
     where
         K: Clone + Eq + Hash,
@@ -391,7 +431,11 @@ impl Scene {
         Graph::with_options(self, vertices, edges, options)
     }
 
-    pub fn digraph<K, V, E>(&mut self, vertices: V, edges: E) -> Result<DiGraph<K>, GraphAuthoringError>
+    pub fn digraph<K, V, E>(
+        &mut self,
+        vertices: V,
+        edges: E,
+    ) -> Result<DiGraph<K>, GraphAuthoringError>
     where
         K: Clone + Eq + Hash,
         V: IntoIterator<Item = (K, (f64, f64))>,
@@ -401,7 +445,10 @@ impl Scene {
     }
 
     pub fn digraph_with_options<K, V, E>(
-        &mut self, vertices: V, edges: E, options: GraphOptions,
+        &mut self,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
     ) -> Result<DiGraph<K>, GraphAuthoringError>
     where
         K: Clone + Eq + Hash,

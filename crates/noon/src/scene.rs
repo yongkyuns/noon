@@ -326,18 +326,17 @@ impl Scene {
         let store_rc = Rc::clone(&self.store);
         if let Some(execution) = self.execution.as_mut() {
             let mut store = store_rc.borrow_mut();
-            let mut publish = |store: &mut SemanticStore,
-                               transaction: SemanticMutationTransaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(AuthoringError::from)
-            };
+            let mut publish =
+                |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(AuthoringError::from)
+                };
             return operation(&mut store, &mut publish);
         }
 
         let mut store = store_rc.borrow_mut();
-        let mut publish = |store: &mut SemanticStore,
-                           transaction: SemanticMutationTransaction| {
+        let mut publish = |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
             transaction.apply(store).map_err(AuthoringError::from)
         };
         operation(&mut store, &mut publish)

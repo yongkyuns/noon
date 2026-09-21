@@ -149,7 +149,10 @@ impl ManimArrowOptions {
         self.prototype.set_object_opacity(opacity)
     }
 
-    pub(crate) fn prepare(self, store: &mut SemanticStore) -> Result<PreparedArrow, AuthoringError> {
+    pub(crate) fn prepare(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<PreparedArrow, AuthoringError> {
         let ShortenedLine {
             visible_start,
             visible_end,

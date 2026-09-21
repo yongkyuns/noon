@@ -100,6 +100,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
                 | SemanticMutationImpact::ForegroundMembers { .. }
+                | SemanticMutationImpact::GraphDeclaration { .. }
                 | SemanticMutationImpact::FamilyMemberAdded { .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }

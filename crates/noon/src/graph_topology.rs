@@ -4,6 +4,4 @@
 //! are owned by noon-core so semantic declarations and authoring use one topology
 //! implementation rather than parallel models.
 
-pub use noon_core::{
-    GraphEdge, GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId,
-};
+pub use noon_core::{GraphEdge, GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId};

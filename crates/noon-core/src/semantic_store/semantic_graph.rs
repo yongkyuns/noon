@@ -72,10 +72,16 @@ impl SemanticGraphDeclaration {
             .collect::<HashMap<_, _>>();
         debug_assert_eq!(vertices.len(), topology.vertices().count());
         debug_assert_eq!(edges.len(), topology.edges().count());
-        debug_assert!(topology.vertices().all(|vertex| vertices.contains_key(&vertex)));
+        debug_assert!(topology
+            .vertices()
+            .all(|vertex| vertices.contains_key(&vertex)));
         debug_assert!(topology.edges().all(|edge| edges.contains_key(&edge.id)));
         Self {
-            data: Box::new(GraphDeclarationData { topology, vertices, edges }),
+            data: Box::new(GraphDeclarationData {
+                topology,
+                vertices,
+                edges,
+            }),
         }
     }
 
@@ -93,12 +99,18 @@ impl SemanticGraphDeclaration {
 
     /// Iterate semantic vertex bindings in topology insertion order.
     pub fn vertices(&self) -> impl Iterator<Item = (GraphVertexId, SemanticNodeId)> + '_ {
-        self.data.topology.vertices().map(|vertex| (vertex, self.data.vertices[&vertex]))
+        self.data
+            .topology
+            .vertices()
+            .map(|vertex| (vertex, self.data.vertices[&vertex]))
     }
 
     /// Iterate semantic edge bindings in topology insertion order.
     pub fn edges(&self) -> impl Iterator<Item = (GraphEdge, SemanticGraphEdgeBinding)> + '_ {
-        self.data.topology.edges().map(|edge| (edge, self.data.edges[&edge.id]))
+        self.data
+            .topology
+            .edges()
+            .map(|edge| (edge, self.data.edges[&edge.id]))
     }
 
     pub fn edge_between(
@@ -123,13 +135,21 @@ impl SemanticGraphDeclaration {
         &self,
         vertex: GraphVertexId,
     ) -> Result<Vec<(GraphEdgeId, SemanticNodeId)>, crate::GraphTopologyError> {
-        Ok(self.data.topology.incident_edges(vertex)?.iter()
-            .map(|&edge| (edge, self.data.edges[&edge].family())).collect())
+        Ok(self
+            .data
+            .topology
+            .incident_edges(vertex)?
+            .iter()
+            .map(|&edge| (edge, self.data.edges[&edge].family()))
+            .collect())
     }
 
     pub(crate) fn referenced_nodes(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
         self.data.vertices.values().copied().chain(
-            self.data.edges.values().flat_map(|edge| [edge.family(), edge.line()]),
+            self.data
+                .edges
+                .values()
+                .flat_map(|edge| [edge.family(), edge.line()]),
         )
     }
 }
@@ -189,7 +209,10 @@ impl SemanticTransactionGraphDeclaration {
         Self {
             data: Box::new(TransactionGraphData {
                 topology,
-                vertices: vertices.into_iter().map(|(id, node)| (id, node.into())).collect(),
+                vertices: vertices
+                    .into_iter()
+                    .map(|(id, node)| (id, node.into()))
+                    .collect(),
                 edges: edges.into_iter().collect(),
             }),
         }
@@ -209,7 +232,10 @@ impl SemanticTransactionGraphDeclaration {
 
     pub(crate) fn node_references(&self) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
         self.data.vertices.iter().map(|(_, node)| *node).chain(
-            self.data.edges.iter().flat_map(|edge| [edge.family(), edge.line()]),
+            self.data
+                .edges
+                .iter()
+                .flat_map(|edge| [edge.family(), edge.line()]),
         )
     }
 }
@@ -226,8 +252,14 @@ mod tests {
     fn optional_graph_metadata_and_transaction_payload_are_pointer_sized() {
         use std::mem::size_of;
         assert_eq!(size_of::<SemanticGraphDeclaration>(), size_of::<usize>());
-        assert_eq!(size_of::<Option<SemanticGraphDeclaration>>(), size_of::<usize>());
-        assert_eq!(size_of::<SemanticTransactionGraphDeclaration>(), size_of::<usize>());
+        assert_eq!(
+            size_of::<Option<SemanticGraphDeclaration>>(),
+            size_of::<usize>()
+        );
+        assert_eq!(
+            size_of::<SemanticTransactionGraphDeclaration>(),
+            size_of::<usize>()
+        );
     }
 
     #[test]
@@ -250,7 +282,10 @@ mod tests {
         assert_eq!(graph.edge_between(b, a, false), Some(ab));
         assert_eq!(graph.edge_between(c, b, true), None);
         assert_eq!(graph.incident_edges(b).unwrap(), &[ab, bc]);
-        assert_eq!(graph.incident_edge_nodes(b).unwrap(), vec![(ab, id(10)), (bc, id(12))]);
+        assert_eq!(
+            graph.incident_edge_nodes(b).unwrap(),
+            vec![(ab, id(10)), (bc, id(12))]
+        );
     }
 
     #[test]
@@ -261,7 +296,11 @@ mod tests {
         let graph = SemanticGraphDeclaration::from_resolved(
             topology,
             vec![(vertex, id(1))],
-            vec![SemanticGraphEdgeBinding::from_resolved(edge, id(10), id(11))],
+            vec![SemanticGraphEdgeBinding::from_resolved(
+                edge,
+                id(10),
+                id(11),
+            )],
         );
         assert_eq!(graph.incident_edges(vertex).unwrap(), &[edge]);
     }
