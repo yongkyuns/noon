@@ -1,0 +1,31 @@
+--- a/crates/noon-native/src/execution_source.rs
++++ b/crates/noon-native/src/execution_source.rs
+@@ -11,6 +11,8 @@
+ use crate::NativeHostError;
+ 
+ #[cfg(test)]
++mod input_callback_tests;
++#[cfg(test)]
+ mod viewport_tests;
+ 
+ /// The narrow execution surface consumed by the native platform loop.
+@@ -129,8 +131,8 @@
+         token: &NativePointerInputToken,
+         input: NativePointerInput,
+     ) -> Result<(), NativeHostError> {
+-        self.session
+-            .submit_native_pointer_input(token, input)
++        self.callbacks
++            .submit_native_pointer_input(&mut self.session, token, input)
+             .map(|_| ())
+             .map_err(Into::into)
+     }
+@@ -258,7 +260,7 @@
+         input: NativePointerInput,
+     ) -> Result<(), NativeHostError> {
+         self.program
+-            .submit_native_pointer_input(token, input)
++            .submit_native_pointer_input_with_callbacks(&mut self.callbacks, token, input)
+             .map(|_| ())
+             .map_err(|error| NativeHostError::Program(error.to_string()))
+     }
