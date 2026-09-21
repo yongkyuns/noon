@@ -386,3 +386,35 @@ fn iteration_preserves_authored_vertex_and_edge_order() {
             .collect::<Vec<_>>()
     );
 }
+
+
+#[test]
+fn generic_family_edits_cannot_silently_stale_public_graph_semantics() {
+    let mut scene = Scene::new();
+    let graph = graph(&mut scene);
+    let extra = scene.circle(0.2).unwrap();
+    let ab = graph.edge_id(&"a", &"b").unwrap();
+    let before = scene.revision();
+
+    assert!(matches!(
+        graph.family().add((&extra).into()),
+        Err(AuthoringError::Transaction(
+            noon_core::SemanticMutationTransactionError::InvalidGraphDeclaration { .. }
+        ))
+    ));
+    assert_eq!(scene.revision(), before);
+
+    let edge = graph.edge(&"a", &"b").unwrap();
+    assert!(matches!(
+        edge.family().remove(edge.line().into()),
+        Err(AuthoringError::Transaction(
+            noon_core::SemanticMutationTransactionError::InvalidGraphDeclaration { .. }
+        ))
+    ));
+    assert_eq!(scene.revision(), before);
+
+    let declaration = graph.semantic_declaration().unwrap();
+    let binding = declaration.edge_binding(ab).unwrap();
+    assert_eq!(binding.family(), edge.family().node_id());
+    assert_eq!(binding.line(), edge.line().node_id());
+}
