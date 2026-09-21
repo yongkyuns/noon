@@ -1,0 +1,75 @@
+--- a/crates/noon-web/src/execution_canvas.rs
++++ b/crates/noon-web/src/execution_canvas.rs
+@@ -237,7 +237,46 @@
+             token: &NativePointerInputToken,
+             input: NativePointerInput,
+         ) -> Result<NativePointerInputPublication, String> {
+-            self.program.submit_pointer(token, input)
++            self.program
++                .submit_native_pointer_input_with_callbacks(&mut self.callbacks, token, input)
++                .map_err(|error| error.to_string())
++        }
++    }
++
++    struct DirectSessionPointerTarget<'a> {
++        session: &'a mut ExecutionSession,
++        callbacks: &'a mut RustHostCallbackTable,
++    }
++
++    impl BrowserPointerTarget for DirectSessionPointerTarget<'_> {
++        fn session(&self) -> &ExecutionSession {
++            &*self.session
++        }
++
++        fn configure_pointer(
++            &mut self,
++            pointer: NativePointerId,
++            view: u64,
++        ) -> Result<NativePointerInputToken, String> {
++            self.session
++                .configure_native_pointer_input(pointer, view)
++                .map_err(|error| error.to_string())
++        }
++
++        fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
++            self.session
++                .native_pointer_input_token()
++                .map_err(|error| error.to_string())
++        }
++
++        fn submit_pointer(
++            &mut self,
++            token: &NativePointerInputToken,
++            input: NativePointerInput,
++        ) -> Result<NativePointerInputPublication, String> {
++            self.callbacks
++                .submit_native_pointer_input(&mut *self.session, token, input)
++                .map_err(|error| error.to_string())
+         }
+     }
+ 
+@@ -391,8 +430,9 @@
+             let binding = &mut self.browser_pointer_binding;
+             let sequence = &mut self.next_native_event_sequence;
+             match &mut self.authority {
+-                DirectSourceAuthority::Session { session, .. } => {
+-                    presentation.submit(session, binding, sequence, input)
++                DirectSourceAuthority::Session { session, callbacks } => {
++                    let mut target = DirectSessionPointerTarget { session, callbacks };
++                    presentation.submit(&mut target, binding, sequence, input)
+                 }
+                 DirectSourceAuthority::Program(program) => {
+                     presentation.submit(program.as_mut(), binding, sequence, input)
+@@ -405,9 +445,10 @@
+             let binding = &mut self.browser_pointer_binding;
+             let sequence = &mut self.next_native_event_sequence;
+             match &mut self.authority {
+-                DirectSourceAuthority::Session { session, .. } => {
++                DirectSourceAuthority::Session { session, callbacks } => {
++                    let mut target = DirectSessionPointerTarget { session, callbacks };
+                     browser_pointer_input::cancel_browser_pointer_input(
+-                        session,
++                        &mut target,
+                         binding,
+                         sequence,
+                         retire_source,
