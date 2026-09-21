@@ -306,6 +306,35 @@ impl<'a> TransactionNodeCatalog<'a> {
         Ok(())
     }
 
+    pub(super) fn ensure_object(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .semantic_object_state_checked(node)
+                .map(|_| ())
+                .map_err(|error| SemanticMutationTransactionError::Object { index, error }),
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Object { .. })
+                ) {
+                    Ok(())
+                } else {
+                    Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::Object,
+                    })
+                }
+            }
+        }
+    }
+
     pub(super) fn ensure_animation(
         &self,
         node: SemanticTransactionNodeRef,
