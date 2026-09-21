@@ -1,4 +1,4 @@
-"""Foreground compatibility metadata projects ordering through shared Rust membership edits."""
+"""Python foreground APIs are thin projections of shared Rust membership semantics."""
 
 import os
 from pathlib import Path
@@ -20,240 +20,122 @@ class SceneForegroundFacadeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_foreground_stays_last_across_adds_and_removal_only_changes_metadata(self):
+    def test_foreground_methods_dispatch_shared_membership_kinds_without_local_state(self):
         self.run_source("""
             import noon
-            import _manim_compat as compat
 
-            compat._leaf_mobjects = lambda value: [value]
             scene = noon.Scene()
             edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
-            )
-            back = object()
-            front = object()
-            later = object()
-
-            assert scene.add_foreground_mobject(front) is scene
-            assert scene.foreground_mobjects == [front]
-            assert edits[-1] == ("add", (front,), None)
-
-            scene.add(back)
-            assert edits[-1] == ("add", (back, front), None)
-            assert scene.foreground_mobjects == [front]
-
-            assert scene.remove_foreground_mobject(front) is scene
-            assert scene.foreground_mobjects == []
-            assert edits[-1] == ("add", (back, front), None)
-
-            scene.add(later)
-            assert edits[-1] == ("add", (later,), None)
-        """)
-
-    def test_multiple_foreground_order_is_stable_and_readding_moves_to_foreground_tail(self):
-        self.run_source("""
-            import noon
-            import _manim_compat as compat
-
-            compat._leaf_mobjects = lambda value: [value]
-            scene = noon.Scene()
-            edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
+            scene._edit_membership = lambda kind, values=(), **kwargs: edits.append(
+                (kind, values, kwargs)
             )
             first = object()
             second = object()
-            third = object()
 
-            scene.add_foreground_mobjects(first, second)
-            assert scene.foreground_mobjects == [first, second]
-            assert edits[-1] == ("add", (first, second), None)
-
-            scene.add_foreground_mobject(first)
-            assert scene.foreground_mobjects == [second, first]
-            assert edits[-1] == ("add", (second, first), None)
-
-            scene.add(third)
-            assert edits[-1] == ("add", (third, second, first), None)
+            assert scene.add_foreground_mobjects(first, second) is scene
+            assert edits[-1] == ("add_foreground", (first, second), {})
+            assert scene.remove_foreground_mobject(first) is scene
+            assert edits[-1] == ("remove_foreground", (first,), {})
+            assert not hasattr(scene, "__dict__") or "foreground_mobjects" not in scene.__dict__
         """)
 
-    def test_failed_foreground_add_does_not_commit_compatibility_metadata(self):
+    def test_foreground_property_is_a_derived_host_query(self):
+        self.run_source("""
+            import noon
+
+            first = object()
+            second = object()
+            class Operations:
+                @staticmethod
+                def _canonical_scene_foreground_mobjects(scene):
+                    assert isinstance(scene, noon.Scene)
+                    return [first, second]
+
+            noon._scene_operations = lambda: Operations
+            scene = noon.Scene()
+            assert scene.foreground_mobjects == [first, second]
+            assert "foreground_mobjects" not in scene.__dict__
+        """)
+
+    def test_ordinary_add_no_longer_projects_a_python_foreground_list(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: [value]
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), **kwargs: edits.append(
+                (kind, values, kwargs)
+            )
+            added = object()
+            scene.add(added)
+            assert edits == [("add", (added,), {"key": None})]
+        """)
+
+    def test_keyed_add_keeps_caller_identity_without_foreground_rewriting(self):
+        self.run_source("""
+            import noon
+            import _manim_compat as compat
+
+            compat._leaf_mobjects = lambda value: [value]
+            scene = noon.Scene()
+            edits = []
+            scene._edit_membership = lambda kind, values=(), **kwargs: edits.append(
+                (kind, values, kwargs)
+            )
+            added = object.__new__(noon.Mobject)
+            scene.add(added, key="stable")
+            assert edits == [("add", (added,), {"key": "stable"})]
+        """)
+
+    def test_remove_back_clear_and_replace_have_no_python_foreground_cleanup(self):
         self.run_source("""
             import noon
 
             scene = noon.Scene()
-            existing = object()
-            scene.foreground_mobjects = [existing]
+            edits = []
+            scene._edit_membership = lambda kind, values=(), **kwargs: edits.append(
+                (kind, values, kwargs)
+            )
+            first = object()
+            second = object()
+            assert scene.bring_to_back(first) is scene
+            assert scene.remove(second) is scene
+            assert scene.replace(first, second) is scene
+            assert scene.clear() is scene
+            assert edits == [
+                ("bring_to_back", (first,), {}),
+                ("remove", (second,), {}),
+                ("replace", (first, second), {}),
+                ("clear", (), {}),
+            ]
+        """)
 
+    def test_failed_shared_edit_has_no_python_foreground_state_to_rollback(self):
+        self.run_source("""
+            import noon
+
+            scene = noon.Scene()
             def reject(*args, **kwargs):
                 raise RuntimeError("rejected")
-
             scene._edit_membership = reject
-            candidate = object()
             try:
-                scene.add_foreground_mobject(candidate)
+                scene.add_foreground_mobject(object())
             except RuntimeError as error:
                 assert str(error) == "rejected"
             else:
                 raise AssertionError("expected rejection")
-            assert scene.foreground_mobjects == [existing]
+            assert "foreground_mobjects" not in scene.__dict__
         """)
 
-    def test_remove_clear_and_bring_to_back_retire_foreground_status_after_success(self):
+    def test_old_python_foreground_policy_helpers_are_deleted(self):
         self.run_source("""
             import noon
 
-            scene = noon.Scene()
-            edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
-            )
-            first = object()
-            second = object()
-            scene.foreground_mobjects = [first, second]
-
-            assert scene.bring_to_back(first) is scene
-            assert edits[-1] == ("bring_to_back", (first,), None)
-            assert scene.foreground_mobjects == [second]
-
-            assert scene.remove(second) is scene
-            assert edits[-1] == ("remove", (second,), None)
-            assert scene.foreground_mobjects == []
-
-            scene.foreground_mobjects = [first]
-            assert scene.clear() is scene
-            assert edits[-1] == ("clear", (), None)
-            assert scene.foreground_mobjects == []
-        """)
-
-    def test_keyed_single_add_keeps_key_on_new_object_while_foreground_is_reordered(self):
-        self.run_source("""
-            import noon
-            import _manim_compat as compat
-
-            compat._leaf_mobjects = lambda value: [value]
-            scene = noon.Scene()
-            edits = []
-            scene._edit_membership = lambda kind, values=(), key=None, key_mobject=None: edits.append(
-                (kind, values, key, key_mobject)
-            )
-            foreground = object.__new__(noon.Mobject)
-            added = object.__new__(noon.Mobject)
-            scene.foreground_mobjects = [foreground]
-
-            scene.add(added, key="stable")
-            assert edits == [("add", (added, foreground), "stable", added)]
-
-            try:
-                scene.add(object(), object(), key="invalid")
-            except ValueError as error:
-                assert "one ordinary Mobject" in str(error)
-            else:
-                raise AssertionError("expected keyed batch rejection")
-        """)
-
-    def test_failed_replace_does_not_change_foreground_metadata(self):
-        self.run_source("""
-            import noon
-
-            scene = noon.Scene()
-            old = object()
-            replacement = object()
-            scene.foreground_mobjects = [old]
-
-            def reject(*args, **kwargs):
-                raise RuntimeError("rejected")
-
-            scene._edit_membership = reject
-            try:
-                scene.replace(old, replacement)
-            except RuntimeError as error:
-                assert str(error) == "rejected"
-            else:
-                raise AssertionError("expected replacement rejection")
-            assert scene.foreground_mobjects == [old]
-        """)
-
-    def test_replace_retires_foreground_before_a_later_add_can_resurrect_it(self):
-        self.run_source("""
-            import noon
-            import _manim_compat as compat
-
-            compat._leaf_mobjects = lambda value: [value]
-            scene = noon.Scene()
-            edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
-            )
-            old = object()
-            replacement = object()
-            later = object()
-            scene.foreground_mobjects = [old]
-
-            assert scene.replace(old, replacement) is scene
-            assert edits[-1] == ("replace", (old, replacement), None)
-            assert scene.foreground_mobjects == []
-
-            scene.add(later)
-            assert edits[-1] == ("add", (later,), None)
-        """)
-
-    def test_failed_group_removal_does_not_change_foreground_metadata(self):
-        self.run_source("""
-            import noon
-            import _manim_compat as compat
-
-            scene = noon.Scene()
-            child = object()
-            class FakeGroup:
-                def __init__(self, *members):
-                    self.submobjects = list(members)
-            compat.Group = FakeGroup
-            group = FakeGroup(child)
-            scene.foreground_mobjects = [child]
-
-            def reject(*args, **kwargs):
-                raise RuntimeError("rejected")
-
-            scene._edit_membership = reject
-            try:
-                scene.remove(group)
-            except RuntimeError as error:
-                assert str(error) == "rejected"
-            else:
-                raise AssertionError("expected removal rejection")
-            assert scene.foreground_mobjects == [child]
-        """)
-
-    def test_group_removal_retires_foreground_child_before_later_add(self):
-        self.run_source("""
-            import noon
-            import _manim_compat as compat
-
-            compat._leaf_mobjects = lambda value: list(
-                value.submobjects if isinstance(value, compat.Group) else [value]
-            )
-            scene = noon.Scene()
-            edits = []
-            scene._edit_membership = lambda kind, values=(), key=None: edits.append(
-                (kind, values, key)
-            )
-            child = object()
-            sibling = object()
-            class FakeGroup:
-                def __init__(self, *members):
-                    self.submobjects = list(members)
-            compat.Group = FakeGroup
-            group = FakeGroup(child, sibling)
-            scene.foreground_mobjects = [child]
-
-            assert scene.remove(group) is scene
-            assert scene.foreground_mobjects == []
-
-            later = object()
-            scene.add(later)
-            assert edits[-1] == ("add", (later,), None)
+            assert not hasattr(noon.Scene, "_identity_list_update")
+            assert not hasattr(noon.Scene, "_foreground_add_order")
+            assert not hasattr(noon.Scene, "_restructure_foreground")
         """)
 
 
