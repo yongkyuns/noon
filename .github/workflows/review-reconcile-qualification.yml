@@ -1,0 +1,151 @@
+name: Review reconciliation qualification
+on:
+  push:
+    branches: [review/reconcile-1684-1693-20260921]
+    paths: [.github/workflows/review-reconcile-qualification.yml]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: c5
+            source: eb5b5c8ef3eb92e502a5ba06c73e6547377af26b
+            expected_tree: e1d8e1d38c1cabdb821f76605f372ccc0e06b5f8
+            candidate_branch: review/1684-candidate-20260921
+          - lane: b5
+            source: ab5d9fb2ee42b06922600e0e03d764ab76ed60f8
+            expected_tree: 3117a5975a56e51df64f984ffc5fded429fd04c4
+            candidate_branch: review/1693-candidate-20260921
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MASTER: c77f7c0dbdd24cad736ceffec8260578746821aa
+      SOURCE_HEAD: ${{ matrix.source }}
+      LANE: ${{ matrix.lane }}
+      EXPECTED_TREE: ${{ matrix.expected_tree }}
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
+      NOON_SKIP_WEB_PREFLIGHT: '0'
+      NOON_WEB_PREFLIGHT_ONLY: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reconcile exact source and apply reviewed repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Noon reconciliation'
+          git config user.email 'reconciliation@users.noreply.github.com'
+          git merge --no-commit --no-ff "$MASTER"
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          if os.environ['LANE'] == 'b5':
+              path = Path('crates/noon-web/src/authoring_coordinates.rs')
+              master = subprocess.check_output(['git', 'show', os.environ['MASTER'] + ':' + str(path)], text=True)
+              marker = '/// The animated gallery uses the same typed program as the native example.'
+              current = path.read_text()
+              assert marker not in current
+              path.write_text(current.rstrip() + '\n\n' + master[master.index(marker):])
+              path = Path('scripts/check-web-package.mjs')
+              current = path.read_text().replace('import { join } from "node:path";', 'import { join } from "node:path";\nimport { animatedPlottingCases } from "./animated-plotting-samples.mjs";')
+              marker = '    || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {\n'
+              assert current.count(marker) == 1
+              replacement = '''  // Keep the package contract tied to the animated qualification registry. A
+            // missing bootstrap must fail the build, not a later zero-sample raster run.
+            for (const { factory } of Object.values(animatedPlottingCases)) {
+              expectedJavascriptSurface.push(`export function ${factory}(`);
+              expectedTypeSurface.push(`export function ${factory}(`);
+            }
+          '''
+              path.write_text(current.replace(marker, marker + replacement))
+          else:
+              path = Path('crates/noon-native/src/selection_overlay.rs')
+              current = path.read_text()
+              assert 'Color::rgba(1.0, 1.0, 0.0, 0.35)' in current
+              path.write_text(current.replace('use noon_core::Color;\n', '').replace('Color::rgba(1.0, 1.0, 0.0, 0.35)', 'noon::integration::pointer_selection_overlay_color()'))
+          PY
+          git add -A
+          git diff --cached --check
+          TREE=$(git write-tree)
+          test "$TREE" = "$EXPECTED_TREE"
+          git commit -m "Reconcile $LANE review repairs with current master"
+          CANDIDATE=$(git rev-parse HEAD)
+          test "$(git show -s --format=%P HEAD)" = "$SOURCE_HEAD $MASTER"
+          test -z "$(git ls-tree -r --name-only HEAD | grep '^.github/workflows/review-reconcile-' || true)"
+          echo "CANDIDATE=$CANDIDATE" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/review-evidence"
+          printf 'master=%s\nsource=%s\ncandidate=%s\ntree=%s\n' "$MASTER" "$SOURCE_HEAD" "$CANDIDATE" "$TREE" > "$RUNNER_TEMP/review-evidence/identity.txt"
+          git diff --binary "$MASTER" HEAD > "$RUNNER_TEMP/review-evidence/source.patch"
+      - name: Build exact-source browser package
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+          cache-ref: c77f7c0dbdd24cad736ceffec8260578746821aa
+      - name: Full integrated repository gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full "$MASTER" 2>&1 | tee "$RUNNER_TEMP/review-evidence/full-check.log"
+      - name: Install pinned browser qualification dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify every plotting mode
+        if: matrix.lane == 'b5'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-web-package.mjs
+          node scripts/plotting-qualification.mjs 2>&1 | tee "$RUNNER_TEMP/review-evidence/paired-plotting.log"
+          for mode in coordinates number-line default synchronized gapped live; do
+            if [ "$mode" = default ]; then
+              node scripts/time-series-plotting-qualification.mjs 2>&1 | tee "$RUNNER_TEMP/review-evidence/plotting-$mode.log"
+            else
+              node scripts/time-series-plotting-qualification.mjs "$mode" 2>&1 | tee "$RUNNER_TEMP/review-evidence/plotting-$mode.log"
+            fi
+          done
+      - name: Qualify bounded input and native/browser selection
+        if: matrix.lane == 'c5'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/review-evidence/overlay-transport.log"
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/review-evidence/selection-tests.log"
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/review-evidence/rendererless-wasm.log"
+          node --test scripts/pointer-selection-raster-contract.test.mjs 2>&1 | tee "$RUNNER_TEMP/review-evidence/pixel-oracle.log"
+          node scripts/browser-pointer-input-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/review-evidence/dom-input.log"
+          node scripts/pointer-selection-qualification.mjs 2>&1 | tee "$RUNNER_TEMP/review-evidence/browser-selection.log"
+          NOON_SELECTION_PROOF_DIR="$RUNNER_TEMP/review-evidence/native-selection" cargo test -p noon --all-features --test selection_overlay_raster -- --include-ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/review-evidence/native-selection.log"
+      - name: Publish only the fully validated source candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_BRANCH: ${{ matrix.candidate_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git diff HEAD --)"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "$CANDIDATE:refs/heads/$CANDIDATE_BRANCH"
+      - name: Retain exact-source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-reconcile-${{ matrix.lane }}-evidence
+          path: |
+            ${{ runner.temp }}/review-evidence/
+            plotting-artifacts/
+            browser-smoke-artifacts/pointer-dom/
+            browser-smoke-artifacts/pointer-selection/
+          retention-days: 7
+          if-no-files-found: error
