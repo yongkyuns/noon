@@ -577,10 +577,6 @@ class Scene:
         self._object_keys: dict[int, str] = {}
         self._object_key_ids: dict[str, int] = {}
         self._next_object_id = 0
-        # Manim compatibility metadata only. Authoritative painter order remains
-        # the shared Rust scene root; Scene.add projects these wrappers through
-        # the same atomic membership edit as newly added objects.
-        self.foreground_mobjects: list[object] = []
 
     def setup(self) -> None:
         pass
@@ -598,6 +594,10 @@ class Scene:
     def mobjects(self) -> list[object]:
         return _scene_operations()._canonical_scene_mobjects(self)
 
+    @property
+    def foreground_mobjects(self) -> list[object]:
+        return _scene_operations()._canonical_scene_foreground_mobjects(self)
+
     def _edit_membership(
         self, kind: str, values: tuple[object, ...] = (), *,
         key=None, key_mobject: Mobject | None = None,
@@ -609,102 +609,28 @@ class Scene:
                 self, kind, values, key=key, key_mobject=key_mobject
             )
 
-    @staticmethod
-    def _identity_list_update(current: list[object], additions: tuple[object, ...]) -> list[object]:
-        """Manim-style list update using wrapper identity, preserving the last occurrence."""
-        result = [value for value in current if all(value is not item for item in additions)]
-        for value in additions:
-            result = [item for item in result if item is not value]
-            result.append(value)
-        return result
-
-    @staticmethod
-    def _foreground_add_order(
-        additions: tuple[object, ...], foreground: list[object]
-    ) -> tuple[object, ...]:
-        # Foreground wrappers are submitted last to the one shared Rust membership
-        # edit. Exact duplicates are removed from the ordinary prefix so the typed
-        # boundary never receives a duplicate request member.
-        prefix = [
-            value for value in additions
-            if all(value is not foreground_value for foreground_value in foreground)
-        ]
-        return tuple(prefix + foreground)
-
-    @staticmethod
-    def _restructure_foreground(
-        foreground: list[object], removals: tuple[object, ...]
-    ) -> list[object]:
-        """Dissolve affected Groups while retaining unaffected foreground siblings."""
-        from _manim_compat import Group
-
-        def removal_contains(candidate: object, value: object) -> bool:
-            if candidate is value:
-                return True
-            return isinstance(candidate, Group) and any(
-                removal_contains(child, value) for child in candidate.submobjects
-            )
-
-        def removed(value: object) -> bool:
-            return any(removal_contains(target, value) for target in removals)
-
-        def contains_removed(value: object) -> bool:
-            if removed(value):
-                return True
-            return isinstance(value, Group) and any(
-                contains_removed(child) for child in value.submobjects
-            )
-
-        def retain(value: object, output: list[object]) -> None:
-            if removed(value):
-                return
-            if isinstance(value, Group) and contains_removed(value):
-                for child in value.submobjects:
-                    retain(child, output)
-            else:
-                output.append(value)
-
-        output: list[object] = []
-        for value in foreground:
-            retain(value, output)
-        return output
-
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
             return self
-        # Preserve the ordinary facade's validation/return contract before the
-        # foreground projection changes the authoritative membership batch.
+        # Validate the caller's ordinary facade contract before Rust publication.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
             raise ValueError("an explicit key requires one ordinary Mobject add")
-        ordered = self._foreground_add_order(mobjects, self.foreground_mobjects)
-        if key is not None and self.foreground_mobjects:
-            # A key belongs to the caller's wrapper, not the first member after
-            # foreground projection. Keep that identity explicit at the boundary.
-            self._edit_membership("add", ordered, key=key, key_mobject=mobjects[0])
-        else:
-            self._edit_membership("add", ordered, key=key)
+        self._edit_membership("add", mobjects, key=key)
         return leaves[0] if len(leaves) == 1 else self
 
     def add_foreground_mobjects(self, *mobjects: object) -> Scene:
-        if not mobjects:
-            return self
-        candidate = self._identity_list_update(self.foreground_mobjects, mobjects)
-        ordered = self._foreground_add_order(mobjects, candidate)
-        # Commit compatibility metadata only after the authoritative Rust edit
-        # succeeds, so rejected foreign/stale/duplicate handles leave no residue.
-        self._edit_membership("add", ordered)
-        self.foreground_mobjects = candidate
+        if mobjects:
+            self._edit_membership("add_foreground", mobjects)
         return self
 
     def add_foreground_mobject(self, mobject: object) -> Scene:
         return self.add_foreground_mobjects(mobject)
 
     def remove_foreground_mobjects(self, *mobjects: object) -> Scene:
-        self.foreground_mobjects = self._restructure_foreground(
-            self.foreground_mobjects, mobjects
-        )
+        if mobjects:
+            self._edit_membership("remove_foreground", mobjects)
         return self
 
     def remove_foreground_mobject(self, mobject: object) -> Scene:
@@ -716,28 +642,18 @@ class Scene:
 
     def bring_to_back(self, *mobjects: object) -> Scene:
         self._edit_membership("bring_to_back", mobjects)
-        self.foreground_mobjects = self._restructure_foreground(
-            self.foreground_mobjects, mobjects
-        )
         return self
 
     def remove(self, *mobjects: object) -> Scene:
         self._edit_membership("remove", mobjects)
-        self.foreground_mobjects = self._restructure_foreground(
-            self.foreground_mobjects, mobjects
-        )
         return self
 
     def clear(self) -> Scene:
         self._edit_membership("clear")
-        self.foreground_mobjects = []
         return self
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
         self._edit_membership("replace", (old_mobject, new_mobject))
-        self.foreground_mobjects = self._restructure_foreground(
-            self.foreground_mobjects, (old_mobject,)
-        )
         return self
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
