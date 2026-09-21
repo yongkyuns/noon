@@ -52,13 +52,23 @@ pub(super) fn replace_members(
         return Ok(Vec::new());
     }
     let (affected, _) = affected_explicit_root_closure(store, scene_root, &HashSet::from([old]))?;
-    // A replacement outside the foreground does not demote an already-declared target.
-    if !previous.iter().any(|id| affected.contains(id)) {
-        return Ok(previous.to_vec());
-    }
-    let mut removal = downward_target_closure(store, &[new])?;
-    removal.insert(old);
-    project_members(store, scene_root, &removal, Some((old, new)))
+    let replaces_foreground = previous.iter().any(|id| affected.contains(id));
+    let mut removal = downward_target_closure(store, &[old])?;
+    let target_members = downward_target_closure(store, &[new])?;
+    let replacement = if replaces_foreground {
+        // The target takes the replaced foreground slot. Retire independently
+        // declared source descendants too; their preserved family handles must
+        // not cause a later add to resurrect the replaced source's contents.
+        removal.extend(target_members);
+        Some((old, new))
+    } else {
+        // A partially demoted family can still contain foreground declarations.
+        // Remove those retired descendants, but keep declarations whose identity
+        // survives in the target. Do not promote the whole target implicitly.
+        removal.retain(|id| !target_members.contains(id));
+        None
+    };
+    project_members(store, scene_root, &removal, replacement)
 }
 
 fn project_members(

@@ -278,3 +278,207 @@ fn local_foreground_reorder_does_not_plan_unrelated_display_members() {
     assert_eq!(store.node(root).unwrap().members().last(), Some(&a));
     assert_eq!(store.node(root).unwrap().member_count(), 2_001);
 }
+
+#[test]
+fn replacing_partially_demoted_family_retires_descendant_declarations() {
+    let mut store = SemanticStore::new();
+    let a = object(&mut store);
+    let b = object(&mut store);
+    let new = object(&mut store);
+    let later = object(&mut store);
+    let group = family(&mut store, &[a, b]);
+    let root = family(&mut store, &[]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::RemoveForeground(&[b]),
+    );
+    assert_lists(&store, root, &[group], &[a]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Replace { old: group, new },
+    );
+    assert_lists(&store, root, &[new], &[]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Add(&[later]),
+    );
+    assert_lists(&store, root, &[new, later], &[]);
+    assert!(!semantic_scene_root_contains(&store, root, a).unwrap());
+    assert_eq!(store.node(group).unwrap().members(), &[a, b]);
+}
+
+#[test]
+fn replacing_nested_family_keeps_only_unaffected_foreground_branches() {
+    let mut store = SemanticStore::new();
+    let [a, b, c, new, later] = std::array::from_fn(|_| object(&mut store));
+    let inner = family(&mut store, &[a, b]);
+    let outer = family(&mut store, &[inner, c]);
+    let root = family(&mut store, &[]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[outer]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::RemoveForeground(&[b]),
+    );
+    assert_lists(&store, root, &[outer], &[a, c]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Replace { old: inner, new },
+    );
+    assert_lists(&store, root, &[new, c], &[c]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Add(&[later]),
+    );
+    assert_lists(&store, root, &[new, later, c], &[c]);
+    assert_eq!(store.node(inner).unwrap().members(), &[a, b]);
+    assert_eq!(store.node(outer).unwrap().members(), &[inner, c]);
+}
+
+#[test]
+fn replacing_family_preserves_declarations_that_survive_in_target() {
+    for family_target in [false, true] {
+        let mut store = SemanticStore::new();
+        let [a, b, c, later] = std::array::from_fn(|_| object(&mut store));
+        let group = family(&mut store, &[a, b]);
+        let new = if family_target {
+            family(&mut store, &[a, c])
+        } else {
+            a
+        };
+        let root = family(&mut store, &[]);
+        edit(
+            &mut store,
+            root,
+            SemanticSceneMembershipRequest::AddForeground(&[group]),
+        );
+        edit(
+            &mut store,
+            root,
+            SemanticSceneMembershipRequest::RemoveForeground(&[b]),
+        );
+        edit(
+            &mut store,
+            root,
+            SemanticSceneMembershipRequest::Replace { old: group, new },
+        );
+        assert_lists(&store, root, &[new], &[a]);
+        edit(
+            &mut store,
+            root,
+            SemanticSceneMembershipRequest::Add(&[later]),
+        );
+        let expected = if family_target {
+            vec![c, later, a]
+        } else {
+            vec![later, a]
+        };
+        assert_lists(&store, root, &expected, &[a]);
+        assert!(!semantic_scene_root_contains(&store, root, b).unwrap());
+    }
+}
+
+#[test]
+fn replacing_declared_family_prunes_independent_descendants_at_source_slot() {
+    let mut store = SemanticStore::new();
+    let [a, b, new, later] = std::array::from_fn(|_| object(&mut store));
+    let group = family(&mut store, &[a, b]);
+    let root = family(&mut store, &[]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::RemoveForeground(&[b]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group]),
+    );
+    assert_lists(&store, root, &[a, group], &[a, group]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Replace { old: group, new },
+    );
+    assert_lists(&store, root, &[a, new], &[new]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Add(&[later]),
+    );
+    assert_lists(&store, root, &[a, later, new], &[new]);
+}
+
+#[test]
+fn replacing_nonforeground_source_preserves_existing_foreground_target() {
+    let mut store = SemanticStore::new();
+    let [a, front, later] = std::array::from_fn(|_| object(&mut store));
+    let root = family(&mut store, &[a]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[front]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Replace { old: a, new: front },
+    );
+    assert_lists(&store, root, &[front], &[front]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Add(&[later]),
+    );
+    assert_lists(&store, root, &[later, front], &[front]);
+}
+
+#[test]
+fn replacement_foreground_cleanup_is_atomic_when_preparation_fails() {
+    let mut store = SemanticStore::new();
+    let [a, b, new] = std::array::from_fn(|_| object(&mut store));
+    let group = family(&mut store, &[a, b]);
+    let root = family(&mut store, &[]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::RemoveForeground(&[b]),
+    );
+    let revision = store.scene_revision();
+    let counters = store.last_mutation_stats();
+    let mut transaction = plan_semantic_scene_membership(
+        &store,
+        root,
+        SemanticSceneMembershipRequest::Replace { old: group, new },
+    )
+    .unwrap();
+    transaction.add_member(new, root);
+    assert!(transaction.prepare(&mut store).is_err());
+    assert_lists(&store, root, &[group], &[a]);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats(), counters);
+}

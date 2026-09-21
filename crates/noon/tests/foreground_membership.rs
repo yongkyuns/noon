@@ -234,3 +234,66 @@ fn family_fade_out_retires_nested_foreground_declarations() {
     assert!(a.state().is_ok());
     assert!(b.state().is_ok());
 }
+
+#[test]
+fn replacing_partially_demoted_family_never_resurrects_descendants_cold_or_live() {
+    for live in [false, true] {
+        let mut scene = Scene::new();
+        let a = scene.square(1.0).unwrap();
+        let b = scene.circle(1.0).unwrap();
+        let new = scene.square(2.0).unwrap();
+        let later = scene.square(0.5).unwrap();
+        let family = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+        scene.add_foreground_many(&[(&family).into()]).unwrap();
+        scene.remove_foreground_many(&[(&b).into()]).unwrap();
+        assert_eq!(foreground(&scene), [a.node_id()]);
+        let mut session = scene.execution_session().unwrap();
+        if live {
+            let before = session.publication_context();
+            scene
+                .live(&mut session)
+                .replace((&family).into(), (&new).into())
+                .unwrap();
+            assert_eq!(
+                scene.revision(),
+                before.scene_revision().checked_next().unwrap()
+            );
+            assert_order(&session, &[&new]);
+            scene.live(&mut session).add(&later).unwrap();
+        } else {
+            scene.replace((&family).into(), (&new).into()).unwrap();
+            scene.add(&later).unwrap();
+            session = scene.execution_session().unwrap();
+        }
+        assert!(foreground(&scene).is_empty());
+        assert_eq!(display(&scene), [new.node_id(), later.node_id()]);
+        assert_order(&session, &[&new, &later]);
+        assert!(!scene.live(&mut session).contains(&a).unwrap());
+        assert!(!scene.live(&mut session).contains(&b).unwrap());
+        assert!(a.state().is_ok());
+        assert!(b.state().is_ok());
+    }
+}
+
+#[test]
+fn live_replacement_keeps_surviving_target_foreground_identity() {
+    let mut scene = Scene::new();
+    let a = scene.square(1.0).unwrap();
+    let b = scene.circle(1.0).unwrap();
+    let c = scene.square(2.0).unwrap();
+    let later = scene.square(0.5).unwrap();
+    let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+    let target = scene.family(&[(&a).into(), (&c).into()]).unwrap();
+    scene.add_foreground_many(&[(&source).into()]).unwrap();
+    scene.remove_foreground_many(&[(&b).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .replace((&source).into(), (&target).into())
+        .unwrap();
+    assert_eq!(foreground(&scene), [a.node_id()]);
+    assert_order(&session, &[&a, &c]);
+    scene.live(&mut session).add(&later).unwrap();
+    assert_order(&session, &[&c, &later, &a]);
+    assert_eq!(foreground(&scene), [a.node_id()]);
+}
