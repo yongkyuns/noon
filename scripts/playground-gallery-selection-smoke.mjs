@@ -43,10 +43,9 @@ function changedPixels(leftBytes, rightBytes) {
 
 async function waitForPresentation(page, previous) {
   await page.waitForFunction(
-    (prior) =>
-      Number(window.__noonExampleGallery?.executionMetrics?.constructor) !== -1 &&
+    () =>
+      window.__noonExampleGallery !== undefined &&
       document.querySelector("#patch-status")?.dataset.state !== "error",
-    previous,
   );
   await page.waitForFunction(
     async (prior) => {
