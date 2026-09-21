@@ -1,0 +1,45 @@
+diff --git a/crates/noon-native/src/selection_overlay/tests.rs b/crates/noon-native/src/selection_overlay/tests.rs
+index 932963933ca9ae196c78b322fe11025de05ab6f6..5607d37c45286413b4ef8f392a30cbac01b21639 100644
+--- a/crates/noon-native/src/selection_overlay/tests.rs
++++ b/crates/noon-native/src/selection_overlay/tests.rs
+@@ -154,9 +154,12 @@ fn native_surface_smoke_presents_paused_click_selection_and_clear() {
+                     assert!(self.app.last_selection_presentation.is_some());
+                     assert!(!self.app.publication_pending());
+                     assert_eq!(self.app.last_geometry_draw_calls, 2);
+-                    // Same-time historical seek changes publication but has not
+-                    // yet erased the displayed highlight. Do not retag a new click.
++                    // Execution makes an unpresented round trip back to the
++                    // same time/image. Its new publication must not revive the
++                    // historical displayed receipt or retag an incoming click.
++                    self.app.static_session_mut().evaluate(0.25).unwrap();
+                     self.app.static_session_mut().seek(0.0).unwrap();
++                    assert_ne!(self.app.session().publication_context(), receipt.publication());
+                     assert!(matches!(self.app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0).unwrap(),
+                         crate::pointer_input::PointerDispatch::RejectedFrame(_)));
+                     assert_eq!(self.app.pointer.presented, Some(receipt));
+@@ -233,3 +236,25 @@ fn rejected_motion_cancels_click_even_after_fresh_display_and_return_to_press_po
+     assert!(app.session().selected_pointer_target().is_some(), "fresh click must recover");
+     assert_eq!(app.session().frame().time, 0.25);
+ }
++
++#[test]
++fn same_time_selection_clear_keeps_an_unchanged_effective_frame_receipt_compatible() {
++    let mut app = app();
++    app.static_session_mut().take_renderer_publication();
++    // Model the displayed scene and selection without an actual window here.
++    app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
++    click(&mut app, 160.0);
++    app.last_selection_presentation = app.session().pointer_selection_presentation();
++    let displayed = app.pointer.presented.clone();
++    let before = app.session().publication_context();
++    assert!(app.session().selected_pointer_target().is_some());
++    app.static_session_mut().seek(0.0).unwrap();
++    assert_eq!(app.session().publication_context(), before);
++    assert!(app.session().selected_pointer_target().is_none());
++    assert!(app.publication_pending(), "selection clear still needs its own redraw");
++    // A session overlay is not a new effective scene or a picking target.
++    assert_eq!(app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0).unwrap(),
++        crate::pointer_input::PointerDispatch::Admitted);
++    assert_eq!(app.pointer.presented, displayed);
++    assert_eq!(app.session().frame().time, 0.0);
++}
