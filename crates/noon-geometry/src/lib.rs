@@ -16,7 +16,8 @@ mod reverse;
 mod smoothing;
 pub use reverse::reverse_path;
 pub use smoothing::{
-    change_path_anchor_mode, change_path_anchor_mode_with_boundary, SplineBoundary,
+    change_path_anchor_mode, change_path_anchor_mode_with_boundary, smooth_curve_handles,
+    SplineBoundary,
 };
 mod tessellation;
 mod vector_field;

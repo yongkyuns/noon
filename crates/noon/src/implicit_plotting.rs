@@ -8,8 +8,9 @@ use crate::{ManimGeometryOptions, Mobject, PlotAuthoringError, PlotPreparationEr
 use noon_core::PathCommand;
 use noon_core::{Vec2, VectorPath};
 use noon_geometry::{
-    change_path_anchor_mode_with_boundary, plan_isoline, validate_isoline_request, AxesFrame,
-    IsolineBounds, IsolineOptions, IsolinePathError, SplineBoundary,
+    change_path_anchor_mode_with_boundary, plan_isoline, smooth_curve_handles,
+    validate_isoline_request, AxesFrame, IsolineBounds, IsolineOptions, IsolinePathError,
+    SplineBoundary,
 };
 
 /// Bounded, static implicit-curve preparation options.
@@ -97,8 +98,10 @@ pub(crate) fn prepare_axes_implicit_path(
     )
     .map_err(|_| PlotAuthoringError::from(PlotPreparationError::InvalidImplicitOptions))?;
 
-    // Map the planner's f64 coordinate points before the retained VectorPath
-    // narrowing. This preserves small spans at large coordinate offsets.
+    // Keep both spline boundary selection and handle preparation in the
+    // planner's f64 coordinate space. Map only completed anchors/handles, then
+    // narrow once at the retained-path boundary. A translation/reflection must
+    // not change Manim's signed source-space closure decision.
     let mut path = VectorPath::new();
     for curve in &plan.curves {
         let Some(first) = curve.first().copied() else {
@@ -106,20 +109,34 @@ pub(crate) fn prepare_axes_implicit_path(
         };
         path = path.move_to(map_isoline_point(frame, first)?);
         let closed = curve.len() > 2 && curve.first() == curve.last();
-        let end = if closed { curve.len() - 1 } else { curve.len() };
-        for point in &curve[1..end] {
-            path = path.line_to(map_isoline_point(frame, *point)?);
+        if options.use_smoothing {
+            let anchors = curve
+                .iter()
+                .map(|point| [point.x, point.y])
+                .collect::<Vec<_>>();
+            let handles = smooth_curve_handles(&anchors, SplineBoundary::ManimSignedClosure)
+                .map_err(|_| PlotAuthoringError::from(PlotPreparationError::SmoothingFailed))?;
+            for ([first, second], end) in handles.into_iter().zip(&curve[1..]) {
+                path = path.cubic_to(
+                    map_isoline_point(frame, noon_geometry::IsolinePoint::new(first[0], first[1]))?,
+                    map_isoline_point(
+                        frame,
+                        noon_geometry::IsolinePoint::new(second[0], second[1]),
+                    )?,
+                    map_isoline_point(frame, *end)?,
+                );
+            }
+        } else {
+            let end = if closed { curve.len() - 1 } else { curve.len() };
+            for point in &curve[1..end] {
+                path = path.line_to(map_isoline_point(frame, *point)?);
+            }
         }
         if closed {
             path = path.close();
         }
     }
-    if options.use_smoothing {
-        change_path_anchor_mode_with_boundary(&path, true, SplineBoundary::ManimSignedClosure)
-            .map_err(|_| PlotAuthoringError::from(PlotPreparationError::SmoothingFailed).into())
-    } else {
-        Ok(path)
-    }
+    Ok(path)
 }
 
 fn map_isoline_point(
@@ -299,40 +316,207 @@ mod tests {
         assert!(sentinel.path_query().is_ok());
     }
 
+    fn assert_mapped_vertical_contour(x_range: [f64; 3], y_range: [f64; 3]) {
+        // Use the same clamped-origin construction as real Axes. A manually
+        // positioned y axis at x=0 is not coherent with a positive-only x range.
+        let centered = AxesFrame::centered(x_range, y_range, 10.0, 4.0).unwrap();
+        let root_x = x_range[0] + (x_range[1] - x_range[0]) * 0.375;
+        let center_y = y_range[0] + (y_range[1] - y_range[0]) * 0.5;
+        let expected_x = -1.25;
+        let mapped_center = centered.coords_to_point(root_x, center_y).unwrap();
+        assert!((mapped_center[0] - expected_x).abs() < 1.0e-6);
+        assert!(mapped_center[1].abs() < 1.0e-6);
+
+        for transformed in [false, true] {
+            let project = |point: [f64; 2]| {
+                if transformed {
+                    // Reflection, quarter-turn, nonuniform scale and translation.
+                    [3.0 - 1.5 * point[1], -2.0 - 0.75 * point[0]]
+                } else {
+                    point
+                }
+            };
+            let frame = AxesFrame::new(
+                noon_geometry::NumberLineFrame::new(
+                    x_range,
+                    project(centered.x().start()),
+                    project(centered.x().end()),
+                )
+                .unwrap(),
+                noon_geometry::NumberLineFrame::new(
+                    y_range,
+                    project(centered.y().start()),
+                    project(centered.y().end()),
+                )
+                .unwrap(),
+            );
+            for use_smoothing in [false, true] {
+                let options = ImplicitPlotOptions {
+                    bounds: IsolineBounds::new(
+                        noon_geometry::IsolinePoint::new(x_range[0], y_range[0]),
+                        noon_geometry::IsolinePoint::new(x_range[1], y_range[1]),
+                    ),
+                    contour: IsolineOptions {
+                        min_depth: 3,
+                        max_quads: 256,
+                        tolerance: None,
+                    },
+                    use_smoothing,
+                    max_leaves: 1_000,
+                };
+                let field = |x: f64, y: f64| {
+                    assert!((x_range[0]..=x_range[1]).contains(&x));
+                    assert!((y_range[0]..=y_range[1]).contains(&y));
+                    (x - root_x) / (x_range[1] - x_range[0])
+                };
+                let path = prepare_axes_implicit_path(frame, &options, field).unwrap();
+                let points = path
+                    .commands()
+                    .iter()
+                    .filter_map(|command| match command {
+                        PathCommand::MoveTo { to }
+                        | PathCommand::LineTo { to }
+                        | PathCommand::QuadraticTo { to, .. }
+                        | PathCommand::CubicTo { to, .. } => Some(*to),
+                        PathCommand::Close => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert!(points.len() >= 2, "nonempty vertical contour: {path:?}");
+                let expected = project([expected_x, 0.0]);
+                let fixed = usize::from(transformed);
+                let value = |point: &Vec2| {
+                    if fixed == 0 {
+                        f64::from(point.x)
+                    } else {
+                        f64::from(point.y)
+                    }
+                };
+                assert!(
+                    points.iter().all(|p| (value(p) - expected[fixed]).abs() < 0.025),
+                    "mapped contour drift: range={x_range:?} transformed={transformed} smooth={use_smoothing} points={points:?}"
+                );
+                let varying = |point: &Vec2| {
+                    if transformed {
+                        f64::from(point.x)
+                    } else {
+                        f64::from(point.y)
+                    }
+                };
+                let min = points.iter().map(varying).fold(f64::INFINITY, f64::min);
+                let max = points.iter().map(varying).fold(f64::NEG_INFINITY, f64::max);
+                // The adaptive trace may terminate inside boundary cells. Test
+                // mapping against its actual f64 anchor extent, not an invented
+                // requirement that it touch the exact requested domain bounds.
+                let reference =
+                    plan_isoline(|p| field(p.x, p.y), options.bounds, options.contour).unwrap();
+                let mapped = reference
+                    .curves
+                    .iter()
+                    .flatten()
+                    .map(|point| {
+                        let scene_y =
+                            4.0 * ((point.y - y_range[0]) / (y_range[1] - y_range[0]) - 0.5);
+                        project([expected_x, scene_y])[1 - fixed]
+                    })
+                    .collect::<Vec<_>>();
+                let expected_min = mapped.iter().copied().fold(f64::INFINITY, f64::min);
+                let expected_max = mapped.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                assert!(expected_max - expected_min > if transformed { 5.0 } else { 3.5 });
+                assert!(
+                    (min - expected_min).abs() < 2.0e-5,
+                    "{min} != {expected_min}"
+                );
+                assert!(
+                    (max - expected_max).abs() < 2.0e-5,
+                    "{max} != {expected_max}"
+                );
+            }
+        }
+    }
+
     #[test]
-    fn axes_mapping_preserves_small_span_at_large_coordinate_offset() {
-        let frame = AxesFrame::new(
+    fn axes_mapping_preserves_small_spans_at_large_positive_and_negative_offsets() {
+        for start in [1_000_000_000.0, -1_000_000_010.0] {
+            assert_mapped_vertical_contour([start, start + 10.0, 1.0], [-1.0, 1.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn axes_mapping_preserves_tiny_domains_and_values_outside_f32_range() {
+        for extent in [1.0e-60, 1.0e45] {
+            assert_mapped_vertical_contour([-extent, extent, extent], [-extent, extent, extent]);
+        }
+    }
+    #[test]
+    fn axes_smoothing_boundary_is_selected_before_frame_mapping() {
+        let base = AxesFrame::centered([1.0, 3.0, 1.0], [1.0, 3.0, 1.0], 4.0, 4.0).unwrap();
+        let translate = |point: [f64; 2]| [point[0] + 10.0, point[1] + 10.0];
+        let translated = AxesFrame::new(
             noon_geometry::NumberLineFrame::new(
-                [1_000_000_000.0, 1_000_000_010.0, 1.0],
-                [-5.0, 0.0],
-                [5.0, 0.0],
+                base.x().range(),
+                translate(base.x().start()),
+                translate(base.x().end()),
             )
             .unwrap(),
-            noon_geometry::NumberLineFrame::new([-1.0, 1.0, 1.0], [0.0, -1.0], [0.0, 1.0]).unwrap(),
+            noon_geometry::NumberLineFrame::new(
+                base.y().range(),
+                translate(base.y().start()),
+                translate(base.y().end()),
+            )
+            .unwrap(),
         );
         let options = ImplicitPlotOptions {
             bounds: IsolineBounds::new(
-                noon_geometry::IsolinePoint::new(1_000_000_000.0, -1.0),
-                noon_geometry::IsolinePoint::new(1_000_000_010.0, 1.0),
+                noon_geometry::IsolinePoint::new(1.0, 1.0),
+                noon_geometry::IsolinePoint::new(3.0, 3.0),
             ),
             contour: IsolineOptions {
-                min_depth: 3,
-                max_quads: 256,
+                min_depth: 2,
+                max_quads: 64,
                 tolerance: None,
             },
-            use_smoothing: false,
-            max_leaves: 1_000,
+            max_leaves: 100,
+            use_smoothing: true,
         };
-        let path = prepare_axes_implicit_path(frame, &options, |x, _| x - 1_000_000_005.0).unwrap();
-        let xs = path
-            .commands()
-            .iter()
-            .filter_map(|command| match command {
-                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => Some(to.x),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(!xs.is_empty());
-        assert!(xs.iter().all(|x| x.abs() < 0.1), "{xs:?}");
+        let circle = |x: f64, y: f64| (x - 2.0).powi(2) + (y - 2.0).powi(2) - 0.36;
+        let original = prepare_axes_implicit_path(base, &options, circle).unwrap();
+        let shifted = prepare_axes_implicit_path(translated, &options, circle).unwrap();
+        assert_eq!(original.commands().len(), shifted.commands().len());
+        let near = |left: Vec2, right: Vec2| {
+            assert!(
+                (right.x - 10.0 - left.x).abs() < 2.0e-5,
+                "{left:?} {right:?}"
+            );
+            assert!(
+                (right.y - 10.0 - left.y).abs() < 2.0e-5,
+                "{left:?} {right:?}"
+            );
+        };
+        let mut cubics = 0;
+        for (left, right) in original.commands().iter().zip(shifted.commands()) {
+            match (*left, *right) {
+                (PathCommand::MoveTo { to: a }, PathCommand::MoveTo { to: b }) => near(a, b),
+                (
+                    PathCommand::CubicTo {
+                        control1: a1,
+                        control2: a2,
+                        to: a,
+                    },
+                    PathCommand::CubicTo {
+                        control1: b1,
+                        control2: b2,
+                        to: b,
+                    },
+                ) => {
+                    near(a1, b1);
+                    near(a2, b2);
+                    near(a, b);
+                    cubics += 1;
+                }
+                (PathCommand::Close, PathCommand::Close) => {}
+                _ => panic!("unexpected contour command pair: {left:?} {right:?}"),
+            }
+        }
+        assert!(cubics > 3);
     }
 }

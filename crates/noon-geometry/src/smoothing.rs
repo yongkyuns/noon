@@ -112,26 +112,88 @@ fn append_contour(
 /// start coordinate makes even an exactly repeated endpoint choose the natural
 /// spline path in the pinned implementation.
 fn manim_signed_is_closed(anchors: &[Vec2]) -> bool {
-    let (Some(&start), Some(&end)) = (anchors.first(), anchors.last()) else {
+    let (Some(start), Some(end)) = (anchors.first(), anchors.last()) else {
         return false;
     };
-    let start_x = f64::from(start.x);
-    let start_y = f64::from(start.y);
-    let end_x = f64::from(end.x);
-    let end_y = f64::from(end.y);
-    let tolerance = |coordinate: f64| 1.0e-8 + 1.0e-5 * coordinate;
-    (end_x - start_x).abs() <= tolerance(start_x) && (end_y - start_y).abs() <= tolerance(start_y)
+    manim_signed_endpoint_closure(
+        [f64::from(start.x), f64::from(start.y)],
+        [f64::from(end.x), f64::from(end.y)],
+    )
+}
+
+fn manim_signed_endpoint_closure(start: [f64; 2], end: [f64; 2]) -> bool {
+    (0..2).all(|axis| (end[axis] - start[axis]).abs() <= 1.0e-8 + 1.0e-5 * start[axis])
+}
+
+/// Smooth a coordinate-space polyline without narrowing its anchors or handles.
+///
+/// Closed contours repeat their first anchor. Boundary selection is performed in
+/// this source space, before any affine mapping into renderable scene units.
+/// The ordinary retained-path smoother uses the same f64 spline solver below.
+pub fn smooth_curve_handles(
+    anchors: &[[f64; 2]],
+    boundary: SplineBoundary,
+) -> Result<Vec<[[f64; 2]; 2]>, PathProportionError> {
+    if anchors.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(PathProportionError::InvalidMetric);
+    }
+    let (Some(first), Some(last)) = (anchors.first(), anchors.last()) else {
+        return Ok(Vec::new());
+    };
+    if anchors.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let closed = match boundary {
+        SplineBoundary::ExactClosure => first == last,
+        SplineBoundary::ManimSignedClosure => manim_signed_endpoint_closure(*first, *last),
+    };
+    let handles = smooth_handles_f64(anchors, closed);
+    if handles
+        .iter()
+        .flatten()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(PathProportionError::InvalidMetric);
+    }
+    Ok(handles)
 }
 
 /// Solve the natural/open or periodic/closed spline equations in f64. The
 /// periodic system uses a rank-one correction to the same tridiagonal solve.
 fn smooth_handles(anchors: &[Vec2], closed: bool) -> Vec<[Vec2; 2]> {
-    let count = anchors.len() - 1;
-    if count == 1 {
+    // Preserve the existing two-anchor f32 path exactly for ordinary callers.
+    if anchors.len() == 2 {
         return vec![[
             anchors[0] + (anchors[1] - anchors[0]) / 3.,
             anchors[0] + (anchors[1] - anchors[0]) * (2. / 3.),
         ]];
+    }
+    let anchors = anchors
+        .iter()
+        .map(|point| [f64::from(point.x), f64::from(point.y)])
+        .collect::<Vec<_>>();
+    smooth_handles_f64(&anchors, closed)
+        .into_iter()
+        .map(|[first, second]| {
+            [
+                Vec2::new(first[0] as f32, first[1] as f32),
+                Vec2::new(second[0] as f32, second[1] as f32),
+            ]
+        })
+        .collect()
+}
+
+fn smooth_handles_f64(anchors: &[[f64; 2]], closed: bool) -> Vec<[[f64; 2]; 2]> {
+    let count = anchors.len() - 1;
+    if count == 1 {
+        let mut handles = [[0.0; 2]; 2];
+        for axis in 0..2 {
+            let delta = anchors[1][axis] - anchors[0][axis];
+            handles[0][axis] = anchors[0][axis] + delta / 3.0;
+            handles[1][axis] = anchors[0][axis] + delta * (2.0 / 3.0);
+        }
+        return vec![handles];
     }
     let mut upper = vec![0.; count - 1];
     upper[0] = if closed { 1. / 3. } else { 0.5 };
@@ -154,15 +216,9 @@ fn smooth_handles(anchors: &[Vec2], closed: bool) -> Vec<[Vec2; 2]> {
             correction[index] -= upper[index] * correction[index + 1];
         }
     }
-    let mut result = vec![[Vec2::ZERO; 2]; count];
+    let mut result = vec![[[0.0; 2]; 2]; count];
     for axis in 0..2 {
-        let coordinate = |index: usize| -> f64 {
-            if axis == 0 {
-                f64::from(anchors[index].x)
-            } else {
-                f64::from(anchors[index].y)
-            }
-        };
+        let coordinate = |index: usize| anchors[index][axis];
         let mut first = vec![0.; count];
         first[0] = if closed {
             (4. * coordinate(0) + 2. * coordinate(1)) / 3.
@@ -196,13 +252,8 @@ fn smooth_handles(anchors: &[Vec2], closed: bool) -> Vec<[Vec2; 2]> {
             } else {
                 0.5 * (coordinate(count) + first[index])
             };
-            if axis == 0 {
-                result[index][0].x = first[index] as f32;
-                result[index][1].x = second as f32;
-            } else {
-                result[index][0].y = first[index] as f32;
-                result[index][1].y = second as f32;
-            }
+            result[index][0][axis] = first[index];
+            result[index][1][axis] = second;
         }
     }
     result
