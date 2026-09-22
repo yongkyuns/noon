@@ -15,7 +15,8 @@ use crate::{
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
+    SemanticTransactionGraphDeclaration, SemanticTransformInterpolation,
+    SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -118,6 +119,14 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         members: Vec<SemanticTransactionNodeRef>,
     },
+    /// Attach the initial authored Graph/DiGraph topology to one family root.
+    ///
+    /// This is construction-time whole-declaration publication. Persistent graph
+    /// edits use local graph mutations rather than replacing the whole topology.
+    SetGraphDeclaration {
+        scope: SemanticTransactionNodeRef,
+        graph: SemanticTransactionGraphDeclaration,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -161,6 +170,9 @@ impl SemanticMutation {
             Self::ScopeSignal { scope, signal } => vec![*scope, *signal],
             Self::SetForegroundMembers { scope, members } => std::iter::once(*scope)
                 .chain(members.iter().copied())
+                .collect(),
+            Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
+                .chain(graph.node_references())
                 .collect(),
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
@@ -208,9 +220,9 @@ impl SemanticMutation {
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => target.existing(),
-            Self::ScopeSignal { scope, .. } | Self::SetForegroundMembers { scope, .. } => {
-                scope.existing()
-            }
+            Self::ScopeSignal { scope, .. }
+            | Self::SetForegroundMembers { scope, .. }
+            | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -245,7 +257,8 @@ impl SemanticMutation {
             | Self::RemoveUpdater { .. }
             | Self::ClearUpdaters { .. }
             | Self::ScopeSignal { .. }
-            | Self::SetForegroundMembers { .. } => None,
+            | Self::SetForegroundMembers { .. }
+            | Self::SetGraphDeclaration { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -331,6 +344,10 @@ pub enum SemanticMutationImpact {
     /// Declaration-only metadata. Execution membership and painter order are
     /// unchanged unless separate ordinary family impacts accompany it.
     ForegroundMembers {
+        scope: SemanticNodeId,
+    },
+    /// Authored graph topology/dependency meaning changed on this family root.
+    GraphDeclaration {
         scope: SemanticNodeId,
     },
     FamilyMemberAdded {
@@ -606,6 +623,22 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetForegroundMembers {
             scope: scope.into(),
             members: members.into_iter().map(Into::into).collect(),
+        });
+        self
+    }
+
+    /// Attach the initial authored Graph/DiGraph declaration to a family root.
+    ///
+    /// The declaration may reference nodes created by this transaction. It is
+    /// validated against the final staged family membership and object content.
+    pub fn set_graph_declaration(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        graph: SemanticTransactionGraphDeclaration,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetGraphDeclaration {
+            scope: scope.into(),
+            graph,
         });
         self
     }
@@ -1907,6 +1940,9 @@ impl SemanticMutationTransaction {
                     staged_foreground.insert(*scope, members.clone());
                     changed.push(!unchanged);
                 }
+                SemanticMutation::SetGraphDeclaration { .. } => {
+                    changed.push(true);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -1991,7 +2027,7 @@ impl SemanticMutationTransaction {
             }
         }
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
-        Ok(SemanticTransactionPreflight {
+        let preflight = SemanticTransactionPreflight {
             staged_family_z,
             changed,
             staged_objects,
@@ -2004,8 +2040,244 @@ impl SemanticMutationTransaction {
             pending_animations,
             removed_existing: removed_nodes,
             removed_pending,
-        })
+        };
+        // New graph declarations validate their complete final construction
+        // overlay. Existing graphs use only dependency-local checks below: a
+        // one-edge edit must never clone or scan the whole graph.
+        let mut staged_graph_scopes = HashSet::new();
+        for (index, mutation) in self.mutations.iter().enumerate() {
+            if let SemanticMutation::SetGraphDeclaration { scope, graph } = mutation {
+                validate_graph_declaration(
+                    &preflight,
+                    store,
+                    &catalog,
+                    &mut staged_graph_scopes,
+                    *scope,
+                    graph,
+                    index,
+                )?;
+            }
+        }
+
+        for (index, mutation) in self.mutations.iter().enumerate() {
+            if !preflight.changed[index] {
+                continue;
+            }
+            match mutation {
+                SemanticMutation::AddMember { family, .. }
+                | SemanticMutation::RemoveMember { family, .. } => {
+                    let SemanticTransactionNodeRef::Existing(family) = family else {
+                        continue;
+                    };
+                    for scope in store.semantic_graph_owners_for_invariant_target(*family) {
+                        if preflight.removed_existing.contains(&scope) {
+                            continue;
+                        }
+                        return Err(SemanticMutationTransactionError::InvalidGraphDeclaration {
+                            index,
+                            scope: scope.into(),
+                            reason: "generic family membership cannot mutate an existing graph root or edge family",
+                        });
+                    }
+                }
+                SemanticMutation::ReplaceContent { object, .. } => {
+                    let SemanticTransactionNodeRef::Existing(object) = object else {
+                        continue;
+                    };
+                    let final_state = preflight
+                        .staged_objects
+                        .get(&SemanticTransactionNodeRef::Existing(*object))
+                        .or_else(|| store.semantic_object_state_checked(*object).ok());
+                    for scope in store.semantic_graph_owners_for_invariant_target(*object) {
+                        if preflight.removed_existing.contains(&scope) {
+                            continue;
+                        }
+                        let Some(graph) =
+                            store.semantic_graph_declaration(scope).map_err(|error| {
+                                SemanticMutationTransactionError::Node { index, error }
+                            })?
+                        else {
+                            continue;
+                        };
+                        if graph.edge_for_line_node(*object).is_some()
+                            && !matches!(
+                                final_state.and_then(|state| state.content.geometry()),
+                                Some(StoredGeometry::Line { .. })
+                            )
+                        {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidGraphDeclaration {
+                                    index,
+                                    scope: scope.into(),
+                                    reason: "designated graph edge dependency must remain an analytic Line",
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(preflight)
     }
+}
+
+fn validate_graph_declaration(
+    preflight: &SemanticTransactionPreflight,
+    store: &SemanticStore,
+    catalog: &TransactionNodeCatalog<'_>,
+    staged_scopes: &mut HashSet<SemanticTransactionNodeRef>,
+    scope: SemanticTransactionNodeRef,
+    graph: &SemanticTransactionGraphDeclaration,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    let invalid = |reason| SemanticMutationTransactionError::InvalidGraphDeclaration {
+        index,
+        scope,
+        reason,
+    };
+    catalog.ensure_family(scope, index)?;
+    if !staged_scopes.insert(scope) {
+        return Err(SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope });
+    }
+    if let SemanticTransactionNodeRef::Existing(scope_id) = scope {
+        if store
+            .node(scope_id)
+            .and_then(|node| node.graph_declaration())
+            .is_some()
+        {
+            return Err(
+                SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope },
+            );
+        }
+    }
+
+    let removed = |node: SemanticTransactionNodeRef| match node {
+        SemanticTransactionNodeRef::Existing(node) => preflight.removed_existing.contains(&node),
+        SemanticTransactionNodeRef::Pending(token) => preflight.removed_pending.contains(&token),
+    };
+    let object_state = |node: SemanticTransactionNodeRef| -> Option<&SemanticObjectState> {
+        preflight.staged_objects.get(&node).or_else(|| {
+            node.existing()
+                .and_then(|id| store.semantic_object_state_checked(id).ok())
+        })
+    };
+
+    let root_members = preflight
+        .family_edges
+        .members_for_read(store, scope)
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+    let mut vertices_by_id = HashMap::with_capacity(graph.vertices().len());
+    let mut semantic_objects = HashSet::new();
+    for &(vertex_id, vertex) in graph.vertices() {
+        if !graph.topology().contains_vertex(vertex_id)
+            || vertices_by_id.insert(vertex_id, vertex).is_some()
+        {
+            return Err(invalid(
+                "semantic vertex bindings must name each topology vertex exactly once",
+            ));
+        }
+        catalog.ensure_object(vertex, index)?;
+        if removed(vertex) || !semantic_objects.insert(vertex) {
+            return Err(invalid("vertices must be distinct live semantic objects"));
+        }
+        if !root_members.contains(&vertex) {
+            return Err(invalid(
+                "every graph vertex must be a direct graph-root member",
+            ));
+        }
+    }
+    if vertices_by_id.len() != graph.topology().vertices().count()
+        || graph
+            .topology()
+            .vertices()
+            .any(|vertex| !vertices_by_id.contains_key(&vertex))
+    {
+        return Err(invalid(
+            "semantic vertex bindings must cover the complete topology",
+        ));
+    }
+
+    let mut edge_ids = HashSet::with_capacity(graph.edges().len());
+    let mut edge_families = HashSet::with_capacity(graph.edges().len());
+    for binding in graph.edges().iter().copied() {
+        let Some(edge) = graph.topology().edge(binding.id()) else {
+            return Err(invalid(
+                "semantic edge binding names an unknown topology edge",
+            ));
+        };
+        if !edge_ids.insert(binding.id()) {
+            return Err(invalid("semantic edge bindings must be unique"));
+        }
+
+        catalog.ensure_family(binding.family(), index)?;
+        catalog.ensure_object(binding.line(), index)?;
+        if removed(binding.family()) || removed(binding.line()) {
+            return Err(invalid("graph declarations cannot reference removed nodes"));
+        }
+        if binding.family() == scope || !edge_families.insert(binding.family()) {
+            return Err(invalid(
+                "graph edge families must be distinct from the graph root",
+            ));
+        }
+        if !semantic_objects.insert(binding.line()) {
+            return Err(invalid(
+                "graph vertex and edge Line identities must be distinct",
+            ));
+        }
+        if !root_members.contains(&binding.family()) {
+            return Err(invalid(
+                "every graph edge family must be a direct graph-root member",
+            ));
+        }
+        if !preflight
+            .family_edges
+            .contains(catalog, binding.family(), binding.line())
+        {
+            return Err(invalid(
+                "graph edge Line must be a direct edge-family member",
+            ));
+        }
+        if !matches!(
+            object_state(binding.line()).and_then(|state| state.content.geometry()),
+            Some(StoredGeometry::Line { .. })
+        ) {
+            return Err(invalid(
+                "graph edge dependency component must be an analytic Line",
+            ));
+        }
+
+        if !vertices_by_id.contains_key(&edge.start) || !vertices_by_id.contains_key(&edge.end) {
+            return Err(invalid(
+                "every graph edge endpoint must resolve through the declared vertex bindings",
+            ));
+        }
+    }
+    if edge_ids.len() != graph.topology().edges().count()
+        || graph
+            .topology()
+            .edges()
+            .any(|edge| !edge_ids.contains(&edge.id))
+    {
+        return Err(invalid(
+            "semantic edge bindings must cover the complete topology",
+        ));
+    }
+
+    if root_members.len() != vertices_by_id.len() + edge_families.len()
+        || !vertices_by_id
+            .values()
+            .copied()
+            .chain(edge_families.iter().copied())
+            .all(|member| root_members.contains(&member))
+    {
+        return Err(invalid(
+            "graph root direct membership must contain exactly its vertices and edge families",
+        ));
+    }
+    Ok(())
 }
 
 fn object_property_value(
@@ -2247,6 +2519,15 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    DuplicateGraphDeclaration {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+    },
+    InvalidGraphDeclaration {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+        reason: &'static str,
+    },
     DuplicateForegroundScope {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -2585,6 +2866,18 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DuplicateGraphDeclaration { index, scope } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"
+            ),
+            Self::InvalidGraphDeclaration {
+                index,
+                scope,
+                reason,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} has invalid Graph declaration for {scope:?}: {reason}"
+            ),
             Self::DuplicateForegroundScope { index, scope } => write!(
                 formatter, "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
             ),
@@ -3080,3 +3373,6 @@ mod z_index_tests;
 
 #[cfg(test)]
 mod foreground_tests;
+
+#[cfg(test)]
+mod graph_tests;

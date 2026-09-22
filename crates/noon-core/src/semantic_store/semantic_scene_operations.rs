@@ -21,6 +21,9 @@ pub enum SemanticSceneOperationError {
     /// multiple attached roots. Until the scene store exposes a local root-order
     /// comparison primitive, fail before commit rather than scan unrelated roots.
     AmbiguousCrossRootAlias(SemanticNodeId),
+    /// A graph-owned family requires the shared transaction vocabulary so the
+    /// declaration and ordinary membership cannot diverge.
+    GraphMutationRequiresTransaction(SemanticNodeId),
     Store(SemanticStoreError),
 }
 
@@ -72,6 +75,12 @@ impl std::fmt::Display for SemanticSceneOperationError {
             Self::AmbiguousCrossRootAlias(id) => write!(
                 formatter,
                 "semantic node {}:{} would be promoted from multiple scene roots",
+                id.slot(),
+                id.generation()
+            ),
+            Self::GraphMutationRequiresTransaction(id) => write!(
+                formatter,
+                "semantic family {}:{} participates in authored graph topology; mutate it through a semantic transaction",
                 id.slot(),
                 id.generation()
             ),
@@ -211,8 +220,18 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<(), SemanticSceneOperationError> {
-        self.semantic_family_checked(family)?;
+        let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
+        if family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
+            return Ok(());
+        }
+        if !self
+            .semantic_graph_owners_for_invariant_target(family)
+            .is_empty()
+        {
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
+        }
         self.add_member(family, member).map_err(Into::into)
     }
 
@@ -225,8 +244,18 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<bool, SemanticSceneOperationError> {
-        self.semantic_family_checked(family)?;
+        let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
+        if !family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
+            return Ok(false);
+        }
+        if !self
+            .semantic_graph_owners_for_invariant_target(family)
+            .is_empty()
+        {
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
+        }
         self.remove_member(family, member).map_err(Into::into)
     }
 }

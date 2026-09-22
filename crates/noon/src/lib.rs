@@ -96,10 +96,12 @@ mod family_style;
 mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
-mod graph_semantic_bindings;
-mod graph_topology;
-pub use graph_semantic_bindings::*;
-pub use graph_topology::*;
+mod graph_authoring;
+pub use graph_authoring::{
+    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphOptions,
+    DEFAULT_GRAPH_EDGE_STROKE_WIDTH, DEFAULT_GRAPH_VERTEX_RADIUS,
+    DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+};
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
 mod host_callbacks;
@@ -198,10 +200,11 @@ pub use live_session::{
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
 pub use noon_core::{
-    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
-    PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
+    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
+    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
+    RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId, SemanticObjectProperty,
+    SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
     SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
     StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan,
     TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,
@@ -248,14 +251,15 @@ pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVecto
 pub mod prelude {
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
-        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
-        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
-        LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
-        ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
-        NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions, RateFunction, Scene,
-        SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate, SvgAuthoringError,
-        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
-        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,
+        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
+        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
+        LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
+        ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
+        NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
+        RateFunction, Scene, SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate,
+        SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker,
+        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,

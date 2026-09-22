@@ -12,12 +12,16 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
-    SignalBinding { property: SemanticObjectProperty },
+    SignalBinding {
+        property: SemanticObjectProperty,
+    },
     ScopedSignal,
     ForegroundMember,
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
+    /// Hard authored topology dependency owned by one graph family root.
+    GraphDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +88,44 @@ impl SemanticStore {
         self.incoming_references
             .get(&signal)
             .is_some_and(|incoming| incoming.contains(&reference))
+    }
+
+    /// Return graph declaration owners whose validity directly depends on
+    /// `target`, plus `target` itself when it owns a graph declaration.
+    ///
+    /// Work is proportional to the target's reverse-reference aliases; unrelated
+    /// graph roots and scene nodes are never scanned.
+    pub(crate) fn semantic_graph_owners_for_invariant_target(
+        &self,
+        target: SemanticNodeId,
+    ) -> Vec<SemanticNodeId> {
+        let mut owners = Vec::new();
+        let mut seen = HashSet::new();
+        if self
+            .node(target)
+            .and_then(SemanticNode::graph_declaration)
+            .is_some()
+            && seen.insert(target)
+        {
+            owners.push(target);
+        }
+        if let Some(incoming) = self.incoming_references.get(&target) {
+            for reference in incoming.iter().copied() {
+                if reference.kind != SemanticReferenceKind::GraphDependency
+                    || self.node(reference.owner).is_none()
+                    || !self.owner_still_references(
+                        reference.owner,
+                        target,
+                        SemanticReferenceKind::GraphDependency,
+                    )
+                    || !seen.insert(reference.owner)
+                {
+                    continue;
+                }
+                owners.push(reference.owner);
+            }
+        }
+        owners
     }
 
     pub(crate) fn register_semantic_scoped_signal_reference(
@@ -219,7 +261,8 @@ impl SemanticStore {
                     SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
-                    | SemanticReferenceKind::AnimationChild => stack.push(reference.owner),
+                    | SemanticReferenceKind::AnimationChild
+                    | SemanticReferenceKind::GraphDependency => stack.push(reference.owner),
                 }
             }
         }
@@ -333,7 +376,8 @@ impl SemanticStore {
                 SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
-                | SemanticReferenceKind::AnimationChild => {
+                | SemanticReferenceKind::AnimationChild
+                | SemanticReferenceKind::GraphDependency => {
                     self.remove_node_with_reverse_cleanup_inner(
                         reference.owner,
                         outcome,
@@ -397,6 +441,14 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             .copied()
             .map(|member| (member, SemanticReferenceKind::ForegroundMember)),
     );
+
+    if let Some(graph) = node.graph_declaration() {
+        references.extend(
+            graph
+                .referenced_nodes()
+                .map(|target| (target, SemanticReferenceKind::GraphDependency)),
+        );
+    }
 
     match node.kind() {
         SemanticNodeKind::Signal(state) => {

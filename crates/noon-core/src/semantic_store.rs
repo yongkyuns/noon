@@ -46,6 +46,9 @@ pub use semantic_signals::*;
 mod semantic_bindings;
 pub use semantic_bindings::*;
 
+mod semantic_graph;
+pub use semantic_graph::*;
+
 mod semantic_animations;
 pub use semantic_animations::*;
 
@@ -379,6 +382,12 @@ pub struct SemanticNode {
     /// Ordered foreground declarations for this family-root scope. These are
     /// soft references, not display membership, parent edges or painter order.
     foreground_members: Vec<SemanticNodeId>,
+    /// Optional authored Graph/DiGraph topology carried by this family root.
+    ///
+    /// The declaration references ordinary semantic vertex objects and edge
+    /// families/Line components. It is Semantic Scene state, not wrapper or
+    /// renderer state.
+    graph_declaration: Option<SemanticGraphDeclaration>,
 }
 
 impl SemanticNode {
@@ -534,6 +543,17 @@ impl SemanticNode {
 
     pub(crate) fn foreground_members_mut(&mut self) -> &mut Vec<SemanticNodeId> {
         &mut self.foreground_members
+    }
+
+    pub fn graph_declaration(&self) -> Option<&SemanticGraphDeclaration> {
+        self.graph_declaration.as_ref()
+    }
+
+    pub(crate) fn replace_graph_declaration(
+        &mut self,
+        graph: Option<SemanticGraphDeclaration>,
+    ) -> Option<SemanticGraphDeclaration> {
+        std::mem::replace(&mut self.graph_declaration, graph)
     }
 
     pub fn scoped_signals(&self) -> &BTreeSet<SemanticNodeId> {
@@ -815,6 +835,7 @@ impl SemanticStore {
             host_updaters: Vec::new(),
             scoped_signals: BTreeSet::new(),
             foreground_members: Vec::new(),
+            graph_declaration: None,
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -844,6 +865,40 @@ impl SemanticStore {
             .get(source)
             .copied()
             .filter(|id| self.node(*id).is_some())
+    }
+
+    /// Return the authored Graph/DiGraph declaration attached to one family root.
+    pub fn semantic_graph_declaration(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<&SemanticGraphDeclaration>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(node.graph_declaration())
+    }
+
+    pub(crate) fn replace_semantic_graph_declaration(
+        &mut self,
+        scope: SemanticNodeId,
+        graph: Option<SemanticGraphDeclaration>,
+    ) -> Result<Option<SemanticGraphDeclaration>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.unregister_semantic_references_for_owner(scope);
+        let previous = self
+            .node_mut(scope)
+            .expect("validated graph scope remains live")
+            .replace_graph_declaration(graph);
+        self.register_semantic_references_for_owner(scope);
+        Ok(previous)
     }
 
     /// Signals explicitly included in one family-root execution scope, ordered

@@ -198,7 +198,7 @@ impl FamilyEdgePreflight {
         }
     }
 
-    fn contains(
+    pub(super) fn contains(
         &self,
         catalog: &TransactionNodeCatalog<'_>,
         family: SemanticTransactionNodeRef,

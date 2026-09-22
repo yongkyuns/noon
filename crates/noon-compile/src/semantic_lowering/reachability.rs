@@ -229,6 +229,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
                 | SemanticMutationImpact::ForegroundMembers { .. }
+                | SemanticMutationImpact::GraphDeclaration { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::NodeAdded { .. }
                 | SemanticMutationImpact::AnimationAdded { .. } => {}
