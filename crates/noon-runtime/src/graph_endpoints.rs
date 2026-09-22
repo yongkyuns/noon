@@ -726,6 +726,50 @@ mod tests {
     }
 
     #[test]
+    fn prepared_vertex_motion_exposes_coherent_incident_edge_before_commit() {
+        let fixture = line_graph_fixture(0, false);
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
+        let a_object = index.execution_object_id(fixture.a).unwrap();
+        let line_object = index.execution_object_id(fixture.line).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        instance
+            .apply_execution_patch(&noon_compile::ExecutionPatch::AddTrack(
+                noon_core::TrackDefinition {
+                    id: noon_core::TrackId::new(91),
+                    object: a_object,
+                    property: noon_core::Property::Position,
+                    values: noon_core::TrackValues::Vec2 {
+                        from: Vec2::new(-1.0, 0.0),
+                        to: Vec2::new(-3.0, 2.0),
+                    },
+                    timing: noon_core::TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                    time_map: noon_core::CompositionTimeMap::identity(),
+                },
+            ))
+            .unwrap();
+        let line_index = instance.frame_index_for_object(line_object).unwrap();
+        let committed = instance.frame().clone();
+
+        let prepared = instance.prepare_advance_to(0.5).unwrap();
+        let line = instance
+            .prepared_properties_at(&prepared, line_index, None)
+            .unwrap();
+        assert_eq!(
+            line.bounds,
+            Some(noon_core::Rect::new(
+                Vec2::new(-2.0, 0.0),
+                Vec2::new(1.0, 1.0),
+            ))
+        );
+        assert_eq!(
+            instance.frame(),
+            &committed,
+            "preparation must not publish the staged graph dependency"
+        );
+    }
+
+    #[test]
     fn timeline_vertex_motion_reuses_same_incident_dependency_path() {
         let fixture = line_graph_fixture(0, false);
         let mut index = SemanticExecutionIndex::new();
