@@ -540,6 +540,9 @@ pub struct CompiledScene {
     graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
     /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
     graph_incident_dependencies: BTreeMap<u32, Vec<u32>>,
+    /// Any graph-owned row -> dependency indices that must be re-derived when
+    /// that effective row changes. Includes vertices, designated Lines and tips.
+    graph_dirty_dependencies: BTreeMap<u32, Vec<u32>>,
     resources: CompiledResources,
 }
 
@@ -961,6 +964,7 @@ impl CompiledScene {
             family_animations: Vec::new(),
             graph_edge_dependencies: Vec::new(),
             graph_incident_dependencies: BTreeMap::new(),
+            graph_dirty_dependencies: BTreeMap::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -1049,6 +1053,17 @@ impl CompiledScene {
     pub fn incident_graph_dependencies(&self, vertex_index: u32) -> &[u32] {
         self.graph_incident_dependencies
             .get(&vertex_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Return graph dependencies invalidated by one changed effective row.
+    ///
+    /// Ordinary rows use the shared empty slice. Graph vertices remain O(degree);
+    /// a designated Line or tip normally maps to exactly one dependency.
+    pub fn graph_dependencies_for_changed_row(&self, object_index: u32) -> &[u32] {
+        self.graph_dirty_dependencies
+            .get(&object_index)
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
