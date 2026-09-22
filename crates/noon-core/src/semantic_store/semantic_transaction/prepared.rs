@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 use crate::{
-    SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding,
-    SemanticGraphEdgeDependency, SemanticTransactionGraphEdgeDependency,
+    SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticGraphEdgeDependency,
+    SemanticTransactionGraphEdgeDependency,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

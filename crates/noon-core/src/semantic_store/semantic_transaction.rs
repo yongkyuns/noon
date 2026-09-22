@@ -10,12 +10,12 @@ use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticObjectRole, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
-    SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
-    SemanticStoreError, SemanticStyle, SemanticTransactionGraphDeclaration,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeDependency, SemanticTransformInterpolation,
     SemanticUpdaterRegistration, StoredGeometry,
 };
@@ -2273,7 +2273,9 @@ fn validate_graph_declaration(
                 },
             ) => {
                 if !policy.is_valid() {
-                    return Err(invalid("graph Arrow endpoint policy must be finite and nonnegative"));
+                    return Err(invalid(
+                        "graph Arrow endpoint policy must be finite and nonnegative",
+                    ));
                 }
                 if !matches!(
                     line_state.map(SemanticObjectState::role),
@@ -2318,10 +2320,14 @@ fn validate_graph_declaration(
                 }
             }
             (false, SemanticTransactionGraphEdgeDependency::Arrow { .. }) => {
-                return Err(invalid("undirected graph edges must use Line endpoint dependencies"));
+                return Err(invalid(
+                    "undirected graph edges must use Line endpoint dependencies",
+                ));
             }
             (true, SemanticTransactionGraphEdgeDependency::Line) => {
-                return Err(invalid("directed graph edges must use shared Arrow endpoint dependencies"));
+                return Err(invalid(
+                    "directed graph edges must use shared Arrow endpoint dependencies",
+                ));
             }
         }
 

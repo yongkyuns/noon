@@ -4,7 +4,10 @@
 //! metadata. This module derives only effective render geometry/style; it never
 //! mutates Semantic Scene geometry and never introduces a renderer graph path.
 
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use noon_compile::{CompiledGraphEdgeDependency, CompiledGraphEdgeKind};
 use noon_core::{GeometryRef, Transform2D, Vec2, VectorPath};
@@ -102,12 +105,7 @@ impl SceneInstance {
                 debug_assert!(false, "compiled Graph dependency index remains in range");
                 continue;
             };
-            apply_prepared_graph_dependency(
-                &self.compiled,
-                &self.frame,
-                rows,
-                dependency,
-            );
+            apply_prepared_graph_dependency(&self.compiled, &self.frame, rows, dependency);
         }
     }
 
@@ -137,12 +135,7 @@ fn apply_prepared_graph_dependency(
     let end = prepared_render_transform(frame, rows, end_index).translation;
     match dependency.kind() {
         CompiledGraphEdgeKind::Line => {
-            set_prepared_effective_geometry(
-                frame,
-                rows,
-                line_index,
-                GeometryRef::line(start, end),
-            );
+            set_prepared_effective_geometry(frame, rows, line_index, GeometryRef::line(start, end));
         }
         CompiledGraphEdgeKind::Arrow {
             end_tip_index,
@@ -212,7 +205,11 @@ fn prepared_geometry_matches(
     let current_geometry = row
         .render_geometry
         .as_deref()
-        .or_else(|| row.content_override.as_ref().and_then(|content| content.geometry()))
+        .or_else(|| {
+            row.content_override
+                .as_ref()
+                .and_then(|content| content.geometry())
+        })
         .or_else(|| frame.render_geometry(object_index));
     current_geometry == Some(geometry)
         && row.render_transform.unwrap_or(row.transform) == Transform2D::IDENTITY
@@ -273,11 +270,7 @@ fn apply_graph_dependency(
 
     match dependency.kind() {
         CompiledGraphEdgeKind::Line => {
-            let changed = set_effective_geometry(
-                frame,
-                line_index,
-                GeometryRef::line(start, end),
-            );
+            let changed = set_effective_geometry(frame, line_index, GeometryRef::line(start, end));
             [changed.then_some(line_index), None, None]
         }
         CompiledGraphEdgeKind::Arrow {
@@ -291,8 +284,11 @@ fn apply_graph_dependency(
                 return [None, None, None];
             }
             let geometry = arrow_geometry(start, end, start_tip_index.is_some(), policy);
-            let line_geometry_changed =
-                set_effective_geometry(frame, line_index, GeometryRef::line(geometry.shaft_start, geometry.shaft_end));
+            let line_geometry_changed = set_effective_geometry(
+                frame,
+                line_index,
+                GeometryRef::line(geometry.shaft_start, geometry.shaft_end),
+            );
             let stroke_width_changed =
                 set_effective_stroke_width(frame, line_index, geometry.stroke_width);
             let line_changed = line_geometry_changed || stroke_width_changed;
@@ -389,14 +385,8 @@ fn arrow_geometry(
     let buff = policy.buff();
     let (visible_start, visible_end) = if buff > 0.0 && length >= 2.0 * buff && length > 0.0 {
         (
-            Vec2::new(
-                start.x + direction.x * buff,
-                start.y + direction.y * buff,
-            ),
-            Vec2::new(
-                end.x - direction.x * buff,
-                end.y - direction.y * buff,
-            ),
+            Vec2::new(start.x + direction.x * buff, start.y + direction.y * buff),
+            Vec2::new(end.x - direction.x * buff, end.y - direction.y * buff),
         )
     } else {
         (start, end)
@@ -438,10 +428,7 @@ fn arrow_geometry(
 }
 
 fn triangle_tip_path(apex: Vec2, direction: Vec2, length: f32) -> VectorPath {
-    let base = Vec2::new(
-        apex.x - direction.x * length,
-        apex.y - direction.y * length,
-    );
+    let base = Vec2::new(apex.x - direction.x * length, apex.y - direction.y * length);
     let half_width = length * 0.5;
     let perpendicular = Vec2::new(-direction.y, direction.x);
     let first_base = Vec2::new(
@@ -466,8 +453,9 @@ mod tests {
     use noon_core::{
         GraphTopology, RateFunction, SemanticArrowShaftRole, SemanticGraphArrowPolicy,
         SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
-        SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
-        SemanticTransactionGraphEdgeBinding, SemanticVec3, StoredGeometry,
+        SemanticObjectRole, SemanticObjectState, SemanticStore,
+        SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeBinding, SemanticVec3,
+        StoredGeometry,
     };
 
     fn circle_at(x: f64, y: f64) -> SemanticObjectState {
@@ -487,9 +475,10 @@ mod tests {
     fn line_graph_fixture(unrelated: usize, reactive: bool) -> LineGraphFixture {
         let mut store = SemanticStore::new();
         for _ in 0..unrelated {
-            let node = store.insert_semantic_object(SemanticObjectState::new(
-                StoredGeometry::Circle { radius: 0.1 },
-            ));
+            let node =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 0.1,
+                }));
             store.attach_to_scene(node).unwrap();
         }
 
@@ -568,7 +557,10 @@ mod tests {
         let before_visits = instance.graph_dependency_visits();
 
         instance
-            .set_reactive_input(position, noon_core::ReactiveValue::Vec2(Vec2::new(-2.0, 1.0)))
+            .set_reactive_input(
+                position,
+                noon_core::ReactiveValue::Vec2(Vec2::new(-2.0, 1.0)),
+            )
             .unwrap();
 
         assert_eq!(fixture.store.scene_revision(), revision);
@@ -603,11 +595,10 @@ mod tests {
             end: Vec2::new(1.65, 0.0),
         });
         shaft_state.style.stroke_width = 0.06;
-        shaft_state.set_role(SemanticObjectRole::ArrowShaft(
-            SemanticArrowShaftRole::new(0.06, 0.05),
-        ));
-        let mut tip_state =
-            SemanticObjectState::new(StoredGeometry::Circle { radius: 0.01 });
+        shaft_state.set_role(SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(
+            0.06, 0.05,
+        )));
+        let mut tip_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.01 });
         tip_state.set_role(SemanticObjectRole::ArrowEndTip);
 
         let mut tx = SemanticMutationTransaction::new();
@@ -652,10 +643,7 @@ mod tests {
 
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&store, &mut index).unwrap();
-        let signal = lowered
-            .reactive()
-            .execution_signal_id(position)
-            .unwrap();
+        let signal = lowered.reactive().execution_signal_id(position).unwrap();
         let shaft_object = index.execution_object_id(shaft).unwrap();
         let tip_object = index.execution_object_id(tip).unwrap();
         let mut instance = SceneInstance::from_semantic_execution(lowered);
@@ -674,26 +662,29 @@ mod tests {
                 Vec2::new(1.4, 0.0),
             ))
         );
-        let GeometryRef::VectorPath(path) =
-            instance.frame().render_geometry(tip_index).unwrap()
+        let GeometryRef::VectorPath(path) = instance.frame().render_geometry(tip_index).unwrap()
         else {
             panic!("Arrow tip effective dependency remains ordinary path geometry");
         };
         assert_eq!(path.commands().len(), 4);
-        assert_eq!(instance.frame().render_transform(shaft_index), Transform2D::IDENTITY);
-        assert_eq!(instance.frame().render_transform(tip_index), Transform2D::IDENTITY);
-        assert_eq!(instance.frame().objects[shaft_index].style.stroke_width, 0.06);
+        assert_eq!(
+            instance.frame().render_transform(shaft_index),
+            Transform2D::IDENTITY
+        );
+        assert_eq!(
+            instance.frame().render_transform(tip_index),
+            Transform2D::IDENTITY
+        );
+        assert_eq!(
+            instance.frame().objects[shaft_index].style.stroke_width,
+            0.06
+        );
     }
 
     #[test]
     fn arrow_geometry_matches_shared_constructor_ordering_rules() {
         let policy = noon_compile::CompiledGraphArrowPolicy::new(0.25, 0.35, 0.25, 0.06, 0.05);
-        let geometry = arrow_geometry(
-            Vec2::new(-2.0, 0.0),
-            Vec2::new(2.0, 0.0),
-            false,
-            policy,
-        );
+        let geometry = arrow_geometry(Vec2::new(-2.0, 0.0), Vec2::new(2.0, 0.0), false, policy);
         assert_eq!(geometry.visible_start, Vec2::new(-1.75, 0.0));
         assert_eq!(geometry.visible_end, Vec2::new(1.75, 0.0));
         assert_eq!(geometry.tip_length, 0.35);
@@ -705,10 +696,7 @@ mod tests {
     #[test]
     fn arrow_policy_handles_short_and_zero_length_edges_without_nonfinite_geometry() {
         let policy = noon_compile::CompiledGraphArrowPolicy::new(0.25, 0.35, 0.25, 0.06, 0.05);
-        for (start, end) in [
-            (Vec2::ZERO, Vec2::new(0.2, 0.0)),
-            (Vec2::ZERO, Vec2::ZERO),
-        ] {
+        for (start, end) in [(Vec2::ZERO, Vec2::new(0.2, 0.0)), (Vec2::ZERO, Vec2::ZERO)] {
             let geometry = arrow_geometry(start, end, false, policy);
             for value in [
                 geometry.visible_start.x,

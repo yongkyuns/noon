@@ -2,8 +2,8 @@
 use crate::AuthoringError;
 use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticGraphEdgeDependency, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
+    SemanticGraphEdgeDependency, SemanticLocalNodeToken, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
     SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeBinding,
 };
@@ -200,25 +200,27 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     }
     for (source_family, graph) in graph_declarations {
         let vertices = graph.vertices().map(|(id, source)| (id, copied[&source]));
-        let edges = graph.edges().map(|(edge, binding)| match binding.dependency() {
-            SemanticGraphEdgeDependency::Line => SemanticTransactionGraphEdgeBinding::new(
-                edge.id,
-                copied[&binding.family()].into(),
-                copied[&binding.line()].into(),
-            ),
-            SemanticGraphEdgeDependency::Arrow {
-                end_tip,
-                start_tip,
-                policy,
-            } => SemanticTransactionGraphEdgeBinding::new_arrow(
-                edge.id,
-                copied[&binding.family()].into(),
-                copied[&binding.line()].into(),
-                copied[&end_tip].into(),
-                start_tip.map(|tip| copied[&tip].into()),
-                policy,
-            ),
-        });
+        let edges = graph
+            .edges()
+            .map(|(edge, binding)| match binding.dependency() {
+                SemanticGraphEdgeDependency::Line => SemanticTransactionGraphEdgeBinding::new(
+                    edge.id,
+                    copied[&binding.family()].into(),
+                    copied[&binding.line()].into(),
+                ),
+                SemanticGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                } => SemanticTransactionGraphEdgeBinding::new_arrow(
+                    edge.id,
+                    copied[&binding.family()].into(),
+                    copied[&binding.line()].into(),
+                    copied[&end_tip].into(),
+                    start_tip.map(|tip| copied[&tip].into()),
+                    policy,
+                ),
+            });
         transaction.set_graph_declaration(
             copied[&source_family],
             SemanticTransactionGraphDeclaration::new(graph.topology().clone(), vertices, edges),

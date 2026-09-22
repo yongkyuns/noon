@@ -180,8 +180,7 @@ impl SemanticExecutionIndex {
         // any compatibility identity. A bad late graph declaration therefore
         // cannot partially mutate the execution index.
         let graph_roots = reachable_graph_roots(store, &roots)?;
-        let pending_graph_edges =
-            lower_graph_dependencies(store, &graph_roots, &seen)?;
+        let pending_graph_edges = lower_graph_dependencies(store, &graph_roots, &seen)?;
 
         let objects = pending
             .into_iter()
@@ -502,13 +501,13 @@ fn lower_graph_dependencies(
 ) -> Result<Vec<PendingGraphEdgeDependency>, SemanticLoweringError> {
     let mut dependencies = Vec::new();
     for &root in graph_roots {
-        let graph = store
-            .semantic_graph_declaration(root)?
-            .ok_or(SemanticLoweringError::InvalidGraphDependency {
+        let graph = store.semantic_graph_declaration(root)?.ok_or(
+            SemanticLoweringError::InvalidGraphDependency {
                 root,
                 edge: GraphEdgeId::new(0),
                 reason: "reachable graph family lost its declaration",
-            })?;
+            },
+        )?;
         for edge in graph.topology().edges() {
             let invalid = |reason| SemanticLoweringError::InvalidGraphDependency {
                 root,
@@ -526,7 +525,9 @@ fn lower_graph_dependencies(
                 .ok_or_else(|| invalid("missing edge semantic binding"))?;
             for node in [start_vertex, end_vertex, binding.line()] {
                 if !visible.contains(&node) {
-                    return Err(invalid("endpoint dependency is not visible with its graph root"));
+                    return Err(invalid(
+                        "endpoint dependency is not visible with its graph root",
+                    ));
                 }
             }
 
@@ -540,7 +541,9 @@ fn lower_graph_dependencies(
                     if !visible.contains(&end_tip)
                         || start_tip.is_some_and(|tip| !visible.contains(&tip))
                     {
-                        return Err(invalid("Arrow tip dependency is not visible with its graph root"));
+                        return Err(invalid(
+                            "Arrow tip dependency is not visible with its graph root",
+                        ));
                     }
                     let shaft = store
                         .semantic_object_state_checked(binding.line())
@@ -549,7 +552,8 @@ fn lower_graph_dependencies(
                         return Err(invalid("Arrow shaft lost its authored shaft role"));
                     };
                     let lower = |field, value| {
-                        lower_scalar_f32(field, value).map_err(|error| error.with_node(binding.line()))
+                        lower_scalar_f32(field, value)
+                            .map_err(|error| error.with_node(binding.line()))
                     };
                     let policy = CompiledGraphArrowPolicy::new(
                         lower(SemanticExecutionField::GraphArrowBuff, policy.buff())?,
@@ -1190,7 +1194,10 @@ mod tests {
         assert_eq!(lowered.graph_edges().len(), 1);
         let dependency = lowered.graph_edges()[0];
         assert_eq!(dependency.edge, edge_id);
-        assert_eq!(dependency.start_vertex, index.execution_object_id(a).unwrap());
+        assert_eq!(
+            dependency.start_vertex,
+            index.execution_object_id(a).unwrap()
+        );
         assert_eq!(dependency.end_vertex, index.execution_object_id(b).unwrap());
         assert_eq!(dependency.line, index.execution_object_id(line).unwrap());
         assert_eq!(dependency.kind, SemanticExecutionGraphEdgeKind::Line);
@@ -1203,6 +1210,9 @@ mod tests {
         assert_eq!(compiled.graph_edge_dependencies().len(), 1);
         assert_eq!(compiled.incident_graph_dependencies(a_index), &[0]);
         assert_eq!(compiled.incident_graph_dependencies(b_index), &[0]);
-        assert_eq!(compiled.graph_dependencies_for_changed_row(line_index), &[0]);
+        assert_eq!(
+            compiled.graph_dependencies_for_changed_row(line_index),
+            &[0]
+        );
     }
 }

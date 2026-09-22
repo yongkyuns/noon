@@ -25,11 +25,7 @@ pub struct SemanticGraphArrowPolicy {
 }
 
 impl SemanticGraphArrowPolicy {
-    pub const fn new(
-        buff: f64,
-        tip_length: f64,
-        max_tip_length_to_length_ratio: f64,
-    ) -> Self {
+    pub const fn new(buff: f64, tip_length: f64, max_tip_length_to_length_ratio: f64) -> Self {
         Self {
             buff,
             tip_length,
@@ -102,9 +98,7 @@ impl SemanticGraphEdgeDependency {
         match self {
             Self::Line => [None, None],
             Self::Arrow {
-                end_tip,
-                start_tip,
-                ..
+                end_tip, start_tip, ..
             } => [Some(end_tip), start_tip],
         }
     }
@@ -304,9 +298,7 @@ impl SemanticTransactionGraphEdgeDependency {
         match self {
             Self::Line => [None, None],
             Self::Arrow {
-                end_tip,
-                start_tip,
-                ..
+                end_tip, start_tip, ..
             } => [Some(end_tip), start_tip],
         }
     }
@@ -512,10 +504,7 @@ mod tests {
             start_tip: Some(id(21)),
             policy,
         };
-        assert_eq!(
-            dependency.referenced_nodes(),
-            [Some(id(20)), Some(id(21))]
-        );
+        assert_eq!(dependency.referenced_nodes(), [Some(id(20)), Some(id(21))]);
     }
 
     #[test]

@@ -13,7 +13,10 @@ mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::{collections::{BTreeMap, HashMap}, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,

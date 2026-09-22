@@ -304,7 +304,6 @@ fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
     assert_ne!(binding.line(), source_edge.line().node_id());
 }
 
-
 #[test]
 fn directed_graph_family_copy_remaps_arrow_dependency_components() {
     let mut scene = Scene::new();
