@@ -290,7 +290,7 @@ def _append_membership_value(
 def _sync_membership_wrapper_attachments(
     scene: _base.Scene, kind: str, values: tuple[object, ...]
 ) -> None:
-    if kind == "add":
+    if kind in {"add", "add_foreground", "remove_foreground"}:
         return
     context = _context(scene)
     # Clear affects every root; other operations only reconsider their old targets.
@@ -356,10 +356,6 @@ def _reconcile_completed_family_bindings(
     for wrapper, reservation, handle in reservations:
         _commit_typed_binding(wrapper, scene, reservation, handle)
     _membership_registry(scene).update(wrappers)
-    if detached and hasattr(scene, "foreground_mobjects"):
-        scene.foreground_mobjects = _base.Scene._restructure_foreground(
-            scene.foreground_mobjects, tuple(detached)
-        )
     for wrapper in detached:
         wrapper._canonical_live_target_context = context
         wrapper._scene = None
@@ -374,26 +370,32 @@ def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
     ]
 
 
+def _canonical_scene_foreground_mobjects(scene: _base.Scene) -> list[object]:
+    """Project the shared Rust declaration back to already-known Python wrappers."""
+    registry = _membership_registry(scene)
+    return [
+        registry[str(key)]
+        for key in engine_call(
+            _context(scene).rootForegroundKeys, operation="Scene.foreground_mobjects"
+        )
+        if str(key) in registry
+    ]
+
+
 def _canonical_edit_membership(
     scene: _base.Scene,
     kind: str,
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
-    key_mobject: _base.Mobject | None = None,
 ) -> None:
-    if key is not None:
-        if kind != "add" or not values or (key_mobject is None and len(values) != 1):
-            raise ValueError("an explicit key requires one ordinary Mobject add")
-        if key_mobject is None:
-            key_mobject = values[0]
-        if not isinstance(key_mobject, _base.Mobject) or sum(
-            value is key_mobject for value in values
-        ) != 1:
-            raise ValueError("an explicit key requires one ordinary Mobject add")
-    elif key_mobject is not None:
-        raise ValueError("a designated keyed Mobject requires an explicit key")
-    key_binding = None if key is None else (_semantic_wrapper_key(key_mobject), key)
+    if key is not None and (
+        kind != "add"
+        or len(values) != 1
+        or not isinstance(values[0], _base.Mobject)
+    ):
+        raise ValueError("an explicit key requires one ordinary Mobject add")
+    key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     next_object_id = scene._next_object_id
@@ -411,7 +413,7 @@ def _canonical_edit_membership(
             value,
             next_object_id=next_object_id,
             binding_reservations=binding_reservations,
-            reserve_bindings=kind in {"add", "replace"},
+            reserve_bindings=kind in {"add", "add_foreground", "replace"},
             key_binding=key_binding,
         )
         reservations.extend(appended)

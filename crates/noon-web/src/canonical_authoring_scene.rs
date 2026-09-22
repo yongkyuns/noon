@@ -34,6 +34,8 @@ enum OwnedSceneMembershipMember {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SceneMembershipBatchKind {
     Add,
+    AddForeground,
+    RemoveForeground,
     Remove,
     Clear,
     Replace,
@@ -2293,7 +2295,9 @@ impl CanonicalAuthoringScene {
                 (None, None)
                     if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) =>
                 {
                     new_bindings.push((*wrapper_id, node));
@@ -2381,7 +2385,9 @@ impl CanonicalAuthoringScene {
                         }
                     } else if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) {
                         return Err(AuthoringFailure::new(
                             "invalid_input",
@@ -2413,6 +2419,12 @@ impl CanonicalAuthoringScene {
         }
         let request = match batch.kind {
             SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),
+            SceneMembershipBatchKind::AddForeground => {
+                noon::SceneMembershipRequest::AddForeground(&borrowed)
+            }
+            SceneMembershipBatchKind::RemoveForeground => {
+                noon::SceneMembershipRequest::RemoveForeground(&borrowed)
+            }
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
             SceneMembershipBatchKind::BringToBack => {
                 noon::SceneMembershipRequest::BringToBack(&borrowed)
@@ -2482,6 +2494,23 @@ impl CanonicalAuthoringScene {
                     .collect()
             })
             .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
+        let store = self.scene.integration_store().borrow();
+        let root = store.node(self.scene.root()).ok_or_else(|| {
+            AuthoringFailure::new(
+                "state",
+                "scene.root_missing",
+                "semantic scene root is no longer live",
+            )
+        })?;
+        Ok(root
+            .foreground_members()
+            .iter()
+            .map(|node| format!("{}:{}", node.slot(), node.generation()))
+            .collect())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2890,13 +2919,15 @@ mod wasm {
         pub fn new(kind: &str) -> Result<WasmSceneMembershipBatch, JsValue> {
             let kind = match kind {
                 "add" => SceneMembershipBatchKind::Add,
+                "add_foreground" => SceneMembershipBatchKind::AddForeground,
+                "remove_foreground" => SceneMembershipBatchKind::RemoveForeground,
                 "remove" => SceneMembershipBatchKind::Remove,
                 "clear" => SceneMembershipBatchKind::Clear,
                 "replace" => SceneMembershipBatchKind::Replace,
                 "bring_to_back" => SceneMembershipBatchKind::BringToBack,
                 _ => {
                     return Err(js_error(format!(
-                        "membership batch kind must be add, remove, clear, replace, or bring_to_back; got {kind:?}"
+                        "membership batch kind must be add, add_foreground, remove_foreground, remove, clear, replace, or bring_to_back; got {kind:?}"
                     )))
                 }
             };
@@ -4450,6 +4481,11 @@ mod wasm {
         #[wasm_bindgen(js_name = rootMembershipKeys)]
         pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
             self.inner.root_membership_keys().map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = rootForegroundKeys)]
+        pub fn root_foreground_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.inner.root_foreground_keys().map_err(typed_js_error)
         }
 
         /// Query authoritative recursive membership without enumerating the scene.
@@ -7645,6 +7681,132 @@ mod tests {
             })
             .unwrap();
         assert!(context.root_membership_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn canonical_foreground_batches_use_shared_membership_and_authoritative_query() {
+        let mut context = CanonicalAuthoringScene::default();
+        let first = context.scene.circle(0.5).unwrap();
+        let second = context.scene.square(0.5).unwrap();
+        let later = context.scene.rectangle(0.25, 0.75).unwrap();
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::AddForeground,
+                members: vec![
+                    membership_mobject(0, &first),
+                    membership_mobject(1, &second),
+                ],
+                bindings: vec![
+                    (ObjectId::new(0), first.clone()),
+                    (ObjectId::new(1), second.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![membership_mobject(2, &later)],
+                bindings: vec![(ObjectId::new(2), later.clone())],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_membership_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    later.node_id().slot(),
+                    later.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+        assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::RemoveForeground,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: first.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            )]
+        );
+        assert_eq!(context.root_membership_keys().unwrap().len(), 3);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::BringToBack,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: second.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert_eq!(
+            context.root_membership_keys().unwrap().first(),
+            Some(&format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            ))
+        );
+    }
+
+    #[test]
+    fn foreground_add_requires_binding_before_publication() {
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context.scene.circle(0.5).unwrap();
+        let before = context.scene.revision();
+        let error = context.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::AddForeground,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: object.clone(),
+            }],
+            bindings: Vec::new(),
+        });
+        assert!(error.is_err());
+        assert_eq!(context.scene.revision(), before);
+        assert!(context.root_membership_keys().unwrap().is_empty());
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert!(!context.identities.contains_key(&object.node_id()));
     }
 
     #[test]
