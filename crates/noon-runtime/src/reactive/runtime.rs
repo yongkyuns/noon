@@ -294,6 +294,7 @@ impl SceneInstance {
         instance.publication = publication;
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
+        instance.refresh_all_graph_dependencies();
         instance
     }
 
