@@ -37,7 +37,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/proof"
           cat candidate/c5-callback-input/part*.b64 | base64 -d | xz -d > "$GITHUB_WORKSPACE/proof/input.patch"
           echo '3f2396b4881c0f84508ff6f9c555da56fda1281dea3afe0f57a55bb06a2752d5  proof/input.patch' | sha256sum -c -
-          git worktree add --detach "$RUNNER_TEMP/candidate" bb7c12c75f2389fc696d25b0e2b657ad410daac2
+          git worktree add --detach "$RUNNER_TEMP/candidate" 3428ccf34c1bd040038032a637d510dfeedbc911
           git -C "$RUNNER_TEMP/candidate" apply --check "$GITHUB_WORKSPACE/proof/input.patch"
           git -C "$RUNNER_TEMP/candidate" apply "$GITHUB_WORKSPACE/proof/input.patch"
           for patch in "$GITHUB_WORKSPACE"/candidate/c5-callback-input/fix*.patch; do
@@ -96,7 +96,7 @@ jobs:
         run: |
           set -o pipefail
           cd "$CANDIDATE"
-          bash scripts/check.sh fast bb7c12c75f2389fc696d25b0e2b657ad410daac2 2>&1 | tee "$PROOF/fast.log"
+          bash scripts/check.sh fast 3428ccf34c1bd040038032a637d510dfeedbc911 2>&1 | tee "$PROOF/fast.log"
 
       - name: Compile reduced WASM paths
         run: |
