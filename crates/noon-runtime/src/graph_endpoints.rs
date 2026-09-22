@@ -770,6 +770,43 @@ mod tests {
     }
 
     #[test]
+    fn final_host_effective_vertex_write_updates_incident_edge_in_same_commit() {
+        let fixture = line_graph_fixture(0, false);
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
+        let a_object = index.execution_object_id(fixture.a).unwrap();
+        let line_object = index.execution_object_id(fixture.line).unwrap();
+        let revision = fixture.store.scene_revision();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        instance.take_frame_changes();
+
+        let prepared = instance.prepare_advance_to(0.0).unwrap();
+        let effective = instance
+            .prepare_effective_property_batch(&[crate::EffectivePropertyWrite::Transform {
+                object: a_object,
+                transform: Transform2D {
+                    translation: Vec2::new(-4.0, 2.0),
+                    ..Transform2D::IDENTITY
+                },
+            }])
+            .unwrap();
+        instance.commit_prepared_frame(prepared, effective).unwrap();
+
+        assert_eq!(fixture.store.scene_revision(), revision);
+        let line_index = instance.frame_index_for_object(line_object).unwrap();
+        assert_eq!(
+            instance.frame().render_geometry(line_index),
+            Some(&GeometryRef::line(
+                Vec2::new(-4.0, 2.0),
+                Vec2::new(1.0, 0.0),
+            ))
+        );
+        let changed = instance.take_frame_changes().object_indices().to_vec();
+        assert!(changed.contains(&instance.frame_index_for_object(a_object).unwrap()));
+        assert!(changed.contains(&line_index));
+    }
+
+    #[test]
     fn timeline_vertex_motion_reuses_same_incident_dependency_path() {
         let fixture = line_graph_fixture(0, false);
         let mut index = SemanticExecutionIndex::new();
