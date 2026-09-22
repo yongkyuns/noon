@@ -248,8 +248,6 @@ impl SemanticExecutionProjection {
     }
 }
 
-/// One execution-facing object lowered from authoritative semantic state.
-#[derive(Clone, Debug, PartialEq)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticExecutionGraphEdgeKind {
     Line,
@@ -271,6 +269,8 @@ pub struct SemanticExecutionGraphEdgeDependency {
     pub kind: SemanticExecutionGraphEdgeKind,
 }
 
+/// One execution-facing object lowered from authoritative semantic state.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
