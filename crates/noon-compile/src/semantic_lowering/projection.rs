@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    Color, ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectState, SemanticPaint,
-    SemanticPresentation, SemanticSignalBinding, SemanticStore, SemanticStoreError, Style,
-    Transform2D,
+    Color, GraphEdgeId, ObjectId, SemanticGraphEdgeDependency, SemanticMutationImpact,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticPresentation,
+    SemanticSignalBinding, SemanticStore, SemanticStoreError, Style, Transform2D,
 };
+
+use crate::CompiledGraphArrowPolicy;
 
 /// Compiler-owned identity bridge from authoritative semantic nodes to the existing
 /// object-key domain consumed by `CompiledScene` and runtime execution slots.
@@ -155,10 +157,11 @@ impl SemanticExecutionIndex {
         store: &SemanticStore,
         roots: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
+        let roots = roots.into_iter().collect::<Vec<_>>();
         let mut pending = Vec::new();
         let mut seen = HashSet::new();
 
-        for root in roots {
+        for &root in &roots {
             for semantic_id in store.ordered_leaf_nodes(root)? {
                 if !seen.insert(semantic_id) {
                     continue;
@@ -173,6 +176,13 @@ impl SemanticExecutionIndex {
             }
         }
 
+        // Validate and value-lower graph dependency metadata before installing
+        // any compatibility identity. A bad late graph declaration therefore
+        // cannot partially mutate the execution index.
+        let graph_roots = reachable_graph_roots(store, &roots)?;
+        let pending_graph_edges =
+            lower_graph_dependencies(store, &graph_roots, &seen)?;
+
         let objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
@@ -184,9 +194,20 @@ impl SemanticExecutionIndex {
                 presentation: state.presentation,
                 signal_bindings: state.signal_bindings,
             })
+            .collect::<Vec<_>>();
+        let execution_ids = objects
+            .iter()
+            .map(|object| (object.semantic_id, object.execution_id))
+            .collect::<HashMap<_, _>>();
+        let graph_edges = pending_graph_edges
+            .into_iter()
+            .map(|edge| edge.resolve(&execution_ids))
             .collect();
 
-        Ok(SemanticExecutionProjection { objects })
+        Ok(SemanticExecutionProjection {
+            objects,
+            graph_edges,
+        })
     }
 
     fn ensure_object(&mut self, semantic_id: SemanticNodeId) -> ObjectId {
@@ -206,11 +227,16 @@ impl SemanticExecutionIndex {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionProjection {
     objects: Vec<SemanticExecutionObject>,
+    graph_edges: Vec<SemanticExecutionGraphEdgeDependency>,
 }
 
 impl SemanticExecutionProjection {
     pub fn objects(&self) -> &[SemanticExecutionObject] {
         &self.objects
+    }
+
+    pub fn graph_edges(&self) -> &[SemanticExecutionGraphEdgeDependency] {
+        &self.graph_edges
     }
 
     pub fn len(&self) -> usize {
@@ -224,6 +250,27 @@ impl SemanticExecutionProjection {
 
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticExecutionGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip: ObjectId,
+        start_tip: Option<ObjectId>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+/// Graph endpoint relation after semantic IDs have been validated and mapped to
+/// execution compatibility identities. Dense compiled rows are assigned later.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticExecutionGraphEdgeDependency {
+    pub edge: GraphEdgeId,
+    pub start_vertex: ObjectId,
+    pub end_vertex: ObjectId,
+    pub line: ObjectId,
+    pub kind: SemanticExecutionGraphEdgeKind,
+}
+
 pub struct SemanticExecutionObject {
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
@@ -253,6 +300,11 @@ pub enum SemanticExecutionField {
     StrokeOpacity,
     StrokeWidth,
     ObjectOpacity,
+    GraphArrowBuff,
+    GraphArrowTipLength,
+    GraphArrowTipLengthRatio,
+    GraphArrowInitialStrokeWidth,
+    GraphArrowStrokeWidthRatio,
 }
 
 impl std::fmt::Display for SemanticExecutionField {
@@ -267,6 +319,11 @@ impl std::fmt::Display for SemanticExecutionField {
             Self::StrokeOpacity => "stroke_opacity",
             Self::StrokeWidth => "stroke_width",
             Self::ObjectOpacity => "object_opacity",
+            Self::GraphArrowBuff => "graph_arrow_buff",
+            Self::GraphArrowTipLength => "graph_arrow_tip_length",
+            Self::GraphArrowTipLengthRatio => "graph_arrow_tip_length_ratio",
+            Self::GraphArrowInitialStrokeWidth => "graph_arrow_initial_stroke_width",
+            Self::GraphArrowStrokeWidthRatio => "graph_arrow_stroke_width_ratio",
         })
     }
 }
@@ -289,6 +346,11 @@ pub enum SemanticLoweringError {
         node: SemanticNodeId,
         field: SemanticExecutionField,
         resource: u64,
+    },
+    InvalidGraphDependency {
+        root: SemanticNodeId,
+        edge: GraphEdgeId,
+        reason: &'static str,
     },
 }
 
@@ -330,6 +392,13 @@ impl std::fmt::Display for SemanticLoweringError {
                 node.slot(),
                 node.generation()
             ),
+            Self::InvalidGraphDependency { root, edge, reason } => write!(
+                formatter,
+                "semantic graph root {}:{} edge {} has invalid endpoint dependency: {reason}",
+                root.slot(),
+                root.generation(),
+                edge.get()
+            ),
         }
     }
 }
@@ -341,6 +410,183 @@ impl std::error::Error for SemanticLoweringError {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PendingGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip: SemanticNodeId,
+        start_tip: Option<SemanticNodeId>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingGraphEdgeDependency {
+    edge: GraphEdgeId,
+    start_vertex: SemanticNodeId,
+    end_vertex: SemanticNodeId,
+    line: SemanticNodeId,
+    kind: PendingGraphEdgeKind,
+}
+
+impl PendingGraphEdgeDependency {
+    fn resolve(
+        self,
+        execution_ids: &HashMap<SemanticNodeId, ObjectId>,
+    ) -> SemanticExecutionGraphEdgeDependency {
+        let resolve = |node| {
+            *execution_ids
+                .get(&node)
+                .expect("validated visible graph dependency has an execution identity")
+        };
+        SemanticExecutionGraphEdgeDependency {
+            edge: self.edge,
+            start_vertex: resolve(self.start_vertex),
+            end_vertex: resolve(self.end_vertex),
+            line: resolve(self.line),
+            kind: match self.kind {
+                PendingGraphEdgeKind::Line => SemanticExecutionGraphEdgeKind::Line,
+                PendingGraphEdgeKind::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                } => SemanticExecutionGraphEdgeKind::Arrow {
+                    end_tip: resolve(end_tip),
+                    start_tip: start_tip.map(resolve),
+                    policy,
+                },
+            },
+        }
+    }
+}
+
+fn reachable_graph_roots(
+    store: &SemanticStore,
+    roots: &[SemanticNodeId],
+) -> Result<Vec<SemanticNodeId>, SemanticLoweringError> {
+    let mut stack = roots.to_vec();
+    let mut seen_families = HashSet::new();
+    let mut graph_roots = Vec::new();
+    while let Some(node_id) = stack.pop() {
+        let node = store
+            .node(node_id)
+            .ok_or(SemanticStoreError::UnknownNode(node_id))?;
+        let SemanticNodeKind::Family(_) = node.kind() else {
+            continue;
+        };
+        if !seen_families.insert(node_id) {
+            continue;
+        }
+        if node.graph_declaration().is_some() {
+            graph_roots.push(node_id);
+        }
+        for member in node.members_iter() {
+            if matches!(
+                store.node(member).map(|node| node.kind()),
+                Some(SemanticNodeKind::Family(_))
+            ) {
+                stack.push(member);
+            }
+        }
+    }
+    graph_roots.sort_unstable();
+    Ok(graph_roots)
+}
+
+fn lower_graph_dependencies(
+    store: &SemanticStore,
+    graph_roots: &[SemanticNodeId],
+    visible: &HashSet<SemanticNodeId>,
+) -> Result<Vec<PendingGraphEdgeDependency>, SemanticLoweringError> {
+    let mut dependencies = Vec::new();
+    for &root in graph_roots {
+        let graph = store
+            .semantic_graph_declaration(root)?
+            .ok_or(SemanticLoweringError::InvalidGraphDependency {
+                root,
+                edge: GraphEdgeId::new(0),
+                reason: "reachable graph family lost its declaration",
+            })?;
+        for edge in graph.topology().edges() {
+            let invalid = |reason| SemanticLoweringError::InvalidGraphDependency {
+                root,
+                edge: edge.id,
+                reason,
+            };
+            let start_vertex = graph
+                .vertex_node(edge.start)
+                .ok_or_else(|| invalid("missing start vertex semantic binding"))?;
+            let end_vertex = graph
+                .vertex_node(edge.end)
+                .ok_or_else(|| invalid("missing end vertex semantic binding"))?;
+            let binding = graph
+                .edge_binding(edge.id)
+                .ok_or_else(|| invalid("missing edge semantic binding"))?;
+            for node in [start_vertex, end_vertex, binding.line()] {
+                if !visible.contains(&node) {
+                    return Err(invalid("endpoint dependency is not visible with its graph root"));
+                }
+            }
+
+            let kind = match binding.dependency() {
+                SemanticGraphEdgeDependency::Line => PendingGraphEdgeKind::Line,
+                SemanticGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                } => {
+                    if !visible.contains(&end_tip)
+                        || start_tip.is_some_and(|tip| !visible.contains(&tip))
+                    {
+                        return Err(invalid("Arrow tip dependency is not visible with its graph root"));
+                    }
+                    let shaft = store
+                        .semantic_object_state_checked(binding.line())
+                        .map_err(|_| invalid("Arrow shaft binding is not an ordinary object"))?;
+                    let SemanticObjectRole::ArrowShaft(shaft_policy) = shaft.role() else {
+                        return Err(invalid("Arrow shaft lost its authored shaft role"));
+                    };
+                    let lower = |field, value| {
+                        lower_scalar_f32(field, value).map_err(|error| error.with_node(binding.line()))
+                    };
+                    let policy = CompiledGraphArrowPolicy::new(
+                        lower(SemanticExecutionField::GraphArrowBuff, policy.buff())?,
+                        lower(
+                            SemanticExecutionField::GraphArrowTipLength,
+                            policy.tip_length(),
+                        )?,
+                        lower(
+                            SemanticExecutionField::GraphArrowTipLengthRatio,
+                            policy.max_tip_length_to_length_ratio(),
+                        )?,
+                        lower(
+                            SemanticExecutionField::GraphArrowInitialStrokeWidth,
+                            shaft_policy.initial_stroke_width(),
+                        )?,
+                        lower(
+                            SemanticExecutionField::GraphArrowStrokeWidthRatio,
+                            shaft_policy.max_stroke_width_to_length_ratio(),
+                        )?,
+                    );
+                    PendingGraphEdgeKind::Arrow {
+                        end_tip,
+                        start_tip,
+                        policy,
+                    }
+                }
+            };
+            dependencies.push(PendingGraphEdgeDependency {
+                edge: edge.id,
+                start_vertex,
+                end_vertex,
+                line: binding.line(),
+                kind,
+            });
+        }
+    }
+    Ok(dependencies)
 }
 
 #[derive(Clone, Debug, PartialEq)]
