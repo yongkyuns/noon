@@ -8,9 +8,9 @@
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
-    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
-    StoredGeometry, Vec2, VectorPath,
+    Color, SemanticArrowShaftRole, SemanticGraphArrowPolicy, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectRole,
+    SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -153,6 +153,12 @@ impl ManimArrowOptions {
         self,
         store: &mut SemanticStore,
     ) -> Result<PreparedArrow, AuthoringError> {
+        let endpoint_policy = SemanticGraphArrowPolicy::new(
+            self.buff,
+            self.tip_length,
+            self.max_tip_length_to_length_ratio,
+        );
+        debug_assert!(endpoint_policy.is_valid());
         let ShortenedLine {
             visible_start,
             visible_end,
@@ -214,6 +220,7 @@ impl ManimArrowOptions {
             start_tip,
             tip_color,
             z_index: self.z_index,
+            endpoint_policy,
         })
     }
 }
@@ -366,6 +373,9 @@ pub(crate) struct PreparedArrow {
     pub(crate) start_tip: Option<VectorPath>,
     pub(crate) tip_color: Color,
     pub(crate) z_index: f64,
+    /// Constructor policy retained only so composite semantic declarations can
+    /// lower the same Arrow at effective endpoint positions.
+    pub(crate) endpoint_policy: SemanticGraphArrowPolicy,
 }
 
 pub(crate) struct StagedArrow {
@@ -373,6 +383,7 @@ pub(crate) struct StagedArrow {
     pub(crate) shaft: noon_core::SemanticLocalNodeToken,
     pub(crate) end_tip: noon_core::SemanticLocalNodeToken,
     pub(crate) start_tip: Option<noon_core::SemanticLocalNodeToken>,
+    pub(crate) endpoint_policy: SemanticGraphArrowPolicy,
 }
 
 #[derive(Debug)]
@@ -451,6 +462,7 @@ pub(crate) fn stage_prepared_arrow(
         shaft,
         end_tip,
         start_tip,
+        endpoint_policy: prepared.endpoint_policy,
     }
 }
 
