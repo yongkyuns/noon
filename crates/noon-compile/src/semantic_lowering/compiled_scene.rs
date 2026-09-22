@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceHandle, ObjectContentRef, Rect, SemanticNodeId,
@@ -181,8 +181,8 @@ fn materialize_semantic_projection(
     }
 
     let mut graph_edge_dependencies = Vec::with_capacity(projection.graph_edges().len());
-    let mut graph_incident_dependencies = BTreeMap::<u32, Vec<u32>>::new();
-    let mut graph_dirty_dependencies = BTreeMap::<u32, Vec<u32>>::new();
+    let mut graph_incident_dependencies = HashMap::<u32, Vec<u32>>::new();
+    let mut graph_dirty_dependencies = HashMap::<u32, Vec<u32>>::new();
     for dependency in projection.graph_edges() {
         let dependency_index = u32::try_from(graph_edge_dependencies.len()).map_err(|_| {
             SemanticCompiledSceneError::TooManyGraphDependencies(projection.graph_edges().len())
