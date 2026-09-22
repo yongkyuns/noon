@@ -223,6 +223,7 @@ impl SemanticStore {
         let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
         if family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
             return Ok(());
         }
         if !self
@@ -248,6 +249,7 @@ impl SemanticStore {
         let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
         if !family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
             return Ok(false);
         }
         if !self
