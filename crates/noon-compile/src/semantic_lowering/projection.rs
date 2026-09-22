@@ -803,9 +803,11 @@ fn compatibility_object_id(id: SemanticNodeId) -> ObjectId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Color, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
-        SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-        SemanticStore, SemanticVec3, StoredGeometry, TextResourceHandle, TextResourceId, Vec2,
+        Color, GraphTopology, SemanticMutationImpact, SemanticMutationTransaction,
+        SemanticNodeCreation, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
+        SemanticPaint, SemanticStore, SemanticTransactionGraphDeclaration,
+        SemanticTransactionGraphEdgeBinding, SemanticVec3, StoredGeometry, TextResourceHandle,
+        TextResourceId, Vec2,
     };
 
     use super::*;
@@ -1126,5 +1128,81 @@ mod tests {
             SemanticLoweringError::MissingSemanticObjectState(state_less)
         );
         assert!(index.is_empty());
+    }
+
+    #[test]
+    fn reachable_nested_graph_lowers_one_sparse_endpoint_dependency() {
+        let mut store = SemanticStore::new();
+        let mut topology = GraphTopology::new();
+        let a_id = topology.add_vertex();
+        let b_id = topology.add_vertex();
+        let edge_id = topology.add_edge(a_id, b_id, false).unwrap();
+
+        let mut tx = SemanticMutationTransaction::new();
+        let graph = tx.create_node(SemanticNodeCreation::family());
+        let edge_family = tx.create_node(SemanticNodeCreation::family());
+        let line = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+            StoredGeometry::Line {
+                start: Vec2::new(-1.0, 0.0),
+                end: Vec2::new(1.0, 0.0),
+            },
+        )));
+        let mut a_state = circle(0.2);
+        a_state.transform.translation = SemanticVec3::new(-1.0, 0.0, 0.0);
+        let mut b_state = circle(0.2);
+        b_state.transform.translation = SemanticVec3::new(1.0, 0.0, 0.0);
+        let a = tx.create_node(SemanticNodeCreation::object(a_state));
+        let b = tx.create_node(SemanticNodeCreation::object(b_state));
+        tx.add_member(edge_family, line)
+            .add_member(graph, edge_family)
+            .add_member(graph, a)
+            .add_member(graph, b)
+            .set_graph_declaration(
+                graph,
+                SemanticTransactionGraphDeclaration::new(
+                    topology,
+                    [(a_id, a), (b_id, b)],
+                    [SemanticTransactionGraphEdgeBinding::new(
+                        edge_id,
+                        edge_family.into(),
+                        line.into(),
+                    )],
+                ),
+            );
+        let result = tx.apply(&mut store).unwrap();
+        let graph = result.resolve(graph).unwrap();
+        let a = result.resolve(a).unwrap();
+        let b = result.resolve(b).unwrap();
+        let line = result.resolve(line).unwrap();
+
+        // Reach the graph only through one ordinary outer family. A second
+        // detached graph declaration must not enter the execution projection.
+        let outer = store.insert_family();
+        store.add_member(outer, graph).unwrap();
+        store.attach_to_scene(outer).unwrap();
+
+        let detached_vertex = store.insert_semantic_object(circle(0.1));
+        let detached = store.insert_family();
+        store.add_member(detached, detached_vertex).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = index.lower_scene(&store).unwrap();
+        assert_eq!(lowered.graph_edges().len(), 1);
+        let dependency = lowered.graph_edges()[0];
+        assert_eq!(dependency.edge, edge_id);
+        assert_eq!(dependency.start_vertex, index.execution_object_id(a).unwrap());
+        assert_eq!(dependency.end_vertex, index.execution_object_id(b).unwrap());
+        assert_eq!(dependency.line, index.execution_object_id(line).unwrap());
+        assert_eq!(dependency.kind, SemanticExecutionGraphEdgeKind::Line);
+        assert_eq!(index.execution_object_id(detached_vertex), None);
+
+        let compiled = crate::CompiledScene::from_semantic_projection(&lowered).unwrap();
+        let a_index = compiled.object_index(dependency.start_vertex).unwrap();
+        let b_index = compiled.object_index(dependency.end_vertex).unwrap();
+        let line_index = compiled.object_index(dependency.line).unwrap();
+        assert_eq!(compiled.graph_edge_dependencies().len(), 1);
+        assert_eq!(compiled.incident_graph_dependencies(a_index), &[0]);
+        assert_eq!(compiled.incident_graph_dependencies(b_index), &[0]);
+        assert_eq!(compiled.graph_dependencies_for_changed_row(line_index), &[0]);
     }
 }
