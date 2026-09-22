@@ -4,12 +4,12 @@
 //! metadata. This module derives only effective render geometry/style; it never
 //! mutates Semantic Scene geometry and never introduces a renderer graph path.
 
-use std::sync::Arc;
+use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 use noon_compile::{CompiledGraphEdgeDependency, CompiledGraphEdgeKind};
 use noon_core::{GeometryRef, Transform2D, Vec2, VectorPath};
 
-use crate::SceneInstance;
+use crate::{frame::FrameRowState, SceneInstance};
 
 impl SceneInstance {
     /// Re-derive dependencies owned by one changed effective row.
@@ -72,10 +72,185 @@ impl SceneInstance {
         }
     }
 
+    /// Extend one speculative prepared phase with exactly the graph dependencies
+    /// touched by its staged rows. This preserves callback-phase coherence without
+    /// mutating the committed frame or scanning unrelated graph/scene state.
+    pub(crate) fn refresh_prepared_graph_dependencies(
+        &self,
+        rows: &mut BTreeMap<usize, FrameRowState>,
+    ) {
+        let mut dependencies = BTreeSet::new();
+        for &object_index in rows.keys() {
+            let Ok(object_index) = u32::try_from(object_index) else {
+                continue;
+            };
+            dependencies.extend(
+                self.compiled
+                    .graph_dependencies_for_changed_row(object_index)
+                    .iter()
+                    .copied(),
+            );
+        }
+
+        for dependency_index in dependencies {
+            let Some(dependency) = self
+                .compiled
+                .graph_edge_dependencies()
+                .get(dependency_index as usize)
+                .copied()
+            else {
+                debug_assert!(false, "compiled Graph dependency index remains in range");
+                continue;
+            };
+            apply_prepared_graph_dependency(
+                &self.compiled,
+                &self.frame,
+                rows,
+                dependency,
+            );
+        }
+    }
+
     #[cfg(test)]
     pub(crate) const fn graph_dependency_visits(&self) -> u64 {
         self.graph_dependency_visits
     }
+}
+
+fn apply_prepared_graph_dependency(
+    compiled: &noon_compile::CompiledScene,
+    frame: &crate::FrameState,
+    rows: &mut BTreeMap<usize, FrameRowState>,
+    dependency: CompiledGraphEdgeDependency,
+) {
+    let start_index = dependency.start_vertex_index() as usize;
+    let end_index = dependency.end_vertex_index() as usize;
+    let line_index = dependency.line_index() as usize;
+    if !compiled.object_slot_is_live(dependency.start_vertex_index())
+        || !compiled.object_slot_is_live(dependency.end_vertex_index())
+        || !compiled.object_slot_is_live(dependency.line_index())
+    {
+        return;
+    }
+
+    let start = prepared_render_transform(frame, rows, start_index).translation;
+    let end = prepared_render_transform(frame, rows, end_index).translation;
+    match dependency.kind() {
+        CompiledGraphEdgeKind::Line => {
+            set_prepared_effective_geometry(
+                frame,
+                rows,
+                line_index,
+                GeometryRef::line(start, end),
+            );
+        }
+        CompiledGraphEdgeKind::Arrow {
+            end_tip_index,
+            start_tip_index,
+            policy,
+        } => {
+            if !compiled.object_slot_is_live(end_tip_index)
+                || start_tip_index.is_some_and(|index| !compiled.object_slot_is_live(index))
+            {
+                return;
+            }
+            let geometry = arrow_geometry(start, end, start_tip_index.is_some(), policy);
+            set_prepared_effective_geometry(
+                frame,
+                rows,
+                line_index,
+                GeometryRef::line(geometry.shaft_start, geometry.shaft_end),
+            );
+            set_prepared_stroke_width(frame, rows, line_index, geometry.stroke_width);
+
+            set_prepared_effective_geometry(
+                frame,
+                rows,
+                end_tip_index as usize,
+                GeometryRef::path(triangle_tip_path(
+                    geometry.visible_end,
+                    geometry.direction,
+                    geometry.tip_length,
+                )),
+            );
+            if let Some(start_tip_index) = start_tip_index {
+                set_prepared_effective_geometry(
+                    frame,
+                    rows,
+                    start_tip_index as usize,
+                    GeometryRef::path(triangle_tip_path(
+                        geometry.visible_start,
+                        Vec2::new(-geometry.direction.x, -geometry.direction.y),
+                        geometry.tip_length,
+                    )),
+                );
+            }
+        }
+    }
+}
+
+fn prepared_render_transform(
+    frame: &crate::FrameState,
+    rows: &BTreeMap<usize, FrameRowState>,
+    object_index: usize,
+) -> Transform2D {
+    rows.get(&object_index)
+        .map(|row| row.render_transform.unwrap_or(row.transform))
+        .unwrap_or_else(|| frame.render_transform(object_index))
+}
+
+fn prepared_geometry_matches(
+    frame: &crate::FrameState,
+    rows: &BTreeMap<usize, FrameRowState>,
+    object_index: usize,
+    geometry: &GeometryRef,
+) -> bool {
+    let Some(row) = rows.get(&object_index) else {
+        return frame.render_geometry(object_index) == Some(geometry)
+            && frame.render_transform(object_index) == Transform2D::IDENTITY;
+    };
+    let current_geometry = row
+        .render_geometry
+        .as_deref()
+        .or_else(|| row.content_override.as_ref().and_then(|content| content.geometry()))
+        .or_else(|| frame.render_geometry(object_index));
+    current_geometry == Some(geometry)
+        && row.render_transform.unwrap_or(row.transform) == Transform2D::IDENTITY
+}
+
+fn set_prepared_effective_geometry(
+    frame: &crate::FrameState,
+    rows: &mut BTreeMap<usize, FrameRowState>,
+    object_index: usize,
+    geometry: GeometryRef,
+) {
+    if prepared_geometry_matches(frame, rows, object_index, &geometry) {
+        return;
+    }
+    let row = rows
+        .entry(object_index)
+        .or_insert_with(|| FrameRowState::from_frame(frame, object_index));
+    row.render_geometry = Some(Arc::new(geometry));
+    row.render_transform = Some(Transform2D::IDENTITY);
+}
+
+fn set_prepared_stroke_width(
+    frame: &crate::FrameState,
+    rows: &mut BTreeMap<usize, FrameRowState>,
+    object_index: usize,
+    stroke_width: f32,
+) {
+    let current = rows
+        .get(&object_index)
+        .map(|row| row.style.stroke_width)
+        .unwrap_or(frame.objects[object_index].style.stroke_width);
+    if current == stroke_width {
+        return;
+    }
+    rows.entry(object_index)
+        .or_insert_with(|| FrameRowState::from_frame(frame, object_index))
+        .style
+        .stroke_width = stroke_width;
 }
 
 fn apply_graph_dependency(
