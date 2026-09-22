@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 22);
+assert.equal(gallery.examples.length, 23);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -39,6 +39,7 @@ assert.deepEqual(
     "noon-raster-image",
     "noon-markup-text",
     "noon-text-range-colors",
+    "noon-pointer-selection",
   ],
 );
 
@@ -214,6 +215,26 @@ assert.doesNotMatch(tigerSource, /for index, leaf in enumerate/, "tiger demo mus
 assert.doesNotMatch(tigerSource, /<(?:rect|circle|ellipse|polygon|polyline)\b/, "unrelated target must stay within qualified plain SVG path topology");
 assert.match(tigerSource, /1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg/);
 assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercise ordinary file-backed SVGMobject authoring");
+
+const pointerSelectionEntry = readyEntries.find((entry) => entry.id === "noon-pointer-selection");
+assert.ok(pointerSelectionEntry, "pointer selection must be a ready compatibility example");
+assert.equal(pointerSelectionEntry.category, "manim-compatible/interaction");
+assert.deepEqual(pointerSelectionEntry.interaction, {
+  type: "pointer-fill-selection",
+  max_movement: 4,
+});
+assert.ok(pointerSelectionEntry.features.includes("pointer selection"));
+const pointerSelectionSource = await readFile(
+  new URL(`./${pointerSelectionEntry.path}`, import.meta.url),
+  "utf8",
+);
+assert.match(pointerSelectionSource, /Circle\(/);
+assert.match(pointerSelectionSource, /Rectangle\(/);
+assert.doesNotMatch(
+  pointerSelectionSource,
+  /(?:onclick|addEventListener|setPointerFillSelection|nativePointerInput)/,
+  "Python gallery source must not own browser interaction plumbing",
+);
 
 const plottingEntry = readyEntries.find((entry) => entry.id === "noon-coordinate-plotting");
 assert.ok(plottingEntry, "coordinate plotting must be a ready compatibility example");
