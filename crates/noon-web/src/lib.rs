@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(target_arch = "wasm32")]
 mod authoring_arc;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow;
@@ -33,6 +32,8 @@ mod authoring_svg;
 mod authoring_synchronized_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
+#[cfg(target_arch = "wasm32")]
+mod authoring_vector_field_defaults;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;

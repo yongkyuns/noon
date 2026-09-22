@@ -21,6 +21,7 @@ pub use smoothing::{
 };
 mod tessellation;
 mod vector_field;
+mod vector_field_defaults;
 
 pub use coordinates::*;
 pub use geometry_proportion::*;
@@ -31,3 +32,4 @@ pub use partial::*;
 pub use plotting::*;
 pub use tessellation::*;
 pub use vector_field::*;
+pub use vector_field_defaults::manim_default_vector_field_ranges_2d;

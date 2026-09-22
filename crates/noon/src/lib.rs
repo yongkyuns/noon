@@ -216,8 +216,8 @@ pub use noon_core::{
     TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
     YELLOW_E,
 };
-pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 pub use noon_geometry::{
+    manim_default_vector_field_ranges_2d, AxesFrame, CoordinateError, NumberLineFrame,
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
     DEFAULT_VECTOR_FIELD_STEP,
