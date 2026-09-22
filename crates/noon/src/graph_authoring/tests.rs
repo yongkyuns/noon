@@ -387,7 +387,6 @@ fn iteration_preserves_authored_vertex_and_edge_order() {
     );
 }
 
-
 #[test]
 fn generic_family_edits_cannot_silently_stale_public_graph_semantics() {
     let mut scene = Scene::new();

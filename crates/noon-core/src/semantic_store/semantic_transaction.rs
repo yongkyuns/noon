@@ -2092,11 +2092,9 @@ impl SemanticMutationTransaction {
                         if preflight.removed_existing.contains(&scope) {
                             continue;
                         }
-                        let Some(graph) = store
-                            .semantic_graph_declaration(scope)
-                            .map_err(|error| SemanticMutationTransactionError::Node {
-                                index,
-                                error,
+                        let Some(graph) =
+                            store.semantic_graph_declaration(scope).map_err(|error| {
+                                SemanticMutationTransactionError::Node { index, error }
                             })?
                         else {
                             continue;

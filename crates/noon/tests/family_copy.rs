@@ -269,15 +269,11 @@ fn detached_references_copy_atomically_without_changing_family_membership() {
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
 }
 
-
 #[test]
 fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
     let mut scene = Scene::new();
     let graph = scene
-        .graph(
-            [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
-            [("a", "b")],
-        )
+        .graph([("a", (-1.0, 0.0)), ("b", (1.0, 0.0))], [("a", "b")])
         .unwrap();
     let a_id = graph.vertex_id(&"a").unwrap();
     let b_id = graph.vertex_id(&"b").unwrap();

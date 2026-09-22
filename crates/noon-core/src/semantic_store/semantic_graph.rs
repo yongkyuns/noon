@@ -165,8 +165,6 @@ impl SemanticGraphDeclaration {
                 .flat_map(|edge| [edge.family(), edge.line()]),
         )
     }
-
-
 }
 
 /// Transaction-local semantic binding for one stable graph edge identity.

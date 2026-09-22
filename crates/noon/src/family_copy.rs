@@ -198,9 +198,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         }
     }
     for (source_family, graph) in graph_declarations {
-        let vertices = graph
-            .vertices()
-            .map(|(id, source)| (id, copied[&source]));
+        let vertices = graph.vertices().map(|(id, source)| (id, copied[&source]));
         let edges = graph.edges().map(|(edge, binding)| {
             SemanticTransactionGraphEdgeBinding::new(
                 edge.id,

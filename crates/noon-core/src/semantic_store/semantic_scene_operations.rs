@@ -230,9 +230,7 @@ impl SemanticStore {
             .semantic_graph_owners_for_invariant_target(family)
             .is_empty()
         {
-            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(
-                family,
-            ));
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
         }
         self.add_member(family, member).map_err(Into::into)
     }
@@ -256,9 +254,7 @@ impl SemanticStore {
             .semantic_graph_owners_for_invariant_target(family)
             .is_empty()
         {
-            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(
-                family,
-            ));
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
         }
         self.remove_member(family, member).map_err(Into::into)
     }
