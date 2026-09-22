@@ -411,6 +411,108 @@ pub struct CompiledTransactionPreflightStats {
     pub staged_compiled_scene_clones: usize,
 }
 
+/// Renderer-neutral endpoint policy for one graph-owned Arrow dependency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphArrowPolicy {
+    buff: f32,
+    tip_length: f32,
+    max_tip_length_to_length_ratio: f32,
+    initial_stroke_width: f32,
+    max_stroke_width_to_length_ratio: f32,
+}
+
+impl CompiledGraphArrowPolicy {
+    pub const fn new(
+        buff: f32,
+        tip_length: f32,
+        max_tip_length_to_length_ratio: f32,
+        initial_stroke_width: f32,
+        max_stroke_width_to_length_ratio: f32,
+    ) -> Self {
+        Self {
+            buff,
+            tip_length,
+            max_tip_length_to_length_ratio,
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio,
+        }
+    }
+
+    pub const fn buff(self) -> f32 {
+        self.buff
+    }
+
+    pub const fn tip_length(self) -> f32 {
+        self.tip_length
+    }
+
+    pub const fn max_tip_length_to_length_ratio(self) -> f32 {
+        self.max_tip_length_to_length_ratio
+    }
+
+    pub const fn initial_stroke_width(self) -> f32 {
+        self.initial_stroke_width
+    }
+
+    pub const fn max_stroke_width_to_length_ratio(self) -> f32 {
+        self.max_stroke_width_to_length_ratio
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompiledGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip_index: u32,
+        start_tip_index: Option<u32>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+/// One graph endpoint dependency lowered into stable compiled object rows.
+///
+/// The rows still contain ordinary geometry/style. This declaration only tells
+/// runtime which effective rows must be recomputed when either vertex moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphEdgeDependency {
+    start_vertex_index: u32,
+    end_vertex_index: u32,
+    line_index: u32,
+    kind: CompiledGraphEdgeKind,
+}
+
+impl CompiledGraphEdgeDependency {
+    pub const fn new(
+        start_vertex_index: u32,
+        end_vertex_index: u32,
+        line_index: u32,
+        kind: CompiledGraphEdgeKind,
+    ) -> Self {
+        Self {
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+        }
+    }
+
+    pub const fn start_vertex_index(self) -> u32 {
+        self.start_vertex_index
+    }
+
+    pub const fn end_vertex_index(self) -> u32 {
+        self.end_vertex_index
+    }
+
+    pub const fn line_index(self) -> u32 {
+        self.line_index
+    }
+
+    pub const fn kind(self) -> CompiledGraphEdgeKind {
+        self.kind
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
@@ -434,6 +536,10 @@ pub struct CompiledScene {
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
     family_animations: Vec<CompiledFamilyAnimationChannel>,
+    /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
+    graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
+    /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
+    graph_incident_dependencies: BTreeMap<u32, Vec<u32>>,
     resources: CompiledResources,
 }
 
@@ -853,6 +959,8 @@ impl CompiledScene {
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
+            graph_edge_dependencies: Vec::new(),
+            graph_incident_dependencies: BTreeMap::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -931,6 +1039,18 @@ impl CompiledScene {
 
     pub fn family_animations(&self) -> &[CompiledFamilyAnimationChannel] {
         &self.family_animations
+    }
+
+    pub fn graph_edge_dependencies(&self) -> &[CompiledGraphEdgeDependency] {
+        &self.graph_edge_dependencies
+    }
+
+    /// Return only the graph dependencies touching one compiled vertex row.
+    pub fn incident_graph_dependencies(&self, vertex_index: u32) -> &[u32] {
+        self.graph_incident_dependencies
+            .get(&vertex_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn raster_image_resources(&self) -> &impl RasterImageResourceLookup {
