@@ -370,9 +370,13 @@ function currentExample() {
 async function applyExampleInteraction(example, target = player) {
   if (target === null) return;
   const interaction = example?.interaction ?? null;
-  await target.setPointerFillSelection(
-    interaction?.type === "pointer-fill-selection" ? interaction.maxMovement : null,
-  );
+  // Gallery selection changes retire the old execution runtime, and semantic
+  // replacement deliberately does not replay pointer configuration. Ordinary
+  // examples therefore stay at the default disabled state without sending a
+  // synthetic null input into callback-driven scenes.
+  if (interaction?.type === "pointer-fill-selection") {
+    await target.setPointerFillSelection(interaction.maxMovement);
+  }
   status.dataset.interaction = interaction?.type ?? "none";
 }
 
