@@ -182,6 +182,7 @@ fn materialize_semantic_projection(
 
     let mut graph_edge_dependencies = Vec::with_capacity(projection.graph_edges().len());
     let mut graph_incident_dependencies = BTreeMap::<u32, Vec<u32>>::new();
+    let mut graph_dirty_dependencies = BTreeMap::<u32, Vec<u32>>::new();
     for dependency in projection.graph_edges() {
         let dependency_index = u32::try_from(graph_edge_dependencies.len()).map_err(|_| {
             SemanticCompiledSceneError::TooManyGraphDependencies(projection.graph_edges().len())
@@ -211,9 +212,30 @@ fn materialize_semantic_projection(
             .entry(start_vertex_index)
             .or_default()
             .push(dependency_index);
+        graph_dirty_dependencies
+            .entry(start_vertex_index)
+            .or_default()
+            .push(dependency_index);
         if end_vertex_index != start_vertex_index {
             graph_incident_dependencies
                 .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+            graph_dirty_dependencies
+                .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+        }
+        for owned_row in std::iter::once(line_index).chain(match kind {
+            CompiledGraphEdgeKind::Line => [None, None].into_iter().flatten(),
+            CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } => [Some(end_tip_index), start_tip_index].into_iter().flatten(),
+        }) {
+            graph_dirty_dependencies
+                .entry(owned_row)
                 .or_default()
                 .push(dependency_index);
         }
@@ -235,6 +257,7 @@ fn materialize_semantic_projection(
         family_animations: Vec::new(),
         graph_edge_dependencies,
         graph_incident_dependencies,
+        graph_dirty_dependencies,
         resources,
     })
 }
