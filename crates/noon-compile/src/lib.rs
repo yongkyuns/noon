@@ -13,7 +13,7 @@ mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::{BTreeMap, HashMap}, sync::Arc};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
@@ -539,10 +539,10 @@ pub struct CompiledScene {
     /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
     graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
     /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
-    graph_incident_dependencies: BTreeMap<u32, Vec<u32>>,
+    graph_incident_dependencies: HashMap<u32, Vec<u32>>,
     /// Any graph-owned row -> dependency indices that must be re-derived when
     /// that effective row changes. Includes vertices, designated Lines and tips.
-    graph_dirty_dependencies: BTreeMap<u32, Vec<u32>>,
+    graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
     resources: CompiledResources,
 }
 
@@ -963,8 +963,8 @@ impl CompiledScene {
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
             graph_edge_dependencies: Vec::new(),
-            graph_incident_dependencies: BTreeMap::new(),
-            graph_dirty_dependencies: BTreeMap::new(),
+            graph_incident_dependencies: HashMap::new(),
+            graph_dirty_dependencies: HashMap::new(),
             resources: CompiledResources::default(),
         })
     }
