@@ -496,7 +496,7 @@ mod tests {
             instance.frame().render_geometry(shaft_index),
             Some(&GeometryRef::line(
                 Vec2::new(-3.75, 0.0),
-                Vec2::new(1.65, 0.0),
+                Vec2::new(1.4, 0.0),
             ))
         );
         let GeometryRef::VectorPath(path) =
