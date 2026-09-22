@@ -38,7 +38,7 @@ impl SceneInstance {
                 debug_assert!(false, "compiled Graph dependency index remains in range");
                 continue;
             };
-            *graph_dependency_visits = graph_dependency_visits.saturating_add(1);
+            *graph_dependency_visits = (*graph_dependency_visits).saturating_add(1);
             for changed_row in apply_graph_dependency(compiled, frame, dependency)
                 .into_iter()
                 .flatten()
@@ -61,7 +61,7 @@ impl SceneInstance {
             ..
         } = self;
         for dependency in compiled.graph_edge_dependencies().iter().copied() {
-            *graph_dependency_visits = graph_dependency_visits.saturating_add(1);
+            *graph_dependency_visits = (*graph_dependency_visits).saturating_add(1);
             for changed_row in apply_graph_dependency(compiled, frame, dependency)
                 .into_iter()
                 .flatten()
@@ -306,9 +306,10 @@ mod tests {
         a: noon_core::SemanticNodeId,
         b: noon_core::SemanticNodeId,
         line: noon_core::SemanticNodeId,
+        position: Option<noon_core::SemanticNodeId>,
     }
 
-    fn line_graph_fixture(unrelated: usize) -> LineGraphFixture {
+    fn line_graph_fixture(unrelated: usize, reactive: bool) -> LineGraphFixture {
         let mut store = SemanticStore::new();
         for _ in 0..unrelated {
             let node = store.insert_semantic_object(SemanticObjectState::new(
@@ -355,19 +356,28 @@ mod tests {
         let b = result.resolve(b).unwrap();
         let line = result.resolve(line).unwrap();
         store.attach_to_scene(root).unwrap();
-        let position = store
-            .insert_semantic_input_signal(SemanticVec3::new(-1.0, 0.0, 0.0))
-            .unwrap();
-        store
-            .bind_semantic_signal(position, a, SemanticObjectProperty::Translation)
-            .unwrap();
+        let position = reactive.then(|| {
+            let position = store
+                .insert_semantic_input_signal(SemanticVec3::new(-1.0, 0.0, 0.0))
+                .unwrap();
+            store
+                .bind_semantic_signal(position, a, SemanticObjectProperty::Translation)
+                .unwrap();
+            position
+        });
 
-        LineGraphFixture { store, a, b, line }
+        LineGraphFixture {
+            store,
+            a,
+            b,
+            line,
+            position,
+        }
     }
 
     #[test]
     fn reactive_vertex_motion_updates_only_vertex_and_incident_line_independent_of_scene_size() {
-        let fixture = line_graph_fixture(10_000);
+        let fixture = line_graph_fixture(10_000, true);
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
         let a_object = index.execution_object_id(fixture.a).unwrap();
@@ -375,14 +385,7 @@ mod tests {
         let line_object = index.execution_object_id(fixture.line).unwrap();
         let position = lowered
             .reactive()
-            .execution_signal_id(
-                fixture
-                    .store
-                    .semantic_object_state_checked(fixture.a)
-                    .unwrap()
-                    .signal_bindings()[0]
-                    .signal(),
-            )
+            .execution_signal_id(fixture.position.expect("reactive fixture has an input"))
             .unwrap();
         let revision = fixture.store.scene_revision();
         let mut instance = SceneInstance::from_semantic_execution(lowered);
@@ -399,7 +402,9 @@ mod tests {
         let a_index = instance.frame_index_for_object(a_object).unwrap();
         let b_index = instance.frame_index_for_object(b_object).unwrap();
         let line_index = instance.frame_index_for_object(line_object).unwrap();
-        assert_eq!(changed, vec![a_index, line_index]);
+        let mut expected = vec![a_index, line_index];
+        expected.sort_unstable();
+        assert_eq!(changed, expected);
         assert!(!changed.contains(&b_index));
         assert_eq!(
             instance.frame().render_geometry(line_index),
@@ -547,19 +552,7 @@ mod tests {
 
     #[test]
     fn timeline_vertex_motion_reuses_same_incident_dependency_path() {
-        let mut fixture = line_graph_fixture(0);
-        let position = fixture
-            .store
-            .semantic_object_state_checked(fixture.a)
-            .unwrap()
-            .signal_bindings()[0]
-            .signal();
-        // Remove the reactive owner so a timeline channel can drive the same
-        // effective position without duplicate property ownership.
-        let mut unbind = SemanticMutationTransaction::new();
-        unbind.unbind_signal(position, fixture.a, SemanticObjectProperty::Translation);
-        unbind.apply(&mut fixture.store).unwrap();
-
+        let fixture = line_graph_fixture(0, false);
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
         let a_object = index.execution_object_id(fixture.a).unwrap();
@@ -587,10 +580,10 @@ mod tests {
         let a_index = instance.frame_index_for_object(a_object).unwrap();
         let line_index = instance.frame_index_for_object(line_object).unwrap();
         assert_eq!(instance.graph_dependency_visits() - before, 1);
-        assert_eq!(
-            instance.take_frame_changes().object_indices(),
-            &[a_index, line_index]
-        );
+        let mut expected = vec![a_index, line_index];
+        expected.sort_unstable();
+        assert_eq!(instance.take_frame_changes().object_indices(), expected);
+
         assert_eq!(
             instance.frame().render_geometry(line_index),
             Some(&GeometryRef::line(
