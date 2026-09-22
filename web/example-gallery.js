@@ -18,6 +18,21 @@ function normalizeGalleryResourcePath(path) {
   return resource.startsWith("https://") ? resource : `./${resource}`;
 }
 
+function normalizeGalleryInteraction(entry) {
+  if (entry.interaction == null) return null;
+  if (typeof entry.interaction !== "object" || Array.isArray(entry.interaction)) {
+    throw new TypeError(`${entry.id}: gallery interaction must be an object`);
+  }
+  if (entry.interaction.type !== "pointer-fill-selection") {
+    throw new Error(`${entry.id}: unsupported gallery interaction ${entry.interaction.type ?? "unknown"}`);
+  }
+  const maxMovement = Number(entry.interaction.max_movement ?? 4);
+  if (!Number.isFinite(maxMovement) || maxMovement < 0) {
+    throw new TypeError(`${entry.id}: pointer selection max_movement must be finite and non-negative`);
+  }
+  return Object.freeze({ type: "pointer-fill-selection", maxMovement });
+}
+
 export function normalizeGalleryManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.entries)) {
     throw new TypeError("Manim example manifest must contain an entries array");
@@ -84,6 +99,7 @@ export function normalizeGalleryManifest(manifest) {
       thumbnailAlt: entry.thumbnail_alt ?? `${entry.title} poster frame`,
       thumbnailTime,
       order,
+      interaction: normalizeGalleryInteraction(entry),
     });
   }
 
@@ -166,6 +182,7 @@ export function filterGalleryExamples(
       example.summary,
       example.category,
       example.parityStatus,
+      example.interaction?.type ?? "",
       ...example.features,
     ]
       .join(" ")

@@ -5,7 +5,7 @@ mod coordinates;
 mod pointer_input;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
-use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerInput};
+use crate::browser_pointer_input::BrowserPointerBinding;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     RuntimeIdentity,
@@ -147,6 +147,8 @@ pub struct SemanticExecutionPlayer {
     /// shared session remains the admission/publication authority.
     #[cfg(any(target_arch = "wasm32", test))]
     browser_pointer_binding: Option<BrowserPointerBinding>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    worker_pointer_presentation: crate::worker_pointer_presentation::WorkerPointerPresentation,
 }
 
 /// A host continuation receipt retains its endpoint after completion for renderer
@@ -306,6 +308,8 @@ impl SemanticExecutionPlayer {
             next_native_event_sequence: 0,
             #[cfg(any(target_arch = "wasm32", test))]
             browser_pointer_binding: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            worker_pointer_presentation: Default::default(),
         })
     }
 
@@ -340,6 +344,8 @@ impl SemanticExecutionPlayer {
             live_wake_clock: BrowserExecutionWakeClock::default(),
             next_native_event_sequence: 0,
             browser_pointer_binding: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            worker_pointer_presentation: Default::default(),
         })
     }
 
@@ -385,6 +391,7 @@ impl SemanticExecutionPlayer {
         self.clock = clock;
         self.resource_bundle = resource_bundle;
         self.encoder = encoder;
+        self.worker_pointer_presentation = Default::default();
         self.snapshot_sent = false;
         // A transport recovery reuses this runtime but begins a new host lease.
         // Re-anchor the derived wall conversion at its next wake so elapsed wall
@@ -2225,9 +2232,17 @@ impl SemanticExecutionPlayer {
             .transpose()
             .map_err(|error| error.to_string())?;
         let camera = self.session.camera().map_err(|e| e.to_string())?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
+        #[cfg(not(any(target_arch = "wasm32", test)))]
+        let pointer_refresh = false;
         let publication = self.session.take_renderer_publication();
         let mut changes = publication.changes().clone();
-        if changes.is_empty() && presentation != self.last_sent_selection_overlay {
+        if changes.is_empty()
+            && (presentation != self.last_sent_selection_overlay || pointer_refresh)
+        {
             // Presentation-only transport work, not authored/runtime dirtiness.
             // Reuse the existing sequence and backpressure; never invent a row.
             changes = noon_runtime::FrameChanges::presentation_redraw();
@@ -2321,6 +2336,18 @@ impl SemanticExecutionPlayer {
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
         delta.selection_overlay = overlay;
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            delta.pointer_view = self
+                .worker_pointer_presentation
+                .view()
+                .filter(|view| view.drawable());
+            self.worker_pointer_presentation.issue(
+                delta.retained.session,
+                delta.retained.sequence,
+                pointer_frame,
+            );
+        }
         self.last_sent_selection_overlay = presentation;
         Ok(Some(delta))
     }
@@ -2973,13 +3000,54 @@ impl SemanticExecutionPlayer {
 
     /// Decode one contextual browser pointer occurrence at the genuine worker
     /// control-port boundary. Coordinates are CSS pixels relative to the content
-    /// viewport; conversion and admission happen against one session publication.
+    /// viewport. The immutable collection-time receipt selects the issued shared
+    /// snapshot; delayed input is never projected with a newer execution camera.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
-    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<(), String> {
-        let input: BrowserPointerInput = serde_json::from_str(json)
+    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
+        let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
-        self.submit_browser_pointer_input(input)
+        self.worker_pointer_presentation.submit(
+            &mut self.session,
+            &mut self.browser_pointer_binding,
+            &mut self.next_native_event_sequence,
+            envelope.input,
+            envelope.presentation,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setBrowserPointerViewJson))]
+    pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
+        let view =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer view JSON: {e}"))?;
+        self.worker_pointer_presentation.set_view(
+            &mut self.session,
+            &mut self.browser_pointer_binding,
+            &mut self.next_native_event_sequence,
+            view,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = notePointerPresentationJson))]
+    pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
+        self.worker_pointer_presentation.note_presented(receipt)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = invalidatePointerPresentationJson))]
+    pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
+        self.worker_pointer_presentation.invalidate(
+            &mut self.session,
+            &mut self.browser_pointer_binding,
+            &mut self.next_native_event_sequence,
+            receipt,
+        )
     }
 
     /// Decode one ordered native event at the genuine worker control-port boundary.

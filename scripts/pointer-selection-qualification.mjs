@@ -29,6 +29,9 @@ try {
   }
   const declarations = await readFile(path.join(root, "web/pkg/noon_web.d.ts"), "utf8");
   assert.match(declarations, /setPointerFillSelection\(/, "WASM package predates session selection configuration");
+  for (const method of ["setBrowserPointerViewJson", "notePointerPresentationJson", "invalidatePointerPresentationJson"]) {
+    assert.ok(declarations.includes(`${method}(`), `WASM package lacks ${method}`);
+  }
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
   report.collectorSha256 = hash(await readFile(path.join(root, "web/browser-pointer-input.js")));
   const { PNG } = await import("pngjs");
@@ -94,6 +97,35 @@ try {
         await page.evaluate(async ({ source, transportMode, view }) => {
           const { PythonAuthoringClient } = await import("./authoring-client.js");
           const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+          const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+          // Test-only transport delay after the production client has captured
+          // the receipt. No alternate collector, Rust player or renderer.
+          const delayed = { enabled: false, messages: [], pending: [], results: [], observed: [] };
+          const post = MessagePort.prototype.postMessage;
+          MessagePort.prototype.postMessage = function (...args) {
+            const message = args[0];
+            if (delayed.enabled && message?.channel === "noon.engine" && message.type === "browser_pointer_input") {
+              delayed.messages.push({ port: this, args }); return;
+            }
+            return post.apply(this, args);
+          };
+          const submit = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
+          ExecutionWorkerClient.prototype.submitBrowserPointerInput = function (...args) {
+            window.pointerReceiptClient = this;
+            const result = submit.apply(this, args);
+            result.then(value => delayed.observed.push({ kind: args[0].kind, accepted: value.pointerInputAccepted }));
+            if (delayed.enabled) {
+              delayed.pending.push(result);
+              result.then(value => delayed.results.push(value.pointerInputAccepted));
+            }
+            return result;
+          };
+          delayed.flush = async () => {
+            delayed.enabled = false;
+            for (const {port, args} of delayed.messages) post.apply(port, args);
+            await Promise.all(delayed.pending);
+          };
+          window.delayedPointer = delayed;
           const canvas = document.querySelector("#scene");
           canvas.width = view.width; canvas.height = view.height;
           canvas.style.width = `${view.width}px`; canvas.style.height = `${view.height}px`;
@@ -127,6 +159,35 @@ try {
         const circle = await image("circle");
         result.steps.push({ name: "circle", ...assertSelectionPixels(baseline, circle, SHAPES[0]) });
         assert.deepEqual(await debug(), authored, "selection must not mutate authored frame/publication");
+
+        // Collect a complete click against A, then actually present B while its
+        // messages are held. Disabling the selected overlay creates a real,
+        // empty-row presentation delta without changing authored time/geometry.
+        await page.evaluate(() => { delayedPointer.enabled = true; });
+        await click(SHAPES[1]);
+        await page.waitForFunction(() => delayedPointer.messages.some(({ args }) => args[0].input.kind === "release"));
+        const collected = await page.evaluate(() => delayedPointer.messages.map(({ args }) => args[0]));
+        assert.ok(collected.some(message => message.input.kind === "press"));
+        assert.ok(collected.every(message => message.presentation !== null), "delay must retain actual receipt A");
+        assert.ok(collected.every(message => JSON.stringify(message.presentation) === JSON.stringify(collected[0].presentation)));
+        before = await metrics();
+        await page.evaluate(() => pointerSelection.execution.setPointerFillSelection(null));
+        await presentAfter(before);
+        assertExactPixels(await image("delayed-newer-presentation"), baseline, "new frame B clears selection");
+        await page.evaluate(() => pointerSelection.execution.setPointerFillSelection(4));
+        await page.evaluate(() => delayedPointer.flush());
+        await settled({ fence: true });
+        const rejected = await page.evaluate(() => delayedPointer.results);
+        assert.equal(rejected.length, collected.length);
+        assert.ok(rejected.every(value => value === false), "collected receipt A must not be retagged to B");
+        assertExactPixels(await image("delayed-click-rejected"), baseline, "delayed packet cannot select");
+        assert.deepEqual(await debug(), authored);
+        // A new contact must work after asynchronous rejection retired the old
+        // source. Positive recovery uses its own wake, not an observation fence.
+        before = await metrics(); await click(SHAPES[0]); await presentAfter(before);
+        assertExactPixels(await image("delayed-fresh-contact"), circle, "fresh source after delayed rejection");
+        result.steps.push({ name: "collection-time-receipt", delayedOccurrences: rejected.length,
+          status: "passed", stimulus: "trusted mouse with test-only MessagePort delay" });
 
         // Repeat a click, then observe a bounded quiet interval. The harness's
         // RAF callbacks are observations, not replacement engine scheduling.
@@ -170,6 +231,39 @@ try {
         assertExactPixels(await image("cleared"), baseline, "background clear");
         assert.deepEqual(await debug(), authored);
         result.steps.push({ name: "clear", status: "passed" });
+
+        // Change only backing pixels through the existing render-owner control.
+        // The DOM mapping and physical source remain unchanged: DOM view
+        // cancellation cannot mask a missing renderer receipt invalidation.
+        const resetCenter = await point(SHAPES[0]);
+        await page.evaluate(() => { delayedPointer.observed.length = 0; });
+        await page.mouse.move(resetCenter.x, resetCenter.y); await page.mouse.down();
+        await drain();
+        const oldReceipt = await page.evaluate(() => pointerReceiptClient.pointerPresentation);
+        assert.ok(oldReceipt);
+        assert.ok(await page.evaluate(() => delayedPointer.observed.some(input => input.kind === "press" && input.accepted === true)));
+        before = await metrics();
+        await page.evaluate(view => pointerReceiptClient.resize(view.width, view.height, 2), VIEW);
+        await presentAfter(before);
+        const resizedBaseline = await image("surface-repainted-held");
+        const newReceipt = await page.evaluate(() => pointerReceiptClient.pointerPresentation);
+        assert.equal(newReceipt.view_revision, oldReceipt.view_revision, "backing-only reset must not change DOM mapping");
+        assert.ok(newReceipt.presentation > oldReceipt.presentation);
+        await page.mouse.up(); await settled({ fence: true });
+        assertExactPixels(await image("surface-release-cancelled"), resizedBaseline,
+          "repainted worker surface release must not complete the old click");
+        assert.ok(await page.evaluate(() => delayedPointer.observed.some(input => input.kind === "release" && input.accepted === true)),
+          "physical release remains admissible after guarded gesture cancellation");
+        before = await metrics(); await click(SHAPES[0]); await presentAfter(before);
+        const resetSelection = assertSelectionPixels(resizedBaseline, await image("surface-fresh-selection"), SHAPES[0]);
+        before = await metrics(); await page.mouse.click(bounds.x + 20, bounds.y + 320); await presentAfter(before);
+        assertExactPixels(await image("surface-cleared"), resizedBaseline, "clear after worker surface reset");
+        before = await metrics();
+        await page.evaluate(view => pointerReceiptClient.resize(view.width, view.height, 1), VIEW);
+        await presentAfter(before);
+        assertExactPixels(await image("surface-original-resolution"), baseline, "restore original backing surface");
+        assert.deepEqual(await debug(), authored);
+        result.steps.push({ name: "backing-only-surface-reset", status: "passed", ...resetSelection });
 
         // A press cancelled by surface exit cannot be completed by re-entry.
         const center = await point(SHAPES[0]);

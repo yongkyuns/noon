@@ -74,6 +74,9 @@ export async function attachSemanticEngine(
   let lastSentPublication = null;
   let lastPresentedPublication = null;
   let pendingPresentation = null;
+  let pendingPointerInvalidation = null;
+  let pendingPointerPresentation = null;
+  let pointerView = null;
   let continuationActive = false;
   // Read-only observation of the last completed lease. The authoring context's
   // next segment horizon is future time, not elapsed playback time. Never use it
@@ -195,6 +198,15 @@ export async function attachSemanticEngine(
       return;
     }
     lastPresentedPublication = publication;
+    if (publication.pointerReceipt && player !== null) {
+      // The render port is ordered. An invalidation received before this repaint
+      // must cancel the old gesture before the repaint can authorize any input.
+      if (pendingPointerInvalidation !== null) {
+        pendingPointerPresentation = publication.pointerReceipt;
+      } else {
+        acknowledgePointerReceipt(publication.pointerReceipt);
+      }
+    }
     if (pendingPresentation !== null &&
         samePublication(pendingPresentation.publication, publication)) {
       const { resolve } = pendingPresentation;
@@ -447,7 +459,31 @@ export async function attachSemanticEngine(
     return null;
   }
 
+  function acknowledgePointerReceipt(receipt) {
+    try {
+      if (player !== null && player.notePointerPresentationJson(JSON.stringify(receipt))) {
+        post({ type: "pointer_presented", receipt });
+      }
+    } catch (error) { fail(error); }
+  }
+
+  function applyPointerInvalidation() {
+    if (pendingPointerInvalidation === null || player === null) return false;
+    const receipt = pendingPointerInvalidation;
+    pendingPointerInvalidation = null;
+    const presented = pendingPointerPresentation;
+    pendingPointerPresentation = null;
+    // A callback/sequence failure is not recovery. Stop rather than acknowledging
+    // a replacement image while the old gesture remains live.
+    let changed;
+    try { changed = player.invalidatePointerPresentationJson(JSON.stringify(receipt)); }
+    catch (error) { terminateProgression(error); throw error; }
+    if (presented !== null) acknowledgePointerReceipt(presented);
+    return changed;
+  }
+
   function applyNativeInput(message) {
+    applyPointerInvalidation();
     if (message.type === "pointer_fill_selection") {
       if (message.maxMovement !== null &&
           (typeof message.maxMovement !== "number" ||
@@ -462,6 +498,20 @@ export async function attachSemanticEngine(
       }));
     } else if (message.type === "native_event") {
       player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+    } else if (message.type === "browser_pointer_view") {
+      const view = message.view;
+      if (!view || !Number.isSafeInteger(view.revision) || view.revision < 0 ||
+          !Number.isFinite(view.width) || !Number.isFinite(view.height) ||
+          view.width < 0 || view.height < 0 ||
+          (pointerView !== null && (view.revision < pointerView.revision ||
+           (view.revision === pointerView.revision &&
+            (view.width !== pointerView.width || view.height !== pointerView.height))))) {
+        throw new Error("invalid or retired browser pointer view");
+      }
+      // Platform metadata may arrive while Python owns the returned lease. It
+      // authorizes no input and is applied before the next leased publication.
+      player?.setBrowserPointerViewJson(JSON.stringify(view));
+      pointerView = Object.freeze({ revision: view.revision, width: view.width, height: view.height });
     } else if (message.type === "browser_pointer_input") {
       const {
         channel: _channel,
@@ -470,7 +520,7 @@ export async function attachSemanticEngine(
         requestId: _requestId,
         ...input
       } = message;
-      player.submitBrowserPointerInputJson(JSON.stringify(input));
+      return player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
     }
@@ -480,6 +530,10 @@ export async function attachSemanticEngine(
     while (!stopped && player !== null && continuationActive) {
       await awaitPresentation(publication);
       if (stopped || player === null || !continuationActive) return false;
+      if (applyPointerInvalidation()) {
+        publication = send(player.drainDeltaJson());
+        continue;
+      }
       if (controls.length === 0) return true;
       // Input admitted while presentation was pending belongs to this lease.
       // Apply its bounded ordered queue at the same authored time, then wait
@@ -489,11 +543,13 @@ export async function attachSemanticEngine(
              (controls[0].type === "native_state_input" ||
               controls[0].type === "native_event" ||
               controls[0].type === "browser_pointer_input" ||
+              controls[0].type === "browser_pointer_view" ||
               controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
         try {
-          applyNativeInput(message);
-          post({ requestId: message.requestId, ...state(message.type) });
+          const accepted = applyNativeInput(message);
+          post({ requestId: message.requestId, ...state(message.type),
+            ...(message.type === "browser_pointer_input" ? { pointerInputAccepted: accepted } : {}) });
         } catch (error) { fail(error, message.requestId); }
         appliedInput = true;
       }
@@ -651,11 +707,15 @@ export async function attachSemanticEngine(
     if (stopped || !transport || draining) return;
     draining = true;
     try {
+      if (player !== null && writable() && applyPointerInvalidation()) {
+        send(player.drainDeltaJson());
+      }
       while (controls.length && writable()) {
       const message = controls.shift();
       let rendererObservation = null;
       let debugFrame;
       let sourceCompleted;
+      let pointerInputAccepted;
       try {
         switch (message.type) {
           case "pause": {
@@ -726,8 +786,17 @@ export async function attachSemanticEngine(
           case "native_event":
           case "browser_pointer_input":
           case "pointer_fill_selection":
-            applyNativeInput(message);
-            send(player.drainDeltaJson());
+          case "browser_pointer_view": {
+            pointerInputAccepted = applyNativeInput(message);
+            if (player === null) break;
+            const publication = send(player.drainDeltaJson());
+            // Unavailable mappings cannot be presented. Acknowledging their
+            // registration authorizes no input and must not block the reveal
+            // command behind an impossible surface-presentation barrier.
+            if (message.type === "browser_pointer_view" &&
+                message.view.width > 0 && message.view.height > 0) {
+              await awaitPresentation(publication);
+            }
             // Live driving pauses the ordinary playback clock. Native input
             // must retain the active segment's Rust-derived wake, including
             // pure-wait deadlines, rather than accidentally publishing idle.
@@ -735,6 +804,7 @@ export async function attachSemanticEngine(
             else if (continuationActive) observeContinuationWake(performance.now());
             else observeExecutionWake(performance.now());
             break;
+          }
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
@@ -744,6 +814,7 @@ export async function attachSemanticEngine(
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
+          ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
         });
       } catch (error) {
         if (message.type === "sample_to_authored_time" && continuation !== null) {
@@ -779,9 +850,12 @@ export async function attachSemanticEngine(
           }
         }
       }
+    } catch (error) {
+      if (!stopped) terminateProgression(error);
     } finally {
       draining = false;
-      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()))) {
+      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()) ||
+          (pendingPointerInvalidation !== null && player !== null && writable()))) {
         void drain();
       }
     }
@@ -867,7 +941,7 @@ export async function attachSemanticEngine(
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event", "browser_pointer_input", "pointer_fill_selection",
+          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -925,6 +999,21 @@ export async function attachSemanticEngine(
         }
       } else if (message?.type === "transport_writable") void drain();
       else if (message?.type === "execution_presented") notePresentedPublication(message);
+      else if (message?.type === "pointer_presentation_invalidated") {
+        if (message.receipt?.session !== session) return;
+        // Main retires the observed receipt immediately. Rust cancellation is
+        // ordered through the existing drain/callback barrier before more input.
+        post({ type: "pointer_presentation_invalidated", receipt: message.receipt });
+        if (!Number.isSafeInteger(message.receipt.presentation) || message.receipt.presentation <= 0) {
+          fail(new Error("invalid pointer presentation invalidation")); return;
+        }
+        // Until cleanup runs, Rust still owns the first acknowledged receipt.
+        // A newer repaint may itself disappear while transport is backpressured;
+        // cancel that original contact, not a receipt Rust has never accepted.
+        pendingPointerInvalidation ??= message.receipt;
+        pendingPointerPresentation = null;
+        void drain();
+      }
       else if (message?.type === "renderer_observation") noteRendererObservation(message);
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
@@ -990,6 +1079,8 @@ export async function attachSemanticEngine(
         throw new Error("stale semantic continuation generation");
       }
       player = context.resumeExecutionPlayer();
+      if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
+      applyPointerInvalidation();
       continuationGeneration = generation;
       continuationActive = true;
       callbackFault = null;

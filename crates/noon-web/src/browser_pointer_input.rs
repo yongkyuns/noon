@@ -7,7 +7,19 @@ use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
     PointerFrameSnapshot, PointerFrameView,
 };
-use noon::{ExecutionSession, LiveContinuation, LiveProgram};
+use noon::{ExecutionSession, ExecutionSessionInputError, LiveContinuation, LiveProgram};
+
+pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
+    matches!(
+        error,
+        PointerFrameError::ViewChanged
+            | PointerFrameError::CameraMismatch
+            | PointerFrameError::Input(
+                ExecutionSessionInputError::ForeignPointerRuntime
+                    | ExecutionSessionInputError::StalePointerPublication { .. }
+            )
+    )
+}
 
 /// Only the operations needed by browser pointer normalization. A live program
 /// preserves its continuation barriers instead of exposing mutable session state.
@@ -58,19 +70,20 @@ impl From<PointerFrameError> for BrowserPointerAdmissionError {
     }
 }
 
-/// Worker processing-time normalization. Collection-time receipt transport and
-/// removal of this unassociated entry are owned by #846. Direct hosts cannot use
-/// this entry for positional input; their entry requires an actual retained frame.
+/// Position-free cancellation entry. Every production positional occurrence,
+/// including worker input, must supply an actual captured/presented frame.
 pub(crate) fn submit_browser_pointer_input(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
 ) -> Result<(), String> {
+    if wire.cancellation().is_none() {
+        return Err("positional browser input requires a presented frame".into());
+    }
     submit_pointer(target, binding, next_sequence, wire, None).map_err(|e| e.to_string())
 }
 
-#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 pub(crate) fn submit_presented_browser_pointer_input(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
@@ -85,7 +98,6 @@ pub(crate) fn submit_presented_browser_pointer_input(
 /// DOM cancellation and rejected input retire the source; a surface transition
 /// keeps it available for a subsequent physical release, but never restores the
 /// cancelled gesture. No positional receipt or synthetic release is involved.
-#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 pub(crate) fn cancel_browser_pointer_input(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
@@ -172,8 +184,8 @@ where
     }
 }
 use noon_core::{
-    Camera2DState, NativeInputModifiers, NativePointerCancellation, NativePointerId,
-    NativePointerInput, NativePointerInputKind, NativePointerPosition, Vec2,
+    NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
+    NativePointerInputKind, Vec2,
 };
 use serde::Deserialize;
 
@@ -341,19 +353,6 @@ impl BrowserPointerInput {
     }
 }
 
-fn position(
-    surface: Vec2,
-    viewport: Vec2,
-    camera: Camera2DState,
-) -> Result<NativePointerPosition, String> {
-    let scene = Vec2::new(
-        camera.center.x
-            + (surface.x / viewport.x - 0.5) * camera.height * (viewport.x / viewport.y),
-        camera.center.y + (0.5 - surface.y / viewport.y) * camera.height,
-    );
-    NativePointerPosition::new(scene, surface).map_err(|error| error.to_string())
-}
-
 fn submit_pointer(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
@@ -371,10 +370,8 @@ fn submit_pointer(
         .ok_or("native input event sequence exhausted")?;
     let needs_binding = wire.needs_binding(*binding)?;
     if let Some((surface, viewport)) = coordinates {
-        // Direct hosts validate the displayed publication before configuration;
-        // resetting held signals may itself change execution. Worker association
-        // still belongs to #846's collection-time receipt transport, not this
-        // current-execution fallback. It cannot be called by the direct entry.
+        // All hosts validate the displayed publication before configuration;
+        // resetting held signals may itself change execution.
         let camera = target
             .session()
             .camera()
@@ -384,7 +381,7 @@ fn submit_pointer(
             frame.validate_current(target.session(), view)?;
             frame.position(surface)?;
         } else {
-            position(surface, viewport, camera)?;
+            return Err("positional browser input requires a presented frame".into());
         }
         if needs_binding {
             target
@@ -417,7 +414,7 @@ fn submit_pointer(
             frame.input_token(target.session(), view)?;
             frame.position(surface)?
         } else {
-            position(surface, viewport, camera)?
+            return Err("positional browser input requires a presented frame".into());
         };
         match wire.kind {
             BrowserPointerKind::Move => NativePointerInputKind::Move(position),

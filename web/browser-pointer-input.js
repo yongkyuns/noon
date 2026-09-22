@@ -12,6 +12,7 @@ export function attachBrowserPointerInput(canvas, {
   }
   let selected = null;
   let view = null;
+  let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
   const cancel = (kind = "cancel") => {
     if (selected === null) return;
@@ -27,7 +28,8 @@ export function attachBrowserPointerInput(canvas, {
     if (!active()) return;
     cancel();
     view = null;
-    if (onView) {
+    if (onView && !unavailableViewReported) {
+      unavailableViewReported = true;
       advanceView();
       onView(viewRevision(), 0, 0);
     }
@@ -43,6 +45,10 @@ export function attachBrowserPointerInput(canvas, {
     if (view !== null && changed) {
       cancel();
       advanceView();
+    }
+    if (unavailableViewReported) {
+      advanceView();
+      unavailableViewReported = false;
     }
     view = next;
     if (changed) onView?.(viewRevision(), rect.width, rect.height);
@@ -173,7 +179,9 @@ export function attachBrowserPointerInput(canvas, {
     }
     refresh();
   }
-  return { invalidateView };
+  return { invalidateView, retireSource(source) {
+    if (selected?.source === source) selected = null;
+  } };
 }
 
 // Validate and snapshot the complete bounded packet before any delivery. There

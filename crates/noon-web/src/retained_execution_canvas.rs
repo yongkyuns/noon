@@ -57,6 +57,7 @@ mod wasm {
         renderer: GpuRenderer,
         text_gpu: RetainedTextGpuState,
         selection_overlay: Option<AnalyticOverlay>,
+        pointer_view: Option<crate::PointerPresentationView>,
         selection_overlay_gpu: OverlayGpuState,
         camera_center: Vec2,
         camera_height: f32,
@@ -181,6 +182,7 @@ mod wasm {
                 renderer,
                 text_gpu,
                 selection_overlay: None,
+                pointer_view: None,
                 selection_overlay_gpu: OverlayGpuState::default(),
                 camera_center: camera.center,
                 camera_height: camera.height,
@@ -234,6 +236,12 @@ mod wasm {
                     .map_err(js_error)?
             };
             if !stale {
+                if let Some(view) = delta.pointer_view {
+                    view.validate().map_err(js_error)?;
+                    if !view.drawable() {
+                        return Err(js_message("published pointer view is unavailable"));
+                    }
+                }
                 delta.validate().map_err(js_error)?;
                 if let Some(bundle) = delta.resource_additions.as_ref() {
                     if let Some(addition) = bundle.render_geometry_addition().map_err(js_error)? {
@@ -293,12 +301,18 @@ mod wasm {
                 }
             }
 
+            let pointer_view = delta.pointer_view;
             let (outcome, changes) = self.mirror.apply_family(delta).map_err(js_error)?;
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
                     self.selection_overlay = overlay;
+                    let view_changed = self.pointer_view != pointer_view;
+                    self.pointer_view = pointer_view;
                     let camera = self.mirror.camera();
-                    if camera.center != self.camera_center || camera.height != self.camera_height {
+                    if view_changed
+                        || camera.center != self.camera_center
+                        || camera.height != self.camera_height
+                    {
                         self.camera_center = camera.center;
                         self.camera_height = camera.height;
                         self.update_camera()?;
@@ -660,7 +674,10 @@ mod wasm {
             if !self.drawable {
                 return Ok(());
             }
-            let aspect = self.config.width as f32 / self.config.height as f32;
+            let aspect = self.pointer_view.map_or(
+                self.config.width as f32 / self.config.height as f32,
+                |view| view.width / view.height,
+            );
             let camera = Camera2D::new(
                 self.camera_center,
                 Vec2::new(self.camera_height * aspect, self.camera_height),

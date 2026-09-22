@@ -171,6 +171,10 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     /// Ordinary scene/export producers leave it absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_overlay: Option<crate::SelectionOverlayPresentation>,
+    /// Logical projection used by a worker-host pointer frame; absence carries
+    /// no pointer presentation authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_view: Option<crate::PointerPresentationView>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -192,6 +196,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -226,6 +231,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -250,6 +256,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -287,6 +294,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -294,6 +302,13 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if let Some(view) = self.pointer_view {
+            view.validate()
+                .map_err(|_| RetainedFamilyExecutionTransportError::InvalidPointerView)?;
+            if !view.drawable() {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPointerView);
+            }
+        }
         if let Some(overlay) = self.selection_overlay {
             overlay.validate()?;
         }
@@ -681,6 +696,7 @@ pub enum RetainedFamilyExecutionTransportError {
     DuplicateTransientOccurrence(u32),
     UnsupportedTransientContent(u32),
     InvalidSelectionOverlay,
+    InvalidPointerView,
     UnknownTransientAnchor(ObjectId),
     UnknownObject(ObjectId),
     StateWithoutPlan(ObjectId),
@@ -740,6 +756,7 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
                 formatter,
                 "transient presentation occurrence {occurrence} requires unsupported retained text content"
             ),
+            Self::InvalidPointerView => formatter.write_str("pointer presentation view requires finite positive dimensions and a safe revision"),
             Self::InvalidSelectionOverlay => formatter.write_str(
                 "selection overlay requires finite, nondegenerate analytic geometry and transform",
             ),
@@ -1048,6 +1065,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1072,6 +1090,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         assert_eq!(
             installed
@@ -1105,6 +1124,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
@@ -1142,6 +1162,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         let index_lookups = Cell::new(0);
         let object_lookups = Cell::new(0);
@@ -1201,6 +1222,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
 
         assert!(installed
@@ -1229,6 +1251,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1240,6 +1263,7 @@ mod tests {
                     resource_additions: None,
                     transient_presentations: Vec::new(),
                     selection_overlay: None,
+                    pointer_view: None,
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -1276,6 +1300,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         assert_eq!(
             installed

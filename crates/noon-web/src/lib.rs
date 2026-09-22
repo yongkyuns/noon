@@ -94,6 +94,8 @@ mod retained_resource_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod selection_overlay_transport;
+mod worker_pointer_presentation;
+pub use worker_pointer_presentation::PointerPresentationView;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;

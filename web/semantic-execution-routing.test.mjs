@@ -570,7 +570,7 @@ test("DOM pointer overflow is bounded, surfaced, and cancelled in order without 
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: error => errors.push(error) });
   for (let i = 0; i < 1000; i += 1) dom.emit(i === 0 ? "pointerdown" : "pointermove", { clientX: i });
   await inputTurn();
-  const accepted = engine.messages.filter(message => message.type === "browser_pointer_input");
+  const accepted = pointerMessages(engine);
   assert.equal(accepted.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
   assert.equal(errors.length, 1, "one overflow faults the collector, not 936 retry tasks");
   assert.match(errors[0].message, /native input.*full/i);
@@ -579,7 +579,7 @@ test("DOM pointer overflow is bounded, surfaced, and cancelled in order without 
   assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, MAX_IN_FLIGHT_NATIVE_INPUTS);
   for (const message of accepted) engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
   await inputTurn();
-  const cancellation = engine.messages.filter(message => message.type === "browser_pointer_input").at(-1);
+  const cancellation = pointerMessages(engine).at(-1);
   assert.equal(cancellation.kind, "cancel");
   assert.equal(cancellation.surface_x, null);
   assert.equal(cancellation.view_revision, accepted[0].view_revision);
@@ -609,7 +609,7 @@ test("DOM overflow cleanup never cancels the replacement session after old reque
   dom.emit("pointerdown");
   await inputTurn();
   assert.equal(next.messages.filter(message => message.type === "browser_pointer_input").length, 1);
-  assert.equal(next.messages.find(message => message.type === "browser_pointer_input").kind, "press");
+  assert.equal(next.messages.find(message => message.type === "browser_pointer_input").input.kind, "press");
 });
 
 test("DOM input failure remains visible without a recoverable-error callback", async t => {
@@ -627,14 +627,18 @@ test("DOM input failure remains visible without a recoverable-error callback", a
   assert.equal(warnings.length, 1);
   assert.match(warnings[0][0], /pointer collection stopped/);
   assert.match(warnings[0][1].message, /position rejected/);
-  const cancel = engine.messages.find(message => message.kind === "cancel");
+  const cancel = engine.messages.find(message => message.input?.kind === "cancel");
   assert.ok(cancel);
   engine.emitMessage(envelope("noon.engine", cancel.type, { requestId: cancel.requestId }));
   await inputTurn();
 });
 
 
-const pointerMessages = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
+// Unwrap only for the pre-existing collector assertions; worker receipt tests
+// below assert the full immutable wire envelope independently.
+const pointerMessages = engine => engine.messages
+  .filter(message => message.type === "browser_pointer_input")
+  .map(({ input, ...envelope }) => ({ ...envelope, ...input }));
 
 test("DOM selection preserves pointer identity and ignores foreign release or cancellation", async t => {
   const dom = pointerCanvas(t);
@@ -773,4 +777,28 @@ test("a pointer entering with already-held buttons never synthesizes a press or 
   dom.emit("pointerup");
   await inputTurn();
   assert.deepEqual(pointerMessages(engine), []);
+});
+
+test("asynchronous pointer rejection retires only its own collected DOM source", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown", {pointerId: 7}); await inputTurn();
+  const press = engine.messages.findLast(m => m.type === "browser_pointer_input");
+  engine.emitMessage(envelope("noon.engine", press.type, { requestId: press.requestId, pointerInputAccepted: false }));
+  await inputTurn();
+  const count=pointerMessages(engine).length;
+  dom.emit("pointerup", {pointerId: 7}); await inputTurn();
+  assert.equal(pointerMessages(engine).length, count, "late physical release is not a new edge");
+  dom.emit("pointerdown", {pointerId: 7}); await inputTurn();
+  const fresh = engine.messages.findLast(m => m.type === "browser_pointer_input");
+  assert.ok(fresh.input.source_id > press.input.source_id);
+  // Repeated feedback for the old source cannot retire this fresh contact.
+  engine.emitMessage(envelope("noon.engine", press.type, { requestId: press.requestId, pointerInputAccepted: false }));
+  engine.emitMessage(envelope("noon.engine", fresh.type, { requestId: fresh.requestId, pointerInputAccepted: true }));
+  await inputTurn();
+  dom.emit("pointerup", {pointerId: 7}); await inputTurn();
+  assert.equal(pointerMessages(engine).at(-1).kind, "release");
+  assert.equal(pointerMessages(engine).at(-1).source_id, fresh.input.source_id);
+  assert.deepEqual(errors, []);
 });

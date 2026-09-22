@@ -737,3 +737,35 @@ test("selection-only publications retry presentation, gate clear, and settle wit
   assert.equal(harness.animationFrames.length, 0);
   assert.equal(harness.timers.size, 0);
 });
+
+test("worker receipt names the logical view only after successful render and never from consumption", async () => {
+  const harness = createWorkerHarness([true, false, true]);
+  harness.creation.resolve(harness.createdRenderer); await flushTasks();
+  harness.animationFrames.shift()(10);
+  vm.runInContext('consumeDelta("with-view", {session:12,sequence:4,pointerView:{revision:3,width:800,height:400}});', harness.context);
+  assert.equal(harness.nextPort.messages.filter(m => m.pointerReceipt).length,0);
+  harness.animationFrames.shift()(20); await flushTasks();
+  const ack = harness.nextPort.messages.find(m => m.pointerReceipt);
+  assert.ok(ack, "successful render must acknowledge its pointer view");
+  assert.deepEqual(JSON.parse(JSON.stringify(ack.pointerReceipt)),
+    {session:12,sequence:4,presentation:2,view_revision:3});
+  const count=harness.createdRenderer.renderCalls;
+  harness.createdRenderer.applyDeltaJson=()=>false;
+  vm.runInContext('consumeDelta("duplicate", {session:12,sequence:4,pointerView:{revision:3,width:800,height:400}});',harness.context);
+  assert.equal(harness.createdRenderer.renderCalls,count);
+  const repeated=harness.nextPort.messages.filter(m=>m.pointerReceipt).at(-1);
+  assert.deepEqual(repeated.pointerReceipt,ack.pointerReceipt,"duplicate receipt cannot invent a new presentation");
+});
+
+test("surface invalidation retires a receipt once and a repaint gets a newer presentation identity", async () => {
+  const harness=createWorkerHarness([true,true,true]);
+  harness.creation.resolve(harness.createdRenderer);await flushTasks();
+  harness.animationFrames.shift()(10);harness.animationFrames.shift()(20);await flushTasks();
+  vm.runInContext('consumeDelta("with-view", {session:12,sequence:4,pointerView:{revision:3,width:800,height:400}});',harness.context);
+  const a=harness.nextPort.messages.findLast(m=>m.pointerReceipt).pointerReceipt;
+  vm.runInContext('invalidatePointerReceipt(); invalidatePointerReceipt(); needsPresent=true; tryPresent();',harness.context);
+  const invalid=harness.nextPort.messages.filter(m=>m.type==="pointer_presentation_invalidated");
+  assert.equal(invalid.length,1);assert.deepEqual(invalid[0].receipt,a);
+  const b=harness.nextPort.messages.findLast(m=>m.pointerReceipt).pointerReceipt;
+  assert.equal(b.sequence,a.sequence);assert.ok(b.presentation>a.presentation);
+});

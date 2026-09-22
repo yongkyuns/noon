@@ -65,6 +65,7 @@ export function createAuthoringRenderController(host) {
   // present exposes. It is an acknowledgement only, never scene or time state.
   let pendingPresentationPublication = null;
   let lastPresentedPublication = null;
+  let lastPointerReceipt = null;
   let pendingRendererObservationRequest = null;
   let pendingRendererObservationPublication = null;
   let running = false;
@@ -171,6 +172,7 @@ export function createAuthoringRenderController(host) {
     await initializeWasmModule();
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas.addEventListener("webglcontextlost", invalidatePointerReceipt);
     canvas.addEventListener("webglcontextcreationerror", recordSurfaceCreationError);
     return true;
   }
@@ -180,6 +182,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function wakeAfterWebGlContextRestored() {
+    invalidatePointerReceipt();
     // Rust records context restoration synchronously. Defer the platform wake
     // until every restore listener has run, then rebuild before presenting even
     // when the execution owner has settled to idle.
@@ -313,6 +316,7 @@ export function createAuthoringRenderController(host) {
     const nextWidth = normalizedDimension(message.width);
     const nextHeight = normalizedDimension(message.height);
     const dimensionsChanged = nextWidth !== width || nextHeight !== height;
+    if (dimensionsChanged) invalidatePointerReceipt();
     width = nextWidth;
     height = nextHeight;
     if (renderer === null) {
@@ -345,6 +349,7 @@ export function createAuthoringRenderController(host) {
     transitionFrameLoopWasRunning = false;
     detachRenderPort();
     canvas?.removeEventListener?.("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas?.removeEventListener?.("webglcontextlost", invalidatePointerReceipt);
     canvas?.removeEventListener?.("webglcontextcreationerror", recordSurfaceCreationError);
     disposeRenderer();
     canvas = null;
@@ -382,6 +387,7 @@ export function createAuthoringRenderController(host) {
     bootstrapPromise = null;
     pendingPresentationPublication = null;
     lastPresentedPublication = null;
+    lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
     pendingRendererObservationPublication = null;
   }
@@ -562,6 +568,7 @@ export function createAuthoringRenderController(host) {
     needsPresent = false;
     pendingPresentationPublication = null;
     lastPresentedPublication = null;
+    lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
     bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
@@ -656,6 +663,7 @@ export function createAuthoringRenderController(host) {
       return false;
     }
     if (!renderer.render()) {
+      invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
@@ -674,7 +682,15 @@ export function createAuthoringRenderController(host) {
       fail(error, null);
       return false;
     }
-    acknowledgePresented(publication);
+    const displayed = publication ?? lastPresentedPublication;
+    if (displayed?.pointerView) {
+      if (!Number.isSafeInteger(presentedFrames)) throw new Error("presentation counter exhausted");
+      lastPointerReceipt = Object.freeze({
+        session: displayed.session, sequence: displayed.sequence,
+        presentation: presentedFrames, view_revision: displayed.pointerView.revision,
+      });
+    } else lastPointerReceipt = null;
+    acknowledgePresented(displayed);
     return drainGpuDiagnostics();
   }
 
@@ -691,7 +707,14 @@ export function createAuthoringRenderController(host) {
       type: "execution_presented",
       session: publication.session,
       sequence: publication.sequence,
+      ...(lastPointerReceipt === null ? {} : { pointerReceipt: lastPointerReceipt }),
     });
+  }
+
+  function invalidatePointerReceipt() {
+    if (lastPointerReceipt === null) return;
+    renderPort?.postMessage({ type: "pointer_presentation_invalidated", receipt: lastPointerReceipt });
+    lastPointerReceipt = null;
   }
 
   function acknowledgeRendererObservation(observationPublication, presentedPublication) {
