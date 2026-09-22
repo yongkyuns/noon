@@ -367,6 +367,19 @@ function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
 }
 
+async function applyExampleInteraction(example, target = player) {
+  if (target === null) return;
+  const interaction = example?.interaction ?? null;
+  // Gallery selection changes retire the old execution runtime, and semantic
+  // replacement deliberately does not replay pointer configuration. Ordinary
+  // examples therefore stay at the default disabled state without sending a
+  // synthetic null input into callback-driven scenes.
+  if (interaction?.type === "pointer-fill-selection") {
+    await target.setPointerFillSelection(interaction.maxMovement);
+  }
+  status.dataset.interaction = interaction?.type ?? "none";
+}
+
 function setRuntimeStatus(message, state) {
   statusText.textContent = message;
   status.dataset.state = state;
@@ -1061,6 +1074,8 @@ async function runScene() {
       });
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
+      await applyExampleInteraction(example);
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;
       status.dataset.executionMode = player.mode;

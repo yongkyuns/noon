@@ -19,6 +19,7 @@ on:
       - "scripts/manim-raster-support.mjs"
       - "scripts/browser-pointer-input-smoke.mjs"
       - "scripts/pointer-selection-*.mjs"
+      - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -40,6 +41,7 @@ on:
       - "scripts/manim-raster-support.mjs"
       - "scripts/browser-pointer-input-smoke.mjs"
       - "scripts/pointer-selection-*.mjs"
+      - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -121,6 +123,10 @@ jobs:
           node scripts/pointer-selection-qualification.mjs
           node scripts/pointer-selection-direct-qualification.mjs
           node scripts/direct-pointer-presentation-qualification.mjs
+      - name: Qualify public gallery pointer selection
+        env:
+          NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/gallery-pointer-selection
+        run: node scripts/playground-gallery-selection-smoke.mjs
       - name: Test public playback controls
         env:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
@@ -151,6 +157,7 @@ jobs:
             browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/pointer-selection-direct
             browser-smoke-artifacts/direct-pointer-presentation
+            browser-smoke-artifacts/gallery-pointer-selection
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph
