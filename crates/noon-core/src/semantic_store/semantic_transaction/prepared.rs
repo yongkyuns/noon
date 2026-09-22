@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-use crate::{SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding};
+use crate::{
+    SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding,
+    SemanticGraphEdgeDependency, SemanticTransactionGraphEdgeDependency,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTransactionReadError {
@@ -731,10 +734,26 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .iter()
                         .copied()
                         .map(|edge| {
+                            let dependency = match edge.dependency() {
+                                SemanticTransactionGraphEdgeDependency::Line => {
+                                    SemanticGraphEdgeDependency::Line
+                                }
+                                SemanticTransactionGraphEdgeDependency::Arrow {
+                                    end_tip,
+                                    start_tip,
+                                    policy,
+                                } => SemanticGraphEdgeDependency::Arrow {
+                                    end_tip: resolve_node_ref(end_tip, &committed_nodes),
+                                    start_tip: start_tip
+                                        .map(|tip| resolve_node_ref(tip, &committed_nodes)),
+                                    policy,
+                                },
+                            };
                             SemanticGraphEdgeBinding::from_resolved(
                                 edge.id(),
                                 resolve_node_ref(edge.family(), &committed_nodes),
                                 resolve_node_ref(edge.line(), &committed_nodes),
+                                dependency,
                             )
                         })
                         .collect();
