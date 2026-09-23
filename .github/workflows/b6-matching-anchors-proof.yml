@@ -6,6 +6,7 @@ on:
       - .github/workflows/b6-matching-anchors-proof.yml
       - .github/ci/b6-matching-anchors.patch.gz.b64
       - .github/ci/b6-matching-presence-review.patch
+      - .github/ci/b6-matching-viewport.patch
 permissions:
   contents: write
 concurrency:
@@ -43,6 +44,9 @@ jobs:
           review = Path('.github/ci/b6-matching-presence-review.patch').read_bytes()
           assert hashlib.sha256(review).hexdigest() == 'cb022e7f97027ec0a67404d6592b2bfeac094cb311ae32cdf869feca9dfbe5d7'
           Path(os.environ['RUNNER_TEMP'], 'b6-anchors', 'review.patch').write_bytes(review)
+          viewport = Path('.github/ci/b6-matching-viewport.patch').read_bytes()
+          assert hashlib.sha256(viewport).hexdigest() == '1da5f22d9d5b9c107d882b26e5b353c66b10d075e6609c30f28efe9ae99eedce'
+          Path(os.environ['RUNNER_TEMP'], 'b6-anchors', 'viewport.patch').write_bytes(viewport)
           PY
           git fetch --no-tags --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
@@ -96,6 +100,7 @@ jobs:
           set -euo pipefail
           git apply "$RUNNER_TEMP/b6-anchors/candidate.patch"
           git apply "$RUNNER_TEMP/b6-anchors/review.patch"
+          git apply "$RUNNER_TEMP/b6-anchors/viewport.patch"
           cargo fmt --all
           git diff --check
       - name: Qualify matching lifetime, transient evaluation, and worker codec
@@ -149,6 +154,7 @@ jobs:
               'crates/noon/src/execution_session/family_transform.rs',
               'crates/noon/src/execution_session/family_transform_tests.rs',
               'crates/noon/src/execution_session/matching_foreground_tests.rs',
+              'crates/noon/src/execution_session/publication/prepared_value.rs',
           }
           actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           actual.update(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
