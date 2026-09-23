@@ -75,8 +75,9 @@ impl SceneInstance {
         let unsupported = self
             .reactive
             .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings())
-            || !self.compiled.family_animation_plans().is_empty();
+            .is_some_and(|reactive| reactive.has_property_bindings());
+        // Existing immutable family channels are already part of this scope's
+        // initial projection and use the ordinary scheduler during replay.
         self.replay_history = Some(ReplayHistory {
             start: self.frame.time,
             end: None,
@@ -177,8 +178,23 @@ impl SceneInstance {
     ) -> Option<CompiledReplayRevision> {
         self.replay_history
             .as_ref()
-            .filter(|h| h.end.is_none() && h.failure.is_none())
-            .and_then(|_| self.compiled.prepare_replay_revision(patch))
+            .filter(|h| h.end.is_none() && h.failure.is_none())?;
+        if let ExecutionPatch::AddFamilyAnimation(animation) = patch {
+            // A resident immutable channel is harmless before its mapped start.
+            // Retroactive introduction would change an earlier replay frame,
+            // so fail the capability closed rather than rewrite that history.
+            let timing = noon_core::TrackTiming::new(
+                animation.spec.start_time,
+                animation.spec.duration,
+                noon_core::RateFunction::Linear,
+            );
+            let (start, _) =
+                noon_core::continuous_time_map_interval(timing, &animation.time_map)?;
+            if start < self.frame.time {
+                return None;
+            }
+        }
+        self.compiled.prepare_replay_revision(patch)
     }
     pub(crate) fn retain_replay_change(&mut self, change: Option<CompiledReplayRevision>) {
         let Some(history) = self.replay_history.as_mut() else {
@@ -343,3 +359,6 @@ impl SceneInstance {
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod family_tests;

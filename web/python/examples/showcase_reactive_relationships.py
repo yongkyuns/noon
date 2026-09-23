@@ -29,14 +29,19 @@ class ReactiveRelationships(Scene):
         def follow_endpoints(line):
             line.match_points(Line(left.get_center(), right.get_center()))
 
-        # Enroll the callback targets before the first play starts execution.
+        # Callback targets must be attached before execution. Reveal their
+        # opacity rather than trying to introduce already attached objects.
+        left.set_opacity(0)
+        right.set_opacity(0)
+        connector.set_opacity(0)
         left.add_updater(follow_horizontal)
         right.add_updater(follow_vertical)
         connector.add_updater(follow_endpoints)
         self.add(left, right, connector)
         self.play(
             FadeIn(title), FadeIn(caption), *[FadeIn(label) for label in labels],
-            FadeIn(left), FadeIn(right), FadeIn(connector), run_time=0.6,
+            left.animate.set_opacity(1), right.animate.set_opacity(1),
+            connector.animate.set_opacity(1), run_time=0.6, rate_func=smooth,
         )
         self.play(*[Create(guide) for guide in guides], run_time=0.9)
         self.wait(0.5)
