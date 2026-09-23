@@ -1,0 +1,206 @@
+name: C5 worker inspection qualification
+
+on:
+  push:
+    branches: [validation/c5-worker-inspection-20260923]
+    paths:
+      - scripts/validation/c5-worker-inspection*
+      - .github/workflows/c5-worker-inspection-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-worker-inspection-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 0b9411aaec4c9dab6ccaecaa1dff8675a9709a8f
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reconstruct and retain exact clean production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-worker-proof
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-worker-proof/rust-version.txt
+          python3 scripts/validation/c5-direct-inspection.py
+          cargo fmt --all
+          python3 scripts/validation/c5-worker-inspection.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-worker-proof/paths.txt <<'EOF'
+          .github/workflows/playground-playback-controls.yml
+          crates/noon-web/src/browser_pointer_input.rs
+          crates/noon-web/src/direct_pointer_presentation.rs
+          crates/noon-web/src/direct_pointer_presentation/inspection.rs
+          crates/noon-web/src/direct_pointer_presentation/tests.rs
+          crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs
+          crates/noon-web/src/execution_canvas.rs
+          crates/noon-web/src/pointer_selection_smoke.rs
+          crates/noon-web/src/semantic_execution_player.rs
+          crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+          crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests/inspection.rs
+          crates/noon-web/src/worker_pointer_presentation.rs
+          scripts/direct-inspection-qualification.mjs
+          scripts/pointer-selection-raster-contract.mjs
+          scripts/pointer-selection-raster-contract.test.mjs
+          scripts/worker-inspection-qualification.mjs
+          web/authoring-execution-client.js
+          web/browser-inspection.test.mjs
+          web/browser-pointer-input.js
+          web/browser-pointer-input.test.mjs
+          web/browser-wheel-units.js
+          web/direct-execution-boundary.test.mjs
+          web/execution-worker-client.js
+          web/execution-worker-client.test.mjs
+          web/native-inputs.js
+          web/playground-stability-boundary.test.mjs
+          web/semantic-engine-endpoint.js
+          web/semantic-engine-endpoint.test.mjs
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-worker-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-worker-proof/paths.txt -
+          git write-tree > /tmp/c5-worker-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-worker-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-worker-proof/source.stat
+          git archive "$(cat /tmp/c5-worker-proof/tree.txt)" | gzip > /tmp/c5-worker-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-worker-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: exact clean worker inspection qualification candidate')
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-worker-proof/tree.txt)"
+          git diff --exit-code
+          test ! -e .github/workflows/c5-worker-inspection-validation.yml
+          test ! -e .github/workflows/c5-direct-inspection-validation.yml
+          cp crates/noon-web/src/semantic_execution_player.rs /tmp/c5-worker-player.good.rs
+      - name: Shared worker admission and direct regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input -- --nocapture 2>&1 | tee /tmp/c5-worker-proof/worker.log
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation -- --nocapture 2>&1 | tee /tmp/c5-worker-proof/direct.log
+          cargo test -p noon --no-default-features --lib inspection -- --nocapture 2>&1 | tee /tmp/c5-worker-proof/shared.log
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-worker-proof/wasm-minimal.log
+      - name: Uncomposed worker camera negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/semantic_execution_player.rs')
+          s = p.read_text()
+          old = 'self.session.inspection_camera().map_err(|e| e.to_string())?'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'self.session.camera().map_err(|e| e.to_string())?'))
+          PY
+          set +e
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::presentation_tests::inspection::zoom_transports_one_composed_view_without_scene_rows_or_authored_time -- --exact --nocapture > /tmp/c5-worker-proof/negative-control.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-worker-player.good.rs crates/noon-web/src/semantic_execution_player.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-worker-proof/negative-control.log
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::presentation_tests::inspection -- --nocapture 2>&1 | tee /tmp/c5-worker-proof/restored.log
+      - name: JavaScript and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-worker-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-worker-proof/fast.log
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build actual browser package
+        shell: bash
+        env:
+          NOON_WASM_PROFILE: dev
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_RENDERER_SMOKE: '1'
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee /tmp/c5-worker-proof/build.log
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install Playwright
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Real worker WebGPU and WebGL shared and transferable transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/worker-inspection-qualification.mjs 2>&1 | tee /tmp/c5-worker-proof/browser-worker.log
+      - name: Direct inspection and existing worker pointer raster regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/direct-inspection-qualification.mjs 2>&1 | tee /tmp/c5-worker-proof/browser-direct.log
+          node scripts/pointer-selection-qualification.mjs 2>&1 | tee /tmp/c5-worker-proof/browser-selection.log
+      - name: Publish tested code without workflow permission escalation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cmp /tmp/c5-worker-player.good.rs crates/noon-web/src/semantic_execution_player.rs
+          git diff --exit-code -- $(cat /tmp/c5-worker-proof/paths.txt)
+          cp Cargo.lock /tmp/c5-worker-proof/Cargo.lock
+          git read-tree "$(cat /tmp/c5-worker-proof/tree.txt)"
+          git restore --source="$BASE_SHA" --staged .github/workflows/playground-playback-controls.yml
+          tree=$(git write-tree)
+          commit=$(git commit-tree "$tree" -p "$BASE_SHA" -m 'C5: qualified browser inspection code (workflow retained separately)')
+          branch="staging/c5-worker-inspection-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$commit:refs/heads/$branch"
+          printf '%s\n' "$commit" > /tmp/c5-worker-proof/code-commit.txt
+          printf '%s\n' "$tree" > /tmp/c5-worker-proof/code-tree.txt
+      - name: Retain qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-worker-inspection-proof
+          path: |
+            /tmp/c5-worker-proof
+            browser-smoke-artifacts/worker-inspection
+            browser-smoke-artifacts/direct-inspection
+            browser-smoke-artifacts/pointer-selection
+          retention-days: 7
+          if-no-files-found: error
