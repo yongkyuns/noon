@@ -8,9 +8,9 @@
       "lesson": "Create two objects, arrange them, and animate a composition.",
       "primary_feature": "scene-authoring", "category": "Getting started",
       "path": "python/examples/showcase_first_scene.py", "features": ["Create", "next_to", "animate", "Indicate"],
-      "duration": 8.0, "thumbnail_time": 6.3,
+      "duration": 8.0, "thumbnail_time": 8.0,
       "thumbnail": "thumbnails/showcase/showcase-first-scene.png",
-      "thumbnail_alt": "The authored circle and square after their movement, during a shared emphasis pulse",
+      "thumbnail_alt": "The blue circle and pink square after their movement and completed emphasis pulse",
       "still_intervals": [[2.1, 2.6], [6.8, 8]],
       "beats": [{"time": 1.4, "label": "Create"}, {"time": 3.4, "label": "Move and rotate"}, {"time": 6.3, "label": "Resolve and emphasize"}]
     },
@@ -19,9 +19,9 @@
       "lesson": "Explore dense animation through six coordinated sequences: assembly, morphs, waves, a spiral, an object exchange, and a resolved finale.",
       "primary_feature": "dense-dynamic-composition", "category": "Dynamic scenes", "performance": true,
       "path": "python/examples/showcase_dynamic_scene.py", "features": ["600 shapes", "24 animated labels", "Transform", "simultaneous motion", "lifecycle exchange", "live renderer counters"],
-      "duration": 23.4, "thumbnail_time": 21.7,
+      "duration": 23.4, "thumbnail_time": 15.3,
       "thumbnail": "thumbnails/showcase/showcase-dynamic-scene.png",
-      "thumbnail_alt": "The actual dense field of colored shapes and animated labels resolving after six animation sequences",
+      "thumbnail_alt": "The actual 600-shape field recomposing into a colorful spiral beside 24 animated labels",
       "still_intervals": [[3.2, 3.6], [21.8, 23.4]],
       "beats": [{"time": 3.1, "label": "Assemble"}, {"time": 5.4, "label": "Morph"}, {"time": 9.6, "label": "Waves"}, {"time": 15.3, "label": "Spiral"}, {"time": 16.6, "label": "Exchange"}, {"time": 21.7, "label": "Finale"}]
     },
@@ -50,7 +50,7 @@
       "lesson": "Match vector geometry even when the target group's member order changes.",
       "primary_feature": "shape-matching", "category": "Animation",
       "path": "python/examples/showcase_shape_matching.py", "features": ["VMobject", "TransformMatchingShapes", "VGroup"],
-      "duration": 8.3, "thumbnail_time": 6.6,
+      "duration": 8.3, "thumbnail_time": 8.3,
       "thumbnail": "thumbnails/showcase/showcase-shape-matching.png", "thumbnail_alt": "Kite and triangle in their reversed target arrangement after matching by geometry",
       "still_intervals": [[1.7, 2.5], [5.6, 6.1], [7.1, 8.3]],
       "beats": [{"time": 1.4, "label": "Source order"}, {"time": 4.2, "label": "Geometry matching"}, {"time": 6.6, "label": "Target order"}]

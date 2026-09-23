@@ -12,6 +12,7 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
+import { seekPausedGallery, qualifyPlayheadEndpoints } from "./showcase-playback.mjs";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
 const { PNG } = pngjs;
@@ -58,6 +59,13 @@ try {
   browser = await chromium.launch({ headless: true, args: browserArgs(backend) });
   report.browserVersion = browser.version();
   const context = await browser.newContext({ viewport: report.viewport, deviceScaleFactor: 1 });
+  const controlsPage = await context.newPage();
+  try {
+    await controlsPage.goto(`${base}/manim-raster-host.html`);
+    report.playbackControlQualification = await qualifyPlayheadEndpoints(controlsPage);
+  } finally {
+    await controlsPage.close();
+  }
   const worker = await readFile(path.join(root, "web/python-worker.js"), "utf8");
   const cache = createPyodideResourceCache(worker);
   await cache.install(context);
@@ -162,38 +170,30 @@ async function captureSelection(context, entry, result) {
   const page = await context.newPage();
   page.setDefaultTimeout(120000);
   const errors = [];
+  let stage = "open playground";
   page.on("pageerror", (error) => errors.push(String(error)));
   try {
     await page.setViewportSize({ width: 1800, height: 1100 });
     await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
     await page.addStyleTag({ content: ".workspace{grid-template-columns:300px 1fr}.canvas-frame{width:960px;max-width:none}" });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
-    const scrubber = page.locator(".playback-scrubber");
-    await scrubber.evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input", { bubbles: true })); });
-    // The scrubber deliberately stays enabled while seeking to coalesce input.
-    // Wait on the existing command-completion state, not the input's disabled flag.
-    await page.waitForFunction((duration) => {
-      const controls = document.querySelector(".playback-controls");
-      return controls?.dataset.busy === "false" &&
-        Math.abs(Number(controls.dataset.elapsedSeconds) - duration) < 1e-6;
-    }, entry.duration);
-    const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-    if (await pause.count()) {
-      await pause.click();
-      await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
-    }
+    stage = "pause and seek to the authored endpoint";
+    const requestedTime = await seekPausedGallery(page, entry.duration);
     assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.equal(actualBackend, expectedBackend, "pointer capture must use the requested backend too");
-    assertCaptureTime(entry, { requestedTime: entry.duration, publishedTime: metrics.metrics.time }, entry.duration);
+    assertCaptureTime(entry, { requestedTime, publishedTime: metrics.metrics.time }, requestedTime);
     const canvas = page.locator("#scene");
     const before = await canvas.screenshot();
+    const baseImage = validateImage(before, `${entry.id}: unselected base`);
     const bounds = await canvas.boundingBox();
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
+    stage = "select the circle";
     await click(0.36, 0.5);
     let selected;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -202,20 +202,48 @@ async function captureSelection(context, entry, result) {
       await page.waitForTimeout(50);
     }
     assert.ok(selected, "actual pointer click did not change the displayed image");
+    stage = "clear the selection";
     await click(0.05, 0.5);
-    let cleared = false;
+    let cleared;
     for (let attempt = 0; attempt < 40; attempt++) {
-      if (samePixels(before, await canvas.screenshot())) { cleared = true; break; }
+      const bytes = await canvas.screenshot();
+      if (samePixels(before, bytes)) { cleared = bytes; break; }
       await page.waitForTimeout(50);
     }
     assert.ok(cleared, "background click did not restore the base pixels exactly");
+    stage = "restart and restore the same resolved frame";
+    await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
+    await seekPausedGallery(page, entry.duration);
+    assert.ok(samePixels(before, await canvas.screenshot()), "restart/seek did not restore the base pixels exactly");
     assert.deepEqual(errors, []);
+    for (const [label, bytes] of [["base", before], ["selected", selected], ["cleared", cleared]]) {
+      await writeFile(path.join(output, `${entry.id}-${label}.png`), bytes);
+    }
     result.interaction = {
       recipe: "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
-      requestedTime: entry.duration, publishedTime: metrics.metrics.time,
-      rendererBackend: actualBackend, exactClear: true, baseMetrics: metrics,
+      requestedTime, publishedTime: metrics.metrics.time,
+      rendererBackend: actualBackend, exactClear: true, restartRestoresBase: true, baseMetrics: metrics,
+      baseImage, selectedImage: validateImage(selected, `${entry.id}: selected`),
+      clearedImage: validateImage(cleared, `${entry.id}: cleared`),
     };
     return selected;
+  } catch (error) {
+    // Retain the failing production page before closing it, not the already
+    // closed raster host that was used for the independent scene samples.
+    result.interactionFailure = {
+      stage, pageErrors: errors, error: String(error),
+      state: await page.evaluate(() => ({
+        status: document.querySelector("#status-text")?.textContent,
+        patch: document.querySelector("#patch-status")?.value,
+        patchState: document.querySelector("#patch-status")?.dataset.state,
+        controls: { ...document.querySelector(".playback-controls")?.dataset },
+        slider: { value: document.querySelector(".playback-scrubber")?.value,
+          max: document.querySelector(".playback-scrubber")?.max,
+          step: document.querySelector(".playback-scrubber")?.step },
+      })).catch(() => null),
+    };
+    await page.screenshot({ path: path.join(output, `${entry.id}-interaction-failure.png`) }).catch(() => {});
+    throw error;
   } finally {
     await page.close();
   }
