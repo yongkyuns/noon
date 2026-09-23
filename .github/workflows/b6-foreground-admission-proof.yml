@@ -1,0 +1,142 @@
+name: B6 foreground admission proof
+on:
+  push:
+    branches: [codex/validate-b6-foreground-admission-20260923]
+    paths:
+      - .github/workflows/b6-foreground-admission-proof.yml
+      - .github/ci/b6-admission.patch.gz.b64
+permissions:
+  contents: write
+concurrency:
+  group: b6-foreground-admission-proof
+  cancel-in-progress: false
+env:
+  BASE: 2d4cebe3aed2b3c12b6c734e982f5953daef9ada
+  SOURCE_BRANCH: codex/b6-foreground-animation-admission-20260923
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Pin clean source and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/b6-admission"
+          python - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          patch = gzip.decompress(base64.b64decode(Path('.github/ci/b6-admission.patch.gz.b64').read_text()))
+          assert hashlib.sha256(patch).hexdigest() == '5b320ba4d8bccfcaa986e7c257f58e3e272d37e4871c2ca6c1a9521aa5e31f9d'
+          Path(os.environ['RUNNER_TEMP'], 'b6-admission', 'candidate.patch').write_bytes(patch)
+          PY
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git clean -ffdx
+          test "$(git rev-parse HEAD)" = "$BASE"
+          test "$(git rev-parse HEAD^{tree})" = '79cf422d7a0dda11d0ccf531564a06ac83002eb8'
+          test -z "$(git status --porcelain)"
+          printf 'base=%s\n' "$BASE" > "$RUNNER_TEMP/b6-admission/identity.txt"
+      - name: Use pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Prove original admission ordering failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --include=crates/noon/tests/foreground_admission.rs "$RUNNER_TEMP/b6-admission/candidate.patch"
+          set +e
+          cargo test -p noon --no-default-features --test foreground_admission -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/before.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 1 passed; 8 failed;' "$RUNNER_TEMP/b6-admission/before.log"
+          grep -F 'assertion `left == right` failed' "$RUNNER_TEMP/b6-admission/before.log"
+          test -z "$(git diff --name-only)"
+      - name: Apply production and core regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --exclude=crates/noon/tests/foreground_admission.rs "$RUNNER_TEMP/b6-admission/candidate.patch"
+          cargo fmt --all
+          git diff --check
+      - name: Qualify admission, completion and paired Rust example
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --test foreground_admission --test foreground_membership --test foreground_declarations --test root_order_acceptance --test root_order_transaction_regressions --test composition_admission -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/typed.log"
+          cargo test -p noon-core --lib semantic_scene_restructure -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/core.log"
+          cargo test -p noon --no-default-features --lib 2>&1 | tee "$RUNNER_TEMP/b6-admission/noon-lib.log"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/b6-admission/wasm.log"
+          cargo check -p noon-native --example foreground_membership 2>&1 | tee "$RUNNER_TEMP/b6-admission/native.log"
+      - name: Complete fast gate and Python preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast "$BASE" 2>&1 | tee "$RUNNER_TEMP/b6-admission/fast.log"
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/b6-admission/web-preflight.log"
+      - name: Publish exact qualified source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'crates/noon-core/src/semantic_store.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_operations.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs',
+              'crates/noon/src/execution_session.rs',
+              'crates/noon/src/example_scenes/foreground_membership.rs',
+              'crates/noon/tests/foreground_admission.rs',
+              'web/python/examples/foreground_membership.py',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          actual.update(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          subprocess.run(['git', 'add', '--', *sorted(expected)], check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          tree=$(git write-tree)
+          source=$(printf '%s\n' 'B6: preserve foreground order during animation admission' | git commit-tree "$tree" -p "$BASE")
+          printf 'source=%s\ntree=%s\n' "$source" "$tree" | tee -a "$RUNNER_TEMP/b6-admission/identity.txt"
+          git push origin "$source:refs/heads/$SOURCE_BRANCH"
+      - name: Retain exact source and evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/b6-admission"
+          git add -N crates/noon/tests/foreground_admission.rs 2>/dev/null || true
+          git diff HEAD --binary > "$RUNNER_TEMP/b6-admission/final.patch"
+          git ls-files -z | tar --null -T - -czf "$RUNNER_TEMP/b6-admission/source.tar.gz"
+          git status --porcelain > "$RUNNER_TEMP/b6-admission/status.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b6-foreground-admission-proof
+          path: ${{ runner.temp }}/b6-admission
+          retention-days: 14
+          if-no-files-found: error
