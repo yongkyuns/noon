@@ -1,4 +1,4 @@
-name: C5 receipt integration source capture
+name: C5 receipt master integration validation
 
 on:
   push:
@@ -6,32 +6,256 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: c5-receipts-master-validation
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: "READ_ONLY"
 
 jobs:
-  capture:
+  validate-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Archive original C5 baseline
+      - name: Reconstruct reviewed source without validation ancestry
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p integration-inputs
-          base=eb5b5c8ef3eb92e502a5ba06c73e6547377af26b
+          master=13cac98be05f15be8000b37a4f409073b01e80fb
           head=3428ccf34c1bd040038032a637d510dfeedbc911
-          git merge-base --is-ancestor "$base" "$head"
-          git archive --format=tar.gz "$base" > integration-inputs/c5base.tar.gz
-          git rev-parse "$base^{tree}" > integration-inputs/c5base.tree
-          git cat-file commit "$base" > integration-inputs/c5base.commit
-          sha256sum integration-inputs/c5base.tar.gz > integration-inputs/SHA256SUMS
-      - uses: actions/upload-artifact@v7
+          c5base=eb5b5c8ef3eb92e502a5ba06c73e6547377af26b
+          expected=26456f31bb73a6fc14b0b16a1d64d0386bcccba9
+          git config user.name "Noon integration validation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Synthetic commits are temporary source-merge helpers, never publication ancestry.
+          baseline=$(printf 'source comparison baseline\n' | git commit-tree "$c5base^{tree}")
+          ours=$(printf 'pinned master source\n' | git commit-tree "$master^{tree}" -p "$baseline")
+          theirs=$(printf 'pinned receipt source\n' | git commit-tree "$head^{tree}" -p "$baseline")
+          git worktree add --detach "$RUNNER_TEMP/c5-candidate" "$ours"
+          cd "$RUNNER_TEMP/c5-candidate"
+          if git merge --no-commit --no-ff "$theirs"; then
+            echo "Expected five reviewed source conflicts, got none" >&2
+            exit 1
+          fi
+          python3 - <<'RESOLVE'
+          from pathlib import Path
+          import re, subprocess
+          expected = {
+              '.github/workflows/playground-playback-controls.yml',
+              'crates/noon-native/src/selection_overlay.rs',
+              'crates/noon/src/example_scenes.rs',
+              'web/main.js',
+              'web/python/examples/manim_compatibility_manifest.json',
+          }
+          actual = set(subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          for path in ['web/main.js','web/python/examples/manim_compatibility_manifest.json']:
+              Path(path).write_bytes(subprocess.check_output(['git','show',f'13cac98be05f15be8000b37a4f409073b01e80fb:{path}']))
+          pattern = r'^<<<<<<< HEAD\n(.*?)^=======\n(.*?)^>>>>>>> [^\n]+\n'
+          for path in ['.github/workflows/playground-playback-controls.yml','crates/noon-native/src/selection_overlay.rs']:
+              p=Path(path)
+              content,n=re.subn(pattern,lambda m:m[2],p.read_text(),flags=re.M|re.S)
+              assert n > 0
+              p.write_text(content)
+          p=Path('crates/noon/src/example_scenes.rs')
+          content,n=re.subn(pattern,lambda m:m[1]+m[2],p.read_text(),flags=re.M|re.S)
+          assert n == 1
+          p.write_text(content)
+          RESOLVE
+          cat > "$RUNNER_TEMP/c5-quiescence.patch" <<'QUIET_PATCH'
+          --- a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+          +++ b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+          @@ -391,3 +391,66 @@
+               assert!(input(&mut p, "release", 2, Some(b), 1, 400.0).unwrap());
+               assert!(p.session.selected_pointer_target().is_some());
+           }
+          +
+          +#[test]
+          +fn registered_view_without_pointer_subscribers_preserves_quiet_presentation() {
+          +    let mut p = player();
+          +    p.set_pointer_fill_selection(None).unwrap();
+          +    assert!(!p.session.has_native_pointer_subscribers());
+          +    register(&mut p, 1);
+          +    let displayed = delta(&mut p);
+          +    let r = receipt(&displayed, 1);
+          +    assert!(acknowledge(&mut p, r));
+          +    let publication = p.session.publication_context();
+          +
+          +    for time in [0.25, 0.5, 1.0] {
+          +        p.session.advance_to(time).unwrap();
+          +        assert_eq!(p.time(), time);
+          +        assert_ne!(p.session.publication_context(), publication);
+          +        assert!(
+          +            p.drain_delta_json().unwrap().is_none(),
+          +            "a dormant pointer view must not republish a visually quiet sample"
+          +        );
+          +    }
+          +}
+          +
+          +#[test]
+          +fn enabling_selection_after_quiet_samples_requires_fresh_presentation() {
+          +    let mut p = player();
+          +    p.set_pointer_fill_selection(None).unwrap();
+          +    register(&mut p, 1);
+          +    let old = receipt(&delta(&mut p), 1);
+          +    assert!(acknowledge(&mut p, old));
+          +    p.session.advance_to(0.5).unwrap();
+          +    assert!(p.drain_delta_json().unwrap().is_none());
+          +
+          +    p.set_pointer_fill_selection(Some(4.0)).unwrap();
+          +    assert!(p.session.has_native_pointer_subscribers());
+          +    let fresh = receipt(&delta(&mut p), 2);
+          +    assert_ne!(fresh.sequence, old.sequence);
+          +    assert!(!input(&mut p, "press", 1, Some(old), 1, 400.0).unwrap());
+          +    assert!(acknowledge(&mut p, fresh));
+          +    assert!(!input(&mut p, "release", 1, Some(fresh), 1, 400.0).unwrap());
+          +    assert!(p.session.selected_pointer_target().is_none());
+          +    assert!(input(&mut p, "press", 2, Some(fresh), 1, 400.0).unwrap());
+          +    assert!(input(&mut p, "release", 2, Some(fresh), 1, 400.0).unwrap());
+          +    assert!(p.session.selected_pointer_target().is_some());
+          +}
+          +
+          +#[test]
+          +fn disabling_last_pointer_subscriber_clears_once_then_settles() {
+          +    let (mut p, r) = ready();
+          +    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+          +    assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
+          +    let selected = delta(&mut p);
+          +    assert!(selected.selection_overlay.is_some());
+          +    assert!(acknowledge(&mut p, receipt(&selected, 2)));
+          +
+          +    p.set_pointer_fill_selection(None).unwrap();
+          +    assert!(!p.session.has_native_pointer_subscribers());
+          +    let cleared = delta(&mut p);
+          +    assert!(cleared.selection_overlay.is_none());
+          +    assert!(acknowledge(&mut p, receipt(&cleared, 3)));
+          +    p.session.advance_to(0.5).unwrap();
+          +    assert!(p.drain_delta_json().unwrap().is_none());
+          +}
+          --- a/crates/noon-web/src/worker_pointer_presentation.rs
+          +++ b/crates/noon-web/src/worker_pointer_presentation.rs
+          @@ -146,13 +146,20 @@
+                   }
+           
+                   pub(crate) fn needs_delta(&self, session: &ExecutionSession) -> bool {
+          +            // A registered DOM view is not semantic input interest. Ordinary
+          +            // scenes must retain their quiet-wait presentation without emitting
+          +            // receipt-only deltas on every external authored-time sample.
+          +            // Enabling selection or adding a native route resumes freshness
+          +            // through this same session-owned query. Admission still validates
+          +            // every collected receipt; no stale frame is relabelled as current.
+                       self.refresh_pending
+          -                || self.issued.as_ref().is_some_and(|issued| {
+          -                    issued
+          -                        .frame
+          -                        .validate_current(session, issued.frame.view())
+          -                        .is_err_and(|e| browser_pointer_input::recoverable_frame_error(&e))
+          -                })
+          +                || (session.has_native_pointer_subscribers()
+          +                    && self.issued.as_ref().is_some_and(|issued| {
+          +                        issued
+          +                            .frame
+          +                            .validate_current(session, issued.frame.view())
+          +                            .is_err_and(|e| browser_pointer_input::recoverable_frame_error(&e))
+          +                    }))
+                   }
+           
+                   pub(crate) fn issue(
+          QUIET_PATCH
+          git apply --check "$RUNNER_TEMP/c5-quiescence.patch"
+          git apply "$RUNNER_TEMP/c5-quiescence.patch"
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$expected"
+          mkdir -p "$RUNNER_TEMP/c5-proof"
+          printf '%s\n' "$expected" > "$RUNNER_TEMP/c5-proof/tree.txt"
+          git diff --cached --binary > "$RUNNER_TEMP/c5-proof/integrated.patch"
+          git diff --cached --stat > "$RUNNER_TEMP/c5-proof/integrated.stat"
+          git archive --format=tar.gz "$expected" > "$RUNNER_TEMP/c5-proof/source.tar.gz"
+          sha256sum "$RUNNER_TEMP/c5-proof/source.tar.gz" > "$RUNNER_TEMP/c5-proof/source.sha256"
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
         with:
-          name: c5-pre-contract-integration-base
-          path: integration-inputs
-          if-no-files-found: error
-          retention-days: 3
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Validate exact integrated source and focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/c5-candidate"
+          rustup install
+          rustc --version --verbose | tee "$RUNNER_TEMP/c5-proof/rust-version.txt"
+          cargo fmt --all -- --check 2>&1 | tee "$RUNNER_TEMP/c5-proof/format.log"
+          cargo test -p noon-web --lib 2>&1 | tee "$RUNNER_TEMP/c5-proof/noon-web-tests.log"
+          cargo test -p noon --lib execution_session::input 2>&1 | tee "$RUNNER_TEMP/c5-proof/shared-input-tests.log"
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/c5-proof/js-tests.log"
+      - name: Prove quiet-wait regression detects the removed fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/c5-candidate"
+          file=crates/noon-web/src/worker_pointer_presentation.rs
+          cp "$file" "$RUNNER_TEMP/c5-worker-fixed.rs"
+          trap 'cp "$RUNNER_TEMP/c5-worker-fixed.rs" "$file"' EXIT
+          git show "3428ccf34c1bd040038032a637d510dfeedbc911:$file" > "$file"
+          set +e
+          cargo test -p noon-web --lib registered_view_without_pointer_subscribers_preserves_quiet_presentation 2>&1 | tee "$RUNNER_TEMP/c5-proof/mutation.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -ne 0
+          grep -F 'a dormant pointer view must not republish a visually quiet sample' "$RUNNER_TEMP/c5-proof/mutation.log"
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' "$RUNNER_TEMP/c5-proof/mutation.log"
+          cp "$RUNNER_TEMP/c5-worker-fixed.rs" "$file"
+          trap - EXIT
+          test -z "$(git diff)"
+          test "$(git write-tree)" = 26456f31bb73a6fc14b0b16a1d64d0386bcccba9
+      - name: Publish one clean master-based feature commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/c5-candidate"
+          master=13cac98be05f15be8000b37a4f409073b01e80fb
+          branch=feat/c5-receipts-master
+          expected=26456f31bb73a6fc14b0b16a1d64d0386bcccba9
+          test -z "$(git diff)"
+          test "$(git write-tree)" = "$expected"
+          test "$(git ls-remote origin refs/heads/master | cut -f1)" = "$master"
+          test -z "$(git ls-remote origin refs/heads/$branch)"
+          clean=$(printf 'C5: integrate displayed-frame receipts on master and preserve quiet waits\n' | git commit-tree "$expected" -p "$master")
+          test "$(git rev-list --parents -n1 "$clean")" = "$clean $master"
+          # Only this new feature ref is writable by this operation; no forced update.
+          header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=$header" push origin "$clean:refs/heads/$branch"
+          printf '%s\n' "$clean" > "$RUNNER_TEMP/c5-proof/commit.txt"
+          git cat-file commit "$clean" > "$RUNNER_TEMP/c5-proof/commit-object.txt"
+          printf 'Published clean feature head %s, tree %s\n' "$clean" "$expected"
+      - name: Retain exact source and executed evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-master-integration-proof
+          path: ${{ runner.temp }}/c5-proof
+          if-no-files-found: warn
+          retention-days: 7
