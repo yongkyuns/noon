@@ -8,7 +8,7 @@ on:
       - 'web/playground-playback-controls*'
       - 'web/python/examples/showcase_*.py'
       - 'web/python/examples/noon_showcase_manifest.json'
-      - 'web/python/test_showcase_contract.py'
+      - 'web/python/test_showcase*.py'
       - 'scripts/showcase-*'
       - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
@@ -38,8 +38,9 @@ jobs:
       - name: Source and editorial contracts
         run: |
           node --test web/showcase-gallery.test.mjs scripts/showcase-*.test.mjs
-          python3 -m unittest discover -s web/python -p test_showcase_contract.py
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
           node --check scripts/showcase-capture.mjs
+          node --check scripts/showcase-live-review.mjs
       - name: Build the existing browser runtime
         uses: ./.github/actions/dev-wasm-build
         with:
@@ -49,7 +50,11 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
       - name: Capture exact Noon sources, validate temporal samples, and exercise real selection
+        id: capture
         run: node scripts/showcase-capture.mjs
+      - name: Record ordinary playback and qualify replay endpoints
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-live-review.mjs
       - name: Retain the review evidence even on failure
         if: always()
         uses: actions/upload-artifact@v7
