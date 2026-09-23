@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
-    SemanticSceneOperationError, SemanticStore,
+    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef,
 };
 
 mod foreground;
@@ -214,6 +214,102 @@ fn projected_root_path_count(
 enum ExplicitPlacement {
     Head,
     Tail,
+}
+
+/// Stage an ordered admission batch, including transaction-local new objects.
+///
+/// Existing objects/families use the same family projection and foreground tail
+/// as Scene.add. Pending admissions must be newly created, unparented objects;
+/// pending family restructuring is not supported. Token identity/allocation and
+/// final publication remain owned by the caller's ordinary semantic transaction.
+/// Work visits the admitted/foreground closures, plus the current transaction only
+/// when it contains pending admissions; unrelated scene roots are not enumerated.
+pub fn stage_semantic_scene_admission(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    admitted: &[SemanticTransactionNodeRef],
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
+    use crate::{SemanticMutation, SemanticNodeCreation};
+    let root = target_node_checked(store, scene_root)?;
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
+    }
+    if admitted.is_empty() {
+        return Ok(());
+    }
+    let existing = admitted
+        .iter()
+        .filter_map(|id| id.existing())
+        .collect::<Vec<_>>();
+    validated_distinct_nodes(store, &existing)?;
+    let mut pending = HashSet::new();
+    for &id in admitted {
+        if let SemanticTransactionNodeRef::Pending(token) = id {
+            if !pending.insert(token) {
+                return Err(SemanticSceneOperationError::InvalidPendingAdmission(token));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let mut created = HashSet::new();
+        for mutation in transaction.mutations() {
+            match mutation {
+                SemanticMutation::AddNode {
+                    token,
+                    creation: SemanticNodeCreation::Object { .. },
+                } if pending.contains(token) => {
+                    created.insert(*token);
+                }
+                SemanticMutation::AddMember {
+                    member: SemanticTransactionNodeRef::Pending(token),
+                    ..
+                } if pending.contains(token) => {
+                    return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
+                }
+                _ => {}
+            }
+        }
+        if let Some(token) = pending.difference(&created).next() {
+            return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
+        }
+    }
+    let foreground = root
+        .foreground_members()
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let ordered = admitted
+        .iter()
+        .copied()
+        .filter(|id| id.existing().is_none_or(|id| !foreground.contains(&id)))
+        .chain(root.foreground_members().iter().copied().map(Into::into))
+        .collect::<Vec<SemanticTransactionNodeRef>>();
+    let existing = ordered
+        .iter()
+        .filter_map(|id| id.existing())
+        .collect::<Vec<_>>();
+    let removal = downward_target_closure(store, &existing)?;
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        &removal,
+        None,
+        &existing,
+        ExplicitPlacement::Tail,
+        transaction,
+    )?;
+    // Fill the pending-object gaps in the projected existing order. These are
+    // ordinary provisional edge/order edits, not synthetic semantic identities.
+    let mut before = None;
+    for &id in ordered.iter().rev() {
+        if matches!(id, SemanticTransactionNodeRef::Pending(_)) {
+            transaction.add_member(scene_root, id);
+            transaction.reorder_member_ref(scene_root, id, before);
+        }
+        before = Some(id);
+    }
+    Ok(())
 }
 
 /// Stage one lifecycle boundary's removals followed by foreground-aware admission.

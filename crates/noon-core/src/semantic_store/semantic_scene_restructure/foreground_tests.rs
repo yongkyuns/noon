@@ -620,3 +620,114 @@ fn lifecycle_membership_rejects_stale_admission_without_staging_removal() {
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(store.last_mutation_stats(), counters);
 }
+
+#[test]
+fn staged_admission_preserves_mixed_existing_and_pending_order() {
+    use crate::{SemanticNodeCreation, SemanticObjectState, StoredGeometry};
+    let mut store = SemanticStore::new();
+    let a = object(&mut store);
+    let b = object(&mut store);
+    let front = object(&mut store);
+    let root = family(&mut store, &[front]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[front]),
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    let fresh = || {
+        SemanticNodeCreation::object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }))
+    };
+    let p = transaction.create_node(fresh());
+    let q = transaction.create_node(fresh());
+    stage_semantic_scene_admission(
+        &store,
+        root,
+        &[a.into(), p.into(), b.into(), q.into()],
+        &mut transaction,
+    )
+    .unwrap();
+    assert_lists(&store, root, &[front], &[front]);
+    let result = transaction.apply(&mut store).unwrap();
+    assert_lists(
+        &store,
+        root,
+        &[
+            a,
+            result.resolve(p).unwrap(),
+            b,
+            result.resolve(q).unwrap(),
+            front,
+        ],
+        &[front],
+    );
+}
+
+#[test]
+fn staged_admission_rejects_foreign_family_and_duplicate_pending_tokens_before_staging() {
+    use crate::{SemanticNodeCreation, SemanticObjectState, StoredGeometry};
+    let mut store = SemanticStore::new();
+    let front = object(&mut store);
+    let root = family(&mut store, &[front]);
+    let mut foreign = SemanticMutationTransaction::new();
+    let token = foreign.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let mut transaction = SemanticMutationTransaction::new();
+    assert!(
+        stage_semantic_scene_admission(&store, root, &[token.into()], &mut transaction).is_err()
+    );
+    assert!(transaction.is_empty());
+    let group = transaction.create_node(SemanticNodeCreation::family());
+    let count = transaction.mutations().len();
+    assert!(
+        stage_semantic_scene_admission(&store, root, &[group.into()], &mut transaction).is_err()
+    );
+    assert_eq!(transaction.mutations().len(), count);
+    let leaf = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let count = transaction.mutations().len();
+    assert!(stage_semantic_scene_admission(
+        &store,
+        root,
+        &[leaf.into(), leaf.into()],
+        &mut transaction
+    )
+    .is_err());
+    assert_eq!(transaction.mutations().len(), count);
+    assert_eq!(store.node(root).unwrap().members(), [front]);
+}
+
+#[test]
+fn staged_admission_projects_nested_foreground_without_touching_unrelated_roots() {
+    let mut store = SemanticStore::new();
+    let a = object(&mut store);
+    let b = object(&mut store);
+    let introduced = object(&mut store);
+    let group = family(&mut store, &[a, b]);
+    let unrelated = (0..2_000).map(|_| object(&mut store)).collect::<Vec<_>>();
+    let root = family(&mut store, &unrelated);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::RemoveForeground(&[a]),
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_admission(&store, root, &[introduced.into()], &mut transaction).unwrap();
+    assert!(transaction.mutations().len() <= 8);
+    transaction.apply(&mut store).unwrap();
+    let expected = unrelated
+        .into_iter()
+        .chain([a, introduced, b])
+        .collect::<Vec<_>>();
+    assert_lists(&store, root, &expected, &[b]);
+    assert_eq!(store.node(group).unwrap().members(), [a, b]);
+}

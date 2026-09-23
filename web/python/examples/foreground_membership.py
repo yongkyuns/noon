@@ -14,20 +14,18 @@ class ForegroundMembership(Scene):
         assert self.foreground_mobjects == [family]
         self.wait(0.35)
 
-        self.add(green)
+        self.play(FadeIn(green), run_time=0.35, rate_func=linear)
         assert self.mobjects == [green, family]
         assert self.foreground_mobjects == [family]
-        self.wait(0.35)
 
         self.remove_foreground_mobject(red)
         assert self.mobjects == [green, family]
         assert self.foreground_mobjects == [blue]
         self.wait(0.35)
 
-        self.add(later)
+        self.play(Create(later), run_time=0.35, rate_func=linear)
         assert self.mobjects == [green, red, later, blue]
         assert self.foreground_mobjects == [blue]
-        self.wait(0.35)
 
         self.remove_foreground_mobject(blue)
         assert self.mobjects == [green, red, later, blue]
