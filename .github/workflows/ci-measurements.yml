@@ -17,28 +17,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Archive exact integration inputs
+      - name: Archive original C5 baseline
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p integration-inputs
-          master=13cac98be05f15be8000b37a4f409073b01e80fb
+          base=eb5b5c8ef3eb92e502a5ba06c73e6547377af26b
           head=3428ccf34c1bd040038032a637d510dfeedbc911
-          base=b7258363817b0c4d31f4becf8a5cc17b6605c139
-          test "$(git merge-base "$master" "$head")" = "$base"
-          for entry in "master:$master" "head:$head" "base:$base"; do
-            label=${entry%%:*}
-            sha=${entry#*:}
-            git archive --format=tar.gz "$sha" > "integration-inputs/$label.tar.gz"
-            git rev-parse "$sha^{tree}" > "integration-inputs/$label.tree"
-            git cat-file commit "$sha" > "integration-inputs/$label.commit"
-          done
-          git diff --stat "$base" "$head" > integration-inputs/stack.stat
-          git diff --stat "$base" "$master" > integration-inputs/master.stat
-          sha256sum integration-inputs/*.tar.gz > integration-inputs/SHA256SUMS
+          git merge-base --is-ancestor "$base" "$head"
+          git archive --format=tar.gz "$base" > integration-inputs/c5base.tar.gz
+          git rev-parse "$base^{tree}" > integration-inputs/c5base.tree
+          git cat-file commit "$base" > integration-inputs/c5base.commit
+          sha256sum integration-inputs/c5base.tar.gz > integration-inputs/SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
-          name: c5-pinned-integration-inputs
+          name: c5-pre-contract-integration-base
           path: integration-inputs
           if-no-files-found: error
           retention-days: 3
