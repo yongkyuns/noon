@@ -84,6 +84,31 @@ jobs:
           set -euo pipefail
           git apply --exclude=crates/noon/tests/foreground_admission.rs "$RUNNER_TEMP/b6-admission/candidate.patch"
           python "$RUNNER_TEMP/b6-admission/repair.py" --production
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/authoring_error.rs')
+          text = path.read_text()
+          old = '            E::DuplicateMembershipTarget(_) => ("invalid_input", "membership.duplicate_target"),'
+          assert text.count(old) == 1
+          text = text.replace(old, old + '\n            E::InvalidPendingAdmission(_) => ("invalid_input", "membership.invalid_pending_admission"),', 1)
+          old = '    #[test]\n    fn typed_membership_chain_preserves_categories_and_sources() {'
+          new = '''    #[test]
+              fn pending_admission_error_preserves_typed_membership_diagnostic() {
+                  let mut transaction = noon_core::SemanticMutationTransaction::new();
+                  let token = transaction.create_node(noon_core::SemanticNodeCreation::family());
+                  let error = SemanticSceneOperationError::InvalidPendingAdmission(token);
+                  let message = error.to_string();
+                  let failure = AuthoringFailure::from(error);
+                  assert_eq!(failure.category, "invalid_input");
+                  assert_eq!(failure.code, "membership.invalid_pending_admission");
+                  assert_eq!(failure.message, message);
+                  assert!(failure.cause.is_none());
+              }
+
+          ''' + old
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
           git diff --check
       - name: Qualify admission, completion and paired Rust example
@@ -93,7 +118,9 @@ jobs:
           cargo test -p noon --no-default-features --test foreground_admission --test foreground_membership --test foreground_declarations --test root_order_acceptance --test root_order_transaction_regressions --test composition_admission -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/typed.log"
           cargo test -p noon-core --lib semantic_scene_restructure -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/core.log"
           cargo test -p noon --no-default-features --lib 2>&1 | tee "$RUNNER_TEMP/b6-admission/noon-lib.log"
+          cargo test -p noon-web --lib pending_admission_error -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/diagnostic.log"
           cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/b6-admission/wasm.log"
+          cargo check -p noon-web --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/b6-admission/browser-wasm.log"
           cargo check -p noon-native --example foreground_membership 2>&1 | tee "$RUNNER_TEMP/b6-admission/native.log"
       - name: Complete fast gate and Python preflight
         shell: bash
@@ -115,6 +142,7 @@ jobs:
               'crates/noon/src/execution_session.rs',
               'crates/noon/src/example_scenes/foreground_membership.rs',
               'crates/noon/tests/foreground_admission.rs',
+              'crates/noon-web/src/authoring_error.rs',
               'web/python/examples/foreground_membership.py',
           }
           actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
