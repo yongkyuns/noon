@@ -44,7 +44,9 @@ elif sys.argv[1] == '--production':
         assert text.count(old) == 1
         start = text.index(old)
         end = text.index('\n' + indent + '}', start) + len('\n' + indent + '}')
-        lines = text[start:end].splitlines()
+        # Removed raw AddMember statements can leave a blank before the outer
+        # brace. Ignore only empty lines; still verify both exact brace levels.
+        lines = [line for line in text[start:end].splitlines() if line.strip()]
         assert lines[-2:] == [indent + '    }', indent + '}']
         new = indent + 'if ' + condition + ' && !admitted.insert(' + target + ') {\n'
         new += '\n'.join(line[4:] for line in lines[2:-2]) + '\n' + indent + '}'
