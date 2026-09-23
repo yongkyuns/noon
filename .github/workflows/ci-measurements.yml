@@ -1,6 +1,8 @@
 name: C5 receipt integration source capture
 
 on:
+  push:
+    branches: [validation/c5-receipts-master-20260923]
   workflow_dispatch:
 
 permissions:
