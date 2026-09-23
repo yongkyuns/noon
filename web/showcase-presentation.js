@@ -2,6 +2,7 @@
 export function installShowcasePresentation(documentLike, examples, showcase) {
   const topbar = documentLike.querySelector(".topbar");
   if (!topbar || documentLike.getElementById("showcase-catalog-link")) return false;
+  documentLike.documentElement.dataset.noonCatalog = showcase ? "showcase" : "reference";
   const link = documentLike.createElement("a");
   link.id = "showcase-catalog-link";
   link.className = "secondary-button";
@@ -13,6 +14,9 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
   style.textContent = `
     #showcase-catalog-link { text-decoration: none; white-space: nowrap; font-size: .7rem; }
     .example-browser-layer .example-thumb { object-fit: contain; }
+    html[data-noon-catalog="showcase"] .selected-example { display: flex !important; }
+    html[data-noon-catalog="showcase"] .selected-tag.parity,
+    html[data-noon-catalog="showcase"] .example-browser-more-filters { display: none; }
     .metrics.showcase-live-metrics { display: flex !important; gap: 1rem; flex-wrap: wrap; padding: .75rem; border-top: 1px solid var(--border); }
     .showcase-live-metrics label { display: grid; gap: .15rem; color: var(--muted); font-size: .7rem; }
     .showcase-live-metrics output { color: var(--accent); font-variant-numeric: tabular-nums; }

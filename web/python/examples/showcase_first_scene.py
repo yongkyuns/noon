@@ -24,5 +24,5 @@ class FirstScene(Scene):
             square.animate.rotate(-PI / 4).shift(0.7 * UP),
             run_time=1.6, rate_func=smooth,
         )
-        self.play(Indicate(VGroup(circle, square)), run_time=1.0)
+        self.play(Indicate(circle), Indicate(square), run_time=1.0)
         self.wait(1.2)

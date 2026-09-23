@@ -25,7 +25,7 @@ Public scene source contains no regression assertions. The original matching-sha
 5. A cross-faded exchange of one third of the geometry.
 6. A second full-field morph resolving into a color-organized grid.
 
-Headings cross-fade between sections. The end state remains legible. ROWS and COLS are explicit load controls in the source, not claims that an arbitrary count is a hardware limit; increasing them also requires reviewing spatial framing. The default layout is the reviewed target.
+Headings fade out and in between sections. The end state is designed to remain legible. ROWS and COLS are explicit load controls in the source, not claims that an arbitrary count is a hardware limit; increasing them also requires reviewing spatial framing. The default layout is the target for qualification.
 
 The existing playground's measured object/draw/upload/time counters are made visible for this scene. There is no second frame sampler, fake FPS display, hard-coded performance score, or isolated GPU timing claim. The thumbnail qualification harness drives deterministic samples; its durations are NOT real-time performance measurements. Device/backend-specific peak-load profiling remains a separate qualification step before advertising numeric performance limits.
 
@@ -44,7 +44,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Pixels in the scene | Recognizable array-backed raster | 2x2 alpha/resource-reuse fixture |
 | Select a shape | Animated introduction plus host selection | Undelivered Indicate-on-click or wheel zoom |
 
-The pointer example's Python code authors the scene only. Its manifest declares `pointer-fill-selection`, and the existing playground configures that host behavior after authoring completes. The host source is `web/main.js` / `web/authoring-execution-client.js`; no hidden callback is claimed to live in Python. The poster must be captured after an actual click, and a subsequent background click must restore the base pixels.
+The pointer example's Python code authors the scene only. Its manifest declares `pointer-fill-selection`, and the existing playground configures that host behavior after authoring completes. The host source is `web/main.js` / `web/authoring-execution-client.js`; no hidden callback is claimed to live in Python. The selected-example summary discloses this setup in the showcase UI. The poster must be captured after an actual click, and a subsequent background click must restore the base pixels.
 
 ## Preview generation and review
 

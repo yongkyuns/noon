@@ -48,16 +48,12 @@ export function normalizeShowcaseManifest(manifest) {
       thumbnail: `./${entry.thumbnail}`,
       thumbnailAlt: entry.thumbnail_alt,
       thumbnailTime: entry.thumbnail_time,
-      order: examplesOrder(ids),
+      order: ids.size,
       interaction: entry.interaction ? { type: entry.interaction.type, maxMovement: 4 } : null,
       performance: entry.performance === true,
     };
   });
   return { reference: null, examples };
-}
-
-function examplesOrder(ids) {
-  return ids.size;
 }
 
 export async function loadShowcaseGallery(fetchImpl = globalThis.fetch) {
