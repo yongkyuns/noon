@@ -14,6 +14,9 @@ use noon_runtime::{EvaluationError, FrameState, RuntimeIdentity};
 
 use super::ExecutionSession;
 
+mod presentation;
+pub use presentation::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
+
 pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
 // Keep the existing input error at the session's public re-export.

@@ -195,6 +195,20 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.scene.owned_execution_mut().query_viewport(bounds)
     }
 
+    /// Configure transient selection without exposing a mutable execution session.
+    pub fn set_pointer_fill_selection(
+        &mut self,
+        max_movement: Option<f32>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure pointer selection")?;
+        let session = self.scene.owned_execution_mut();
+        match max_movement {
+            Some(value) => session.enable_pointer_fill_selection(value),
+            None => session.disable_pointer_fill_selection(),
+        }
+        .map_err(LiveProgramError::Input)
+    }
+
     /// Configure the platform pointer projected into the existing unkeyed native signals.
     pub fn configure_native_pointer_input(
         &mut self,

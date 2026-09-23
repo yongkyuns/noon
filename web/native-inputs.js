@@ -1,13 +1,9 @@
-import { MAX_PENDING_SEMANTIC_CONTROLS } from "./semantic-engine-endpoint.js";
+import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
-function normalizedPointer(canvas, event) {
-  const rect = canvas.getBoundingClientRect();
-  if (!(rect.width > 0) || !(rect.height > 0)) return null;
-  return {
-    x: (event.clientX - rect.left) / rect.width,
-    y: (event.clientY - rect.top) / rect.height,
-  };
-}
+// Lifetimes belong to the host, not a listener attachment. Retired DOM callbacks
+// cannot reuse a source ID when the same direct renderer is attached again.
+const pointerLifetimes = new WeakMap();
+const MAX_DIRECT_POINTER_SAMPLES = 64;
 
 function wheelLinePixels(canvas) {
   const view = canvas.ownerDocument?.defaultView;
@@ -53,27 +49,97 @@ export function attachNativeInputs(
     keyboardTarget = window,
     preventWheelDefault = false,
     onError = defaultInputError,
+    onInput = () => {},
+    pointer = true,
   } = {},
 ) {
-  validateHost(host);
+  validateHost(host, pointer ? ["nativePointerInput", "nativeKey", "nativeWheel"] : ["nativeKey", "nativeWheel"]);
   if (!canvas) throw new TypeError("host and canvas are required");
   if (typeof onError !== "function") throw new TypeError("onError must be a function");
-  const invoke = (method, ...args) => invokeHost(host, method, args, onError);
-
-  const pointerMove = (event) => {
-    const point = normalizedPointer(canvas, event);
-    if (point !== null) invoke("nativePointerPosition", point.x, point.y);
+  if (typeof onInput !== "function") throw new TypeError("onInput must be a function");
+  let attached = true;
+  let failing = false;
+  let collector = null;
+  const controller = new AbortController();
+  const fail = error => {
+    if (!attached || failing) return;
+    failing = true;
+    // Listener retirement alone does not retire an already admitted press.
+    // Attempt the same ordered cancellation as explicit detach before aborting.
+    // A terminal admission failure can reject cleanup too; never replay input,
+    // retry cleanup or replace the original fault with that secondary failure.
+    try { collector?.invalidateView(); } catch { /* Preserve the original fault. */ }
+    attached = false;
+    controller.abort();
+    onError(error);
   };
-  const pointerDown = (event) => {
-    pointerMove(event);
-    invoke("nativePointerButton", event.button, true);
+  const notify = value => {
+    if (!attached || failing) return;
+    try { onInput(value); } catch (error) { fail(error); }
   };
-  const pointerUp = (event) => {
-    pointerMove(event);
-    invoke("nativePointerButton", event.button, false);
+  const invoke = (method, ...args) => {
+    if (!attached) return;
+    const result = host[method](...args);
+    if (result && typeof result.then === "function") result.then(notify, fail);
+    else notify(result);
+    return result;
   };
-  const keyDown = (event) => invoke("nativeKey", event.code, true);
-  const keyUp = (event) => invoke("nativeKey", event.code, false);
+  const directPointer = typeof host.setPointerView === "function";
+  let pointerNotificationQueued = false;
+  const invokePointer = (method, ...args) => {
+    if (!directPointer) return invoke(method, ...args);
+    if (!attached) return;
+    const result = host[method](...args);
+    if (result && typeof result.then === "function") {
+      throw new TypeError("direct pointer admission must be synchronous");
+    }
+    // Notify only after this DOM callback/coalesced packet has finished. A
+    // synchronous driver.wake() here could present newer execution between two
+    // already-collected samples and silently freshen their admission receipt.
+    // This schedules presentation only; no input, publication, or scene is queued.
+    if (!pointerNotificationQueued) {
+      pointerNotificationQueued = true;
+      queueMicrotask(() => {
+        pointerNotificationQueued = false;
+        notify(result);
+      });
+    }
+    return result;
+  };
+  const guarded = (method, ...args) => {
+    try { invoke(method, ...args); } catch (error) { fail(error); }
+  };
+  const lifetime = pointerLifetimes.get(host) ?? { source: 0, view: 0 };
+  pointerLifetimes.set(host, lifetime);
+  const increment = key => {
+    if (lifetime[key] >= Number.MAX_SAFE_INTEGER) throw new RangeError("pointer lifetime exhausted");
+    return ++lifetime[key];
+  };
+  collector = pointer ? attachBrowserPointerInput(canvas, {
+    signal: controller.signal, isCurrent: () => attached,
+    allocateSource: () => increment("source"), viewRevision: () => lifetime.view,
+    advanceView: () => increment("view"), maxSamples: MAX_DIRECT_POINTER_SAMPLES,
+    windowTarget: canvas.ownerDocument?.defaultView ?? keyboardTarget,
+    onError: fail,
+    // Only the same-context canvas can synchronously associate this platform
+    // view with its Rust presentation. Worker receipts remain a transport concern.
+    onView: directPointer
+      ? (revision, width, height) => invokePointer("setPointerView", revision, width, height)
+      : undefined,
+    send: sample => {
+      const result = invokePointer("nativePointerInput", sample.kind, sample.source_id,
+        sample.pointer_id, sample.view_revision, sample.surface_x ?? undefined,
+        sample.surface_y ?? undefined, sample.viewport_width ?? undefined,
+        sample.viewport_height ?? undefined, sample.button ?? undefined,
+        sample.shift === true, sample.control === true, sample.alt === true, sample.meta === true);
+      // The direct ABI distinguishes an admitted clean sample (false) from a
+      // recoverable presentation rejection (undefined). Do not apply this rule
+      // to the asynchronous worker ABI or treat missing replies as receipts.
+      return !directPointer || result !== undefined;
+    },
+  }) : null;
+  const keyDown = (event) => guarded("nativeKey", event.code, true);
+  const keyUp = (event) => guarded("nativeKey", event.code, false);
   let cachedLinePixels = null;
   const resolveLinePixels = () => {
     cachedLinePixels ??= wheelLinePixels(canvas);
@@ -82,20 +148,19 @@ export function attachNativeInputs(
   const wheel = (event) => {
     if (preventWheelDefault) event.preventDefault();
     const delta = wheelDeltaCssPixels(canvas, event, resolveLinePixels);
-    invoke("nativeWheel", delta.x, delta.y);
+    guarded("nativeWheel", delta.x, delta.y);
   };
 
-  canvas.addEventListener("pointermove", pointerMove);
-  canvas.addEventListener("pointerdown", pointerDown);
-  canvas.addEventListener("pointerup", pointerUp);
-  canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault });
-  keyboardTarget.addEventListener("keydown", keyDown);
-  keyboardTarget.addEventListener("keyup", keyUp);
+  canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault, signal: controller.signal });
+  keyboardTarget.addEventListener("keydown", keyDown, { signal: controller.signal });
+  keyboardTarget.addEventListener("keyup", keyUp, { signal: controller.signal });
 
   return () => {
-    canvas.removeEventListener("pointermove", pointerMove);
-    canvas.removeEventListener("pointerdown", pointerDown);
-    canvas.removeEventListener("pointerup", pointerUp);
+    if (attached) {
+      try { collector?.invalidateView(); } catch (error) { fail(error); }
+    }
+    attached = false;
+    controller.abort();
     canvas.removeEventListener("wheel", wheel);
     keyboardTarget.removeEventListener("keydown", keyDown);
     keyboardTarget.removeEventListener("keyup", keyUp);
@@ -109,7 +174,7 @@ export function bindNativeControl(
   name,
   { onError = defaultInputError } = {},
 ) {
-  validateHost(player);
+  validateHost(player, ["nativeControl", "nativeControlCommit"]);
   if (!element) throw new TypeError("host and element are required");
   if (typeof onError !== "function") throw new TypeError("onError must be a function");
   if (typeof name !== "string" || name.trim().length === 0) {
@@ -139,23 +204,20 @@ export function bindNativeControl(
 /**
  * Adapt the genuine semantic execution-worker boundary to the DOM host shape.
  *
- * Pointer conversion is supplied by the platform integration because canonical
- * pointer signals carry scene coordinates. Calls are admitted synchronously and
- * then forwarded immediately; the endpoint's bounded control queue remains the
- * only ordered queue.
+ * Pointer records use the same occurrence-local route as the ordinary authoring
+ * client. If that client already owns the canvas pointer collector, attach this
+ * host with `pointer: false`. JavaScript performs no scene-coordinate conversion
+ * or split pointer state/event writes. The execution client's existing bound remains authoritative.
  */
 export function createExecutionWorkerNativeInputHost(
   client,
-  { pointerToScene, maxInFlight = MAX_PENDING_SEMANTIC_CONTROLS } = {},
+  { maxInFlight = 64 } = {},
 ) {
   if (
     typeof client?.setNativeStateInput !== "function" ||
     typeof client?.emitNativeEvent !== "function"
   ) {
     throw new TypeError("worker native input requires a canonical execution client");
-  }
-  if (typeof pointerToScene !== "function") {
-    throw new TypeError("worker native input requires pointerToScene");
   }
   if (!Number.isSafeInteger(maxInFlight) || maxInFlight <= 0) {
     throw new TypeError("maxInFlight must be a positive safe integer");
@@ -182,26 +244,7 @@ export function createExecutionWorkerNativeInputHost(
   const state = (source, value) => () => client.setNativeStateInput(source, value);
   const event = (source) => () => client.emitNativeEvent(source);
 
-  return Object.freeze({
-    nativePointerPosition(normalizedX, normalizedY) {
-      const point = pointerToScene(normalizedX, normalizedY);
-      if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
-        throw new TypeError("pointerToScene must return finite x and y coordinates");
-      }
-      return submit([state(
-        { kind: "pointer_position" },
-        { kind: "vec2", x: point.x, y: point.y },
-      )]);
-    },
-    nativePointerButton(button, pressed) {
-      return submit([
-        state(
-          { kind: "pointer_button", button },
-          { kind: "bool", value: pressed },
-        ),
-        event({ kind: pressed ? "pointer_down" : "pointer_up", button }),
-      ]);
-    },
+  const host = {
     nativeKey(code, pressed) {
       return submit([
         state({ kind: "key", code }, { kind: "bool", value: pressed }),
@@ -220,19 +263,24 @@ export function createExecutionWorkerNativeInputHost(
     nativeControlCommit(name) {
       return submit([event({ kind: "control_commit", name })]);
     },
-  });
+  };
+  // AuthoringExecutionClient already owns its canvas pointer collector. Expose
+  // this entry only for a client that actually supports explicit pointer input;
+  // nonpointer/control adapters must not create a bypass around that ownership.
+  if (typeof client.submitBrowserPointerInput === "function") {
+    host.nativePointerInput = (kind, source_id, pointer_id, view_revision,
+      surface_x, surface_y, viewport_width, viewport_height, button, shift, control, alt, meta) =>
+      submit([() => client.submitBrowserPointerInput({
+        kind, source_id, pointer_id, view_revision, surface_x, surface_y,
+        viewport_width, viewport_height, button, shift, control, alt, meta,
+      })]);
+  }
+  return Object.freeze(host);
 }
 
-function validateHost(host) {
+function validateHost(host, methods) {
   if (!host) throw new TypeError("canonical native input host is required");
-  for (const method of [
-    "nativePointerPosition",
-    "nativePointerButton",
-    "nativeKey",
-    "nativeWheel",
-    "nativeControl",
-    "nativeControlCommit",
-  ]) {
+  for (const method of methods) {
     if (typeof host[method] !== "function") {
       throw new TypeError(`canonical native input host requires ${method}`);
     }

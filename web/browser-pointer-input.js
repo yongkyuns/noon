@@ -5,13 +5,14 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, windowTarget = window,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
   }
   let selected = null;
   let view = null;
+  let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
   const cancel = (kind = "cancel") => {
     if (selected === null) return;
@@ -27,19 +28,30 @@ export function attachBrowserPointerInput(canvas, {
     if (!active()) return;
     cancel();
     view = null;
+    if (onView && !unavailableViewReported) {
+      unavailableViewReported = true;
+      advanceView();
+      onView(viewRevision(), 0, 0);
+    }
   };
   const currentView = () => {
     const rect = canvas.getBoundingClientRect();
-    const next = [rect.left, rect.top, rect.width, rect.height, window.devicePixelRatio || 1];
+    const next = [rect.left, rect.top, rect.width, rect.height, windowTarget.devicePixelRatio || 1];
     if (!next.every(Number.isFinite) || rect.width <= 0 || rect.height <= 0 || next[4] <= 0) {
       invalidateView();
       return null;
     }
-    if (view !== null && next.some((value, i) => value !== view[i])) {
+    const changed = view === null || next.some((value, i) => value !== view[i]);
+    if (view !== null && changed) {
       cancel();
       advanceView();
     }
+    if (unavailableViewReported) {
+      advanceView();
+      unavailableViewReported = false;
+    }
     view = next;
+    if (changed) onView?.(viewRevision(), rect.width, rect.height);
     return rect;
   };
   const receive = (type, event, receiptRect = null) => {
@@ -91,15 +103,27 @@ export function attachBrowserPointerInput(canvas, {
       cancel();
       return;
     }
-    send({
-      kind, source_id: selected.source, pointer_id: selected.id,
+    const contact = selected;
+    const admitted = send({
+      kind, source_id: contact.source, pointer_id: contact.id,
       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
       viewport_width: rect.width, viewport_height: rect.height,
-      button, view_revision: selected.viewRevision,
+      button, view_revision: contact.viewRevision,
       shift: event.shiftKey === true, control: event.ctrlKey === true,
       alt: event.altKey === true, meta: event.metaKey === true,
     });
-    selected.buttons = event.buttons;
+    // A synchronous direct host can reject a stale displayed frame. Rust has
+    // already cancelled its contact. Retire this DOM source without another
+    // cancellation, edge reconstruction, queued replay, or fatal detachment.
+    if (admitted === false) {
+      if (selected === contact) selected = null;
+      return false;
+    }
+    // Delivery can synchronously retire the attachment/contact (for example,
+    // when a presentation notification fails after Rust admitted the press).
+    // Do not mutate a cancelled or replacement contact on return from send.
+    if (!active() || selected !== contact) return;
+    contact.buttons = event.buttons;
     // Touch IDs may be recycled; the next contact must receive a new source.
     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
     return true;
@@ -140,8 +164,24 @@ export function attachBrowserPointerInput(canvas, {
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
-  window.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
-  return { invalidateView };
+  windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  if (onView) {
+    // Register before the first paint; input collection never invents a receipt.
+    // Scroll/resize/element resize can invalidate mapping without pointer motion.
+    advanceView();
+    const refresh = guard(() => { if (active()) currentView(); });
+    windowTarget.addEventListener("resize", refresh, { signal });
+    windowTarget.addEventListener("scroll", refresh, { capture: true, signal });
+    if (typeof windowTarget.ResizeObserver === "function") {
+      const observer = new windowTarget.ResizeObserver(refresh);
+      observer.observe(canvas);
+      signal.addEventListener("abort", () => observer.disconnect(), { once: true });
+    }
+    refresh();
+  }
+  return { invalidateView, retireSource(source) {
+    if (selected?.source === source) selected = null;
+  } };
 }
 
 // Validate and snapshot the complete bounded packet before any delivery. There

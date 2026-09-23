@@ -165,7 +165,7 @@ export class AuthoringExecutionClient {
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
       this.#resizeCurrentCanvas();
-      this.#attachPointerInput();
+      await this.#attachPointerInput();
       return ready;
     } catch (error) {
       if (this.#preparedPlayer === player) {
@@ -205,7 +205,7 @@ export class AuthoringExecutionClient {
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
-      this.#attachPointerInput();
+      await this.#attachPointerInput();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -310,7 +310,7 @@ export class AuthoringExecutionClient {
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
         this.#resizeCurrentCanvas();
-        this.#attachPointerInput();
+        await this.#attachPointerInput();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -487,6 +487,7 @@ export class AuthoringExecutionClient {
     const player = this.#player;
     const generation = this.#lifecycleGeneration;
     let previousDelivery = Promise.resolve();
+    let initialViewDelivery = previousDelivery;
     const report = (error) => {
       if (this.#onRecoverableError !== null) this.#onRecoverableError(error);
       else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
@@ -512,7 +513,11 @@ export class AuthoringExecutionClient {
       const preceding = previousDelivery;
       const delivery = player.submitBrowserPointerInput(input);
       previousDelivery = delivery;
-      void delivery.catch(error => fault(error, preceding));
+      void delivery.then(result => {
+        if (result.pointerInputAccepted === false && this.#pointerAbortController === controller) {
+          this.#pointerCollector?.retireSource(input.source_id);
+        }
+      }).catch(error => fault(error, preceding));
     };
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,
@@ -528,7 +533,15 @@ export class AuthoringExecutionClient {
       advanceView: () => this.#advancePointerView(),
       onError: error => { void fault(error); },
       maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+      onView: (revision, width, height) => {
+        const preceding = previousDelivery;
+        const delivery = player.setBrowserPointerView(revision, width, height);
+        previousDelivery = delivery;
+        initialViewDelivery = delivery;
+        void delivery.catch(error => fault(error, preceding));
+      },
     });
+    return initialViewDelivery;
   }
 
   #assertLifecycleCurrent(generation, terminateCandidate = null) {

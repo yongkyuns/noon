@@ -20,6 +20,7 @@ on:
       - "scripts/browser-pointer-input-smoke.mjs"
       - "scripts/pointer-selection-*.mjs"
       - "scripts/playground-gallery-selection-smoke.mjs"
+      - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
   pull_request:
@@ -32,6 +33,8 @@ on:
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
       - "web/browser-pointer-input*"
+      - "web/native-inputs*"
+      - "web/direct-execution-wake-driver*"
       - "web/authoring-execution-client*"
       - "web/execution-worker-client*"
       - "crates/noon-render-wgpu/**"
@@ -39,6 +42,7 @@ on:
       - "scripts/browser-pointer-input-smoke.mjs"
       - "scripts/pointer-selection-*.mjs"
       - "scripts/playground-gallery-selection-smoke.mjs"
+      - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
@@ -89,6 +93,7 @@ jobs:
           cargo test -p noon-runtime --test finite_replay_locality
       - name: Test shared pointer selection and renderer-less WASM build
         run: |
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation::tests -- --nocapture
           cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture
           cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
           cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
@@ -100,6 +105,7 @@ jobs:
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
@@ -115,6 +121,8 @@ jobs:
           node --test scripts/pointer-selection-raster-contract.test.mjs
           node scripts/browser-pointer-input-smoke.mjs
           node scripts/pointer-selection-qualification.mjs
+          node scripts/pointer-selection-direct-qualification.mjs
+          node scripts/direct-pointer-presentation-qualification.mjs
       - name: Qualify public gallery pointer selection
         env:
           NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/gallery-pointer-selection
@@ -147,6 +155,8 @@ jobs:
           path: |
             browser-smoke-artifacts/pointer-dom
             browser-smoke-artifacts/pointer-selection
+            browser-smoke-artifacts/pointer-selection-direct
+            browser-smoke-artifacts/direct-pointer-presentation
             browser-smoke-artifacts/gallery-pointer-selection
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress
