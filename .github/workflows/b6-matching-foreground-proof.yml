@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/b6-matching-foreground-proof.yml
       - .github/ci/b6-matching-foreground-payload.py
+      - .github/ci/b6-matching-foreground-repair.py
 
 permissions:
   contents: write
@@ -15,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASE: 13cac98be05f15be8000b37a4f409073b01e80fb
+  BASE: 13cac98be05f15be800b37a4f409073b01e80fb
   SOURCE_BRANCH: codex/b6-matching-foreground-completion-20260923
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
@@ -31,14 +32,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 3
+          fetch-depth: 5
       - name: Isolate exact master source
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/b6-proof"
           cp .github/ci/b6-matching-foreground-payload.py "$RUNNER_TEMP/b6-payload.py"
-          sha256sum "$RUNNER_TEMP/b6-payload.py" | tee "$RUNNER_TEMP/b6-proof/payload.sha256"
+          cp .github/ci/b6-matching-foreground-repair.py "$RUNNER_TEMP/b6-repair.py"
+          sha256sum "$RUNNER_TEMP/b6-payload.py" "$RUNNER_TEMP/b6-repair.py" | tee "$RUNNER_TEMP/b6-proof/payload.sha256"
           git fetch --no-tags --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
           git clean -ffdx
@@ -67,6 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/b6-payload.py" --regressions
+          python "$RUNNER_TEMP/b6-repair.py" --regressions
           set +e
           cargo test -p noon --no-default-features --lib matching_foreground_completion -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-proof/before.log"
           result=${PIPESTATUS[0]}
@@ -80,6 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/b6-payload.py" --production
+          python "$RUNNER_TEMP/b6-repair.py" --production
           cargo fmt --all
           git diff --check
           git diff --stat | tee "$RUNNER_TEMP/b6-proof/scope.txt"
