@@ -1,0 +1,183 @@
+name: C5 direct inspection qualification
+
+on:
+  push:
+    branches: [validation/c5-direct-inspection-20260923]
+    paths:
+      - scripts/validation/c5-direct-inspection*
+      - .github/workflows/c5-direct-inspection-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-direct-inspection-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 0b9411aaec4c9dab6ccaecaa1dff8675a9709a8f
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify and apply exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-direct-proof
+          python3 scripts/validation/c5-direct-inspection.py
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain clean source before testing
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-direct-proof/rust-version.txt
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-direct-proof/paths.txt <<'EOF'
+          .github/workflows/playground-playback-controls.yml
+          crates/noon-web/src/browser_pointer_input.rs
+          crates/noon-web/src/direct_pointer_presentation.rs
+          crates/noon-web/src/direct_pointer_presentation/inspection.rs
+          crates/noon-web/src/direct_pointer_presentation/tests.rs
+          crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs
+          crates/noon-web/src/execution_canvas.rs
+          crates/noon-web/src/pointer_selection_smoke.rs
+          scripts/direct-inspection-qualification.mjs
+          web/browser-inspection.test.mjs
+          web/browser-pointer-input.js
+          web/browser-wheel-units.js
+          web/direct-execution-boundary.test.mjs
+          web/native-inputs.js
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-direct-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-direct-proof/paths.txt -
+          git write-tree > /tmp/c5-direct-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-direct-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-direct-proof/source.stat
+          git archive "$(cat /tmp/c5-direct-proof/tree.txt)" | gzip > /tmp/c5-direct-proof/source.tar.gz
+          cp crates/noon-web/src/browser_pointer_input.rs /tmp/c5-browser-pointer.good.rs
+      - name: Focused direct admission and shared inspection tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation -- --nocapture 2>&1 | tee /tmp/c5-direct-proof/direct.log
+          cargo test -p noon --no-default-features --lib inspection -- --nocapture 2>&1 | tee /tmp/c5-direct-proof/shared.log
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-direct-proof/wasm-minimal.log
+      - name: Composed mapping negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/browser_pointer_input.rs')
+          s = p.read_text()
+          old = '.inspection_camera()\n            .map_err(BrowserPointerAdmissionError::Frame)?'
+          assert s.count(old) == 2
+          p.write_text(s.replace(old, '.camera()\n            .map_err(|error| BrowserPointerAdmissionError::Input(error.to_string()))?'))
+          PY
+          set +e
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation::tests::inspection -- --nocapture > /tmp/c5-direct-proof/negative-control.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-browser-pointer.good.rs crates/noon-web/src/browser_pointer_input.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED.' /tmp/c5-direct-proof/negative-control.log
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation::tests::inspection -- --nocapture 2>&1 | tee /tmp/c5-direct-proof/restored.log
+      - name: JavaScript and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-direct-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-direct-proof/fast.log
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build actual browser package
+        shell: bash
+        env:
+          NOON_WASM_PROFILE: dev
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_RENDERER_SMOKE: '1'
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee /tmp/c5-direct-proof/build.log
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install Playwright
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Real direct WebGPU and WebGL inspection qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/direct-inspection-qualification.mjs 2>&1 | tee /tmp/c5-direct-proof/browser.log
+          node scripts/direct-pointer-presentation-qualification.mjs 2>&1 | tee /tmp/c5-direct-proof/pointer-regression.log
+      - name: Publish tested code without workflow permission escalation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cmp /tmp/c5-browser-pointer.good.rs crates/noon-web/src/browser_pointer_input.rs
+          git diff --exit-code -- $(cat /tmp/c5-direct-proof/paths.txt)
+          cp Cargo.lock /tmp/c5-direct-proof/Cargo.lock
+          git read-tree "$(cat /tmp/c5-direct-proof/tree.txt)"
+          # The full tested tree is retained above. GITHUB_TOKEN cannot update a
+          # workflow; keep its original blob in this intermediate code reference.
+          # The repository connection may restore the one tested workflow later.
+          git restore --source="$BASE_SHA" --staged .github/workflows/playground-playback-controls.yml
+          tree=$(git write-tree)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          commit=$(git commit-tree "$tree" -p "$BASE_SHA" -m 'C5: qualified direct inspection code (workflow retained separately)')
+          branch="staging/c5-direct-inspection-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$commit:refs/heads/$branch"
+          printf '%s\n' "$commit" > /tmp/c5-direct-proof/code-commit.txt
+          printf '%s\n' "$tree" > /tmp/c5-direct-proof/code-tree.txt
+      - name: Retain qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-direct-inspection-proof
+          path: |
+            /tmp/c5-direct-proof
+            browser-smoke-artifacts/direct-inspection
+            browser-smoke-artifacts/direct-pointer-presentation
+          retention-days: 7
+          if-no-files-found: error
