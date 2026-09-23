@@ -11,6 +11,7 @@
       "duration": 8.0, "thumbnail_time": 6.3,
       "thumbnail": "thumbnails/showcase/showcase-first-scene.png",
       "thumbnail_alt": "The authored circle and square after their movement, during a shared emphasis pulse",
+      "still_intervals": [[2.1, 2.6], [6.8, 8]],
       "beats": [{"time": 1.4, "label": "Create"}, {"time": 3.4, "label": "Move and rotate"}, {"time": 6.3, "label": "Resolve and emphasize"}]
     },
     {
@@ -21,6 +22,7 @@
       "duration": 23.4, "thumbnail_time": 21.7,
       "thumbnail": "thumbnails/showcase/showcase-dynamic-scene.png",
       "thumbnail_alt": "The actual dense field of colored shapes and animated labels resolving after six animation sequences",
+      "still_intervals": [[3.2, 3.6], [21.8, 23.4]],
       "beats": [{"time": 3.1, "label": "Assemble"}, {"time": 5.4, "label": "Morph"}, {"time": 9.6, "label": "Waves"}, {"time": 15.3, "label": "Spiral"}, {"time": 16.6, "label": "Exchange"}, {"time": 21.7, "label": "Finale"}]
     },
     {
@@ -30,6 +32,7 @@
       "path": "python/examples/showcase_timing.py", "features": ["FadeIn", "Succession", "LaggedStartMap"],
       "duration": 9.2, "thumbnail_time": 7.9,
       "thumbnail": "thumbnails/showcase/showcase-timing.png", "thumbnail_alt": "Three labeled rows comparing simultaneous, sequential, and staggered entrances",
+      "still_intervals": [[2.4, 2.8], [5.2, 5.6], [8, 9.2]],
       "beats": [{"time": 1.6, "label": "Together"}, {"time": 4.0, "label": "Sequence"}, {"time": 7.9, "label": "Staggered"}]
     },
     {
@@ -39,6 +42,7 @@
       "path": "python/examples/showcase_group_slicing.py", "features": ["VGroup", "slice", "Indicate", "animate"],
       "duration": 8.4, "thumbnail_time": 4.8,
       "thumbnail": "thumbnails/showcase/showcase-group-slicing.png", "thumbnail_alt": "Five indexed objects with the three slice-selected members raised above their neighbors",
+      "still_intervals": [[1.9, 2.4], [4.9, 5.9], [7.4, 8.4]],
       "beats": [{"time": 1.5, "label": "Indexed collection"}, {"time": 2.9, "label": "Select the slice"}, {"time": 4.8, "label": "Move only selected members"}]
     },
     {
@@ -48,6 +52,7 @@
       "path": "python/examples/showcase_shape_matching.py", "features": ["VMobject", "TransformMatchingShapes", "VGroup"],
       "duration": 8.3, "thumbnail_time": 6.6,
       "thumbnail": "thumbnails/showcase/showcase-shape-matching.png", "thumbnail_alt": "Kite and triangle in their reversed target arrangement after matching by geometry",
+      "still_intervals": [[1.7, 2.5], [5.6, 6.1], [7.1, 8.3]],
       "beats": [{"time": 1.4, "label": "Source order"}, {"time": 4.2, "label": "Geometry matching"}, {"time": 6.6, "label": "Target order"}]
     },
     {
@@ -57,6 +62,7 @@
       "path": "python/examples/showcase_ordered_reveal.py", "features": ["ShowIncreasingSubsets", "ShowSubmobjectsOneByOne", "VGroup"],
       "duration": 8.5, "thumbnail_time": 6.9,
       "thumbnail": "thumbnails/showcase/showcase-ordered-reveal.png", "thumbnail_alt": "An accumulated blue row above a single active pink member, with both behaviors labeled",
+      "still_intervals": [[0.8, 1.55], [1.55, 2.3], [2.3, 3.05], [3.05, 3.8], [3.8, 4.3], [4.3, 5.05], [5.05, 5.8], [5.8, 6.55], [6.55, 7.3], [7.3, 8.5]],
       "beats": [{"time": 2.3, "label": "Accumulating"}, {"time": 4.9, "label": "First individual"}, {"time": 6.9, "label": "Later individual"}]
     },
     {
@@ -66,6 +72,7 @@
       "path": "python/examples/showcase_text_math.py", "features": ["Text", "MarkupText", "MathTypst", "Write", "FadeIn"],
       "duration": 6.5, "thumbnail_time": 5.0,
       "thumbnail": "thumbnails/showcase/showcase-text-math.png", "thumbnail_alt": "Styled words above a typeset summation identity, captured from Noon's text rendering",
+      "still_intervals": [[2.2, 2.7], [5.1, 6.5]],
       "beats": [{"time": 0.8, "label": "Write the heading"}, {"time": 3.5, "label": "Typeset mathematics"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
@@ -75,15 +82,17 @@
       "path": "python/examples/showcase_coordinate_plotting.py", "features": ["Axes", "plot", "plot_samples", "Create"],
       "duration": 7.2, "thumbnail_time": 5.65,
       "thumbnail": "thumbnails/showcase/showcase-coordinate-plotting.png", "thumbnail_alt": "A blue function and yellow sampled observations drawn on shared axes with a color-matched legend",
+      "still_intervals": [[5.7, 7.2]],
       "beats": [{"time": 1.5, "label": "Axes"}, {"time": 3.1, "label": "Function"}, {"time": 5.65, "label": "Sampled observations"}]
     },
     {
       "id": "showcase-raster-images", "title": "Pixels in the scene",
       "lesson": "Reveal and animate a recognizable raster landscape without external assets.",
       "primary_feature": "raster-assets", "category": "Images and assets",
-      "path": "python/examples/showcase_raster_images.py", "features": ["ImageMobject", "array-backed image", "FadeIn", "animate"],
+      "path": "python/examples/showcase_raster_images.py", "features": ["ImageMobject", "array-backed image", "FadeIn", "Transform"],
       "duration": 7.6, "thumbnail_time": 6.35,
       "thumbnail": "thumbnails/showcase/showcase-raster-images.png", "thumbnail_alt": "Two actual array-backed landscape images at different sizes after a rotation and opacity sequence",
+      "still_intervals": [[2.9, 3.4], [6.4, 7.6]],
       "beats": [{"time": 1.5, "label": "Reveal image"}, {"time": 4.2, "label": "Rotate and fade"}, {"time": 6.35, "label": "Resolve"}]
     },
     {
@@ -95,6 +104,7 @@
       "thumbnail": "thumbnails/showcase/showcase-pointer-selection.png", "thumbnail_alt": "The actual blue circle selected beside the green rectangle after the animated introduction",
       "interaction": {"type": "pointer-fill-selection"},
       "host_setup": "The gallery enables pointer-fill-selection after source completion; copying the Python scene alone does not install pointer handling. See docs/gallery-curation.md.",
+      "still_intervals": [[2.1, 2.6]],
       "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to interact"}]
     }
   ]
