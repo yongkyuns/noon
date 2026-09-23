@@ -83,11 +83,13 @@ jobs:
           git diff --cached --binary "$BASE_SHA" > /tmp/c5-direct-proof/source.patch
           git diff --cached --stat "$BASE_SHA" > /tmp/c5-direct-proof/source.stat
           git archive "$(cat /tmp/c5-direct-proof/tree.txt)" | gzip > /tmp/c5-direct-proof/source.tar.gz
-          # Test the actual production tree, not the staging checkout. In
-          # particular CI topology tests must never see this temporary workflow.
+          # Test the production tree, not temporary staging workflows. Restore
+          # the staging index first so checkout also removes staging-only files
+          # which the production read-tree above made untracked.
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           candidate=$(git commit-tree "$(cat /tmp/c5-direct-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: exact clean direct inspection qualification candidate')
+          git read-tree "$GITHUB_SHA"
           git checkout --detach --force "$candidate"
           test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-direct-proof/tree.txt)"
           git diff --exit-code
