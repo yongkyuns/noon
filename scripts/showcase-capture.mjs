@@ -12,11 +12,13 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
+import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
 const { PNG } = pngjs;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
 normalizeShowcaseManifest(manifest);
+const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
 const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
 const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
@@ -39,18 +41,13 @@ function validateImage(bytes, label) {
     if ([0, 1, 2].some((channel) => Math.abs(image.data[index + channel] - background[channel]) > 20)) foreground++;
   }
   assert.ok(foreground > image.width * image.height * 0.001, `${label}: effectively empty capture`);
-  return { width: image.width, height: image.height, foregroundPixels: foreground, pngSha256: hash(bytes) };
+  return { width: image.width, height: image.height, foregroundPixels: foreground,
+    pngSha256: hash(bytes), pixelSha256: hash(image.data) };
 }
 
 function samePixels(left, right) {
   const a = PNG.sync.read(left), b = PNG.sync.read(right);
   return a.width === b.width && a.height === b.height && a.data.equals(b.data);
-}
-
-function timesFor(entry) {
-  const times = Array.from({ length: Math.ceil(entry.duration * 30) + 1 }, (_, frame) => Math.min(frame / 30, entry.duration));
-  times.push(entry.thumbnail_time, ...entry.beats.map((beat) => beat.time));
-  return [...new Set(times)].sort((a, b) => a - b);
 }
 
 await mkdir(output, { recursive: true });
@@ -82,29 +79,30 @@ try {
       await page.waitForFunction(() => window.noonHostRaster !== undefined);
       const loaded = await page.evaluate(({ source, duration }) => window.noonHostRaster.load(source, duration), { source, duration: entry.duration });
       assert.equal(loaded.rendererBackend, expectedBackend, `${entry.id}: requested backend must actually execute`);
-      const frameTimes = timesFor(entry);
-      const wanted = [...new Set([...entry.beats.map((beat) => beat.time), entry.thumbnail_time, entry.duration])].sort((a, b) => a - b);
+      const { frameTimes, wanted, completionTime, posterTime } = schedules.get(entry.id);
       let poster;
       for (const time of wanted) {
         const frameIndex = frameTimes.indexOf(time);
-        const sample = await page.evaluate(({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
+        const completionProbe = time === completionTime;
+        const sample = await page.evaluate(({ frameIndex, frameTimes, completionProbe }) =>
+          window.noonHostRaster.renderThrough(frameIndex, frameTimes, { stopAtSourceCompletion: completionProbe }),
+        { frameIndex, frameTimes, completionProbe });
         assert.equal(sample.error, null);
         assert.equal(sample.presented, true);
-        assert.equal(sample.requestedTime, time);
         assert.equal(sample.rendererBackend, expectedBackend);
-        assert.ok(Number.isFinite(sample.publishedTime) && sample.publishedTime <= time + 1e-7);
-        // Quiet holds may reuse a previously published frame. Preserve that time;
-        // never stamp a new timestamp onto the captured pixels.
+        if (completionProbe) assertCompletedCapture(entry, sample, time);
+        else assertCaptureTime(entry, sample, time);
+        // A completion probe stops at the actual endpoint. Ordinary quiet holds
+        // may reuse a frame only within their explicitly declared still interval.
         const bytes = await page.locator("#scene").screenshot();
         const filename = `${entry.id}-${String(time).replace(".", "_")}.png`;
         const image = validateImage(bytes, `${entry.id}@${time}`);
         await writeFile(path.join(output, filename), bytes);
-        result.samples.push({ ...sample, ...image, filename });
-        if (time === entry.thumbnail_time) poster = bytes;
+        result.samples.push({ ...sample, completionProbe, ...image, filename });
+        if (time === posterTime) poster = bytes;
         if (entry.performance && time >= 3.1) assert.ok(sample.objectCount >= 600, `${entry.id}: dense phases must retain the geometry workload`);
-        if (time === entry.duration) assert.ok(Math.abs(sample.authoredDuration - entry.duration) < 1e-6, `${entry.id}: authored duration differs from its storyboard`);
       }
-      assert.ok(new Set(result.samples.map((sample) => sample.pngSha256)).size >= 3, `${entry.id}: temporal samples did not change`);
+      assert.ok(new Set(result.samples.map((sample) => sample.pixelSha256)).size >= 3, `${entry.id}: temporal samples did not change`);
       await page.evaluate(() => window.noonHostRaster.close());
       assert.deepEqual(result.pageErrors, []);
       if (entry.interaction) {
@@ -126,7 +124,7 @@ try {
     }
   }
 
-  const cards = report.results.map((result) => `<article><h2>${escape(result.title)}</h2><p>${escape(result.outcome)}</p>${result.poster ? `<img src="${result.poster}" alt="${escape(result.title)}">` : "<p>Capture failed — not publishable</p>"}<details><summary>Storyboard frames</summary>${result.samples.map((sample) => `<figure><img src="${sample.filename}" alt="Actual scene frame"><figcaption>Requested ${sample.requestedTime}s · published ${sample.publishedTime}s</figcaption></figure>`).join("")}</details></article>`).join("");
+  const cards = report.results.map((result) => `<article><h2>${escape(result.title)}</h2><p>${escape(result.outcome)}</p>${result.poster ? `<img src="${result.poster}" alt="${escape(result.title)}">` : "<p>Capture failed — not publishable</p>"}<details><summary>Storyboard frames</summary>${result.samples.map((sample) => `<figure><img src="${sample.filename}" alt="Actual scene frame"><figcaption>${sample.completionProbe ? "Completion probe" : "Requested"} ${sample.requestedTime}s · published ${sample.publishedTime}s</figcaption></figure>`).join("")}</details></article>`).join("");
   await writeFile(path.join(output, "index.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><title>Noon showcase review</title><style>body{margin:32px;font:16px system-ui;background:#10141d;color:#eef2fa}main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}article{border:1px solid #3b4454;padding:12px}h2{font-size:18px}img{width:100%;height:auto}figure{margin:12px 0}figcaption{font-size:12px}</style><h1>Noon showcase — actual ${escape(expectedBackend)} captures</h1><p>Preview review, not editorial approval or performance benchmarking.</p><main>${cards}</main></html>`);
   const sheet = await context.newPage();
   await sheet.setViewportSize({ width: 1440, height: 1200 });
@@ -190,7 +188,7 @@ async function captureSelection(context, entry, result) {
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.equal(actualBackend, expectedBackend, "pointer capture must use the requested backend too");
-    assert.ok(metrics.metrics.time >= entry.duration - 0.6, "selection poster must follow the completed introduction");
+    assertCaptureTime(entry, { requestedTime: entry.duration, publishedTime: metrics.metrics.time }, entry.duration);
     const canvas = page.locator("#scene");
     const before = await canvas.screenshot();
     const bounds = await canvas.boundingBox();

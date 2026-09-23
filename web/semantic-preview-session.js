@@ -121,11 +121,14 @@ export class SemanticPreviewSession {
     });
   }
 
-  async sample(timeSeconds) {
+  async sample(timeSeconds, { stopAtSourceCompletion = false } = {}) {
     this.#assertReady();
     if (this.#busy) throw new Error("preview operation already in progress");
     if (typeof timeSeconds !== "number" || !Number.isFinite(timeSeconds) || timeSeconds < 0) {
       throw new RangeError("preview time must be a non-negative finite number");
+    }
+    if (typeof stopAtSourceCompletion !== "boolean") {
+      throw new TypeError("stopAtSourceCompletion must be a boolean");
     }
     if (timeSeconds < this.#lastRequestedTime) {
       throw new RangeError("preview playback cannot move backwards");
@@ -134,7 +137,7 @@ export class SemanticPreviewSession {
       throw new RangeError("preview sampling limit exceeded");
     }
     return this.#perform(async () => {
-      await this.#capture(timeSeconds);
+      await this.#capture(timeSeconds, stopAtSourceCompletion);
       return this.snapshot;
     });
   }
@@ -152,8 +155,12 @@ export class SemanticPreviewSession {
     return this.snapshot;
   }
 
-  async #capture(time) {
-    const sample = await this.#execution.sampleToAuthoredTime(time);
+  async #capture(time, stopAtSourceCompletion = false) {
+    // Forward the existing endpoint option; normal samples remain strict.
+    // A completion probe retains the actual endpoint, never its requested bound.
+    const sample = stopAtSourceCompletion
+      ? await this.#execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
+      : await this.#execution.sampleToAuthoredTime(time);
     this.#assertActive();
     const report = await this.#execution.metrics();
     this.#assertActive();
@@ -165,6 +172,7 @@ export class SemanticPreviewSession {
     this.#frame = {
       requestedTime: time,
       publishedTime: sample.time,
+      ...(stopAtSourceCompletion ? { sourceCompleted: sample.sourceCompleted === true } : {}),
       rendererBackend: metrics.backend,
       objectCount: metrics.objectCount ?? null,
       drawCalls: metrics.drawCalls ?? null,
