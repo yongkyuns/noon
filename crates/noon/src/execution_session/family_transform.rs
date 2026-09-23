@@ -3,7 +3,7 @@ use noon_compile::{
     PreparedMatchingFamilyTransformPayload, PreparedMatchingShapeSourceMember,
     PreparedMatchingShapeTargetLeftoverFade, PreparedTransientPainterPlacement,
 };
-use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
+use noon_core::{SemanticNodeId, SemanticStore};
 use noon_runtime::{
     DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan, DerivedDisplayAnimationTrack,
     DerivedDisplayObjectState, SceneInstance, TransientPresentationPainterPlacement,
@@ -328,21 +328,20 @@ impl std::fmt::Display for MatchingFamilyCompletionSwapError {
 
 impl std::error::Error for MatchingFamilyCompletionSwapError {}
 
-/// Stage the exact-end source-family -> target-family replacement without publishing it.
+/// Validate the exact-end source-family -> target-family replacement topology.
 ///
 /// The source must be one direct member of `execution_root` with no shared
 /// descendants; the authored target must be detached. Shared descendants require
 /// membership restructuring before their active presentation can move to the tail,
 /// so this bounded path rejects them before staging any edit. Both families retain
 /// their internal authored topology and no execution identity is manufactured. The
-/// target is appended after the surviving root members, matching Manim's cleanup-time
-/// remove-source / add-target scene ordering.
-pub(super) fn stage_matching_family_completion_swap(
+/// membership and foreground-aware ordering are staged separately with all other
+/// removals at the same completion boundary.
+pub(super) fn validate_matching_family_completion_swap(
     store: &SemanticStore,
     execution_root: SemanticNodeId,
     source_root: SemanticNodeId,
     target_root: SemanticNodeId,
-    semantic: &mut SemanticMutationTransaction,
 ) -> Result<(), MatchingFamilyCompletionSwapError> {
     store
         .node(execution_root)
@@ -417,16 +416,33 @@ pub(super) fn stage_matching_family_completion_swap(
         }
     }
 
-    semantic.remove_member(execution_root, source_root);
-    semantic.add_member(execution_root, target_root);
     Ok(())
 }
 
 #[cfg(test)]
 mod matching_completion_tests {
-    use noon_core::{SemanticObjectState, StoredGeometry};
+    use noon_core::{SemanticMutationTransaction, SemanticObjectState, StoredGeometry};
 
     use super::*;
+
+    fn stage_matching_family_completion_swap(
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+        transaction: &mut SemanticMutationTransaction,
+    ) -> Result<(), MatchingFamilyCompletionSwapError> {
+        validate_matching_family_completion_swap(store, root, source, target)?;
+        noon_core::stage_semantic_scene_lifecycle_membership(
+            store,
+            root,
+            &[source],
+            &[target],
+            transaction,
+        )
+        .unwrap();
+        Ok(())
+    }
 
     fn object(store: &mut SemanticStore) -> SemanticNodeId {
         store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {

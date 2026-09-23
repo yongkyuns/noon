@@ -83,6 +83,37 @@ fn resolve_committed_node(
     }
 }
 
+/// Request-local order and duplicate detection; the core planner owns membership.
+#[derive(Default)]
+struct AnimationAdmissions {
+    ordered: Vec<SemanticTransactionNodeRef>,
+    seen: HashSet<SemanticTransactionNodeRef>,
+}
+
+impl AnimationAdmissions {
+    fn insert(&mut self, target: SemanticTransactionNodeRef) -> bool {
+        if !self.seen.insert(target) {
+            return false;
+        }
+        self.ordered.push(target);
+        true
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+}
+
+fn stage_animation_admissions(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    targets: &[SemanticTransactionNodeRef],
+    declaration: &mut SemanticMutationTransaction,
+) -> Result<(), ExecutionSessionAnimationError> {
+    noon_core::stage_semantic_scene_admission(store, root, targets, declaration)
+        .map_err(|error| ExecutionSessionAnimationError::InvalidComposition(error.to_string()))
+}
+
 #[derive(Clone)]
 enum PreparedAnimationLifecycle {
     Introduce(SemanticNodeId),
@@ -1601,7 +1632,7 @@ impl ExecutionSession {
             });
         }
         let mut declaration = SemanticMutationTransaction::new();
-        let mut admitted = HashSet::new();
+        let mut admitted = AnimationAdmissions::default();
         let mut removals = Vec::new();
         let animation = self.stage_composition_request(
             store,
@@ -1611,6 +1642,7 @@ impl ExecutionSession {
             &mut admitted,
             &mut removals,
         )?;
+        stage_animation_admissions(store, root, &admitted.ordered, &mut declaration)?;
         self.declare_and_activate_prepared_animation(
             store,
             declaration,
@@ -1682,12 +1714,11 @@ impl ExecutionSession {
         root: SemanticNodeId,
         request: &SemanticCompositionRequest,
         declaration: &mut SemanticMutationTransaction,
-        admitted: &mut HashSet<SemanticTransactionNodeRef>,
+        admitted: &mut AnimationAdmissions,
         removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let admit = |target: SemanticNodeId,
-                     declaration: &mut SemanticMutationTransaction,
-                     admitted: &mut HashSet<SemanticTransactionNodeRef>|
+                     admitted: &mut AnimationAdmissions|
          -> Result<(), ExecutionSessionAnimationError> {
             let state = store
                 .semantic_object_state_checked(target)
@@ -1721,7 +1752,7 @@ impl ExecutionSession {
                     error: ExecutionSessionCreateError::DuplicateTarget,
                 });
             }
-            declaration.add_member(root, target);
+
             Ok(())
         };
         match request {
@@ -1729,7 +1760,7 @@ impl ExecutionSession {
                 let (target, animation) = focus
                     .stage(declaration, *options)
                     .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
-                declaration.add_member(root, target);
+
                 admitted.insert(target.into());
                 removals.push((root, target.into()));
                 Ok(animation)
@@ -1741,7 +1772,7 @@ impl ExecutionSession {
                 complete_priority,
                 options,
             } => {
-                admit(*source, declaration, admitted)?;
+                admit(*source, admitted)?;
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -1765,14 +1796,12 @@ impl ExecutionSession {
                     ));
                 }
                 // Reuse the exact-completion topology contract as activation preflight.
-                // The scratch transaction is discarded; this validates only.
-                let mut completion = SemanticMutationTransaction::new();
-                family_transform::stage_matching_family_completion_swap(
+                // This validates only; completion stages one combined membership edit.
+                family_transform::validate_matching_family_completion_swap(
                     store,
                     root,
                     *source,
                     *target_state,
-                    &mut completion,
                 )
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
@@ -1968,7 +1997,7 @@ impl ExecutionSession {
             } => {
                 let introducer = options.introducer.unwrap_or(true);
                 if introducer {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 } else {
                     self.require_present_draw_border_target(store, root, *target)?;
                 }
@@ -2070,7 +2099,7 @@ impl ExecutionSession {
                                 "subset display supports direct object members, not nested families".into(),
                             )
                         })?;
-                        admit(leaf, declaration, admitted)?;
+                        admit(leaf, admitted)?;
                         Ok(declaration.create_subset_display_member_animation(
                             leaf,
                             index,
@@ -2121,7 +2150,6 @@ impl ExecutionSession {
                                 error: ExecutionSessionCreateError::DuplicateTarget,
                             });
                         }
-                        declaration.add_member(root, *target);
                     }
                     SemanticFadeDirection::Out => removals.push((root, (*target).into())),
                 }
@@ -2153,7 +2181,7 @@ impl ExecutionSession {
                 let introducer = options.introducer.unwrap_or(!reverse_member_order);
                 let remover = options.remover.unwrap_or(*reverse_member_order);
                 if introducer {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 } else {
                     self.require_present_draw_border_target(store, root, *target)?;
                 }
@@ -2201,14 +2229,11 @@ impl ExecutionSession {
                     self.require_create_target(store, *target)?;
                     true
                 };
-                if admitted_target {
-                    if !admitted.insert((*target).into()) {
-                        return Err(ExecutionSessionAnimationError::CreateTarget {
-                            target: *target,
-                            error: ExecutionSessionCreateError::DuplicateTarget,
-                        });
-                    }
-                    declaration.add_member(root, *target);
+                if admitted_target && !admitted.insert((*target).into()) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget {
+                        target: *target,
+                        error: ExecutionSessionCreateError::DuplicateTarget,
+                    });
                 }
                 if options.remover.unwrap_or(*reverse) {
                     removals.push((root, (*target).into()));
@@ -2238,7 +2263,7 @@ impl ExecutionSession {
                     crate::animation_authoring::normalized_passing_flash_options(*options)
                         .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                 if self.require_uncreate_target(store, root, *target)? {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 }
                 // The final reveal phase owns this leaf's membership removal.
                 Ok(declaration.create_passing_flash_animation(*target, *time_width, options))
@@ -2249,7 +2274,7 @@ impl ExecutionSession {
                 hold_origin,
                 options,
             } => {
-                admit(*target, declaration, admitted)?;
+                admit(*target, admitted)?;
                 Ok(declaration.create_rotate_animation_with_origin_constraint(
                     *target,
                     *angle,
@@ -2276,7 +2301,7 @@ impl ExecutionSession {
                 Ok(declaration.create_wait_animation(*duration))
             }
             SemanticCompositionRequest::Add { target, options } => {
-                admit(*target, declaration, admitted)?;
+                admit(*target, admitted)?;
                 Ok(declaration.create_add_animation(*target, *options))
             }
             SemanticCompositionRequest::Fade {
@@ -2287,19 +2312,19 @@ impl ExecutionSession {
             } => {
                 self.require_fade_target(store, root, *target, *direction)?;
                 if *direction == SemanticFadeDirection::In {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 }
                 Ok(declaration
                     .create_fade_animation_with_endpoint(*target, *direction, *endpoint, *options))
             }
             SemanticCompositionRequest::Create { target, options } => {
                 self.require_create_target(store, *target)?;
-                admit(*target, declaration, admitted)?;
+                admit(*target, admitted)?;
                 Ok(declaration.create_create_animation(*target, *options))
             }
             SemanticCompositionRequest::Uncreate { target, options } => {
                 if self.require_uncreate_target(store, root, *target)? {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 }
                 // The reveal track completion owns leaf removal. Explicit
                 // composition removals are for families and non-track effects.
@@ -2319,7 +2344,7 @@ impl ExecutionSession {
                 let needs_admission =
                     self.require_affine_lifecycle_target(store, root, *target, *direction)?;
                 if needs_admission {
-                    admit(*target, declaration, admitted)?;
+                    admit(*target, admitted)?;
                 }
                 if *direction == SemanticAffineLifecycleDirection::RemoveTo {
                     removals.push((root, (*target).into()));
@@ -2427,7 +2452,7 @@ impl ExecutionSession {
         self.require_fade_target(store, root, target, direction)?;
         let mut declaration = SemanticMutationTransaction::new();
         if direction == SemanticFadeDirection::In {
-            declaration.add_member(root, target);
+            stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
         }
         let animation =
             declaration.create_fade_animation_with_endpoint(target, direction, endpoint, options);
@@ -2460,7 +2485,7 @@ impl ExecutionSession {
         let admitted = self.require_affine_lifecycle_target(store, root, target, direction)?;
         let mut declaration = SemanticMutationTransaction::new();
         if admitted {
-            declaration.add_member(root, target);
+            stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
         }
         let animation =
             declaration.create_affine_lifecycle_animation(target, direction, endpoint, options);
@@ -2496,7 +2521,7 @@ impl ExecutionSession {
         self.require_create_root(root, target)?;
         self.require_create_target(store, target)?;
         let mut declaration = SemanticMutationTransaction::new();
-        declaration.add_member(root, target);
+        stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
         let animation = declaration.create_create_animation(target, options);
         self.declare_and_activate_prepared_animation(
             store,
@@ -2563,11 +2588,13 @@ impl ExecutionSession {
         let mut declaration = SemanticMutationTransaction::new();
         let leaves = children
             .iter()
-            .map(|(target, options)| {
-                declaration.add_member(root, *target);
-                declaration.create_create_animation(*target, *options)
-            })
+            .map(|(target, options)| declaration.create_create_animation(*target, *options))
             .collect::<Vec<_>>();
+        let admissions = children
+            .iter()
+            .map(|(target, _)| (*target).into())
+            .collect::<Vec<_>>();
+        stage_animation_admissions(store, root, &admissions, &mut declaration)?;
         let animation_root = declaration.create_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             leaves,
@@ -2702,7 +2729,7 @@ impl ExecutionSession {
         operation: FamilyGlyphOperation,
         options: AnimationOptions,
         declaration: &mut SemanticMutationTransaction,
-        admitted: &mut HashSet<SemanticTransactionNodeRef>,
+        admitted: &mut AnimationAdmissions,
         removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let node = store.node(target).ok_or_else(|| {
@@ -2798,14 +2825,11 @@ impl ExecutionSession {
                 "family TextWrite requires at least one visible glyph".into(),
             ));
         }
-        if introducer {
-            if !admitted.insert(target.into()) {
-                return Err(ExecutionSessionAnimationError::CreateTarget {
-                    target,
-                    error: ExecutionSessionCreateError::DuplicateTarget,
-                });
-            }
-            declaration.add_member(root, target);
+        if introducer && !admitted.insert(target.into()) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target,
+                error: ExecutionSessionCreateError::DuplicateTarget,
+            });
         }
         if remover {
             removals.push((root, target.into()));
@@ -3486,7 +3510,12 @@ impl ExecutionSession {
             .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
                 prepared,
                 execution_prefix,
-                family_replacement.map(|(root, _, _)| root),
+                // Admissions can reorder the root even without a matching
+                // family transform. Use the lifecycle's already validated scope;
+                // the unrooted lowering guard remains unchanged.
+                family_replacement
+                    .map(|(root, _, _)| root)
+                    .or_else(|| lifecycle.as_ref().map(PreparedAnimationLifecycle::root)),
                 publication::SemanticPublicationPurpose::AuthoredMutation,
                 reactive_enrollment,
                 handled_scalar_signals,

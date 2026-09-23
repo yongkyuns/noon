@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
-    SemanticSceneOperationError, SemanticStore,
+    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef,
 };
 
 mod foreground;
@@ -216,6 +216,153 @@ enum ExplicitPlacement {
     Tail,
 }
 
+/// Stage an ordered admission batch, including transaction-local new objects.
+///
+/// Existing objects/families use the same family projection and foreground tail
+/// as Scene.add. Pending admissions must be newly created, unparented objects;
+/// pending family restructuring is not supported. Token identity/allocation and
+/// final publication remain owned by the caller's ordinary semantic transaction.
+/// Work visits the admitted/foreground closures, plus the current transaction only
+/// when it contains pending admissions; unrelated scene roots are not enumerated.
+pub fn stage_semantic_scene_admission(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    admitted: &[SemanticTransactionNodeRef],
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
+    use crate::{SemanticMutation, SemanticNodeCreation};
+    let root = target_node_checked(store, scene_root)?;
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
+    }
+    if admitted.is_empty() {
+        return Ok(());
+    }
+    let existing = admitted
+        .iter()
+        .filter_map(|id| id.existing())
+        .collect::<Vec<_>>();
+    validated_distinct_nodes(store, &existing)?;
+    let mut pending = HashSet::new();
+    for &id in admitted {
+        if let SemanticTransactionNodeRef::Pending(token) = id {
+            if !pending.insert(token) {
+                return Err(SemanticSceneOperationError::InvalidPendingAdmission(token));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let mut created = HashSet::new();
+        for mutation in transaction.mutations() {
+            match mutation {
+                SemanticMutation::AddNode {
+                    token,
+                    creation: SemanticNodeCreation::Object { .. },
+                } if pending.contains(token) => {
+                    created.insert(*token);
+                }
+                SemanticMutation::AddMember {
+                    member: SemanticTransactionNodeRef::Pending(token),
+                    ..
+                } if pending.contains(token) => {
+                    return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
+                }
+                _ => {}
+            }
+        }
+        if let Some(token) = pending.difference(&created).next() {
+            return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
+        }
+    }
+    let foreground = root
+        .foreground_members()
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let ordered = admitted
+        .iter()
+        .copied()
+        .filter(|id| id.existing().is_none_or(|id| !foreground.contains(&id)))
+        .chain(root.foreground_members().iter().copied().map(Into::into))
+        .collect::<Vec<SemanticTransactionNodeRef>>();
+    let existing = ordered
+        .iter()
+        .filter_map(|id| id.existing())
+        .collect::<Vec<_>>();
+    let removal = downward_target_closure(store, &existing)?;
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        &removal,
+        None,
+        &existing,
+        ExplicitPlacement::Tail,
+        transaction,
+    )?;
+    // Fill the pending-object gaps in the projected existing order. These are
+    // ordinary provisional edge/order edits, not synthetic semantic identities.
+    let mut before = None;
+    for &id in ordered.iter().rev() {
+        if matches!(id, SemanticTransactionNodeRef::Pending(_)) {
+            transaction.add_member(scene_root, id);
+            transaction.reorder_member_ref(scene_root, id, before);
+        }
+        before = Some(id);
+    }
+    Ok(())
+}
+
+/// Stage one lifecycle boundary's removals followed by foreground-aware admission.
+///
+/// All targets for a scope are planned together so membership restructuring,
+/// persistence cleanup and painter order publish in the caller's single transaction.
+/// Removal-only boundaries preserve the order of surviving display members. An
+/// admission uses the same family projection as Scene.add, with only the surviving
+/// foreground declarations at its tail. No temporary store or second order is owned.
+pub fn stage_semantic_scene_lifecycle_membership(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    removed: &[SemanticNodeId],
+    added: &[SemanticNodeId],
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
+    let root = target_node_checked(store, scene_root)?;
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
+    }
+    let removed = validated_distinct_nodes(store, removed)?;
+    let added = validated_distinct_nodes(store, added)?;
+    if removed.is_empty() && added.is_empty() {
+        return Ok(());
+    }
+    let members = if root.foreground_members().is_empty() || removed.is_empty() {
+        root.foreground_members().to_vec()
+    } else {
+        let removal = downward_target_closure(store, &removed)?;
+        foreground::project_members(store, scene_root, &removal, None)?
+    };
+    let explicit = if added.is_empty() {
+        Vec::new()
+    } else {
+        foreground::add_order(&added, &members)
+    };
+    let mut remove_set = downward_target_closure(store, &explicit)?;
+    remove_set.extend(removed);
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        &remove_set,
+        None,
+        &explicit,
+        ExplicitPlacement::Tail,
+        transaction,
+    )?;
+    if members != root.foreground_members() {
+        transaction.set_foreground_members(scene_root, members);
+    }
+    Ok(())
+}
+
 fn plan_explicit_root_projection(
     store: &SemanticStore,
     scene_root: SemanticNodeId,
@@ -224,6 +371,28 @@ fn plan_explicit_root_projection(
     explicit: &[SemanticNodeId],
     placement: ExplicitPlacement,
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        remove_set,
+        replacement,
+        explicit,
+        placement,
+        &mut transaction,
+    )?;
+    Ok(transaction)
+}
+
+fn stage_explicit_root_projection(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    remove_set: &HashSet<SemanticNodeId>,
+    replacement: Option<(SemanticNodeId, SemanticNodeId)>,
+    explicit: &[SemanticNodeId],
+    placement: ExplicitPlacement,
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
     let (affected, affected_roots) = affected_explicit_root_closure(store, scene_root, remove_set)?;
     let root_node = target_node_checked(store, scene_root)?;
     let mut run_heads = Vec::new();
@@ -298,7 +467,6 @@ fn plan_explicit_root_projection(
             retained_roots.insert(replacement);
         }
     }
-    let mut transaction = SemanticMutationTransaction::new();
     for (root, _, _) in &plans {
         if !retained_roots.contains(root) {
             transaction.remove_member(scene_root, *root);
@@ -331,7 +499,7 @@ fn plan_explicit_root_projection(
         transaction.reorder_member(scene_root, *member, anchor);
         anchor = Some(*member);
     }
-    Ok(transaction)
+    Ok(())
 }
 
 fn first_projected_root_after_restructure(

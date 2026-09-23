@@ -2,9 +2,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    MobjectFamily,
     MobjectTarget::{Family, Object as Leaf},
-    Scene, SemanticNodeId,
+    RateFunction, Scene, SemanticNodeId,
 };
 use noon_core::SemanticStore;
 
@@ -54,11 +55,21 @@ impl LiveContinuation for ForegroundMembership {
                 self.assert_lists(&[self.family.node_id()], &[self.family.node_id()])?;
             }
             1 => {
-                live.add(&self.green).map_err(|error| error.to_string())?;
+                let segment = live
+                    .declare_and_activate_fade(
+                        &self.green,
+                        noon_core::SemanticFadeDirection::In,
+                        AnimationOptions::new()
+                            .run_time(0.35)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map_err(|error| error.to_string())?;
                 self.assert_lists(
                     &[self.green.node_id(), self.family.node_id()],
                     &[self.family.node_id()],
                 )?;
+                self.stage += 1;
+                return Ok(ContinuationStep::Await(segment));
             }
             2 => {
                 live.remove_foreground_many(&[Leaf(&self.red)])
@@ -69,7 +80,14 @@ impl LiveContinuation for ForegroundMembership {
                 )?;
             }
             3 => {
-                live.add(&self.later).map_err(|error| error.to_string())?;
+                let segment = live
+                    .declare_and_activate_create(
+                        &self.later,
+                        AnimationOptions::new()
+                            .run_time(0.35)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map_err(|error| error.to_string())?;
                 self.assert_lists(
                     &[
                         self.green.node_id(),
@@ -79,6 +97,8 @@ impl LiveContinuation for ForegroundMembership {
                     ],
                     &[self.blue.node_id()],
                 )?;
+                self.stage += 1;
+                return Ok(ContinuationStep::Await(segment));
             }
             4 => {
                 live.remove_foreground_many(&[Leaf(&self.blue)])
