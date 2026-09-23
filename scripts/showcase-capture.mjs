@@ -174,8 +174,22 @@ async function captureSelection(context, entry, result) {
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
     const scrubber = page.locator(".playback-scrubber");
     await scrubber.evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input", { bubbles: true })); });
-    await page.waitForFunction(() => !document.querySelector(".playback-scrubber")?.disabled);
+    // The scrubber deliberately stays enabled while seeking to coalesce input.
+    // Wait on the existing command-completion state, not the input's disabled flag.
+    await page.waitForFunction((duration) => {
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" &&
+        Math.abs(Number(controls.dataset.elapsedSeconds) - duration) < 1e-6;
+    }, entry.duration);
+    const pause = page.getByRole("button", { name: "Pause animation", exact: true });
+    if (await pause.count()) {
+      await pause.click();
+      await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+    }
+    assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
+    assert.equal(actualBackend, expectedBackend, "pointer capture must use the requested backend too");
     assert.ok(metrics.metrics.time >= entry.duration - 0.6, "selection poster must follow the completed introduction");
     const canvas = page.locator("#scene");
     const before = await canvas.screenshot();
@@ -198,7 +212,11 @@ async function captureSelection(context, entry, result) {
     }
     assert.ok(cleared, "background click did not restore the base pixels exactly");
     assert.deepEqual(errors, []);
-    result.interaction = { recipe: "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)", exactClear: true, baseMetrics: metrics };
+    result.interaction = {
+      recipe: "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
+      requestedTime: entry.duration, publishedTime: metrics.metrics.time,
+      rendererBackend: actualBackend, exactClear: true, baseMetrics: metrics,
+    };
     return selected;
   } finally {
     await page.close();
