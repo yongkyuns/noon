@@ -20,6 +20,7 @@ fn app() -> NativeApp {
             title: "Noon paused click selection".to_owned(),
             width: SIZE.width,
             height: SIZE.height,
+            inspection_zoom: false,
         },
     )
 }

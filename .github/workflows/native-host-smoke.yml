@@ -93,6 +93,12 @@ jobs:
           cargo test -p noon --all-features --test selection_overlay_raster \
             -- --include-ignored --nocapture
 
+      - name: Present inspection zoom and view recovery without advancing native time
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_inspection_zoom_and_recovery \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Present click selection and clear without advancing native time
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

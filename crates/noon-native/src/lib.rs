@@ -50,6 +50,9 @@ pub struct NativeViewportConfig {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    /// Opt in to session-owned cursor-anchored inspection zoom. Authored camera
+    /// values and time remain unchanged; ordinary native viewports default off.
+    pub inspection_zoom: bool,
 }
 
 impl Default for NativeViewportConfig {
@@ -58,6 +61,7 @@ impl Default for NativeViewportConfig {
             title: "Noon".to_owned(),
             width: 960,
             height: 540,
+            inspection_zoom: false,
         }
     }
 }
@@ -71,6 +75,8 @@ pub enum NativeHostError {
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
     Program(String),
+    PointerFrame(noon::integration::PointerFrameError),
+    Inspection(noon::InspectionNavigationError),
 }
 
 impl std::fmt::Display for NativeHostError {
@@ -82,12 +88,25 @@ impl std::fmt::Display for NativeHostError {
             Self::Callback(error) => error.fmt(formatter),
             Self::Camera(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::PointerFrame(error) => error.fmt(formatter),
+            Self::Inspection(error) => error.fmt(formatter),
             Self::Program(message) => write!(formatter, "native live program error: {message}"),
         }
     }
 }
 
 impl std::error::Error for NativeHostError {}
+
+impl From<noon::integration::PointerFrameError> for NativeHostError {
+    fn from(value: noon::integration::PointerFrameError) -> Self {
+        Self::PointerFrame(value)
+    }
+}
+impl From<noon::InspectionNavigationError> for NativeHostError {
+    fn from(value: noon::InspectionNavigationError) -> Self {
+        Self::Inspection(value)
+    }
+}
 
 impl From<EvaluationError> for NativeHostError {
     fn from(value: EvaluationError) -> Self {
@@ -590,10 +609,10 @@ impl NativeApp {
         }
         let presented = publication.context();
         debug_assert_eq!(pointer_frame.publication(), presented);
+        self.execution.admit_presented_frame(&pointer_frame)?;
         self.pointer.presented = Some(pointer_frame);
         self.pointer.refresh_pending = false;
         self.last_selection_presentation = highlight;
-        self.execution.admit_presented_publication(presented)?;
         #[cfg(test)]
         {
             self.presented_frame_time = Some(self.execution.frame_time());
@@ -762,6 +781,15 @@ impl ApplicationHandler for NativeApp {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let Err(error) = self.dispatch_keyboard(event.physical_key, event.state) {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Err(error) = self.dispatch_inspection_scroll(
+                    delta,
+                    window.inner_size(),
+                    window.scale_factor(),
+                ) {
                     self.fail(event_loop, error);
                 }
             }
@@ -1626,6 +1654,7 @@ mod tests {
                 title: "Noon native mixed text smoke".to_owned(),
                 width: 320,
                 height: 180,
+                inspection_zoom: false,
             },
         );
         app.exit_after_present = Some(0.0);
@@ -1665,6 +1694,7 @@ mod tests {
                 title: "Noon native continuation smoke".to_owned(),
                 width: 320,
                 height: 180,
+                inspection_zoom: false,
             },
         );
         app.exit_after_present = Some(endpoint);
