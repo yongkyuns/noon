@@ -1,0 +1,213 @@
+name: B6 gallery exact-clear diagnosis
+
+on:
+  push:
+    branches: [codex/diagnose-b6-gallery-clear-20260923]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b6-gallery-clear-diagnosis-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Gallery exact-clear / ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: master
+            source: 697847e30399977ae38751f05e22306756577640
+          - label: pr1716-integration
+            source: b71f0dc9f1db1130378daf8f5a7f8d040d76575c
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout exact comparison source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+      - name: Record clean source identity
+        env:
+          EXPECTED_SOURCE: ${{ matrix.source }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          git diff --exit-code
+          mkdir -p browser-smoke-artifacts/gallery-diagnosis
+          git show -s --format='%H%n%T%n%P%n%s' HEAD | tee browser-smoke-artifacts/gallery-diagnosis/source.txt
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build unchanged browser source
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Add failure-only image retention without changing assertions
+        run: |
+          git diff --exit-code
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          p = Path('scripts/playground-gallery-selection-smoke.mjs')
+          source = p.read_text()
+          raw = source.encode()
+          assert hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() == 'de4c2d33b089a88d25d76e3da627c0d23ecf88d0'
+
+          def replace_once(old, new):
+              global source
+              assert source.count(old) == 1, old
+              source = source.replace(old, new)
+
+          replace_once('let runtimeCache;', 'let runtimeCache;\nlet diagnosticPage;\nlet primaryFailure;\nconst snapshots = {};\nconst diagnostics = {};')
+          replace_once('const page = await context.newPage();', 'const page = await context.newPage();\n  diagnosticPage = page;')
+          for label in ('baseline', 'selected', 'cleared'):
+              statement = f'const {label} = await canvas.screenshot();'
+              replace_once(statement, statement + f'\n  snapshots.{label} = {label};')
+          replace_once('const box = await canvas.boundingBox();', 'const box = await canvas.boundingBox();\n  diagnostics.canvasBefore = box;')
+          replace_once('await waitForPresentation(page, beforeSelect);', 'await waitForPresentation(page, beforeSelect);\n  diagnostics.beforeSelect = beforeSelect;')
+          replace_once('await waitForPresentation(page, beforeClear);', 'await waitForPresentation(page, beforeClear);\n  diagnostics.beforeClear = beforeClear;')
+          replace_once('} finally {\n  await browser?.close();\n  server?.kill("SIGTERM");\n}', r'''} catch (error) {
+            primaryFailure = error;
+            diagnostics.failure = String(error.stack ?? error);
+            throw error;
+          } finally {
+            try {
+              // Passive extra evidence only AFTER the original assertions. No retries,
+              // sleeps, redraw requests, tolerance changes or passing-on-retry policy.
+              if (diagnosticPage && snapshots.cleared) {
+                snapshots.afterClear = await diagnosticPage.locator("#scene").screenshot();
+              }
+              if (diagnosticPage) {
+                diagnostics.finalState = await diagnosticPage.evaluate(async () => ({
+                  status: { ...document.querySelector("#status")?.dataset },
+                  patch: { ...document.querySelector("#patch-status")?.dataset },
+                  canvas: {
+                    width: document.querySelector("#scene")?.width,
+                    height: document.querySelector("#scene")?.height,
+                    rect: document.querySelector("#scene")?.getBoundingClientRect().toJSON(),
+                  },
+                  metrics: await window.__noonExampleGallery?.executionMetrics(),
+                }));
+              }
+              for (const [label, bytes] of Object.entries(snapshots)) {
+                await writeFile(path.join(artifacts, `${label}.png`), bytes);
+              }
+              for (const [label, other] of [
+                ["selectedDifference", "selected"],
+                ["clearDifference", "cleared"],
+                ["afterClearDifference", "afterClear"],
+              ]) {
+                if (snapshots.baseline && snapshots[other]) {
+                  diagnostics[label] = describeDifferences(snapshots.baseline, snapshots[other]);
+                }
+              }
+              if (snapshots.cleared && snapshots.afterClear) {
+                diagnostics.postAssertionChange = describeDifferences(snapshots.cleared, snapshots.afterClear);
+              }
+              await writeFile(path.join(artifacts, "diagnostics.json"), JSON.stringify(diagnostics, null, 2) + "\n");
+              console.log("GALLERY_DIAGNOSTICS " + JSON.stringify(diagnostics));
+            } catch (error) {
+              console.error("GALLERY_DIAGNOSTIC_FAILURE", error);
+              if (!primaryFailure) process.exitCode = 1;
+            } finally {
+              await browser?.close();
+              server?.kill("SIGTERM");
+            }
+          }
+
+          function describeDifferences(leftBytes, rightBytes) {
+            const left = PNG.sync.read(leftBytes);
+            const right = PNG.sync.read(rightBytes);
+            assert.equal(left.width, right.width);
+            assert.equal(left.height, right.height);
+            let changed = 0;
+            let minX = left.width, minY = left.height, maxX = -1, maxY = -1;
+            const samples = [];
+            for (let i = 0; i < left.data.length; i += 4) {
+              const before = Array.from(left.data.subarray(i, i + 4));
+              const after = Array.from(right.data.subarray(i, i + 4));
+              if (before.every((value, channel) => value === after[channel])) continue;
+              const x = (i / 4) % left.width;
+              const y = Math.floor(i / 4 / left.width);
+              changed += 1;
+              minX = Math.min(minX, x); minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+              if (samples.length < 32) samples.push({ x, y, before, after });
+            }
+            return {
+              width: left.width, height: left.height, changed,
+              bounds: changed === 0 ? null : { minX, minY, maxX, maxY },
+              samples,
+            };
+          }''')
+          p.write_text(source)
+          PY
+          node --check scripts/playground-gallery-selection-smoke.mjs
+          test "$(git diff --name-only)" = scripts/playground-gallery-selection-smoke.mjs
+          git diff --check
+          git diff -- scripts/playground-gallery-selection-smoke.mjs > browser-smoke-artifacts/gallery-diagnosis/diagnostics.patch
+      - name: Run three independent strict samples and preserve every failure
+        run: |
+          overall=0
+          for sample in 1 2 3; do
+            out="browser-smoke-artifacts/gallery-diagnosis/sample-$sample"
+            mkdir -p "$out"
+            set +e
+            NOON_GALLERY_SELECTION_ARTIFACTS="$out" node scripts/playground-gallery-selection-smoke.mjs > "$out/console.log" 2>&1
+            status=$?
+            set -e
+            cat "$out/console.log"
+            echo "GALLERY_SAMPLE source=${{ matrix.source }} sample=$sample exit=$status"
+            echo "$status" > "$out/exit-code.txt"
+            if [ "$status" -ne 0 ]; then overall=1; fi
+          done
+          exit "$overall"
+      - name: Retain exact comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: b6-gallery-clear-${{ matrix.label }}
+          path: browser-smoke-artifacts/gallery-diagnosis
+          if-no-files-found: error
+          retention-days: 7
