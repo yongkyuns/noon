@@ -482,3 +482,141 @@ fn replacement_foreground_cleanup_is_atomic_when_preparation_fails() {
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(store.last_mutation_stats(), counters);
 }
+
+#[test]
+fn lifecycle_membership_combines_removals_and_foreground_aware_admission() {
+    let mut store = SemanticStore::new();
+    let back = object(&mut store);
+    let retired_leaf = object(&mut store);
+    let retired = family(&mut store, &[retired_leaf]);
+    let sibling = object(&mut store);
+    let group = family(&mut store, &[retired, sibling]);
+    let front = object(&mut store);
+    let added = object(&mut store);
+    let root = family(&mut store, &[back]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[group, front]),
+    );
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_lifecycle_membership(&store, root, &[retired], &[added], &mut transaction)
+        .unwrap();
+    assert_lists(&store, root, &[back, group, front], &[group, front]);
+    // Preparing and dropping the complete change cannot demote persistence early.
+    drop(transaction.prepare(&mut store).unwrap());
+    assert_eq!(store.scene_revision(), revision);
+    assert_lists(&store, root, &[back, group, front], &[group, front]);
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_lifecycle_membership(&store, root, &[retired], &[added], &mut transaction)
+        .unwrap();
+    transaction.apply(&mut store).unwrap();
+    assert_lists(
+        &store,
+        root,
+        &[back, added, sibling, front],
+        &[sibling, front],
+    );
+    assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+    assert_eq!(store.node(group).unwrap().members(), &[retired, sibling]);
+}
+
+#[test]
+fn lifecycle_membership_removal_without_admission_does_not_reorder_survivors() {
+    let mut store = SemanticStore::new();
+    let retired = object(&mut store);
+    let front = object(&mut store);
+    let ordinary = object(&mut store);
+    let root = family(&mut store, &[retired, front, ordinary]);
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.set_foreground_members(root, [retired, front]);
+    declaration.apply(&mut store).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_lifecycle_membership(&store, root, &[retired], &[], &mut transaction)
+        .unwrap();
+    transaction.apply(&mut store).unwrap();
+    assert_lists(&store, root, &[front, ordinary], &[front]);
+}
+
+#[test]
+fn lifecycle_membership_admission_reuses_an_existing_target_edge() {
+    let mut store = SemanticStore::new();
+    let source = object(&mut store);
+    let target = object(&mut store);
+    let front = object(&mut store);
+    let root = family(&mut store, &[source, target]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[front]),
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_lifecycle_membership(&store, root, &[source], &[target], &mut transaction)
+        .unwrap();
+    transaction.apply(&mut store).unwrap();
+    assert_lists(&store, root, &[target, front], &[front]);
+}
+
+#[test]
+fn lifecycle_membership_keeps_unrelated_roots_out_of_the_plan() {
+    let mut store = SemanticStore::new();
+    let source = object(&mut store);
+    let target = object(&mut store);
+    let front = object(&mut store);
+    let unrelated = (0..2_000).map(|_| object(&mut store)).collect::<Vec<_>>();
+    let root = family(&mut store, &unrelated);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::Add(&[source]),
+    );
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[front]),
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_semantic_scene_lifecycle_membership(&store, root, &[source], &[target], &mut transaction)
+        .unwrap();
+    // Remove source, add target, and place target/front; no unrelated root edit.
+    assert_eq!(transaction.mutations().len(), 4);
+    transaction.apply(&mut store).unwrap();
+    let expected = unrelated
+        .iter()
+        .copied()
+        .chain([target, front])
+        .collect::<Vec<_>>();
+    assert_lists(&store, root, &expected, &[front]);
+}
+
+#[test]
+fn lifecycle_membership_rejects_stale_admission_without_staging_removal() {
+    let mut store = SemanticStore::new();
+    let source = object(&mut store);
+    let stale = object(&mut store);
+    let root = family(&mut store, &[source]);
+    edit(
+        &mut store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&[source]),
+    );
+    let mut deletion = SemanticMutationTransaction::new();
+    deletion.remove_node(stale);
+    deletion.apply(&mut store).unwrap();
+    let revision = store.scene_revision();
+    let counters = store.last_mutation_stats();
+    let mut transaction = SemanticMutationTransaction::new();
+    assert!(stage_semantic_scene_lifecycle_membership(
+        &store,
+        root,
+        &[source],
+        &[stale],
+        &mut transaction,
+    )
+    .is_err());
+    assert!(transaction.mutations().is_empty());
+    assert_lists(&store, root, &[source], &[source]);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats(), counters);
+}

@@ -1763,14 +1763,12 @@ impl ExecutionSession {
                     ));
                 }
                 // Reuse the exact-completion topology contract as activation preflight.
-                // The scratch transaction is discarded; this validates only.
-                let mut completion = SemanticMutationTransaction::new();
-                family_transform::stage_matching_family_completion_swap(
+                // This validates only; completion stages one combined membership edit.
+                family_transform::validate_matching_family_completion_swap(
                     store,
                     root,
                     *source,
                     *target_state,
-                    &mut completion,
                 )
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())

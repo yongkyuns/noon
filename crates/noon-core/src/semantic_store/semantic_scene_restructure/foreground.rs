@@ -71,7 +71,7 @@ pub(super) fn replace_members(
     project_members(store, scene_root, &removal, replacement)
 }
 
-fn project_members(
+pub(super) fn project_members(
     store: &SemanticStore,
     scene_root: SemanticNodeId,
     removal: &HashSet<SemanticNodeId>,
