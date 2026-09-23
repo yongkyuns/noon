@@ -43,12 +43,14 @@ elif sys.argv[1] == '--production':
     end = text.index('            self.apply_prepared_scalar_timeline_transaction_with_execution_at_root(', start)
     text = text[:start] + '''        // Completion can restructure display membership even without an unequal
         // Transform. Carry the declaration's validated root through the existing
-        // publication boundary; unrooted reorders must remain rejected.
+        // publication boundary; explicit family replacement also supplies its root.
+        // The publication layer still rejects unrooted or foreign-root reorders.
         let order_root = match family_transform {
             Some(completion) => Some((*lifecycle_root).ok_or(
                 ExecutionSegmentCompletionError::MissingFamilyTransformRoot(completion.source),
             )?),
-            None => *lifecycle_root,
+            None => (*lifecycle_root)
+                .or_else(|| segment.family_replacement().map(|replacement| replacement.root)),
         };
         if let Some(root) = order_root {
 ''' + text[end:]
