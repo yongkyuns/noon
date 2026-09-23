@@ -34,5 +34,21 @@ elif sys.argv[1] == '--production':
         '/// Request-local order and duplicate detection; the core planner owns membership.\n#[derive(Default)]',
     )
     replace_once(path, '\nenum PreparedAnimationLifecycle {', '\n#[derive(Clone)]\nenum PreparedAnimationLifecycle {')
+    p = Path(path)
+    text = p.read_text()
+    for indent, condition, target in [
+        (' ' * 16, 'admitted_target', '(*target).into()'),
+        (' ' * 8, 'introducer', 'target.into()'),
+    ]:
+        old = indent + 'if ' + condition + ' {\n' + indent + '    if !admitted.insert(' + target + ') {\n'
+        assert text.count(old) == 1
+        start = text.index(old)
+        end = text.index('\n' + indent + '}', start) + len('\n' + indent + '}')
+        lines = text[start:end].splitlines()
+        assert lines[-2:] == [indent + '    }', indent + '}']
+        new = indent + 'if ' + condition + ' && !admitted.insert(' + target + ') {\n'
+        new += '\n'.join(line[4:] for line in lines[2:-2]) + '\n' + indent + '}'
+        text = text[:start] + new + text[end:]
+    p.write_text(text)
 else:
     raise SystemExit('expected --regressions or --production')
