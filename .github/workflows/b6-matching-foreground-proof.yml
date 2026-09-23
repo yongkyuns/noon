@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASE: 13cac98be05f15be800b37a4f409073b01e80fb
+  BASE: 13cac98be05f15be8000b37a4f409073b01e80fb
   SOURCE_BRANCH: codex/b6-matching-foreground-completion-20260923
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
