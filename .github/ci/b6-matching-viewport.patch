@@ -1,0 +1,76 @@
+diff --git a/crates/noon/src/execution_session/publication/prepared_value.rs b/crates/noon/src/execution_session/publication/prepared_value.rs
+index 800c0e5..15ce9d8 100644
+--- a/crates/noon/src/execution_session/publication/prepared_value.rs
++++ b/crates/noon/src/execution_session/publication/prepared_value.rs
+@@ -169,7 +169,10 @@ impl ExecutionSession {
+         let mut anchors = Vec::<(u32, usize)>::new();
+         for occurrence in transient {
+             let anchor = match occurrence.painter_placement {
+-                TransientPresentationPainterPlacement::AfterStable {
++                TransientPresentationPainterPlacement::BeforeStable {
++                    anchor_object_index,
++                }
++                | TransientPresentationPainterPlacement::AfterStable {
+                     anchor_object_index,
+                 } => anchor_object_index as usize,
+                 TransientPresentationPainterPlacement::LayerEnd => {
+@@ -230,14 +233,29 @@ mod viewport_tests {
+ 
+     #[test]
+     fn renderer_viewport_reads_mapped_anchors_without_evaluating_geometry() {
++        assert_mapped_viewport_anchor(false);
++    }
++
++    #[test]
++    fn renderer_viewport_before_anchor_survives_culling_without_evaluating_geometry() {
++        assert_mapped_viewport_anchor(true);
++    }
++
++    fn assert_mapped_viewport_anchor(before: bool) {
+         let mut scene = Scene::new();
+         let object = scene.circle(0.5).unwrap();
+         scene.add_many(&[(&object).into()]).unwrap();
+         let mut session = scene.execution_session().unwrap();
+         let anchor = session.painter_order()[0];
+         let occurrence = DerivedDisplayAnimationOccurrence {
+-            painter_placement: TransientPresentationPainterPlacement::AfterStable {
+-                anchor_object_index: anchor,
++            painter_placement: if before {
++                TransientPresentationPainterPlacement::BeforeStable {
++                    anchor_object_index: anchor,
++                }
++            } else {
++                TransientPresentationPainterPlacement::AfterStable {
++                    anchor_object_index: anchor,
++                }
+             },
+             occurrence_index: 0,
+             base: DerivedDisplayObjectState {
+@@ -267,7 +285,11 @@ mod viewport_tests {
+                 )]),
+             }],
+         };
+-        let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
++        // Two occurrences sharing an offscreen anchor still require only one
++        // stable row. Their geometry remains deliberately non-evaluable.
++        let mut duplicate = occurrence.clone();
++        duplicate.occurrence_index = 1;
++        let plan = DerivedDisplayAnimationPlan::new(vec![occurrence, duplicate]).unwrap();
+         assert!(matches!(
+             plan.evaluate(3.0),
+             Err(DerivedDisplayEvaluationError::MissingGeometryPlan { .. })
+@@ -299,6 +321,14 @@ mod viewport_tests {
+             assert_eq!(query.spatial_stats(), spatial.spatial_stats());
+             assert_eq!(session.publication_context(), context);
+             assert!(session.derived_display_objects.is_empty());
++
++            // An already-visible anchor must not be inserted again either.
++            let visible = session.query_viewport(Rect::new(
++                Vec2::new(-2.0, -2.0),
++                Vec2::new(2.0, 2.0),
++            ));
++            assert_eq!(visible.object_indices(), &[anchor as usize]);
++            assert_eq!(session.renderer_viewport_query(visible.clone()), visible);
+         }
+     }
+ }
