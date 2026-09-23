@@ -211,7 +211,7 @@ fn required_callback_barrier_is_not_bypassed_even_by_unit_zoom() {
 
 #[test]
 fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_guard() {
-    let (mut scene, circle, mut session) = fixture();
+    let (scene, circle, mut session) = fixture();
     let original = scene.live(&mut session).effective(&circle).unwrap();
     let segment = scene.live(&mut session).declare_and_activate_indicate(&circle, IndicateOptions::default(), AnimationOptions::new().run_time(1.0)).unwrap();
     scene.live(&mut session).advance_segment_to(segment, 0.5).unwrap();
