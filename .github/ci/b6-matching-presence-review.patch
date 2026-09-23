@@ -1,0 +1,50 @@
+diff --git a/crates/noon/src/execution_session/family_transform.rs b/crates/noon/src/execution_session/family_transform.rs
+--- a/crates/noon/src/execution_session/family_transform.rs
++++ b/crates/noon/src/execution_session/family_transform.rs
+@@ -319,10 +319,13 @@
+ fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
+     let frame = runtime.frame();
+     let order = runtime.painter_order();
++    // Isolate the requested z layer without visiting unrelated layers. Presence
++    // is independent of painter membership: skip absent candidates within this
++    // layer rather than treating an absent tail as an empty layer.
++    let begin = order.partition_point(|&index| frame.objects[index as usize].z_index < z_index);
+     let end = order.partition_point(|&index| frame.objects[index as usize].z_index <= z_index);
+-    order.get(end.checked_sub(1)?).copied().filter(|&index| {
+-        frame.is_present(index as usize) && frame.objects[index as usize].z_index == z_index
+-    })
++    order[begin..end].iter().rev().copied()
++        .find(|&index| frame.is_present(index as usize))
+ }
+ 
+ /// Unsupported topology for exact-end matching-family replacement.
+@@ -681,6 +684,29 @@
+     }
+ 
+     #[test]
++    fn layer_tail_preserves_presence_filtering_and_signed_zero() {
++        use noon_core::{TrackDefinition, TrackId};
++        let objects = (1..=2).map(|id| CompiledObject::new(
++            ObjectId::new(id), GeometryRef::circle(1.0),
++            Transform2D::IDENTITY, Style::default(),
++        )).collect();
++        let track = TrackDefinition {
++            id: TrackId::new(0), object: ObjectId::new(2), property: Property::Presence,
++            values: TrackValues::Bool { from: false, to: true },
++            timing: TrackTiming::instant(1.0), time_map: CompositionTimeMap::identity(),
++        };
++        let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[track]).unwrap());
++        assert!(!runtime.frame().is_present(1));
++        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(0));
++        assert_eq!(stable_layer_tail(&runtime, -0.0), Some(0));
++        assert_eq!(stable_layer_tail(&runtime, 1.0), None);
++        runtime.advance_to(1.0).unwrap();
++        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(1));
++        runtime.seek(0.0).unwrap();
++        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(0));
++    }
++
++    #[test]
+     fn matching_plan_combines_derived_and_target_occurrences_without_index_collision() {
+         let runtime = runtime();
+         let plan = build_matching_family_transform_plan_from_parts(
