@@ -1,11 +1,11 @@
-use noon::integration::NativePointerInputToken;
 use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
+use noon::integration::{NativePointerInputToken, PointerFrameSnapshot, PointerFrameView};
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
-    NativeStateSource, PublicationContext, Rect,
+    NativeStateSource, PublicationContext, Rect, Vec2,
 };
 
 use crate::NativeHostError;
@@ -20,7 +20,26 @@ mod viewport_tests;
 /// visibility, and acknowledge a publication after successful presentation.
 pub(crate) trait NativeExecutionSource {
     fn frame_time(&self) -> f64;
-    fn camera(&self) -> Result<Camera2DState, NativeHostError>;
+    fn camera(&self) -> Result<Camera2DState, NativeHostError> {
+        self.session().inspection_camera().map_err(Into::into)
+    }
+    fn scroll_inspection_view(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        current_view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, NativeHostError>;
+
+    /// Validate the displayed view as well as the authored publication before
+    /// releasing a live continuation. A view-only edit need not change the latter.
+    fn admit_presented_frame(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), NativeHostError> {
+        frame.validate_presentation(self.session(), frame.view())?;
+        self.admit_presented_publication(frame.publication())
+    }
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery;
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
@@ -82,8 +101,16 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.frame().time
     }
 
-    fn camera(&self) -> Result<Camera2DState, NativeHostError> {
-        self.session.camera().map_err(Into::into)
+    fn scroll_inspection_view(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        current_view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.session
+            .scroll_inspection_view(displayed, current_view, surface, delta_pixels)
+            .map_err(Into::into)
     }
 
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
@@ -204,8 +231,16 @@ where
         self.program.session().frame().time
     }
 
-    fn camera(&self) -> Result<Camera2DState, NativeHostError> {
-        self.program.session().camera().map_err(Into::into)
+    fn scroll_inspection_view(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        current_view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.program
+            .scroll_inspection_view(displayed, current_view, surface, delta_pixels)
+            .map_err(|error| NativeHostError::Program(error.to_string()))
     }
 
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {

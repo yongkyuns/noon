@@ -48,6 +48,7 @@ pub enum ExecutionSessionInputError {
     },
     Reactive(ReactiveError),
     Evaluation(EvaluationError),
+    PreparedCommit(noon_runtime::PreparedFrameCommitError),
     TimelineOwnedSignal {
         signal: SemanticNodeId,
     },
@@ -87,6 +88,7 @@ impl std::fmt::Display for ExecutionSessionInputError {
             ),
             Self::Reactive(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
+            Self::PreparedCommit(error) => error.fmt(formatter),
             Self::TimelineOwnedSignal { signal } => write!(
                 formatter,
                 "semantic signal {}:{} is timeline-owned and cannot be set directly",
@@ -213,6 +215,15 @@ impl Default for PointerInputState {
             next_generation: Some(0),
         }
     }
+}
+
+/// One unpublished native-input batch; its frame uses the existing sparse runtime
+/// preparation, not a copied session. Used when a view change must validate the
+/// effects of cancelling held buttons before either operation commits.
+pub(super) struct PreparedInputPublication {
+    pub(super) frame: noon_runtime::PreparedFrameEvaluation,
+    effective: noon_runtime::PreparedEffectivePropertyBatch,
+    timeline: Option<super::signal_timeline::SignalTimelinePreview>,
 }
 
 impl ExecutionSession {
@@ -505,6 +516,14 @@ impl ExecutionSession {
         &mut self,
         inputs: Vec<(noon_core::SignalId, ReactiveValue)>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
+        let prepared = self.prepare_reactive_input_batch(inputs)?;
+        self.commit_reactive_input_batch(prepared)
+    }
+
+    fn prepare_reactive_input_batch(
+        &mut self,
+        inputs: Vec<(noon_core::SignalId, ReactiveValue)>,
+    ) -> Result<PreparedInputPublication, ExecutionSessionInputError> {
         let current = self.runtime.frame().time;
         let signal_timeline = (!self.signal_timeline.is_empty()
             && !self.signal_timeline.is_coherent_at(current, current))
@@ -513,12 +532,51 @@ impl ExecutionSession {
             .as_ref()
             .map_or_else(Vec::new, |preview| preview.inputs().to_vec());
         combined.extend(inputs);
+        let frame = self
+            .runtime
+            .prepare_advance_to_with_reactive_inputs(current, &combined)?;
+        let effective = self
+            .runtime
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        Ok(PreparedInputPublication {
+            frame,
+            effective,
+            timeline: signal_timeline,
+        })
+    }
+
+    pub(super) fn commit_reactive_input_batch(
+        &mut self,
+        prepared: PreparedInputPublication,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
         self.runtime
-            .advance_to_with_reactive_inputs(current, &combined)?;
-        if let Some(preview) = signal_timeline {
+            .commit_prepared_frame(prepared.frame, prepared.effective)
+            .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        if let Some(preview) = prepared.timeline {
             self.signal_timeline.commit(preview);
         }
         Ok(self.runtime.frame())
+    }
+
+    pub(super) fn prepare_pointer_view_cancellation(
+        &mut self,
+    ) -> Result<Option<PreparedInputPublication>, ExecutionSessionInputError> {
+        self.ensure_direct_input_ingress_available()?;
+        let mut inputs = self.pointer_button_reset_inputs();
+        // No input publication is needed for already released buttons. In
+        // particular inspection alone must not invalidate finite replay history.
+        inputs.retain(|(signal, value)| self.runtime.reactive_value(*signal) != Some(value));
+        if inputs.is_empty() {
+            Ok(None)
+        } else {
+            self.prepare_reactive_input_batch(inputs).map(Some)
+        }
+    }
+
+    pub(super) fn retire_pointer_view_binding(&mut self) {
+        self.pointer_input.binding = None;
+        self.pointer_selection.cancel_press();
     }
 }
 
