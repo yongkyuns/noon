@@ -52,6 +52,14 @@ impl DerivedDisplayObjectState {
     }
 }
 
+/// Which side of the real stable painter anchor contains a transient occurrence.
+/// This is derived placement provenance, not a semantic layer or object identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TransientAnchorSide {
+    Before,
+    After,
+}
+
 /// One transient visual occurrence and its placement provenance.
 ///
 /// `anchor_object_index` identifies an existing stable execution slot only for
@@ -61,6 +69,7 @@ impl DerivedDisplayObjectState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObject {
     anchor_object_index: u32,
+    anchor_side: TransientAnchorSide,
     occurrence_index: u32,
     state: DerivedDisplayObjectState,
 }
@@ -73,9 +82,19 @@ impl DerivedDisplayObject {
     ) -> Self {
         Self {
             anchor_object_index,
+            anchor_side: TransientAnchorSide::After,
             occurrence_index,
             state,
         }
+    }
+
+    pub const fn with_anchor_side(mut self, side: TransientAnchorSide) -> Self {
+        self.anchor_side = side;
+        self
+    }
+
+    pub const fn anchor_side(&self) -> TransientAnchorSide {
+        self.anchor_side
     }
 
     pub const fn anchor_object_index(&self) -> u32 {

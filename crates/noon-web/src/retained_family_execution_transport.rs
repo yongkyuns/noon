@@ -27,6 +27,7 @@ pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransientPresentationOccurrence {
     pub anchor: ObjectId,
+    pub before_anchor: bool,
     pub occurrence_index: u32,
     pub z_index: f64,
     pub geometry: GeometryRef,
@@ -64,6 +65,7 @@ impl RetainedTransientPresentationOccurrence {
         };
         Ok(Self {
             anchor: anchor.id,
+            before_anchor: object.anchor_side() == noon_runtime::TransientAnchorSide::Before,
             occurrence_index: object.occurrence_index(),
             z_index: state.z_index,
             geometry,
@@ -96,6 +98,11 @@ impl RetainedTransientPresentationOccurrence {
                 render_transform: self.render_transform,
             },
         )
+        .with_anchor_side(if self.before_anchor {
+            noon_runtime::TransientAnchorSide::Before
+        } else {
+            noon_runtime::TransientAnchorSide::After
+        })
     }
 }
 
@@ -978,6 +985,45 @@ mod tests {
             installed.state().effective_render_geometry(),
             Some(GeometryRef::VectorPath(_))
         ));
+    }
+
+    #[test]
+    fn transient_anchor_side_survives_worker_codec_and_slot_remapping() {
+        for side in [
+            noon_runtime::TransientAnchorSide::Before,
+            noon_runtime::TransientAnchorSide::After,
+        ] {
+            let frame = frame();
+            let occurrence = TransientPresentationOccurrence::new(
+                0,
+                9,
+                TransientPresentationState {
+                    z_index: 0.0,
+                    content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                    text_bounds: None,
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                    appearance: 0.5,
+                    presence: true,
+                    reveal: 1.0,
+                    morph: 0.0,
+                    render_geometry: None,
+                    render_transform: None,
+                },
+            )
+            .with_anchor_side(side);
+            let wire =
+                RetainedTransientPresentationOccurrence::from_runtime(&frame, &occurrence).unwrap();
+            let json = serde_json::to_string(&wire).unwrap();
+            let decoded: RetainedTransientPresentationOccurrence =
+                serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.anchor, frame.objects[0].id);
+            let installed = decoded.install(12);
+            assert_eq!(installed.anchor_side(), side);
+            assert_eq!(installed.anchor_object_index(), 12);
+            assert_eq!(installed.occurrence_index(), 9);
+            assert_eq!(installed.state(), occurrence.state());
+        }
     }
 
     #[test]
