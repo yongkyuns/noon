@@ -868,6 +868,7 @@ pub enum DerivedDisplayPrimitive {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreparedDerivedDisplaySlot {
     pub anchor_object_index: u32,
+    pub anchor_side: noon_runtime::TransientAnchorSide,
     pub occurrence_index: u32,
     pub primitive: DerivedDisplayPrimitive,
     pub instance_index: usize,
@@ -1066,7 +1067,7 @@ fn prepare_derived_display_inner(
         by_anchor.entry(anchor).or_default().push(object);
     }
     for objects in by_anchor.values_mut() {
-        objects.sort_unstable_by_key(|object| object.occurrence_index());
+        objects.sort_unstable_by_key(|object| (object.anchor_side(), object.occurrence_index()));
     }
 
     let mut prepared = PreparedDerivedDisplay::default();
@@ -1203,6 +1204,7 @@ fn pack_derived_display_object(
     };
     prepared.slots.push(PreparedDerivedDisplaySlot {
         anchor_object_index: object.anchor_object_index(),
+        anchor_side: object.anchor_side(),
         occurrence_index: occurrence,
         primitive,
         instance_index,
@@ -1342,6 +1344,7 @@ mod derived_display_tests {
             prepared.slot_for_occurrence(7),
             Some(PreparedDerivedDisplaySlot {
                 anchor_object_index: 0,
+                anchor_side: noon_runtime::TransientAnchorSide::After,
                 occurrence_index: 7,
                 primitive: DerivedDisplayPrimitive::Circle,
                 instance_index: 0,
@@ -1412,6 +1415,7 @@ mod derived_display_tests {
             prepared.slot_for_occurrence(3),
             Some(PreparedDerivedDisplaySlot {
                 anchor_object_index: 0,
+                anchor_side: noon_runtime::TransientAnchorSide::After,
                 occurrence_index: 3,
                 primitive: DerivedDisplayPrimitive::Path {
                     batch: 0,

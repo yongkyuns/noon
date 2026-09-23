@@ -135,7 +135,11 @@ pub(super) fn build_matching_shape_target_leftover_plan(
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
     let occurrences =
         materialize_matching_shape_target_leftovers(target_fades, occurrence_index_start, |z| {
-            stable_layer_tail(runtime, z)
+            stable_layer_tail(runtime, z).map(|anchor_object_index| {
+                TransientPresentationPainterPlacement::AfterStable {
+                    anchor_object_index,
+                }
+            })
         })?;
     build_transient_plan(occurrences)
 }
@@ -148,13 +152,48 @@ pub(super) fn build_matching_shape_target_leftover_plan(
 /// occurrence range after all matched derived occurrences, so concatenation cannot
 /// invent or arbitrate another occurrence identity space.
 pub(super) fn build_matching_family_transform_plan(
-    runtime: &SceneInstance,
+    session: &crate::ExecutionSession,
+    store: &SemanticStore,
+    root: SemanticNodeId,
     payload: &PreparedMatchingFamilyTransformPayload,
     moved_sources: &[PreparedMatchingShapeSourceMember],
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
-    // The declaration moves the source family behind surviving roots. Resolve
-    // LayerEnd against that proposed order before committing, not the old frame's
-    // tail. Only affected source members are visited; stable row IDs do not change.
+    let runtime = &session.runtime;
+    // Admission moves ordinary sources ahead of the ordered foreground tail.
+    // A detached target leftover belongs before that tail even when the source
+    // itself is foreground, or this z layer has no ordinary stable anchor.
+    // Visit only foreground families and the already prepared source members.
+    let mut foreground_heads = std::collections::HashMap::new();
+    if !payload.target_leftovers().is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for &foreground in store
+            .node(root)
+            .ok_or_else(|| "matching foreground scope is missing".to_owned())?
+            .foreground_members()
+        {
+            for node in store
+                .ordered_authoring_nodes(foreground)
+                .map_err(|e| e.to_string())?
+            {
+                if !seen.insert(node) {
+                    continue;
+                }
+                let Some(object) = session.execution_index.execution_object_id(node) else {
+                    continue;
+                };
+                let index = runtime
+                    .frame_index_for_object(object)
+                    .ok_or_else(|| "matching foreground has no stable painter row".to_owned())?;
+                if runtime.frame().is_present(index) {
+                    foreground_heads
+                        .entry(layer_key(runtime.frame().objects[index].z_index))
+                        .or_insert(u32::try_from(index).map_err(|_| {
+                            "matching foreground row exceeds u32 painter indexing".to_owned()
+                        })?);
+                }
+            }
+        }
+    }
     let mut moved_layer_tails = std::collections::HashMap::new();
     for source in moved_sources {
         let index = runtime
@@ -174,10 +213,20 @@ pub(super) fn build_matching_family_transform_plan(
         payload.target_leftovers(),
         payload.target_occurrence_index_start(),
         |z| {
+            if let Some(&anchor_object_index) = foreground_heads.get(&layer_key(z)) {
+                return Some(TransientPresentationPainterPlacement::BeforeStable {
+                    anchor_object_index,
+                });
+            }
             moved_layer_tails
                 .get(&layer_key(z))
                 .copied()
                 .or_else(|| stable_layer_tail(runtime, z))
+                .map(
+                    |anchor_object_index| TransientPresentationPainterPlacement::AfterStable {
+                        anchor_object_index,
+                    },
+                )
         },
     )
 }
@@ -196,7 +245,7 @@ fn build_matching_family_transform_plan_from_parts(
     derived: &[PreparedDerivedFamilyTransformOccurrence],
     target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
     target_occurrence_index_start: u32,
-    layer_tail: impl FnMut(f64) -> Option<u32>,
+    layer_tail: impl FnMut(f64) -> Option<TransientPresentationPainterPlacement>,
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
     let mut occurrences = materialize_derived_family_occurrences(runtime, derived)?;
     occurrences.extend(materialize_matching_shape_target_leftovers(
@@ -210,7 +259,7 @@ fn build_matching_family_transform_plan_from_parts(
 fn materialize_matching_shape_target_leftovers(
     target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
     occurrence_index_start: u32,
-    mut layer_tail: impl FnMut(f64) -> Option<u32>,
+    mut layer_tail: impl FnMut(f64) -> Option<TransientPresentationPainterPlacement>,
 ) -> Result<Vec<DerivedDisplayAnimationOccurrence>, String> {
     let mut occurrences = Vec::with_capacity(target_fades.len());
     for (ordinal, fade) in target_fades.iter().enumerate() {
@@ -220,7 +269,7 @@ fn materialize_matching_shape_target_leftovers(
                 fade.target_index
             ));
         }
-        let anchor_object_index = layer_tail(fade.base.z_index).ok_or_else(|| {
+        let painter_placement = layer_tail(fade.base.z_index).ok_or_else(|| {
             format!(
                 "matching-shape target leftover {} has no stable painter row in z layer {}",
                 fade.target_index, fade.base.z_index
@@ -250,9 +299,7 @@ fn materialize_matching_shape_target_leftovers(
             })
             .collect();
         occurrences.push(DerivedDisplayAnimationOccurrence {
-            painter_placement: TransientPresentationPainterPlacement::AfterStable {
-                anchor_object_index,
-            },
+            painter_placement,
             occurrence_index,
             base: DerivedDisplayObjectState {
                 z_index: fade.base.z_index,
@@ -286,19 +333,17 @@ fn build_transient_plan(
 
 fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
     let frame = runtime.frame();
-    runtime
-        .painter_order()
+    let order = runtime.painter_order();
+    // Isolate the requested z layer without visiting unrelated layers. Presence
+    // is independent of painter membership: skip absent candidates within this
+    // layer rather than treating an absent tail as an empty layer.
+    let begin = order.partition_point(|&index| frame.objects[index as usize].z_index < z_index);
+    let end = order.partition_point(|&index| frame.objects[index as usize].z_index <= z_index);
+    order[begin..end]
         .iter()
-        .copied()
         .rev()
-        .find(|&index| {
-            let index = index as usize;
-            frame.is_present(index)
-                && frame
-                    .objects
-                    .get(index)
-                    .is_some_and(|object| object.z_index == z_index)
-        })
+        .copied()
+        .find(|&index| frame.is_present(index as usize))
 }
 
 /// Unsupported topology for exact-end matching-family replacement.
@@ -657,6 +702,42 @@ mod matching_target_tests {
     }
 
     #[test]
+    fn layer_tail_preserves_presence_filtering_and_signed_zero() {
+        use noon_core::{TrackDefinition, TrackId};
+        let objects = (1..=2)
+            .map(|id| {
+                CompiledObject::new(
+                    ObjectId::new(id),
+                    GeometryRef::circle(1.0),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .collect();
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(2),
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::instant(1.0),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let mut runtime =
+            SceneInstance::new(CompiledScene::compile_objects(objects, &[track]).unwrap());
+        assert!(!runtime.frame().is_present(1));
+        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(0));
+        assert_eq!(stable_layer_tail(&runtime, -0.0), Some(0));
+        assert_eq!(stable_layer_tail(&runtime, 1.0), None);
+        runtime.advance_to(1.0).unwrap();
+        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(1));
+        runtime.seek(0.0).unwrap();
+        assert_eq!(stable_layer_tail(&runtime, 0.0), Some(0));
+    }
+
+    #[test]
     fn matching_plan_combines_derived_and_target_occurrences_without_index_collision() {
         let runtime = runtime();
         let plan = build_matching_family_transform_plan_from_parts(
@@ -664,7 +745,13 @@ mod matching_target_tests {
             &[derived_occurrence()],
             &[target_fade(0.0)],
             1,
-            |z| stable_layer_tail(&runtime, z),
+            |z| {
+                stable_layer_tail(&runtime, z).map(|anchor_object_index| {
+                    TransientPresentationPainterPlacement::AfterStable {
+                        anchor_object_index,
+                    }
+                })
+            },
         )
         .unwrap()
         .unwrap();
