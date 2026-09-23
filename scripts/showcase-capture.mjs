@@ -190,6 +190,9 @@ async function captureSelection(context, entry, result) {
     const canvas = page.locator("#scene");
     const before = await canvas.screenshot();
     const baseImage = validateImage(before, `${entry.id}: unselected base`);
+    // Preserve comparison inputs as they are captured, including on failure.
+    await writeFile(path.join(output, `${entry.id}-base.png`), before);
+    result.interactionAttempt = { requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend, baseImage };
     const bounds = await canvas.boundingBox();
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
@@ -202,23 +205,25 @@ async function captureSelection(context, entry, result) {
       await page.waitForTimeout(50);
     }
     assert.ok(selected, "actual pointer click did not change the displayed image");
+    await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
     stage = "clear the selection";
     await click(0.05, 0.5);
-    let cleared;
+    let cleared, lastClear;
     for (let attempt = 0; attempt < 40; attempt++) {
       const bytes = await canvas.screenshot();
+      lastClear = bytes;
       if (samePixels(before, bytes)) { cleared = bytes; break; }
       await page.waitForTimeout(50);
     }
+    if (lastClear) await writeFile(path.join(output, `${entry.id}-${cleared ? "cleared" : "clear-last"}.png`), lastClear);
     assert.ok(cleared, "background click did not restore the base pixels exactly");
     stage = "restart and restore the same resolved frame";
     await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
     await seekPausedGallery(page, entry.duration);
-    assert.ok(samePixels(before, await canvas.screenshot()), "restart/seek did not restore the base pixels exactly");
+    const restarted = await canvas.screenshot();
+    await writeFile(path.join(output, `${entry.id}-restarted.png`), restarted);
+    assert.ok(samePixels(before, restarted), "restart/seek did not restore the base pixels exactly");
     assert.deepEqual(errors, []);
-    for (const [label, bytes] of [["base", before], ["selected", selected], ["cleared", cleared]]) {
-      await writeFile(path.join(output, `${entry.id}-${label}.png`), bytes);
-    }
     result.interaction = {
       recipe: "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
       requestedTime, publishedTime: metrics.metrics.time,

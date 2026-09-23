@@ -39,7 +39,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
 | Animate part of a group | Indexed slice selection | Identity assertions in source |
 | Bend a vector curve | Cubic anchors, control handles and a smooth path morph | Callback-time path editing and SVG import |
-| Transform, replace, or copy | Animate the correct reference after a morph | Shape-keyed matching and identity assertions |
+| Transform an object or its copy | Explicit copy isolation and subsequent Transform input animation | Unsupported ReplacementTransform and TransformFromCopy |
 | Match by shape | Geometry matching despite changed order | Duplicate-key and unmatched edge cases |
 | Accumulate or step through | Ordered visibility comparison | Smoothing away discrete semantics |
 | Words and equations | Text, emphasis, real mathematics | Full LaTeX parity |
@@ -69,11 +69,24 @@ The four feature additions have external syntax-only storyboard checks: explicit
 
 Generated images are artifacts until reviewed. Before default promotion, retain the approved PNGs under `web/thumbnails/showcase/`, verify every image loads on the deployed path, and review full animation playback, introduction, transitions, endpoint, replay/reset, pointer click/clear, desktop/mobile framing, and supported backends. A generated contact sheet alone is not proof that the complete animation is good.
 
+## Runtime findings that still block publication
+
+Run `35903486282` at head `3343197` produced matching results on WebGPU and WebGL: twelve of fourteen deterministic scene captures passed. Ordinary-playback recordings also exposed failures that isolated frames cannot detect. Treat the following as separate qualification concerns, not interchangeable success metrics.
+
+- The canonical composition path rejects `ReplacementTransform` and `TransformFromCopy`; exported class names were not sufficient evidence of support. The revised transform lesson deliberately teaches public `copy()` plus ordinary `Transform`, and says so in its title, source and metadata. It does not emulate or claim the rejected animation APIs.
+- The reactive lesson must register **and scene-bind** all three callback targets before its first play begins. The revised source does that and includes the targets in the first FadeIn, preserving an animated introduction. Late first-time callback enrollment remains outside this lesson's demonstrated scope.
+- Group slicing, text/math and coordinate plotting complete their source animations but return `UnsupportedDomain` for retained replay. `crates/noon-runtime/src/replay.rs` explicitly excludes domains including family-animation plans and reactive property bindings. The exact invalidation path for each scene still needs qualification; do not remove those demonstrations' features to manufacture a replay pass. Unavailable replay remains a failing live-review result.
+- A live seek uses the actual authored endpoint, which may be a few floating-point bits above the decimal storyboard duration. The live endpoint check compares those representations within roundoff, while keeping the requested and published values unchanged. Deterministic sampling keeps its existing strict bounds.
+- Parent run `35899027235` had a WebGL exact-clear failure even though the child run passed pointer selection on both backends. Do not dismiss this as fixed by a later pass. Capture now retains the base, selected and last clear-attempt images before assertions, including on failure, so this discrepancy can be diagnosed without relaxing pixel equality.
+
+Live review retains an unseeked first-pass PNG and state before attempting replay. This preserves evidence for a completed animation when a later replay check fails; it is not a substitute for that check. Post-repair backend results, visual review and publication approval are still required.
+
 ## Remaining coverage and migration
 
 This first slice is intentionally NOT exhaustive. Finish and qualify these learning homes before describing the curated catalog as comprehensive:
 
 - Finish rendered review of the new entrances/exits, transform-ownership, cubic-path and reactive-relationship lessons.
+- Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.
 - dt-driven updater lifecycle, beyond the authored ValueTracker relationship lesson.
 - NumberLine transforms, NumberPlane, implicit contours, synchronized/gapped series.
