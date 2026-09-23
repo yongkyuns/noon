@@ -31,13 +31,13 @@ jobs:
       NOON_RENDERER_SMOKE: '1'
       XDG_RUNTIME_DIR: /tmp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install reference and native raster dependencies
@@ -49,14 +49,14 @@ jobs:
         run: |
           rustup install
           rustup target add wasm32-unknown-unknown
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: image-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/**/Cargo.toml') }}
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -82,7 +82,7 @@ jobs:
         run: cargo test -p noon --no-default-features --features image-decode --test image_raster_qualification -- --ignored --nocapture
       - name: Direct Rust WASM and Python on WebGPU and WebGL2
         run: timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: image-raster-qualification

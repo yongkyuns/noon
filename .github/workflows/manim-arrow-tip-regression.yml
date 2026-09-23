@@ -50,7 +50,7 @@ jobs:
           git rev-parse HEAD > ci-artifacts/arrow-tip/checkout.txt
           git status --short >> ci-artifacts/arrow-tip/checkout.txt
           sha256sum parity/manim-v0.21/core-examples/arrow_tip_regression.py >> ci-artifacts/arrow-tip/checkout.txt
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Prove the pixel checker detects bad tips
@@ -86,7 +86,7 @@ jobs:
         run: bash scripts/check.sh fast "$BASE_SHA"
       - name: Test native Rust arrow geometry without Python or browser features
         run: cargo test -p noon --no-default-features --test arrow_tip_regression
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
           tool: wasm-pack@0.15.0
           fallback: none
