@@ -1,0 +1,978 @@
+diff --git a/crates/noon-core/src/semantic_store.rs b/crates/noon-core/src/semantic_store.rs
+index 6c4544755..199a62245 100644
+--- a/crates/noon-core/src/semantic_store.rs
++++ b/crates/noon-core/src/semantic_store.rs
+@@ -35,8 +35,8 @@ pub use semantic_scene_operations::*;
+ mod semantic_scene_restructure;
+ pub use semantic_scene_restructure::{
+     plan_semantic_scene_membership, semantic_scene_root_contains,
+-    stage_semantic_foreground_removal, stage_semantic_scene_lifecycle_membership,
+-    SemanticSceneMembershipRequest,
++    stage_semantic_foreground_removal, stage_semantic_scene_admission,
++    stage_semantic_scene_lifecycle_membership, SemanticSceneMembershipRequest,
+ };
+ 
+ mod semantic_declarations;
+diff --git a/crates/noon-core/src/semantic_store/semantic_scene_operations.rs b/crates/noon-core/src/semantic_store/semantic_scene_operations.rs
+index 30e09140e..430471033 100644
+--- a/crates/noon-core/src/semantic_store/semantic_scene_operations.rs
++++ b/crates/noon-core/src/semantic_store/semantic_scene_operations.rs
+@@ -15,6 +15,8 @@ pub enum SemanticSceneOperationError {
+     NotSemanticFamily(SemanticNodeId),
+     NotSemanticAuthoringNode(SemanticNodeId),
+     DuplicateMembershipTarget(SemanticNodeId),
++    /// A pending admission must name one fresh, unparented object in this transaction.
++    InvalidPendingAdmission(crate::SemanticLocalNodeToken),
+     MissingMembershipTarget(SemanticNodeId),
+     AmbiguousMembershipTarget(SemanticNodeId),
+     /// One local scene restructure would promote the same aliased node from
+@@ -60,6 +62,10 @@ impl std::fmt::Display for SemanticSceneOperationError {
+                 id.slot(),
+                 id.generation()
+             ),
++            Self::InvalidPendingAdmission(token) => write!(
++                formatter,
++                "pending admission {token:?} must name one fresh unparented object in this transaction"
++            ),
+             Self::MissingMembershipTarget(id) => write!(
+                 formatter,
+                 "semantic membership target {}:{} is absent from the scene projection",
+diff --git a/crates/noon-core/src/semantic_store/semantic_scene_restructure.rs b/crates/noon-core/src/semantic_store/semantic_scene_restructure.rs
+index 9c7397920..1c2086430 100644
+--- a/crates/noon-core/src/semantic_store/semantic_scene_restructure.rs
++++ b/crates/noon-core/src/semantic_store/semantic_scene_restructure.rs
+@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
+ 
+ use crate::{
+     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
+-    SemanticSceneOperationError, SemanticStore,
++    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef,
+ };
+ 
+ mod foreground;
+@@ -216,6 +216,102 @@ enum ExplicitPlacement {
+     Tail,
+ }
+ 
++/// Stage an ordered admission batch, including transaction-local new objects.
++///
++/// Existing objects/families use the same family projection and foreground tail
++/// as Scene.add. Pending admissions must be newly created, unparented objects;
++/// pending family restructuring is not supported. Token identity/allocation and
++/// final publication remain owned by the caller's ordinary semantic transaction.
++/// Work visits the admitted/foreground closures, plus the current transaction only
++/// when it contains pending admissions; unrelated scene roots are not enumerated.
++pub fn stage_semantic_scene_admission(
++    store: &SemanticStore,
++    scene_root: SemanticNodeId,
++    admitted: &[SemanticTransactionNodeRef],
++    transaction: &mut SemanticMutationTransaction,
++) -> Result<(), SemanticSceneOperationError> {
++    use crate::{SemanticMutation, SemanticNodeCreation};
++    let root = target_node_checked(store, scene_root)?;
++    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
++        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
++    }
++    if admitted.is_empty() {
++        return Ok(());
++    }
++    let existing = admitted
++        .iter()
++        .filter_map(|id| id.existing())
++        .collect::<Vec<_>>();
++    validated_distinct_nodes(store, &existing)?;
++    let mut pending = HashSet::new();
++    for &id in admitted {
++        if let SemanticTransactionNodeRef::Pending(token) = id {
++            if !pending.insert(token) {
++                return Err(SemanticSceneOperationError::InvalidPendingAdmission(token));
++            }
++        }
++    }
++    if !pending.is_empty() {
++        let mut created = HashSet::new();
++        for mutation in transaction.mutations() {
++            match mutation {
++                SemanticMutation::AddNode {
++                    token,
++                    creation: SemanticNodeCreation::Object { .. },
++                } if pending.contains(token) => {
++                    created.insert(*token);
++                }
++                SemanticMutation::AddMember {
++                    member: SemanticTransactionNodeRef::Pending(token),
++                    ..
++                } if pending.contains(token) => {
++                    return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
++                }
++                _ => {}
++            }
++        }
++        if let Some(token) = pending.difference(&created).next() {
++            return Err(SemanticSceneOperationError::InvalidPendingAdmission(*token));
++        }
++    }
++    let foreground = root
++        .foreground_members()
++        .iter()
++        .copied()
++        .collect::<HashSet<_>>();
++    let ordered = admitted
++        .iter()
++        .copied()
++        .filter(|id| id.existing().is_none_or(|id| !foreground.contains(&id)))
++        .chain(root.foreground_members().iter().copied().map(Into::into))
++        .collect::<Vec<SemanticTransactionNodeRef>>();
++    let existing = ordered
++        .iter()
++        .filter_map(|id| id.existing())
++        .collect::<Vec<_>>();
++    let removal = downward_target_closure(store, &existing)?;
++    stage_explicit_root_projection(
++        store,
++        scene_root,
++        &removal,
++        None,
++        &existing,
++        ExplicitPlacement::Tail,
++        transaction,
++    )?;
++    // Fill the pending-object gaps in the projected existing order. These are
++    // ordinary provisional edge/order edits, not synthetic semantic identities.
++    let mut before = None;
++    for &id in ordered.iter().rev() {
++        if matches!(id, SemanticTransactionNodeRef::Pending(_)) {
++            transaction.add_member(scene_root, id);
++            transaction.reorder_member_ref(scene_root, id, before);
++        }
++        before = Some(id);
++    }
++    Ok(())
++}
++
+ /// Stage one lifecycle boundary's removals followed by foreground-aware admission.
+ ///
+ /// All targets for a scope are planned together so membership restructuring,
+diff --git a/crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs b/crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs
+index 65d386209..8429d0677 100644
+--- a/crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs
++++ b/crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs
+@@ -620,3 +620,114 @@ fn lifecycle_membership_rejects_stale_admission_without_staging_removal() {
+     assert_eq!(store.scene_revision(), revision);
+     assert_eq!(store.last_mutation_stats(), counters);
+ }
++
++#[test]
++fn staged_admission_preserves_mixed_existing_and_pending_order() {
++    use crate::{SemanticNodeCreation, SemanticObjectState, StoredGeometry};
++    let mut store = SemanticStore::new();
++    let a = object(&mut store);
++    let b = object(&mut store);
++    let front = object(&mut store);
++    let root = family(&mut store, &[front]);
++    edit(
++        &mut store,
++        root,
++        SemanticSceneMembershipRequest::AddForeground(&[front]),
++    );
++    let mut transaction = SemanticMutationTransaction::new();
++    let fresh = || {
++        SemanticNodeCreation::object(SemanticObjectState::new(StoredGeometry::Circle {
++            radius: 1.0,
++        }))
++    };
++    let p = transaction.create_node(fresh());
++    let q = transaction.create_node(fresh());
++    stage_semantic_scene_admission(
++        &store,
++        root,
++        &[a.into(), p.into(), b.into(), q.into()],
++        &mut transaction,
++    )
++    .unwrap();
++    assert_lists(&store, root, &[front], &[front]);
++    let result = transaction.apply(&mut store).unwrap();
++    assert_lists(
++        &store,
++        root,
++        &[
++            a,
++            result.resolve(p).unwrap(),
++            b,
++            result.resolve(q).unwrap(),
++            front,
++        ],
++        &[front],
++    );
++}
++
++#[test]
++fn staged_admission_rejects_foreign_family_and_duplicate_pending_tokens_before_staging() {
++    use crate::{SemanticNodeCreation, SemanticObjectState, StoredGeometry};
++    let mut store = SemanticStore::new();
++    let front = object(&mut store);
++    let root = family(&mut store, &[front]);
++    let mut foreign = SemanticMutationTransaction::new();
++    let token = foreign.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
++        StoredGeometry::Circle { radius: 1.0 },
++    )));
++    let mut transaction = SemanticMutationTransaction::new();
++    assert!(
++        stage_semantic_scene_admission(&store, root, &[token.into()], &mut transaction).is_err()
++    );
++    assert!(transaction.is_empty());
++    let group = transaction.create_node(SemanticNodeCreation::family());
++    let count = transaction.mutations().len();
++    assert!(
++        stage_semantic_scene_admission(&store, root, &[group.into()], &mut transaction).is_err()
++    );
++    assert_eq!(transaction.mutations().len(), count);
++    let leaf = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
++        StoredGeometry::Circle { radius: 1.0 },
++    )));
++    let count = transaction.mutations().len();
++    assert!(stage_semantic_scene_admission(
++        &store,
++        root,
++        &[leaf.into(), leaf.into()],
++        &mut transaction
++    )
++    .is_err());
++    assert_eq!(transaction.mutations().len(), count);
++    assert_eq!(store.node(root).unwrap().members(), [front]);
++}
++
++#[test]
++fn staged_admission_projects_nested_foreground_without_touching_unrelated_roots() {
++    let mut store = SemanticStore::new();
++    let a = object(&mut store);
++    let b = object(&mut store);
++    let introduced = object(&mut store);
++    let group = family(&mut store, &[a, b]);
++    let unrelated = (0..2_000).map(|_| object(&mut store)).collect::<Vec<_>>();
++    let root = family(&mut store, &unrelated);
++    edit(
++        &mut store,
++        root,
++        SemanticSceneMembershipRequest::AddForeground(&[group]),
++    );
++    edit(
++        &mut store,
++        root,
++        SemanticSceneMembershipRequest::RemoveForeground(&[a]),
++    );
++    let mut transaction = SemanticMutationTransaction::new();
++    stage_semantic_scene_admission(&store, root, &[introduced.into()], &mut transaction).unwrap();
++    assert!(transaction.mutations().len() <= 8);
++    transaction.apply(&mut store).unwrap();
++    let expected = unrelated
++        .into_iter()
++        .chain([a, introduced, b])
++        .collect::<Vec<_>>();
++    assert_lists(&store, root, &expected, &[b]);
++    assert_eq!(store.node(group).unwrap().members(), [a, b]);
++}
+diff --git a/crates/noon-web/src/authoring_error.rs b/crates/noon-web/src/authoring_error.rs
+index 2272c398f..8dc53e7bf 100644
+--- a/crates/noon-web/src/authoring_error.rs
++++ b/crates/noon-web/src/authoring_error.rs
+@@ -487,6 +487,9 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
+             E::NotSemanticFamily(_) => ("invalid_input", "semantic.not_family"),
+             E::NotSemanticAuthoringNode(_) => ("invalid_input", "semantic.not_authoring_node"),
+             E::DuplicateMembershipTarget(_) => ("invalid_input", "membership.duplicate_target"),
++            E::InvalidPendingAdmission(_) => {
++                ("invalid_input", "membership.invalid_pending_admission")
++            }
+             E::MissingMembershipTarget(_) => ("invalid_input", "membership.missing_target"),
+             E::AmbiguousMembershipTarget(_) => ("invalid_input", "membership.ambiguous_target"),
+             E::AmbiguousCrossRootAlias(_) => {
+@@ -850,6 +853,19 @@ mod tests {
+     use super::*;
+     use noon_core::SemanticNodeId;
+ 
++    #[test]
++    fn pending_admission_error_preserves_typed_membership_diagnostic() {
++        let mut transaction = noon_core::SemanticMutationTransaction::new();
++        let token = transaction.create_node(noon_core::SemanticNodeCreation::family());
++        let error = SemanticSceneOperationError::InvalidPendingAdmission(token);
++        let message = error.to_string();
++        let failure = AuthoringFailure::from(error);
++        assert_eq!(failure.category, "invalid_input");
++        assert_eq!(failure.code, "membership.invalid_pending_admission");
++        assert_eq!(failure.message, message);
++        assert!(failure.cause.is_none());
++    }
++
+     #[test]
+     fn typed_membership_chain_preserves_categories_and_sources() {
+         let node = SemanticNodeId::new(7, 3);
+diff --git a/crates/noon/src/example_scenes/foreground_membership.rs b/crates/noon/src/example_scenes/foreground_membership.rs
+index 1224bff71..7384c38d1 100644
+--- a/crates/noon/src/example_scenes/foreground_membership.rs
++++ b/crates/noon/src/example_scenes/foreground_membership.rs
+@@ -2,9 +2,10 @@
+ use std::{cell::RefCell, rc::Rc};
+ 
+ use crate::{
+-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
++    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
++    MobjectFamily,
+     MobjectTarget::{Family, Object as Leaf},
+-    Scene, SemanticNodeId,
++    RateFunction, Scene, SemanticNodeId,
+ };
+ use noon_core::SemanticStore;
+ 
+@@ -54,11 +55,21 @@ impl LiveContinuation for ForegroundMembership {
+                 self.assert_lists(&[self.family.node_id()], &[self.family.node_id()])?;
+             }
+             1 => {
+-                live.add(&self.green).map_err(|error| error.to_string())?;
++                let segment = live
++                    .declare_and_activate_fade(
++                        &self.green,
++                        noon_core::SemanticFadeDirection::In,
++                        AnimationOptions::new()
++                            .run_time(0.35)
++                            .rate_func(RateFunction::Linear),
++                    )
++                    .map_err(|error| error.to_string())?;
+                 self.assert_lists(
+                     &[self.green.node_id(), self.family.node_id()],
+                     &[self.family.node_id()],
+                 )?;
++                self.stage += 1;
++                return Ok(ContinuationStep::Await(segment));
+             }
+             2 => {
+                 live.remove_foreground_many(&[Leaf(&self.red)])
+@@ -69,7 +80,14 @@ impl LiveContinuation for ForegroundMembership {
+                 )?;
+             }
+             3 => {
+-                live.add(&self.later).map_err(|error| error.to_string())?;
++                let segment = live
++                    .declare_and_activate_create(
++                        &self.later,
++                        AnimationOptions::new()
++                            .run_time(0.35)
++                            .rate_func(RateFunction::Linear),
++                    )
++                    .map_err(|error| error.to_string())?;
+                 self.assert_lists(
+                     &[
+                         self.green.node_id(),
+@@ -79,6 +97,8 @@ impl LiveContinuation for ForegroundMembership {
+                     ],
+                     &[self.blue.node_id()],
+                 )?;
++                self.stage += 1;
++                return Ok(ContinuationStep::Await(segment));
+             }
+             4 => {
+                 live.remove_foreground_many(&[Leaf(&self.blue)])
+diff --git a/crates/noon/src/execution_session.rs b/crates/noon/src/execution_session.rs
+index e6b066b3a..03905b98e 100644
+--- a/crates/noon/src/execution_session.rs
++++ b/crates/noon/src/execution_session.rs
+@@ -81,6 +81,37 @@ fn resolve_committed_node(
+     }
+ }
+ 
++/// Request-local order and duplicate detection; the core planner owns membership.
++#[derive(Default)]
++struct AnimationAdmissions {
++    ordered: Vec<SemanticTransactionNodeRef>,
++    seen: HashSet<SemanticTransactionNodeRef>,
++}
++
++impl AnimationAdmissions {
++    fn insert(&mut self, target: SemanticTransactionNodeRef) -> bool {
++        if !self.seen.insert(target) {
++            return false;
++        }
++        self.ordered.push(target);
++        true
++    }
++
++    fn is_empty(&self) -> bool {
++        self.ordered.is_empty()
++    }
++}
++
++fn stage_animation_admissions(
++    store: &SemanticStore,
++    root: SemanticNodeId,
++    targets: &[SemanticTransactionNodeRef],
++    declaration: &mut SemanticMutationTransaction,
++) -> Result<(), ExecutionSessionAnimationError> {
++    noon_core::stage_semantic_scene_admission(store, root, targets, declaration)
++        .map_err(|error| ExecutionSessionAnimationError::InvalidComposition(error.to_string()))
++}
++
+ #[derive(Clone)]
+ enum PreparedAnimationLifecycle {
+     Introduce(SemanticNodeId),
+@@ -1599,7 +1630,7 @@ impl ExecutionSession {
+             });
+         }
+         let mut declaration = SemanticMutationTransaction::new();
+-        let mut admitted = HashSet::new();
++        let mut admitted = AnimationAdmissions::default();
+         let mut removals = Vec::new();
+         let animation = self.stage_composition_request(
+             store,
+@@ -1609,6 +1640,7 @@ impl ExecutionSession {
+             &mut admitted,
+             &mut removals,
+         )?;
++        stage_animation_admissions(store, root, &admitted.ordered, &mut declaration)?;
+         self.declare_and_activate_prepared_animation(
+             store,
+             declaration,
+@@ -1680,12 +1712,11 @@ impl ExecutionSession {
+         root: SemanticNodeId,
+         request: &SemanticCompositionRequest,
+         declaration: &mut SemanticMutationTransaction,
+-        admitted: &mut HashSet<SemanticTransactionNodeRef>,
++        admitted: &mut AnimationAdmissions,
+         removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+         let admit = |target: SemanticNodeId,
+-                     declaration: &mut SemanticMutationTransaction,
+-                     admitted: &mut HashSet<SemanticTransactionNodeRef>|
++                     admitted: &mut AnimationAdmissions|
+          -> Result<(), ExecutionSessionAnimationError> {
+             let state = store
+                 .semantic_object_state_checked(target)
+@@ -1719,7 +1750,7 @@ impl ExecutionSession {
+                     error: ExecutionSessionCreateError::DuplicateTarget,
+                 });
+             }
+-            declaration.add_member(root, target);
++
+             Ok(())
+         };
+         match request {
+@@ -1727,7 +1758,7 @@ impl ExecutionSession {
+                 let (target, animation) = focus
+                     .stage(declaration, *options)
+                     .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+-                declaration.add_member(root, target);
++
+                 admitted.insert(target.into());
+                 removals.push((root, target.into()));
+                 Ok(animation)
+@@ -1739,7 +1770,7 @@ impl ExecutionSession {
+                 complete_priority,
+                 options,
+             } => {
+-                admit(*source, declaration, admitted)?;
++                admit(*source, admitted)?;
+                 let target_state =
+                     self.stage_animation_target_state(store, declaration, *target_state)?;
+                 let animation = declaration.create_transform_animation_with_interpolation(
+@@ -1964,7 +1995,7 @@ impl ExecutionSession {
+             } => {
+                 let introducer = options.introducer.unwrap_or(true);
+                 if introducer {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 } else {
+                     self.require_present_draw_border_target(store, root, *target)?;
+                 }
+@@ -2066,7 +2097,7 @@ impl ExecutionSession {
+                                 "subset display supports direct object members, not nested families".into(),
+                             )
+                         })?;
+-                        admit(leaf, declaration, admitted)?;
++                        admit(leaf, admitted)?;
+                         Ok(declaration.create_subset_display_member_animation(
+                             leaf,
+                             index,
+@@ -2117,7 +2148,6 @@ impl ExecutionSession {
+                                 error: ExecutionSessionCreateError::DuplicateTarget,
+                             });
+                         }
+-                        declaration.add_member(root, *target);
+                     }
+                     SemanticFadeDirection::Out => removals.push((root, (*target).into())),
+                 }
+@@ -2149,7 +2179,7 @@ impl ExecutionSession {
+                 let introducer = options.introducer.unwrap_or(!reverse_member_order);
+                 let remover = options.remover.unwrap_or(*reverse_member_order);
+                 if introducer {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 } else {
+                     self.require_present_draw_border_target(store, root, *target)?;
+                 }
+@@ -2197,14 +2227,11 @@ impl ExecutionSession {
+                     self.require_create_target(store, *target)?;
+                     true
+                 };
+-                if admitted_target {
+-                    if !admitted.insert((*target).into()) {
+-                        return Err(ExecutionSessionAnimationError::CreateTarget {
+-                            target: *target,
+-                            error: ExecutionSessionCreateError::DuplicateTarget,
+-                        });
+-                    }
+-                    declaration.add_member(root, *target);
++                if admitted_target && !admitted.insert((*target).into()) {
++                    return Err(ExecutionSessionAnimationError::CreateTarget {
++                        target: *target,
++                        error: ExecutionSessionCreateError::DuplicateTarget,
++                    });
+                 }
+                 if options.remover.unwrap_or(*reverse) {
+                     removals.push((root, (*target).into()));
+@@ -2234,7 +2261,7 @@ impl ExecutionSession {
+                     crate::animation_authoring::normalized_passing_flash_options(*options)
+                         .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                 if self.require_uncreate_target(store, root, *target)? {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 }
+                 // The final reveal phase owns this leaf's membership removal.
+                 Ok(declaration.create_passing_flash_animation(*target, *time_width, options))
+@@ -2245,7 +2272,7 @@ impl ExecutionSession {
+                 hold_origin,
+                 options,
+             } => {
+-                admit(*target, declaration, admitted)?;
++                admit(*target, admitted)?;
+                 Ok(declaration.create_rotate_animation_with_origin_constraint(
+                     *target,
+                     *angle,
+@@ -2272,7 +2299,7 @@ impl ExecutionSession {
+                 Ok(declaration.create_wait_animation(*duration))
+             }
+             SemanticCompositionRequest::Add { target, options } => {
+-                admit(*target, declaration, admitted)?;
++                admit(*target, admitted)?;
+                 Ok(declaration.create_add_animation(*target, *options))
+             }
+             SemanticCompositionRequest::Fade {
+@@ -2283,19 +2310,19 @@ impl ExecutionSession {
+             } => {
+                 self.require_fade_target(store, root, *target, *direction)?;
+                 if *direction == SemanticFadeDirection::In {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 }
+                 Ok(declaration
+                     .create_fade_animation_with_endpoint(*target, *direction, *endpoint, *options))
+             }
+             SemanticCompositionRequest::Create { target, options } => {
+                 self.require_create_target(store, *target)?;
+-                admit(*target, declaration, admitted)?;
++                admit(*target, admitted)?;
+                 Ok(declaration.create_create_animation(*target, *options))
+             }
+             SemanticCompositionRequest::Uncreate { target, options } => {
+                 if self.require_uncreate_target(store, root, *target)? {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 }
+                 // The reveal track completion owns leaf removal. Explicit
+                 // composition removals are for families and non-track effects.
+@@ -2315,7 +2342,7 @@ impl ExecutionSession {
+                 let needs_admission =
+                     self.require_affine_lifecycle_target(store, root, *target, *direction)?;
+                 if needs_admission {
+-                    admit(*target, declaration, admitted)?;
++                    admit(*target, admitted)?;
+                 }
+                 if *direction == SemanticAffineLifecycleDirection::RemoveTo {
+                     removals.push((root, (*target).into()));
+@@ -2423,7 +2450,7 @@ impl ExecutionSession {
+         self.require_fade_target(store, root, target, direction)?;
+         let mut declaration = SemanticMutationTransaction::new();
+         if direction == SemanticFadeDirection::In {
+-            declaration.add_member(root, target);
++            stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
+         }
+         let animation =
+             declaration.create_fade_animation_with_endpoint(target, direction, endpoint, options);
+@@ -2456,7 +2483,7 @@ impl ExecutionSession {
+         let admitted = self.require_affine_lifecycle_target(store, root, target, direction)?;
+         let mut declaration = SemanticMutationTransaction::new();
+         if admitted {
+-            declaration.add_member(root, target);
++            stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
+         }
+         let animation =
+             declaration.create_affine_lifecycle_animation(target, direction, endpoint, options);
+@@ -2492,7 +2519,7 @@ impl ExecutionSession {
+         self.require_create_root(root, target)?;
+         self.require_create_target(store, target)?;
+         let mut declaration = SemanticMutationTransaction::new();
+-        declaration.add_member(root, target);
++        stage_animation_admissions(store, root, &[target.into()], &mut declaration)?;
+         let animation = declaration.create_create_animation(target, options);
+         self.declare_and_activate_prepared_animation(
+             store,
+@@ -2559,11 +2586,13 @@ impl ExecutionSession {
+         let mut declaration = SemanticMutationTransaction::new();
+         let leaves = children
+             .iter()
+-            .map(|(target, options)| {
+-                declaration.add_member(root, *target);
+-                declaration.create_create_animation(*target, *options)
+-            })
++            .map(|(target, options)| declaration.create_create_animation(*target, *options))
++            .collect::<Vec<_>>();
++        let admissions = children
++            .iter()
++            .map(|(target, _)| (*target).into())
+             .collect::<Vec<_>>();
++        stage_animation_admissions(store, root, &admissions, &mut declaration)?;
+         let animation_root = declaration.create_animation_composition(
+             SemanticAnimationCompositionKind::Parallel,
+             leaves,
+@@ -2698,7 +2727,7 @@ impl ExecutionSession {
+         operation: FamilyGlyphOperation,
+         options: AnimationOptions,
+         declaration: &mut SemanticMutationTransaction,
+-        admitted: &mut HashSet<SemanticTransactionNodeRef>,
++        admitted: &mut AnimationAdmissions,
+         removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+         let node = store.node(target).ok_or_else(|| {
+@@ -2794,14 +2823,11 @@ impl ExecutionSession {
+                 "family TextWrite requires at least one visible glyph".into(),
+             ));
+         }
+-        if introducer {
+-            if !admitted.insert(target.into()) {
+-                return Err(ExecutionSessionAnimationError::CreateTarget {
+-                    target,
+-                    error: ExecutionSessionCreateError::DuplicateTarget,
+-                });
+-            }
+-            declaration.add_member(root, target);
++        if introducer && !admitted.insert(target.into()) {
++            return Err(ExecutionSessionAnimationError::CreateTarget {
++                target,
++                error: ExecutionSessionCreateError::DuplicateTarget,
++            });
+         }
+         if remover {
+             removals.push((root, target.into()));
+@@ -3482,7 +3508,12 @@ impl ExecutionSession {
+             .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+                 prepared,
+                 execution_prefix,
+-                family_replacement.map(|(root, _, _)| root),
++                // Admissions can reorder the root even without a matching
++                // family transform. Use the lifecycle's already validated scope;
++                // the unrooted lowering guard remains unchanged.
++                family_replacement
++                    .map(|(root, _, _)| root)
++                    .or_else(|| lifecycle.as_ref().map(PreparedAnimationLifecycle::root)),
+                 publication::SemanticPublicationPurpose::AuthoredMutation,
+                 reactive_enrollment,
+                 handled_scalar_signals,
+diff --git a/crates/noon/tests/foreground_admission.rs b/crates/noon/tests/foreground_admission.rs
+new file mode 100644
+index 000000000..58a8a0732
+--- /dev/null
++++ b/crates/noon/tests/foreground_admission.rs
+@@ -0,0 +1,269 @@
++//! Every authoring entrypoint admits animation content below persistent foreground.
++use noon::{
++    AnimationCompositionRequest as Request, AnimationOptions, ExecutionSession, FocusOnOptions,
++    Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind,
++};
++use noon_compile::semantic_execution_object_id;
++use noon_core::{ObjectId, SemanticFadeDirection, SemanticNodeId};
++
++fn options() -> AnimationOptions {
++    AnimationOptions::new()
++        .run_time(1.0)
++        .rate_func(RateFunction::Linear)
++}
++fn display(scene: &Scene) -> Vec<SemanticNodeId> {
++    scene
++        .integration_store()
++        .borrow()
++        .node(scene.root())
++        .unwrap()
++        .members()
++}
++fn foreground(scene: &Scene) -> Vec<SemanticNodeId> {
++    scene
++        .integration_store()
++        .borrow()
++        .node(scene.root())
++        .unwrap()
++        .foreground_members()
++        .to_vec()
++}
++fn painter(session: &ExecutionSession) -> Vec<ObjectId> {
++    session
++        .painter_order()
++        .iter()
++        .map(|&i| session.frame().objects[i as usize].id)
++        .collect()
++}
++fn id(object: &Mobject) -> ObjectId {
++    semantic_execution_object_id(object.node_id())
++}
++
++fn check_admission(path: u8) {
++    let mut scene = Scene::new();
++    let back = scene.square(3.0).unwrap();
++    let front = scene.square(1.0).unwrap();
++    let a = scene.square(2.0).unwrap();
++    let b = scene.circle(0.7).unwrap();
++    let later = scene.circle(0.3).unwrap();
++    let family = if path >= 5 {
++        Some(scene.family(&[(&a).into(), (&b).into()]).unwrap())
++    } else {
++        None
++    };
++    scene.add(&back).unwrap();
++    scene.add_foreground_many(&[(&front).into()]).unwrap();
++    let mut session = scene.execution_session().unwrap();
++    let revision = scene.revision();
++    let segment = match path {
++        0 => scene
++            .live(&mut session)
++            .declare_and_activate_create(&a, options())
++            .unwrap(),
++        1 => scene
++            .live(&mut session)
++            .declare_and_activate_fade(&a, SemanticFadeDirection::In, options())
++            .unwrap(),
++        2 => scene
++            .live(&mut session)
++            .declare_and_activate_affine_lifecycle(
++                &a,
++                noon::AffineLifecycleDirection::IntroduceFrom,
++                noon::AffineLifecycleEndpoint::Point {
++                    x: -1.0,
++                    y: 0.0,
++                    rotation_offset: 0.0,
++                    point_color: None,
++                },
++                options(),
++            )
++            .unwrap(),
++        3 => scene
++            .live(&mut session)
++            .declare_and_activate_create_parallel(&[(&a, options()), (&b, options())], options())
++            .unwrap(),
++        4 => scene
++            .live(&mut session)
++            .declare_and_activate_composition(
++                &Request::Composition {
++                    kind: Kind::Parallel,
++                    children: vec![
++                        Request::Create {
++                            target: &a,
++                            options: options(),
++                        },
++                        Request::Fade {
++                            target: &b,
++                            direction: SemanticFadeDirection::In,
++                            endpoint: noon::FadeEndpoint::default(),
++                            options: options(),
++                        },
++                    ],
++                    options: options(),
++                },
++                options(),
++            )
++            .unwrap(),
++        5 => scene
++            .live(&mut session)
++            .declare_and_activate_family_fade(
++                family.as_ref().unwrap(),
++                SemanticFadeDirection::In,
++                options(),
++            )
++            .unwrap(),
++        6 => scene
++            .live(&mut session)
++            .declare_and_activate_composition(
++                &Request::FamilyReveal {
++                    target: family.as_ref().unwrap(),
++                    reverse: false,
++                    options: options(),
++                },
++                options(),
++            )
++            .unwrap(),
++        _ => unreachable!(),
++    };
++    let expected = if path < 3 {
++        vec![id(&back), id(&a), id(&front)]
++    } else {
++        vec![id(&back), id(&a), id(&b), id(&front)]
++    };
++    assert_eq!(painter(&session), expected, "activation path {path}");
++    assert_eq!(scene.revision(), revision.checked_next().unwrap());
++    let authored = scene.revision();
++    let membership = display(&scene);
++    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
++        scene
++            .live(&mut session)
++            .advance_segment_to(segment, t)
++            .unwrap();
++        assert_eq!(painter(&session), expected, "path {path}, time {t}");
++        assert_eq!(scene.revision(), authored);
++        assert_eq!(display(&scene), membership);
++        assert_eq!(foreground(&scene), [front.node_id()]);
++    }
++    scene.live(&mut session).complete_segment(segment).unwrap();
++    assert_eq!(painter(&session), expected);
++    scene.live(&mut session).add(&later).unwrap();
++    let mut after = expected;
++    after.insert(after.len() - 1, id(&later));
++    assert_eq!(painter(&session), after);
++    assert_eq!(foreground(&scene), [front.node_id()]);
++}
++#[test]
++fn foreground_admission_direct_create() {
++    check_admission(0);
++}
++#[test]
++fn foreground_admission_direct_fade() {
++    check_admission(1);
++}
++#[test]
++fn foreground_admission_direct_affine() {
++    check_admission(2);
++}
++#[test]
++fn foreground_admission_parallel_create() {
++    check_admission(3);
++}
++#[test]
++fn foreground_admission_recursive_composition() {
++    check_admission(4);
++}
++#[test]
++fn foreground_admission_family_fade() {
++    check_admission(5);
++}
++#[test]
++fn foreground_admission_family_reveal() {
++    check_admission(6);
++}
++
++#[test]
++fn foreground_admission_preserves_pending_focus_positions_and_cleanup() {
++    let mut scene = Scene::new();
++    let front = scene.square(1.0).unwrap();
++    let a = scene.square(2.0).unwrap();
++    let b = scene.circle(0.7).unwrap();
++    scene.add_foreground_many(&[(&front).into()]).unwrap();
++    let mut session = scene.execution_session().unwrap();
++    let segment = scene
++        .live(&mut session)
++        .declare_and_activate_composition(
++            &Request::Composition {
++                kind: Kind::Parallel,
++                children: vec![
++                    Request::Create {
++                        target: &a,
++                        options: options(),
++                    },
++                    Request::FocusOn {
++                        focus: FocusOnOptions::new((0.0, 0.0)),
++                        options: options(),
++                    },
++                    Request::Create {
++                        target: &b,
++                        options: options(),
++                    },
++                    Request::FocusOn {
++                        focus: FocusOnOptions::new((1.0, 0.0)),
++                        options: options(),
++                    },
++                ],
++                options: options(),
++            },
++            options(),
++        )
++        .unwrap();
++    let order = painter(&session);
++    assert_eq!(order.len(), 5);
++    assert_eq!([order[0], order[2], order[4]], [id(&a), id(&b), id(&front)]);
++    assert_ne!(order[1], order[3]);
++    for t in [0.0, 0.5, 1.0] {
++        scene
++            .live(&mut session)
++            .advance_segment_to(segment, t)
++            .unwrap();
++        assert_eq!(painter(&session), order);
++    }
++    scene.live(&mut session).complete_segment(segment).unwrap();
++    assert_eq!(painter(&session), [id(&a), id(&b), id(&front)]);
++    assert_eq!(foreground(&scene), [front.node_id()]);
++}
++
++#[test]
++fn foreground_admission_rejection_preserves_membership_publication_and_dirty_state() {
++    let mut scene = Scene::new();
++    let front = scene.square(1.0).unwrap();
++    let a = scene.square(2.0).unwrap();
++    scene.add_foreground_many(&[(&front).into()]).unwrap();
++    let mut session = scene.execution_session().unwrap();
++    let before = session.publication_context();
++    let frame = session.frame().clone();
++    session.take_frame_changes();
++    let result = scene.live(&mut session).declare_and_activate_composition(
++        &Request::Composition {
++            kind: Kind::Parallel,
++            children: vec![
++                Request::FocusOn {
++                    focus: FocusOnOptions::new((0.0, 0.0)),
++                    options: options(),
++                },
++                Request::Create {
++                    target: &a,
++                    options: options().run_time(f64::NAN),
++                },
++            ],
++            options: options(),
++        },
++        options(),
++    );
++    assert!(result.is_err());
++    assert_eq!(session.publication_context(), before);
++    assert_eq!(session.frame(), &frame);
++    assert!(session.take_frame_changes().is_empty());
++    assert_eq!(display(&scene), [front.node_id()]);
++    assert_eq!(foreground(&scene), [front.node_id()]);
++}
+diff --git a/web/python/examples/foreground_membership.py b/web/python/examples/foreground_membership.py
+index eaf5c48e4..a791c6074 100644
+--- a/web/python/examples/foreground_membership.py
++++ b/web/python/examples/foreground_membership.py
+@@ -14,20 +14,18 @@ def construct(self):
+         assert self.foreground_mobjects == [family]
+         self.wait(0.35)
+ 
+-        self.add(green)
++        self.play(FadeIn(green), run_time=0.35, rate_func=linear)
+         assert self.mobjects == [green, family]
+         assert self.foreground_mobjects == [family]
+-        self.wait(0.35)
+ 
+         self.remove_foreground_mobject(red)
+         assert self.mobjects == [green, family]
+         assert self.foreground_mobjects == [blue]
+         self.wait(0.35)
+ 
+-        self.add(later)
++        self.play(Create(later), run_time=0.35, rate_func=linear)
+         assert self.mobjects == [green, red, later, blue]
+         assert self.foreground_mobjects == [blue]
+-        self.wait(0.35)
+ 
+         self.remove_foreground_mobject(blue)
+         assert self.mobjects == [green, red, later, blue]
