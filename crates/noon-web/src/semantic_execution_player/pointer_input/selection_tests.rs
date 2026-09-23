@@ -20,7 +20,7 @@ fn player() -> SemanticExecutionPlayer {
 
 fn input(player: &mut SemanticExecutionPlayer, kind: &str, x: f32) {
     player
-        .submit_browser_pointer_input_json(
+        .submit_test_frame_json(
             &serde_json::json!({
                 "kind": kind, "source_id": 1, "pointer_id": 7, "view_revision": 0,
                 "surface_x": x, "surface_y": 200.0,
@@ -94,7 +94,14 @@ fn same_selection_out_and_back_and_rejected_configuration_emit_no_delta() {
         assert!(p.set_pointer_fill_selection(Some(bad)).is_err());
         assert!(p.drain_delta_json().unwrap().is_none());
     }
-    assert_eq!(p.last_sent_selection_overlay, selected);
+    assert_eq!(
+        p.last_sent_selection_overlay
+            .as_ref()
+            .map(crate::SelectionOverlayPresentation::from_presentation)
+            .transpose()
+            .unwrap(),
+        selected
+    );
     p.set_pointer_fill_selection(None).unwrap();
     assert!(drain(&mut p).selection_overlay.is_none());
     assert!(p.drain_delta_json().unwrap().is_none());

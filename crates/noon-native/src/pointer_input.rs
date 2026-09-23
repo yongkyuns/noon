@@ -1,17 +1,17 @@
-//! Winit pointer normalization for the existing synchronous session input path.
+//! Winit pointer collection against the last successfully presented frame.
 //!
-//! One window's logical OS mouse cursor is projected into the existing unkeyed
-//! pointer signals. This is not a raw-device/multitouch collector. Coordinates
-//! are captured at delivery against the current effective camera/publication;
-//! historical presented-frame picking and asynchronous replay are not promised.
-//! There is no private queue, gesture recognizer, target selection or OS grab.
-//! Leaving the surface cancels because portable capture is not implemented here.
+//! One window's logical cursor feeds the shared typed session input boundary.
+//! Positional input never substitutes current execution for an older displayed
+//! frame. Stale input cancels the contact and waits for a fresh presentation and
+//! cursor sample; cancellation itself does not depend on a positional receipt.
+//! The collector owns no geometry, picking index, gesture recognizer or OS grab.
 
 use noon::integration::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
-    NativePointerInputKind, NativePointerPosition,
+    NativePointerInputKind, NativePointerInputToken, PointerFrameError, PointerFrameSnapshot,
+    PointerFrameView,
 };
-use noon_core::{Camera2DState, NativeInputValue, NativeStateSource, Vec2};
+use noon_core::{NativeInputValue, NativeStateSource, Vec2};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::ModifiersState;
@@ -23,7 +23,8 @@ const WINDOW_CURSOR: NativePointerId = NativePointerId {
     pointer: 0,
 };
 
-/// Only collector lifetime and the last valid OS cursor sample are retained.
+/// Collector lifetime, the last valid OS cursor sample and one presentation
+/// receipt are retained. A pending render is never installed as a receipt.
 /// The session owns sampled button values, event counters and publications.
 #[derive(Default)]
 pub(super) struct PointerCollector {
@@ -31,6 +32,19 @@ pub(super) struct PointerCollector {
     view_revision: u64,
     surface: Option<Vec2>,
     pub(super) modifiers: ModifiersState,
+    pub(super) presented: Option<PointerFrameSnapshot>,
+    pub(super) refresh_pending: bool,
+}
+
+/// Explicit admission outcome for the platform shell. Stale input is recoverable,
+/// unlike malformed input or a failed session/callback transaction.
+#[derive(Debug, PartialEq)]
+pub(super) enum PointerDispatch {
+    Admitted,
+    Cancelled,
+    Unsubscribed,
+    AwaitingPresentation,
+    RejectedFrame(PointerFrameError),
 }
 
 impl NativeApp {
@@ -49,18 +63,15 @@ impl NativeApp {
         Ok(true)
     }
 
-    fn dispatch_pointer_kind(
+    fn admit_pointer_kind(
         &mut self,
+        token: &NativePointerInputToken,
         kind: NativePointerInputKind,
     ) -> Result<(), NativeHostError> {
         let sequence = self.next_input_sequence;
         let next = sequence.checked_add(1).ok_or_else(|| {
             NativeHostError::Platform("native input event sequence exhausted".to_owned())
         })?;
-        if !self.ensure_pointer_input()? {
-            return Ok(());
-        }
-        let token = self.execution.native_pointer_input_token()?;
         let modifiers = self.pointer.modifiers;
         let input = NativePointerInput::new(
             sequence,
@@ -74,9 +85,93 @@ impl NativeApp {
             },
             kind,
         );
-        self.execution.submit_native_pointer_input(&token, input)?;
+        self.execution.submit_native_pointer_input(token, input)?;
         self.next_input_sequence = next;
         Ok(())
+    }
+
+    pub(super) fn capture_pointer_presentation(
+        &self,
+        size: PhysicalSize<u32>,
+        scale: f64,
+    ) -> Result<PointerFrameSnapshot, NativeHostError> {
+        let view = self.pointer_frame_view(logical_size(size, scale)?)?;
+        self.execution
+            .session()
+            .capture_pointer_frame(view)
+            .map_err(|error| NativeHostError::Platform(error.to_string()))
+    }
+
+    fn pointer_frame_view(&self, logical: Vec2) -> Result<PointerFrameView, NativeHostError> {
+        PointerFrameView::new(
+            self.pointer.view_revision,
+            logical,
+            self.execution.camera()?,
+        )
+        .map_err(|error| NativeHostError::Platform(error.to_string()))
+    }
+
+    fn reject_pointer_frame(
+        &mut self,
+        error: PointerFrameError,
+    ) -> Result<PointerDispatch, NativeHostError> {
+        use noon::ExecutionSessionInputError;
+        match error {
+            PointerFrameError::ViewChanged
+            | PointerFrameError::CameraMismatch
+            | PointerFrameError::Input(
+                ExecutionSessionInputError::ForeignPointerRuntime
+                | ExecutionSessionInputError::StalePointerPublication { .. },
+            ) => {
+                // This is a new cancellation occurrence, never acknowledgement or
+                // replay of the rejected position/edge. A failed cancellation is
+                // still an error; callback and terminal barriers are not bypassed.
+                self.cancel_pointer(NativePointerCancellation::Cancelled)?;
+                self.pointer.refresh_pending = true;
+                Ok(PointerDispatch::RejectedFrame(error))
+            }
+            PointerFrameError::Input(error) => Err(error.into()),
+            PointerFrameError::Camera(error) => Err(error.into()),
+            error => Err(NativeHostError::Platform(error.to_string())),
+        }
+    }
+
+    fn dispatch_presented_pointer(
+        &mut self,
+        surface: Vec2,
+        logical: Vec2,
+        kind: impl FnOnce(noon::integration::NativePointerPosition) -> NativePointerInputKind,
+    ) -> Result<PointerDispatch, NativeHostError> {
+        if !self.execution.session().has_native_pointer_subscribers() {
+            return Ok(PointerDispatch::Unsubscribed);
+        }
+        let Some(frame) = self.pointer.presented.clone() else {
+            self.cancel_pointer(NativePointerCancellation::Cancelled)?;
+            self.pointer.refresh_pending = true;
+            return Ok(PointerDispatch::AwaitingPresentation);
+        };
+        let view = self.pointer_frame_view(logical)?;
+        // Validate before configuration: resetting a binding can mutate signals.
+        if let Err(error) = frame.validate_current(self.execution.session(), view) {
+            return self.reject_pointer_frame(error);
+        }
+        let position = frame
+            .position(surface)
+            .map_err(|error| NativeHostError::Platform(error.to_string()))?;
+        if self.next_input_sequence == u64::MAX {
+            return Err(NativeHostError::Platform(
+                "native input event sequence exhausted".to_owned(),
+            ));
+        }
+        if !self.ensure_pointer_input()? {
+            return Ok(PointerDispatch::Unsubscribed);
+        }
+        let token = match frame.input_token(self.execution.session(), view) {
+            Ok(token) => token,
+            Err(error) => return self.reject_pointer_frame(error),
+        };
+        self.admit_pointer_kind(&token, kind(position))?;
+        Ok(PointerDispatch::Admitted)
     }
 
     pub(super) fn dispatch_pointer_position(
@@ -84,10 +179,11 @@ impl NativeApp {
         physical: PhysicalPosition<f64>,
         size: PhysicalSize<u32>,
         scale: f64,
-    ) -> Result<(), NativeHostError> {
-        let logical_size = logical_size(size, scale)?;
+    ) -> Result<PointerDispatch, NativeHostError> {
+        let logical = logical_size(size, scale)?;
         if size.width == 0 || size.height == 0 {
-            return self.pointer_left();
+            self.pointer_left()?;
+            return Ok(PointerDispatch::Cancelled);
         }
         let surface = Vec2::new((physical.x / scale) as f32, (physical.y / scale) as f32);
         if !surface.x.is_finite() || !surface.y.is_finite() {
@@ -95,24 +191,13 @@ impl NativeApp {
                 "native pointer coordinates must be finite".to_owned(),
             ));
         }
-        if self.next_input_sequence == u64::MAX {
-            return Err(NativeHostError::Platform(
-                "native input event sequence exhausted".to_owned(),
-            ));
-        }
-        // Binding setup can reset a button-driven camera. Read the
-        // camera only afterwards, so conversion and token describe
-        // the same effective publication. Invalid raw data never binds.
-        if !self.ensure_pointer_input()? {
-            return Ok(());
-        }
-        let position = pointer_position(surface, logical_size, self.execution.camera()?)?;
-        self.dispatch_pointer_kind(NativePointerInputKind::Move(position))?;
-        // Never let a rejected occurrence overwrite the position of a later edge.
-        if self.pointer.configured {
+        let outcome =
+            self.dispatch_presented_pointer(surface, logical, NativePointerInputKind::Move)?;
+        if outcome == PointerDispatch::Admitted {
+            // Rejected samples must not supply coordinates to a later edge.
             self.pointer.surface = Some(surface);
         }
-        Ok(())
+        Ok(outcome)
     }
 
     pub(super) fn dispatch_pointer_button(
@@ -121,36 +206,36 @@ impl NativeApp {
         state: ElementState,
         size: PhysicalSize<u32>,
         scale: f64,
-    ) -> Result<(), NativeHostError> {
+    ) -> Result<PointerDispatch, NativeHostError> {
         let button = native_pointer_button(button).ok_or_else(|| {
             NativeHostError::Platform(
                 "native pointer button is outside the u8 input vocabulary".to_owned(),
             )
         })?;
-        let logical_size = logical_size(size, scale)?;
+        let logical = logical_size(size, scale)?;
         let Some(surface) = self
             .pointer
             .surface
             .filter(|_| size.width > 0 && size.height > 0)
         else {
-            // Winit button edges do not include position. After focus/resize or
-            // before the first move, acknowledge an explicit cancellation rather
-            // than inventing a press/release at the origin or at a stale sample.
-            return self.dispatch_pointer_kind(NativePointerInputKind::Cancel(
-                NativePointerCancellation::Cancelled,
-            ));
+            // Winit edges carry no position. Never manufacture one from the origin
+            // or from a sample retired by focus, resize or rejected frame input.
+            self.cancel_pointer(NativePointerCancellation::Cancelled)?;
+            return Ok(PointerDispatch::Cancelled);
         };
-        let position = pointer_position(surface, logical_size, self.execution.camera()?)?;
-        self.dispatch_pointer_kind(if state == ElementState::Pressed {
-            NativePointerInputKind::Press { position, button }
-        } else {
-            NativePointerInputKind::Release { position, button }
+        self.dispatch_presented_pointer(surface, logical, |position| {
+            if state == ElementState::Pressed {
+                NativePointerInputKind::Press { position, button }
+            } else {
+                NativePointerInputKind::Release { position, button }
+            }
         })
     }
 
     fn cancel_pointer(&mut self, reason: NativePointerCancellation) -> Result<(), NativeHostError> {
         if self.pointer.configured {
-            self.dispatch_pointer_kind(NativePointerInputKind::Cancel(reason))?;
+            let token = self.execution.native_pointer_input_token()?;
+            self.admit_pointer_kind(&token, NativePointerInputKind::Cancel(reason))?;
         }
         self.pointer.surface = None;
         Ok(())
@@ -177,6 +262,10 @@ impl NativeApp {
         // Only successful session rebinding invalidates the local coordinate cache.
         self.pointer.view_revision = next;
         self.pointer.surface = None;
+        self.pointer.presented = None;
+        // A size/scale/surface change needs a new presentation even when no
+        // authored object or native viewport signal became dirty.
+        self.pointer.refresh_pending = true;
         Ok(())
     }
 
@@ -214,27 +303,6 @@ fn logical_size(size: PhysicalSize<u32>, scale: f64) -> Result<Vec2, NativeHostE
         ));
     }
     Ok(logical)
-}
-
-fn pointer_position(
-    surface: Vec2,
-    logical_size: Vec2,
-    camera: Camera2DState,
-) -> Result<NativePointerPosition, NativeHostError> {
-    if logical_size.x <= 0.0 || logical_size.y <= 0.0 {
-        return Err(NativeHostError::Platform(
-            "native pointer viewport must be positive".to_owned(),
-        ));
-    }
-    let scene = Vec2::new(
-        camera.center.x
-            + (surface.x / logical_size.x - 0.5)
-                * camera.height
-                * (logical_size.x / logical_size.y),
-        camera.center.y + (0.5 - surface.y / logical_size.y) * camera.height,
-    );
-    NativePointerPosition::new(scene, surface)
-        .map_err(|error| NativeHostError::Platform(error.to_string()))
 }
 
 #[cfg(test)]

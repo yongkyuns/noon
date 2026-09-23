@@ -472,7 +472,7 @@ test("native input snapshots occurrence data before its readiness await", async 
   try {
     const sent = await waitForRequest(engine, "browser_pointer_input");
     const { channel, protocolVersion, requestId, type, ...body } = sent;
-    assert.deepEqual(body, expected);
+    assert.deepEqual(body, { input: expected, presentation: null });
     engine.emitMessage(engineMessage(type, { requestId, time: 0 }));
     assert.ok((await outcome).value);
   } finally { client.terminate(); await outcome; }
@@ -508,6 +508,46 @@ test("native input releases capacity and pending requests after synchronous post
       await assert.rejects(client.emitNativeEvent({ kind: "wheel" }), /cannot clone input/);
       assert.equal(client.diagnostics.engine.pendingRequests, 0);
     }
+  } finally { client.terminate(); }
+});
+
+test("failed pointer view reservation stays unregistered and the same revision can retry", async () => {
+  const { client, engine } = await startClient();
+  const held = [];
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+      held.push(observeResult(client.emitNativeEvent({ kind: "control_commit", name: `held-${i}` })));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    const failed = observeResult(client.setBrowserPointerView(9, 800, 400));
+    assert.match((await failed).error?.message ?? "", /native input.*full/i);
+    assert.equal(client.pointerPresentation, null);
+
+    const first = await waitForRequest(engine, "native_event", 1);
+    engine.emitMessage(engineMessage(first.type, { requestId: first.requestId }));
+    await held[0];
+
+    const retry = client.setBrowserPointerView(9, 800, 400);
+    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
+    assert.deepEqual(registration.view, { revision: 9, width: 800, height: 400 });
+    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+    await retry;
+  } finally {
+    client.terminate();
+    await Promise.all(held);
+  }
+});
+
+test("duplicate pointer view registration shares the pending bounded delivery", async () => {
+  const { client, engine } = await startClient();
+  try {
+    const first = client.setBrowserPointerView(11, 800, 400);
+    const duplicate = client.setBrowserPointerView(11, 800, 400);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(engine.messages.filter(message => message.type === "browser_pointer_view").length, 1);
+    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
+    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+    await Promise.all([first, duplicate]);
   } finally { client.terminate(); }
 });
 
@@ -613,3 +653,139 @@ test("selection configuration is not replayed through a replacement scene", asyn
     assert.equal(currentEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
   } finally { client.terminate(); await configuration; }
 });
+
+// Collection-time receipt contract: real client, existing readiness yield and
+// ownership gates. These do not claim that the fake render owner draws pixels.
+async function registerPointerView(client, engine, revision = 3) {
+  const delivery = client.setBrowserPointerView(revision, 800, 400);
+  const sent = await waitForRequest(engine, "browser_pointer_view");
+  engine.emitMessage(engineMessage("browser_pointer_view", { requestId: sent.requestId }));
+  await delivery;
+}
+const pointerReceipt = (presentation = 1, sequence = 0, view_revision = 3, session = 1) =>
+  ({ session, sequence, presentation, view_revision });
+const pointerInput = { kind: "press", source_id: 1, pointer_id: 7, view_revision: 3,
+  surface_x: 400, surface_y: 200, viewport_width: 800, viewport_height: 400, button: 0 };
+
+test("pointer input pins receipt before readiness yields, despite a newer repaint", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const a = pointerReceipt(), b = pointerReceipt(2, 1);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: a }));
+    const pending = client.submitBrowserPointerInput(pointerInput);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: b }));
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    assert.deepEqual(sent.presentation, a, "already collected input must keep frame A");
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, pointerInputAccepted: false }));
+    assert.equal((await pending).pointerInputAccepted, false);
+  } finally { client.terminate(); }
+});
+
+test("input collected without receipt is not relabelled by a later acknowledgement", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const pending = client.submitBrowserPointerInput(pointerInput);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    assert.equal(sent.presentation, null);
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, pointerInputAccepted: false }));
+    assert.equal((await pending).pointerInputAccepted, false);
+  } finally { client.terminate(); }
+});
+
+test("worker receipt is immutable and neither transport consumption nor future view authorizes it", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    engine.emitMessage(engineMessage("execution_presented", { receipt: pointerReceipt() }));
+    assert.equal(client.pointerPresentation, null);
+    for (const receipt of [pointerReceipt(1, 0, 4), pointerReceipt(1, 0, 3, 2)]) {
+      engine.emitMessage(engineMessage("pointer_presented", { receipt }));
+      assert.equal(client.pointerPresentation, null);
+    }
+    const receipt = pointerReceipt();
+    engine.emitMessage(engineMessage("pointer_presented", { receipt }));
+    receipt.sequence = 90;
+    assert.equal(client.pointerPresentation.sequence, 0);
+    assert.ok(Object.isFrozen(client.pointerPresentation));
+  } finally { client.terminate(); }
+});
+
+test("view registration clears receipt before any asynchronous delivery", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+    const view = client.setBrowserPointerView(4, 800, 400);
+    assert.equal(client.pointerPresentation, null);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(2) }));
+    assert.equal(client.pointerPresentation, null, "old view feedback cannot restore mapping");
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = requestMessage(engine, "browser_pointer_view");
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId }));
+    await view;
+  } finally { client.terminate(); }
+});
+
+test("same view is a no-op and reused revision cannot replace its geometry", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const r = pointerReceipt(); engine.emitMessage(engineMessage("pointer_presented", { receipt: r }));
+    await client.setBrowserPointerView(3, 800, 400);
+    assert.deepEqual(client.pointerPresentation, r);
+    assert.throws(() => client.setBrowserPointerView(3, 801, 400), /revision reused/);
+    assert.deepEqual(client.pointerPresentation, r);
+  } finally { client.terminate(); }
+});
+
+test("late invalidation cannot clear a newer successful presentation", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const a=pointerReceipt(), b=pointerReceipt(2);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: b }));
+    engine.emitMessage(engineMessage("pointer_presentation_invalidated", { receipt: a }));
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: a }));
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage("pointer_presentation_invalidated", { receipt: b }));
+    assert.equal(client.pointerPresentation, null);
+  } finally { client.terminate(); }
+});
+
+for (const operation of ["engine-restart", "semantic-replacement"]) {
+  test(`${operation} must re-register an unchanged view without reusing its receipt`, async () => {
+    const { client, authoring, engine: oldEngine, render } = await startClient();
+    let pending;
+    try {
+      await registerPointerView(client, oldEngine);
+      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+      const replacing = operation === "engine-restart"
+        ? client.restart({ failedOwner: "engine" })
+        : client.switchToSemanticExecution("replacement", authoring);
+      const renderRequest = await waitForRequest(render, "rebuild_engine");
+      replyRender(render, renderRequest, "engine_rebuilt");
+      const ready = await replacing;
+      assert.equal(ready.session, 2);
+      const engine = authoring.attachments.at(-1).controlPort.peer;
+      assert.equal(client.pointerPresentation, null);
+      const currentReceipt = pointerReceipt(2, 0, 3, 2);
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
+      assert.equal(client.pointerPresentation, null, "replacement needs its own platform registration");
+      pending = client.setBrowserPointerView(3, 800, 400);
+      const registration = await waitForRequest(engine, "browser_pointer_view");
+      assert.deepEqual(registration.view, { revision: 3, width: 800, height: 400 });
+      engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+      await pending;
+      assert.equal(client.pointerPresentation, null, "registration is not presentation");
+      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(10) }));
+      assert.equal(client.pointerPresentation, null);
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
+      assert.deepEqual(client.pointerPresentation, currentReceipt);
+    } finally { client.terminate(); await pending?.catch(() => {}); }
+  });
+}

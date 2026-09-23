@@ -33,11 +33,15 @@ mod authoring_svg;
 mod authoring_synchronized_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
+#[cfg(any(target_arch = "wasm32", test))]
+mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;
 #[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
 mod direct_execution_smoke;
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+mod direct_pointer_presentation;
 #[cfg(feature = "renderer")]
 mod execution_canvas;
 mod execution_transport;
@@ -66,6 +70,12 @@ mod plot_error;
     target_arch = "wasm32",
     any(debug_assertions, feature = "renderer-smoke")
 ))]
+mod pointer_selection_smoke;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 mod raster_image_smoke;
 mod renderer_observation;
 #[cfg(all(
@@ -88,6 +98,8 @@ mod retained_resource_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod selection_overlay_transport;
+mod worker_pointer_presentation;
+pub use worker_pointer_presentation::PointerPresentationView;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;
