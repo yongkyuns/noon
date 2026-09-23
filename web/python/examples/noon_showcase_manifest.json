@@ -26,6 +26,21 @@
       "beats": [{"time": 3.1, "label": "Assemble"}, {"time": 5.4, "label": "Morph"}, {"time": 9.6, "label": "Waves"}, {"time": 15.3, "label": "Spiral"}, {"time": 16.6, "label": "Exchange"}, {"time": 21.7, "label": "Finale"}]
     },
     {
+      "id": "showcase-entrances-exits",
+      "title": "Entrances and exits",
+      "lesson": "Compare four ways to reveal and remove the same shape, using a shared duration.",
+      "primary_feature": "appearance-lifecycle",
+      "category": "Animation",
+      "path": "python/examples/showcase_entrances_exits.py",
+      "features": ["FadeIn", "FadeOut", "Create", "Uncreate", "GrowFromCenter", "SpinInFromNothing", "ShrinkToCenter"],
+      "duration": 9.5,
+      "thumbnail_time": 2.9,
+      "thumbnail_alt": "Four equal blue squares under Fade, Draw, Grow, and Spin labels after their different entrances",
+      "still_intervals": [[2.9, 3.7], [6.4, 6.9], [8.1, 9.5]],
+      "beats": [{"time": 1.5, "label": "Compare entrances"}, {"time": 2.9, "label": "Same shape"}, {"time": 5.3, "label": "Compare exits"}, {"time": 8.7, "label": "Resolved composition"}],
+      "thumbnail": "thumbnails/showcase/showcase-entrances-exits.png"
+    },
+    {
       "id": "showcase-timing", "title": "Together, sequential, staggered",
       "lesson": "Compare the same row of objects with three different timing arrangements.",
       "primary_feature": "animation-composition", "category": "Animation",
@@ -44,6 +59,36 @@
       "thumbnail": "thumbnails/showcase/showcase-group-slicing.png", "thumbnail_alt": "Five indexed objects with the three slice-selected members raised above their neighbors",
       "still_intervals": [[1.9, 2.4], [4.9, 5.9], [7.4, 8.4]],
       "beats": [{"time": 1.5, "label": "Indexed collection"}, {"time": 2.9, "label": "Select the slice"}, {"time": 4.8, "label": "Move only selected members"}]
+    },
+    {
+      "id": "showcase-bezier-paths",
+      "title": "Bend a vector curve",
+      "lesson": "Construct a cubic Bezier curve from anchors and handles, then morph it while the anchors stay fixed.",
+      "primary_feature": "vector-path-construction",
+      "category": "Geometry and layout",
+      "path": "python/examples/showcase_bezier_paths.py",
+      "features": ["VMobject", "start_new_path", "add_cubic_bezier_curve_to", "Create", "Transform"],
+      "duration": 9.5,
+      "thumbnail_time": 7.3,
+      "thumbnail_alt": "A blue cubic curve between white anchors with yellow control handles and a gray control polygon",
+      "still_intervals": [[3.4, 4.1], [7, 7.7], [8.3, 9.5]],
+      "beats": [{"time": 1.2, "label": "Anchors and handles"}, {"time": 3, "label": "Draw the path"}, {"time": 6, "label": "Move handles and bend"}, {"time": 7.3, "label": "Resolved curve with construction"}],
+      "thumbnail": "thumbnails/showcase/showcase-bezier-paths.png"
+    },
+    {
+      "id": "showcase-transform-ownership",
+      "title": "Transform, replace, or copy",
+      "lesson": "See which source or target reference remains useful after each kind of morph.",
+      "primary_feature": "transform-ownership",
+      "category": "Animation",
+      "path": "python/examples/showcase_transform_ownership.py",
+      "features": ["Transform", "ReplacementTransform", "TransformFromCopy", "animate"],
+      "duration": 8.2,
+      "thumbnail_time": 7.2,
+      "thumbnail_alt": "Three labeled morph outcomes, with the copy retaining its original square and both source and target moving",
+      "still_intervals": [[1.6, 2.2], [5, 5.6], [7, 8.2]],
+      "beats": [{"time": 1.2, "label": "Sources"}, {"time": 3.3, "label": "Three morphs"}, {"time": 6.3, "label": "Animate the surviving references"}, {"time": 7.2, "label": "Copy keeps both"}],
+      "thumbnail": "thumbnails/showcase/showcase-transform-ownership.png"
     },
     {
       "id": "showcase-shape-matching", "title": "Match by shape",
@@ -84,6 +129,21 @@
       "thumbnail": "thumbnails/showcase/showcase-coordinate-plotting.png", "thumbnail_alt": "A blue function and yellow sampled observations drawn on shared axes with a color-matched legend",
       "still_intervals": [[5.7, 7.2]],
       "beats": [{"time": 1.5, "label": "Axes"}, {"time": 3.1, "label": "Function"}, {"time": 5.65, "label": "Sampled observations"}]
+    },
+    {
+      "id": "showcase-reactive-relationships",
+      "title": "Relationships that follow motion",
+      "lesson": "Drive two dots with ValueTrackers and keep their connector attached using public updaters.",
+      "primary_feature": "reactive-relationships",
+      "category": "Reactive animation",
+      "path": "python/examples/showcase_reactive_relationships.py",
+      "features": ["ValueTracker", "add_updater", "remove_updater", "match_points", "animate"],
+      "duration": 9.2,
+      "thumbnail_time": 4.6,
+      "thumbnail_alt": "Blue and teal dots at different heights joined by a yellow updater-driven connector and axis guides",
+      "still_intervals": [[1.5, 2], [4.4, 5], [8, 9.2]],
+      "beats": [{"time": 1.2, "label": "Introduce the relationship"}, {"time": 3.2, "label": "Drive both endpoints"}, {"time": 4.6, "label": "Connector stays attached"}, {"time": 6.2, "label": "Change both drivers again"}],
+      "thumbnail": "thumbnails/showcase/showcase-reactive-relationships.png"
     },
     {
       "id": "showcase-raster-images", "title": "Pixels in the scene",
