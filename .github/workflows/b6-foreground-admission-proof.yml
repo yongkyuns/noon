@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/b6-foreground-admission-proof.yml
       - .github/ci/b6-admission.patch.gz.b64
+      - .github/ci/b6-admission-repair.py
 permissions:
   contents: write
 concurrency:
@@ -32,6 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/b6-admission"
+          cp .github/ci/b6-admission-repair.py "$RUNNER_TEMP/b6-admission/repair.py"
+          sha256sum "$RUNNER_TEMP/b6-admission/repair.py" > "$RUNNER_TEMP/b6-admission/repair.sha256"
           python - <<'PY'
           import base64, gzip, hashlib, os
           from pathlib import Path
@@ -66,19 +69,21 @@ jobs:
         run: |
           set -euo pipefail
           git apply --include=crates/noon/tests/foreground_admission.rs "$RUNNER_TEMP/b6-admission/candidate.patch"
+          python "$RUNNER_TEMP/b6-admission/repair.py" --regressions
           set +e
           cargo test -p noon --no-default-features --test foreground_admission -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-admission/before.log"
           result=${PIPESTATUS[0]}
           set -e
           test "$result" -ne 0
           grep -F 'test result: FAILED. 1 passed; 8 failed;' "$RUNNER_TEMP/b6-admission/before.log"
-          grep -F 'assertion `left == right` failed' "$RUNNER_TEMP/b6-admission/before.log"
+          test "$(grep -Fc 'assertion `left == right` failed' "$RUNNER_TEMP/b6-admission/before.log")" -eq 8
           test -z "$(git diff --name-only)"
       - name: Apply production and core regressions
         shell: bash
         run: |
           set -euo pipefail
           git apply --exclude=crates/noon/tests/foreground_admission.rs "$RUNNER_TEMP/b6-admission/candidate.patch"
+          python "$RUNNER_TEMP/b6-admission/repair.py" --production
           cargo fmt --all
           git diff --check
       - name: Qualify admission, completion and paired Rust example
