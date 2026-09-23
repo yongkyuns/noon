@@ -1230,3 +1230,117 @@ fn matching_family_rejects_aliased_target_descendants_before_publication() {
     assert!(session.pending_segment_completion.is_none());
     assert!(session.derived_display_plan.is_none());
 }
+
+fn assert_matching_foreground_completion(source_is_foreground: bool) {
+    use noon_core::{plan_semantic_scene_membership, SemanticSceneMembershipRequest};
+
+    let mut store = SemanticStore::new();
+    let back = object(&mut store, -4.0);
+    let source_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[source_leaf]);
+    let front = object(&mut store, 4.0);
+    let target_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let target = family(&mut store, &[target_leaf]);
+    let later = object(&mut store, 6.0);
+    let root = family(&mut store, &[back, source, front]);
+    let foreground = if source_is_foreground {
+        vec![source, front]
+    } else {
+        vec![front]
+    };
+    plan_semantic_scene_membership(
+        &store,
+        root,
+        SemanticSceneMembershipRequest::AddForeground(&foreground),
+    )
+    .unwrap()
+    .apply(&mut store)
+    .unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let source_id = session
+        .execution_index
+        .execution_object_id(source_leaf)
+        .unwrap();
+    let front_id = session.execution_index.execution_object_id(front).unwrap();
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let painter_order = session.painter_order().to_vec();
+    let revision = store.scene_revision();
+    session.take_frame_changes();
+    assert!(matches!(
+        session.complete_segment(&mut store, segment),
+        Err(crate::ExecutionSegmentCompletionError::NotAtBoundary { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(session.painter_order(), painter_order);
+    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(store.node(root).unwrap().foreground_members(), foreground);
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(store.node(root).unwrap().members(), [back, target, front]);
+    assert_eq!(store.node(root).unwrap().foreground_members(), [front]);
+    assert_eq!(store.node(source).unwrap().members(), [source_leaf]);
+    assert_eq!(store.node(target).unwrap().members(), [target_leaf]);
+    assert!(session.runtime.frame_index_for_object(source_id).is_none());
+    let ids = session
+        .painter_order()
+        .iter()
+        .map(|&index| session.frame().objects[index as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            session.execution_index.execution_object_id(back).unwrap(),
+            session
+                .execution_index
+                .execution_object_id(target_leaf)
+                .unwrap(),
+            front_id,
+        ]
+    );
+    assert!(session.frame().objects.iter().all(|row| row.z_index == 0.0));
+    assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+    let completed = session.publication_context();
+    session.take_frame_changes();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(session.publication_context(), completed);
+    assert!(session.take_frame_changes().is_empty());
+    let add =
+        plan_semantic_scene_membership(&store, root, SemanticSceneMembershipRequest::Add(&[later]))
+            .unwrap();
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, add)
+        .unwrap();
+    assert_eq!(
+        store.node(root).unwrap().members(),
+        [back, target, later, front]
+    );
+    assert_eq!(store.node(root).unwrap().foreground_members(), [front]);
+    assert!(session.runtime.frame_index_for_object(source_id).is_none());
+}
+
+#[test]
+fn matching_foreground_completion_keeps_surviving_foreground_after_target() {
+    assert_matching_foreground_completion(false);
+}
+
+#[test]
+fn matching_foreground_completion_retires_source_without_promoting_target() {
+    assert_matching_foreground_completion(true);
+}

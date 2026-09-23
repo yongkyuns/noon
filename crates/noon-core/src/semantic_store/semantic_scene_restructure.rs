@@ -216,6 +216,57 @@ enum ExplicitPlacement {
     Tail,
 }
 
+/// Stage one lifecycle boundary's removals followed by foreground-aware admission.
+///
+/// All targets for a scope are planned together so membership restructuring,
+/// persistence cleanup and painter order publish in the caller's single transaction.
+/// Removal-only boundaries preserve the order of surviving display members. An
+/// admission uses the same family projection as Scene.add, with only the surviving
+/// foreground declarations at its tail. No temporary store or second order is owned.
+pub fn stage_semantic_scene_lifecycle_membership(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    removed: &[SemanticNodeId],
+    added: &[SemanticNodeId],
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
+    let root = target_node_checked(store, scene_root)?;
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
+    }
+    let removed = validated_distinct_nodes(store, removed)?;
+    let added = validated_distinct_nodes(store, added)?;
+    if removed.is_empty() && added.is_empty() {
+        return Ok(());
+    }
+    let members = if root.foreground_members().is_empty() || removed.is_empty() {
+        root.foreground_members().to_vec()
+    } else {
+        let removal = downward_target_closure(store, &removed)?;
+        foreground::project_members(store, scene_root, &removal, None)?
+    };
+    let explicit = if added.is_empty() {
+        Vec::new()
+    } else {
+        foreground::add_order(&added, &members)
+    };
+    let mut remove_set = downward_target_closure(store, &explicit)?;
+    remove_set.extend(removed);
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        &remove_set,
+        None,
+        &explicit,
+        ExplicitPlacement::Tail,
+        transaction,
+    )?;
+    if members != root.foreground_members() {
+        transaction.set_foreground_members(scene_root, members);
+    }
+    Ok(())
+}
+
 fn plan_explicit_root_projection(
     store: &SemanticStore,
     scene_root: SemanticNodeId,
@@ -224,6 +275,28 @@ fn plan_explicit_root_projection(
     explicit: &[SemanticNodeId],
     placement: ExplicitPlacement,
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
+    let mut transaction = SemanticMutationTransaction::new();
+    stage_explicit_root_projection(
+        store,
+        scene_root,
+        remove_set,
+        replacement,
+        explicit,
+        placement,
+        &mut transaction,
+    )?;
+    Ok(transaction)
+}
+
+fn stage_explicit_root_projection(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    remove_set: &HashSet<SemanticNodeId>,
+    replacement: Option<(SemanticNodeId, SemanticNodeId)>,
+    explicit: &[SemanticNodeId],
+    placement: ExplicitPlacement,
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
     let (affected, affected_roots) = affected_explicit_root_closure(store, scene_root, remove_set)?;
     let root_node = target_node_checked(store, scene_root)?;
     let mut run_heads = Vec::new();
@@ -298,7 +371,6 @@ fn plan_explicit_root_projection(
             retained_roots.insert(replacement);
         }
     }
-    let mut transaction = SemanticMutationTransaction::new();
     for (root, _, _) in &plans {
         if !retained_roots.contains(root) {
             transaction.remove_member(scene_root, *root);
@@ -331,7 +403,7 @@ fn plan_explicit_root_projection(
         transaction.reorder_member(scene_root, *member, anchor);
         anchor = Some(*member);
     }
-    Ok(transaction)
+    Ok(())
 }
 
 fn first_projected_root_after_restructure(

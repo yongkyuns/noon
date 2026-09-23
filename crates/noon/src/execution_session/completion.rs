@@ -4,7 +4,7 @@ use noon_compile::{
     ExecutionPatch, PreparedScalarSignalTimelineError, SemanticAnimationCompletion,
 };
 use noon_core::{
-    stage_semantic_foreground_removal, ReactiveValue, SemanticFadeDirection,
+    stage_semantic_scene_lifecycle_membership, ReactiveValue, SemanticFadeDirection,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
     SemanticSignalValue, SemanticStore,
 };
@@ -240,24 +240,22 @@ impl ExecutionSession {
         }
 
         let mut semantic = SemanticMutationTransaction::new();
-        let mut foreground_removals = BTreeMap::<SemanticNodeId, BTreeSet<SemanticNodeId>>::new();
+        let mut membership_removals = BTreeMap::<SemanticNodeId, BTreeSet<SemanticNodeId>>::new();
         for entry in scalar_entries {
             semantic.set_scalar_signal_at(entry.signal, entry.authored_endpoint, actual_time);
         }
         for &(root, target) in lifecycle_removals {
-            semantic.remove_member(root, target);
-            foreground_removals.entry(root).or_default().insert(target);
+            membership_removals.entry(root).or_default().insert(target);
         }
         if let Some(replacement) = segment.family_replacement() {
-            super::family_transform::stage_matching_family_completion_swap(
+            super::family_transform::validate_matching_family_completion_swap(
                 store,
                 replacement.root,
                 replacement.source,
                 replacement.target,
-                &mut semantic,
             )
             .map_err(|_| ExecutionSegmentCompletionError::InvalidFamilyReplacement)?;
-            foreground_removals
+            membership_removals
                 .entry(replacement.root)
                 .or_default()
                 .insert(replacement.source);
@@ -290,20 +288,26 @@ impl ExecutionSession {
                 let root = lifecycle_root.ok_or(
                     ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
                 )?;
-                semantic.remove_member(root, entry.semantic_object);
-                foreground_removals
+                membership_removals
                     .entry(root)
                     .or_default()
                     .insert(entry.semantic_object);
             }
         }
-        // One declaration edit per scope, staged with endpoint release and display
-        // removals. A failed completion never leaves a partially demoted foreground.
-        for (root, removed) in foreground_removals {
-            stage_semantic_foreground_removal(
+        // One combined display/declaration edit per scope. Matching cleanup's
+        // authored target is admitted after removals but before surviving foreground.
+        // Planning separate add/remove transactions could resurrect a retired source
+        // declaration or write the same membership edge twice.
+        for (root, removed) in membership_removals {
+            let added = segment
+                .family_replacement()
+                .filter(|replacement| replacement.root == root)
+                .map(|replacement| replacement.target);
+            stage_semantic_scene_lifecycle_membership(
                 store,
                 root,
                 &removed.into_iter().collect::<Vec<_>>(),
+                added.as_slice(),
                 &mut semantic,
             )
             .map_err(ExecutionSegmentCompletionError::ForegroundMembership)?;
@@ -531,15 +535,21 @@ impl ExecutionSession {
             .signal_timeline
             .prepare_append_batch(timeline_entries, actual_time)
             .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
-        if family_transform.is_some() {
-            let root = (*lifecycle_root).ok_or_else(|| {
-                ExecutionSegmentCompletionError::MissingFamilyTransformRoot(
-                    family_transform
-                        .as_ref()
-                        .expect("family Transform completion is present")
-                        .source,
-                )
-            })?;
+        // Completion can restructure display membership even without an unequal
+        // Transform. Carry the declaration's validated root through the existing
+        // publication boundary; explicit family replacement also supplies its root.
+        // The publication layer still rejects unrooted or foreign-root reorders.
+        let order_root = match family_transform {
+            Some(completion) => Some((*lifecycle_root).ok_or(
+                ExecutionSegmentCompletionError::MissingFamilyTransformRoot(completion.source),
+            )?),
+            None => (*lifecycle_root).or_else(|| {
+                segment
+                    .family_replacement()
+                    .map(|replacement| replacement.root)
+            }),
+        };
+        if let Some(root) = order_root {
             self.apply_prepared_scalar_timeline_transaction_with_execution_at_root(
                 prepared,
                 release,
