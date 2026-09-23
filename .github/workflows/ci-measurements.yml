@@ -1,50 +1,42 @@
-name: CI measurements
+name: C5 receipt integration source capture
 
 on:
-  pull_request:
-    paths:
-      - ".github/ci/run-report*"
-      - ".github/workflows/ci-measurements.yml"
   workflow_dispatch:
-    inputs:
-      runs:
-        description: "Completed run:attempt pairs, separated by commas (maximum 20)"
-        required: true
-        type: string
-        default: "34251123265:1,34258854671:1,34251062699:1,34258854689:1"
 
 permissions:
   contents: read
-  actions: read
-
-concurrency:
-  group: ci-measurements-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  measure:
-    name: Collect historical CI measurements (not product qualification)
+  capture:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout reporter source
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Test attempt accounting
-        run: node --test .github/ci/run-report.test.mjs
-      - name: Collect completed attempt evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # PRs exercise the collector against the issue's fixed historical samples.
-          # These are not current-head qualification or a controlled before/after trial.
-          TIMING_RUNS: ${{ inputs.runs || '34251123265:1,34258854671:1,34251062699:1,34258854689:1' }}
-        run: node .github/ci/run-report.mjs collect "$GITHUB_REPOSITORY" "$TIMING_RUNS"
-      - name: Upload measurement evidence
-        if: always()
-        uses: actions/upload-artifact@v7
+      - name: Archive exact integration inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p integration-inputs
+          master=13cac98be05f15be8000b37a4f409073b01e80fb
+          head=3428ccf34c1bd040038032a637d510dfeedbc911
+          base=b7258363817b0c4d31f4becf8a5cc17b6605c139
+          test "$(git merge-base "$master" "$head")" = "$base"
+          for entry in "master:$master" "head:$head" "base:$base"; do
+            label=${entry%%:*}
+            sha=${entry#*:}
+            git archive --format=tar.gz "$sha" > "integration-inputs/$label.tar.gz"
+            git rev-parse "$sha^{tree}" > "integration-inputs/$label.tree"
+            git cat-file commit "$sha" > "integration-inputs/$label.commit"
+          done
+          git diff --stat "$base" "$head" > integration-inputs/stack.stat
+          git diff --stat "$base" "$master" > integration-inputs/master.stat
+          sha256sum integration-inputs/*.tar.gz > integration-inputs/SHA256SUMS
+      - uses: actions/upload-artifact@v7
         with:
-          name: ci-attempt-measurements-${{ github.run_attempt }}
-          path: ci-artifacts/run-timing
-          if-no-files-found: warn
-          retention-days: 30
+          name: c5-pinned-integration-inputs
+          path: integration-inputs
+          if-no-files-found: error
+          retention-days: 3
