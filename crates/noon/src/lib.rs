@@ -108,6 +108,7 @@ mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
+mod inspection_view;
 pub mod integration;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod live_coordinate_plotting_example;
@@ -173,7 +174,7 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionPublicationError, InspectionNavigationError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -188,6 +189,7 @@ pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHos
 pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+pub use inspection_view::{InspectionView2D, InspectionViewError};
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };

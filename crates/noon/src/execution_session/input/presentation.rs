@@ -71,6 +71,7 @@ pub struct PointerFrameSnapshot {
     runtime: RuntimeIdentity,
     publication: PublicationContext,
     view: PointerFrameView,
+    inspection_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,6 +82,7 @@ pub enum PointerFrameError {
     PositionOutOfRange,
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
+    Inspection(crate::InspectionViewError),
 }
 
 impl std::fmt::Display for PointerFrameError {
@@ -100,6 +102,7 @@ impl std::fmt::Display for PointerFrameError {
             }
             Self::Camera(error) => error.fmt(f),
             Self::Input(error) => error.fmt(f),
+            Self::Inspection(error) => error.fmt(f),
         }
     }
 }
@@ -109,6 +112,7 @@ impl std::error::Error for PointerFrameError {
         match self {
             Self::Camera(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::Inspection(error) => Some(error),
             _ => None,
         }
     }
@@ -125,18 +129,24 @@ impl ExecutionSession {
         &self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
-        if view.camera != self.camera().map_err(PointerFrameError::Camera)? {
+        if view.camera != self.inspection_camera()? {
             return Err(PointerFrameError::CameraMismatch);
         }
         Ok(PointerFrameSnapshot {
             runtime: self.runtime_identity(),
             publication: self.publication_context(),
             view,
+            inspection_revision: self.inspection_view_revision(),
         })
     }
 }
 
 impl PointerFrameSnapshot {
+    /// Session navigation revision, distinct from the host's surface revision.
+    pub const fn inspection_revision(&self) -> u64 {
+        self.inspection_revision
+    }
+
     pub const fn publication(&self) -> PublicationContext {
         self.publication
     }
@@ -179,7 +189,9 @@ impl PointerFrameSnapshot {
                 ExecutionSessionInputError::ForeignPointerRuntime,
             ));
         }
-        if self.view != current_view {
+        if self.view != current_view
+            || self.inspection_revision != session.inspection_view_revision()
+        {
             return Err(PointerFrameError::ViewChanged);
         }
         let current = session.publication_context();
@@ -191,7 +203,7 @@ impl PointerFrameSnapshot {
                 },
             ));
         }
-        if self.view.camera != session.camera().map_err(PointerFrameError::Camera)? {
+        if self.view.camera != session.inspection_camera()? {
             return Err(PointerFrameError::CameraMismatch);
         }
         Ok(())
