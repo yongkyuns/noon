@@ -9,7 +9,7 @@ on:
       - 'web/python/examples/noon_showcase_manifest.json'
       - 'web/python/test_showcase_contract.py'
       - 'scripts/showcase-*'
-      - '.github/workflows/showcase-qualification.yml'
+      - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
 
 permissions:
