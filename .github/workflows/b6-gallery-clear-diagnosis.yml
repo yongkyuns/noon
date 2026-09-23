@@ -16,7 +16,7 @@ jobs:
   compare:
     name: Gallery exact-clear / ${{ matrix.label }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -77,30 +77,49 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium-1.62.1
+          key: Linux-playwright-chromium-1.62.1
       - name: Install Playwright Chromium
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Add failure-only image retention without changing assertions
+      - name: Instrument exact original assertions and explicit CSS arms
         run: |
           git diff --exit-code
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
+          import os
 
           p = Path('scripts/playground-gallery-selection-smoke.mjs')
           source = p.read_text()
           raw = source.encode()
           assert hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() == 'de4c2d33b089a88d25d76e3da627c0d23ecf88d0'
 
+
           def replace_once(old, new):
               global source
               assert source.count(old) == 1, old
               source = source.replace(old, new)
 
-          replace_once('let runtimeCache;', 'let runtimeCache;\nlet diagnosticPage;\nlet primaryFailure;\nconst snapshots = {};\nconst diagnostics = {};')
+
+          replace_once('let runtimeCache;', '''let runtimeCache;
+          let diagnosticPage;
+          let primaryFailure;
+          const snapshots = {};
+          const diagnostics = { arm: process.env.NOON_GALLERY_CSS_ARM ?? "original" };
+          const cssArms = {
+            original: null,
+            noShadow: "#scene { box-shadow: none !important; }",
+            square: "#scene { border-radius: 0 !important; }",
+          };
+          assert.ok(Object.hasOwn(cssArms, diagnostics.arm), "unknown diagnostic CSS arm");''')
           replace_once('const page = await context.newPage();', 'const page = await context.newPage();\n  diagnosticPage = page;')
+          replace_once('  const canvas = page.locator("#scene");', '''  // Separate causal experiment, never a tolerance or mask in the original arm.
+            // The original arm executes no new awaited operation before its verdict.
+            if (cssArms[diagnostics.arm] !== null) {
+              await page.addStyleTag({ content: cssArms[diagnostics.arm] });
+            }
+            const canvas = page.locator("#scene");''')
           for label in ('baseline', 'selected', 'cleared'):
               statement = f'const {label} = await canvas.screenshot();'
               replace_once(statement, statement + f'\n  snapshots.{label} = {label};')
@@ -109,51 +128,57 @@ jobs:
           replace_once('await waitForPresentation(page, beforeClear);', 'await waitForPresentation(page, beforeClear);\n  diagnostics.beforeClear = beforeClear;')
           replace_once('} finally {\n  await browser?.close();\n  server?.kill("SIGTERM");\n}', r'''} catch (error) {
             primaryFailure = error;
-            diagnostics.failure = String(error.stack ?? error);
+            diagnostics.failure = { message: String(error), code: error?.code, actual: error?.actual, expected: error?.expected };
             throw error;
           } finally {
+            diagnostics.strictVerdict = primaryFailure ? "failure" : "success";
             try {
-              // Passive extra evidence only AFTER the original assertions. No retries,
-              // sleeps, redraw requests, tolerance changes or passing-on-retry policy.
-              if (diagnosticPage && snapshots.cleared) {
-                snapshots.afterClear = await diagnosticPage.locator("#scene").screenshot();
+              // Write original buffers and the strict verdict before any optional probe.
+              await Promise.all(Object.entries(snapshots).map(([label, bytes]) =>
+                writeFile(path.join(artifacts, `${label}.png`), bytes)));
+              for (const [label, other] of [["selectedDifference", "selected"], ["clearDifference", "cleared"]]) {
+                if (snapshots.baseline && snapshots[other]) diagnostics[label] = describeDifferences(snapshots.baseline, snapshots[other]);
               }
+              await writeFile(path.join(artifacts, "strict.json"), encodeDiagnostic(diagnostics));
               if (diagnosticPage) {
-                diagnostics.finalState = await diagnosticPage.evaluate(async () => ({
-                  status: { ...document.querySelector("#status")?.dataset },
-                  patch: { ...document.querySelector("#patch-status")?.dataset },
-                  canvas: {
-                    width: document.querySelector("#scene")?.width,
-                    height: document.querySelector("#scene")?.height,
-                    rect: document.querySelector("#scene")?.getBoundingClientRect().toJSON(),
-                  },
-                  metrics: await window.__noonExampleGallery?.executionMetrics(),
-                }));
+                diagnostics.finalState = await diagnosticPage.evaluate(async () => {
+                  const canvas = document.querySelector("#scene");
+                  const css = canvas ? getComputedStyle(canvas) : null;
+                  return {
+                    status: { ...document.querySelector("#status")?.dataset },
+                    patch: { ...document.querySelector("#patch-status")?.dataset },
+                    canvas: {
+                      width: canvas?.width, height: canvas?.height,
+                      rect: canvas?.getBoundingClientRect().toJSON(),
+                      borderRadius: css?.borderRadius, boxShadow: css?.boxShadow,
+                      border: css?.border, background: css?.background,
+                    },
+                    metrics: await window.__noonExampleGallery?.executionMetrics(),
+                  };
+                });
               }
-              for (const [label, bytes] of Object.entries(snapshots)) {
-                await writeFile(path.join(artifacts, `${label}.png`), bytes);
-              }
-              for (const [label, other] of [
-                ["selectedDifference", "selected"],
-                ["clearDifference", "cleared"],
-                ["afterClearDifference", "afterClear"],
-              ]) {
-                if (snapshots.baseline && snapshots[other]) {
-                  diagnostics[label] = describeDifferences(snapshots.baseline, snapshots[other]);
+              if (diagnosticPage && snapshots.cleared) {
+                // Post-verdict passive captures cannot change the original strict outcome.
+                for (let index = 1; index <= 3; index += 1) {
+                  const bytes = await diagnosticPage.locator("#scene").screenshot();
+                  await writeFile(path.join(artifacts, `passive-${index}.png`), bytes);
+                  (diagnostics.passive ??= []).push(describeDifferences(snapshots.cleared, bytes));
                 }
               }
-              if (snapshots.cleared && snapshots.afterClear) {
-                diagnostics.postAssertionChange = describeDifferences(snapshots.cleared, snapshots.afterClear);
-              }
-              await writeFile(path.join(artifacts, "diagnostics.json"), JSON.stringify(diagnostics, null, 2) + "\n");
-              console.log("GALLERY_DIAGNOSTICS " + JSON.stringify(diagnostics));
+              await writeFile(path.join(artifacts, "diagnostics.json"), encodeDiagnostic(diagnostics));
+              console.log("GALLERY_DIAGNOSTICS " + encodeDiagnostic(diagnostics));
             } catch (error) {
               console.error("GALLERY_DIAGNOSTIC_FAILURE", error);
               if (!primaryFailure) process.exitCode = 1;
             } finally {
-              await browser?.close();
-              server?.kill("SIGTERM");
+              try { await browser?.close(); } finally { server?.kill("SIGTERM"); }
             }
+          }
+
+          function encodeDiagnostic(value) {
+            // Preserve 64-bit identity/counter values exactly. Never coerce them to Number.
+            return JSON.stringify(value, (_key, item) =>
+              typeof item === "bigint" ? { type: "bigint", decimal: item.toString() } : item, 2) + "\n";
           }
 
           function describeDifferences(leftBytes, rightBytes) {
@@ -177,8 +202,7 @@ jobs:
             }
             return {
               width: left.width, height: left.height, changed,
-              bounds: changed === 0 ? null : { minX, minY, maxX, maxY },
-              samples,
+              bounds: changed === 0 ? null : { minX, minY, maxX, maxY }, samples,
             };
           }''')
           p.write_text(source)
@@ -187,20 +211,22 @@ jobs:
           test "$(git diff --name-only)" = scripts/playground-gallery-selection-smoke.mjs
           git diff --check
           git diff -- scripts/playground-gallery-selection-smoke.mjs > browser-smoke-artifacts/gallery-diagnosis/diagnostics.patch
-      - name: Run three independent strict samples and preserve every failure
+      - name: Preserve every original and controlled sample outcome
         run: |
           overall=0
-          for sample in 1 2 3; do
-            out="browser-smoke-artifacts/gallery-diagnosis/sample-$sample"
-            mkdir -p "$out"
-            set +e
-            NOON_GALLERY_SELECTION_ARTIFACTS="$out" node scripts/playground-gallery-selection-smoke.mjs > "$out/console.log" 2>&1
-            status=$?
-            set -e
-            cat "$out/console.log"
-            echo "GALLERY_SAMPLE source=${{ matrix.source }} sample=$sample exit=$status"
-            echo "$status" > "$out/exit-code.txt"
-            if [ "$status" -ne 0 ]; then overall=1; fi
+          for arm in original noShadow square; do
+            for sample in 1 2 3; do
+              out="browser-smoke-artifacts/gallery-diagnosis/$arm-$sample"
+              mkdir -p "$out"
+              set +e
+              NOON_GALLERY_CSS_ARM="$arm" NOON_GALLERY_SELECTION_ARTIFACTS="$out" node scripts/playground-gallery-selection-smoke.mjs > "$out/console.log" 2>&1
+              status=$?
+              set -e
+              cat "$out/console.log"
+              echo "GALLERY_SAMPLE source=${{ matrix.source }} arm=$arm sample=$sample exit=$status"
+              echo "$status" > "$out/exit-code.txt"
+              if [ "$status" -ne 0 ]; then overall=1; fi
+            done
           done
           exit "$overall"
       - name: Retain exact comparison evidence
