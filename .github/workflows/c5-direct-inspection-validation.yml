@@ -83,6 +83,15 @@ jobs:
           git diff --cached --binary "$BASE_SHA" > /tmp/c5-direct-proof/source.patch
           git diff --cached --stat "$BASE_SHA" > /tmp/c5-direct-proof/source.stat
           git archive "$(cat /tmp/c5-direct-proof/tree.txt)" | gzip > /tmp/c5-direct-proof/source.tar.gz
+          # Test the actual production tree, not the staging checkout. In
+          # particular CI topology tests must never see this temporary workflow.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-direct-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: exact clean direct inspection qualification candidate')
+          git checkout --detach --force "$candidate"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-direct-proof/tree.txt)"
+          git diff --exit-code
+          test ! -e .github/workflows/c5-direct-inspection-validation.yml
           cp crates/noon-web/src/browser_pointer_input.rs /tmp/c5-browser-pointer.good.rs
       - name: Focused direct admission and shared inspection tests
         shell: bash
