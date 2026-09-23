@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <rect width="640" height="360" rx="24" fill="#090c13"/>
+  <circle cx="230" cy="180" r="72" fill="#2d6cdf" fill-opacity=".78" stroke="#6f9cff" stroke-width="5"/>
+  <rect x="370" y="125" width="150" height="110" rx="8" fill="#2a9d63" fill-opacity=".78" stroke="#6bd59a" stroke-width="5"/>
+  <circle cx="230" cy="180" r="78" fill="#ffd84a" fill-opacity=".18" stroke="#ffd84a" stroke-width="8"/>
+  <text x="320" y="314" text-anchor="middle" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="22">Click a filled shape to select</text>
+</svg>

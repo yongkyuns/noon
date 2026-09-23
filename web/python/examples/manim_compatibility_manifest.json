@@ -353,6 +353,28 @@
       "thumbnail_alt": "Monospaced multiline text with repeated red substring and blue and green source ranges",
       "thumbnail_time": 0,
       "order": 1200
+    },
+    {
+      "id": "noon-pointer-selection",
+      "title": "Pointer Selection",
+      "summary": "Click either filled shape to select it; click the background to clear. The authored Python scene stays unchanged while Noon renders a session-only highlight.",
+      "status": "ready",
+      "path": "python/examples/noon_pointer_selection.py",
+      "category": "manim-compatible/interaction",
+      "features": ["Circle", "Rectangle", "pointer selection", "session overlay", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "interaction": {
+        "type": "pointer-fill-selection",
+        "max_movement": 4
+      },
+      "expected_duration": 0,
+      "qualification_mode": "shared-live",
+      "expected_object_count": 2,
+      "thumbnail": "thumbnails/manim/noon-pointer-selection.svg",
+      "thumbnail_alt": "Blue circle selected with a yellow highlight beside a green rectangle",
+      "thumbnail_time": 0,
+      "order": 1210
     }
   ]
 }
