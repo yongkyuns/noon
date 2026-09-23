@@ -5,11 +5,12 @@ on:
     paths:
       - .github/workflows/b6-matching-anchors-proof.yml
       - .github/ci/b6-matching-anchors.patch.gz.b64
+      - .github/ci/b6-matching-presence-review.patch
 permissions:
   contents: write
 concurrency:
   group: b6-matching-foreground-anchors-proof
-  cancel-in-progress: false
+  cancel-in-progress: true
 env:
   BASE: 4bf851b4643b8b4b96dfdc31fc47300b802bac28
   SOURCE_BRANCH: codex/b6-matching-foreground-anchors-20260923
@@ -39,6 +40,9 @@ jobs:
           patch = gzip.decompress(base64.b64decode(Path('.github/ci/b6-matching-anchors.patch.gz.b64').read_text()))
           assert hashlib.sha256(patch).hexdigest() == '8153fc0e9d9032c3546e47e98cfe96f3fdfb460365fbc3120c568d48d9fcf4f1'
           Path(os.environ['RUNNER_TEMP'], 'b6-anchors', 'candidate.patch').write_bytes(patch)
+          review = Path('.github/ci/b6-matching-presence-review.patch').read_bytes()
+          assert hashlib.sha256(review).hexdigest() == 'cb022e7f97027ec0a67404d6592b2bfeac094cb311ae32cdf869feca9dfbe5d7'
+          Path(os.environ['RUNNER_TEMP'], 'b6-anchors', 'review.patch').write_bytes(review)
           PY
           git fetch --no-tags --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
@@ -86,11 +90,12 @@ jobs:
           git checkout -- crates/noon/src/execution_session.rs
           rm crates/noon/src/execution_session/matching_foreground_tests.rs
           test -z "$(git status --porcelain)"
-      - name: Apply complete candidate and format
+      - name: Apply complete reviewed candidate and format
         shell: bash
         run: |
           set -euo pipefail
           git apply "$RUNNER_TEMP/b6-anchors/candidate.patch"
+          git apply "$RUNNER_TEMP/b6-anchors/review.patch"
           cargo fmt --all
           git diff --check
       - name: Qualify matching lifetime, transient evaluation, and worker codec
@@ -129,6 +134,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)" = "$GITHUB_SHA"
           python - <<'PY'
           import subprocess
           expected = {
