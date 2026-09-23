@@ -1,4 +1,4 @@
-name: C5 receipts with foreground completion
+name: C5 receipts with foreground completion and admission
 
 on:
   push:
@@ -30,13 +30,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Merge pinned product sources in an isolated worktree
+      - name: Merge pinned product sources without validation ancestry
         shell: bash
         run: |
           set -euo pipefail
           old=6ce7954738be263a99b0a0ed4ca0d071984b022b
-          master=2d4cebe3aed2b3c12b6c734e982f5953daef9ada
-          test "$(git merge-base "$old" "$master")" = 13cac98be05f15be8000b37a4f409073b01e80fb
+          master=4bf851b4643b8b4b96dfdc31fc47300b802bac28
+          base=13cac98be05f15be8000b37a4f409073b01e80fb
+          test "$(git merge-base "$old" "$master")" = "$base"
           git config user.name "Noon integration validation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p "$RUNNER_TEMP/c5-proof"
@@ -44,25 +45,24 @@ jobs:
           cd "$RUNNER_TEMP/c5-candidate"
           git merge --no-commit --no-ff "$master" 2>&1 | tee "$RUNNER_TEMP/c5-proof/merge.log"
           python3 - <<'PY'
-          import subprocess
-          expected = {
-              'crates/noon-core/src/semantic_store.rs',
-              'crates/noon-core/src/semantic_store/semantic_scene_restructure.rs',
-              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground.rs',
-              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs',
-              'crates/noon/src/execution_session.rs',
-              'crates/noon/src/execution_session/completion.rs',
-              'crates/noon/src/execution_session/family_transform.rs',
-              'crates/noon/src/execution_session/family_transform_tests.rs',
-          }
+          import json, os, subprocess
+          from pathlib import Path
+          old = '6ce7954738be263a99b0a0ed4ca0d071984b022b'
+          master = '4bf851b4643b8b4b96dfdc31fc47300b802bac28'
+          base = '13cac98be05f15be8000b37a4f409073b01e80fb'
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
+          incoming = set(git('diff', '--name-only', base, master).splitlines())
+          feature = set(git('diff', '--name-only', base, old).splitlines())
           actual = set(git('diff', '--cached', '--name-only').splitlines())
-          assert actual == expected, (actual, expected)
-          master = '2d4cebe3aed2b3c12b6c734e982f5953daef9ada'
-          for path in expected - {'crates/noon/src/execution_session.rs'}:
+          assert actual == incoming, (actual, incoming)
+          overlap = incoming & feature
+          assert overlap == {'crates/noon/src/execution_session.rs'}, overlap
+          for path in incoming - overlap:
               assert git('rev-parse', ':' + path) == git('rev-parse', master + ':' + path), path
           assert not git('diff', '--name-only', '--diff-filter=U')
+          report = {'incoming': sorted(incoming), 'overlap': sorted(overlap)}
+          Path(os.environ['RUNNER_TEMP'], 'c5-proof', 'merge-files.json').write_text(json.dumps(report, indent=2) + '\n')
           PY
           git diff --cached --check
           test -z "$(git diff)"
@@ -98,7 +98,7 @@ jobs:
           cargo fmt --all -- --check 2>&1 | tee "$RUNNER_TEMP/c5-proof/format.log"
           cargo test -p noon-core -p noon -p noon-web --lib 2>&1 | tee "$RUNNER_TEMP/c5-proof/rust-tests.log"
           node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/c5-proof/js-tests.log"
-      - name: Publish a qualified staging ref without moving the PR or master
+      - name: Publish only a qualified staging ref
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,25 +106,37 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/c5-candidate"
           old=6ce7954738be263a99b0a0ed4ca0d071984b022b
-          master=2d4cebe3aed2b3c12b6c734e982f5953daef9ada
-          output=validation/c5-receipts-sync-1711-qualified
+          master=4bf851b4643b8b4b96dfdc31fc47300b802bac28
+          output=validation/c5-receipts-sync-1713-qualified
           test -z "$(git diff)"
           tree=$(cat "$RUNNER_TEMP/c5-proof/tree.txt")
           test "$(git write-tree)" = "$tree"
-          test "$(git ls-remote origin refs/heads/feat/c5-receipts-master | cut -f1)" = "$old"
-          test "$(git ls-remote origin refs/heads/master | cut -f1)" = "$master"
-          test -z "$(git ls-remote origin refs/heads/$output)"
-          clean=$(printf 'Merge master foreground completion into C5 receipt integration\n\nPreserve #1711 and the qualified receipt source without validation-workflow ancestry.\n' | git commit-tree "$tree" -p "$old" -p "$master")
+          # Record the tested object before networking; retries never rebuild it.
+          clean=$(printf 'Merge master foreground completion and admission into C5 receipts\n\nPreserve #1711 and #1713 without validation-workflow ancestry.\n' | git commit-tree "$tree" -p "$old" -p "$master")
           test "$(git rev-list --parents -n1 "$clean")" = "$clean $old $master"
-          header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c "http.https://github.com/.extraheader=$header" push origin "$clean:refs/heads/$output"
           printf '%s\n' "$clean" > "$RUNNER_TEMP/c5-proof/commit.txt"
           git cat-file commit "$clean" > "$RUNNER_TEMP/c5-proof/commit-object.txt"
+          retry() {
+            for attempt in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              test "$attempt" -lt 4 || return 1
+              sleep "$((attempt * 3))"
+            done
+          }
+          refs=$(retry git ls-remote origin refs/heads/feat/c5-receipts-master refs/heads/master "refs/heads/$output")
+          printf '%s\n' "$refs" > "$RUNNER_TEMP/c5-proof/remote-refs-before.txt"
+          test "$(printf '%s\n' "$refs" | awk '$2 == "refs/heads/feat/c5-receipts-master" {print $1}')" = "$old"
+          test -z "$(printf '%s\n' "$refs" | awk -v ref="refs/heads/$output" '$2 == ref {print $1}')"
+          # This is a staging ref only. A later master advance is recorded, not
+          # silently merged or used to change the tested tree during publication.
+          header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          retry git -c "http.https://github.com/.extraheader=$header" push origin "$clean:refs/heads/$output"
+          printf '%s\n' "$output" > "$RUNNER_TEMP/c5-proof/published-ref.txt"
       - name: Retain source and executed evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: c5-receipts-foreground-integration-proof
+          name: c5-receipts-foreground-admission-proof
           path: ${{ runner.temp }}/c5-proof
           if-no-files-found: warn
           retention-days: 7
