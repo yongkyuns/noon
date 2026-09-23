@@ -940,6 +940,8 @@ mod wasm {
                     .map_err(js_error)? as u64,
                 surface_x,
                 surface_y,
+                wheel_x: None,
+                wheel_y: None,
                 viewport_width,
                 viewport_height,
                 button: button

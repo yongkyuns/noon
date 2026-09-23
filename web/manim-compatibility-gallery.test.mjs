@@ -219,15 +219,14 @@ assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercis
 const pointerSelectionEntry = readyEntries.find((entry) => entry.id === "noon-pointer-selection");
 assert.ok(pointerSelectionEntry, "pointer selection must be a ready compatibility example");
 assert.equal(pointerSelectionEntry.category, "manim-compatible/interaction");
-assert.deepEqual(pointerSelectionEntry.interaction, {
-  type: "pointer-fill-selection",
-  max_movement: 4,
-});
+assert.deepEqual(pointerSelectionEntry.interaction, { type: "authored-pointer-actions" });
 assert.ok(pointerSelectionEntry.features.includes("pointer selection"));
 const pointerSelectionSource = await readFile(
   new URL(`./${pointerSelectionEntry.path}`, import.meta.url),
   "utf8",
 );
+assert.match(pointerSelectionSource, /MovingCameraScene/);
+assert.match(pointerSelectionSource, /configure_pointer_interactions\(/);
 assert.match(pointerSelectionSource, /Circle\(/);
 assert.match(pointerSelectionSource, /Rectangle\(/);
 assert.doesNotMatch(

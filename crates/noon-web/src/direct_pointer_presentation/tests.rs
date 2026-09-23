@@ -17,6 +17,8 @@ fn input(kind: BrowserPointerKind) -> BrowserPointerInput {
     BrowserPointerInput {
         kind,
         source_id: 1,
+        wheel_x: None,
+        wheel_y: None,
         pointer_id: 7,
         view_revision: 1,
         surface_x: (!cancel).then_some(400.0),

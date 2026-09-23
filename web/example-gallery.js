@@ -23,6 +23,9 @@ function normalizeGalleryInteraction(entry) {
   if (typeof entry.interaction !== "object" || Array.isArray(entry.interaction)) {
     throw new TypeError(`${entry.id}: gallery interaction must be an object`);
   }
+  if (entry.interaction.type === "authored-pointer-actions") {
+    return Object.freeze({ type: "authored-pointer-actions" });
+  }
   if (entry.interaction.type !== "pointer-fill-selection") {
     throw new Error(`${entry.id}: unsupported gallery interaction ${entry.interaction.type ?? "unknown"}`);
   }

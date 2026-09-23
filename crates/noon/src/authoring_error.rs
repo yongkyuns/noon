@@ -100,6 +100,7 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    PointerInteractions(&'static str),
     #[cfg(feature = "image-decode")]
     ImageDecode(crate::ImageDecodeError),
     /// Immutable raster resource validation failed.
@@ -121,13 +122,25 @@ pub enum AuthoringError {
     /// An object references a missing or stale text resource.
     MissingTextResource(noon_core::TextResourceHandle),
     /// The named input is non-finite or cannot be represented as f32.
-    InvalidRenderNumber { name: String, value: f64 },
+    InvalidRenderNumber {
+        name: String,
+        value: f64,
+    },
     /// The named input must be strictly positive.
-    NonPositiveNumber { name: String, value: f64 },
+    NonPositiveNumber {
+        name: String,
+        value: f64,
+    },
     /// The named opacity is outside the inclusive unit interval.
-    InvalidOpacity { name: String, value: f64 },
+    InvalidOpacity {
+        name: String,
+        value: f64,
+    },
     /// At least one validated ellipse dimension is nonpositive.
-    InvalidEllipseDimensions { width: f64, height: f64 },
+    InvalidEllipseDimensions {
+        width: f64,
+        height: f64,
+    },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
     /// Flattened XY point input has an incomplete coordinate pair.
@@ -195,7 +208,9 @@ pub enum AuthoringError {
     /// A detached-only tracker operation was requested after association.
     AlreadyScopedTracker(noon_core::SemanticNodeId),
     /// A native input declaration received an empty name.
-    EmptyInputName { kind: String },
+    EmptyInputName {
+        kind: String,
+    },
     /// This operation requires an unsupported payload or capability.
     Unsupported(UnsupportedAuthoringOperation),
     /// The semantic operation rejected a node, family, or membership request.
@@ -238,6 +253,9 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PointerInteractions(reason) => {
+                write!(f, "invalid pointer interactions: {reason}")
+            }
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => error.fmt(f),
             Self::ImageResource(error) => error.fmt(f),

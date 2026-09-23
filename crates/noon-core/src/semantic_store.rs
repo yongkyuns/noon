@@ -49,6 +49,8 @@ pub use semantic_bindings::*;
 mod semantic_graph;
 pub use semantic_graph::*;
 
+mod semantic_pointer_interactions;
+pub use semantic_pointer_interactions::*;
 mod semantic_animations;
 pub use semantic_animations::*;
 
@@ -388,9 +390,14 @@ pub struct SemanticNode {
     /// families/Line components. It is Semantic Scene state, not wrapper or
     /// renderer state.
     graph_declaration: Option<SemanticGraphDeclaration>,
+    pointer_interactions: SemanticPointerInteractions,
 }
 
 impl SemanticNode {
+    pub const fn pointer_interactions(&self) -> SemanticPointerInteractions {
+        self.pointer_interactions
+    }
+
     pub const fn id(&self) -> SemanticNodeId {
         self.id
     }
@@ -836,6 +843,7 @@ impl SemanticStore {
             scoped_signals: BTreeSet::new(),
             foreground_members: Vec::new(),
             graph_declaration: None,
+            pointer_interactions: SemanticPointerInteractions::default(),
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {

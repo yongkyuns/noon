@@ -173,7 +173,7 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionPublicationError, PointerActionAdvanceError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -201,8 +201,9 @@ pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
-    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
-    RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand,
+    PointerIndicateOptions, PointerZoomOptions, PublicationContext, RateFunction, Rect,
+    SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId, SemanticObjectProperty,
     SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
     SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,

@@ -5,7 +5,7 @@
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, windowTarget = window,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, windowTarget = window, wheelEnabled = () => false,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -60,7 +60,8 @@ export function attachBrowserPointerInput(canvas, {
     if (event.isPrimary !== true || event.pointerId === -1) return;
     if (!Number.isInteger(event.pointerId) || event.pointerId < -2147483648 ||
         event.pointerId > 2147483647) throw new TypeError("invalid DOM pointer identity");
-    const matches = selected !== null && event.pointerId === selected.id;
+    const matches = selected !== null && !selected.wheel && event.pointerId === selected.id;
+    if (type === "pointerleave" && selected?.wheel) { cancel(); return; }
     if (type === "pointercancel" || type === "pointerleave" || type === "lostpointercapture") {
       // A foreign contact must never release/cancel the selected pointer. After
       // a successful release, implicit capture loss adds no cancellation edge.
@@ -80,7 +81,7 @@ export function attachBrowserPointerInput(canvas, {
     if (rect === null) return;
     // View invalidation and pointer replacement retire the previous contact.
     // Never turn a release or an in-progress outside contact into a new press.
-    if (selected === null || event.pointerId !== selected.id) {
+    if (selected === null || selected.wheel || event.pointerId !== selected.id) {
       if (type === "pointerup" || (type === "pointermove" && event.buttons !== 0)) return;
       cancel();
       selected = { id: event.pointerId, source: allocateSource(), buttons: 0, viewRevision: viewRevision() };
@@ -158,12 +159,42 @@ export function attachBrowserPointerInput(canvas, {
       if (!active() || !receive(type, sample, rect)) break;
     }
   };
+  const wheel = event => {
+    if (!active() || !wheelEnabled()) return;
+    if (![event.clientX, event.clientY, event.deltaX, event.deltaY].every(Number.isFinite) ||
+        ![0, 1, 2].includes(event.deltaMode)) throw new TypeError("invalid DOM wheel sample");
+    if (event.deltaX === 0 && event.deltaY === 0) return;
+    const rect = currentView();
+    if (rect === null) return;
+    const x = event.clientX - rect.left, y = event.clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+    // WheelEvent has no pointer identity. Give this collector source its own
+    // lifetime, rather than impersonating a held DOM contact or inventing edges.
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+    const dx = event.deltaX * unit, dy = event.deltaY * unit;
+    if (![dx, dy].every(v => Number.isFinite(v) && Number.isFinite(Math.fround(v)))) {
+      throw new RangeError("DOM wheel delta is not representable");
+    }
+    if (!selected?.wheel) {
+      cancel();
+      selected = { id: -2, source: allocateSource(), buttons: 0, viewRevision: viewRevision(), wheel: true };
+    }
+    const contact = selected;
+    const admitted = send({ kind: "wheel", source_id: contact.source, pointer_id: contact.id,
+      view_revision: contact.viewRevision, surface_x: x, surface_y: y,
+      viewport_width: rect.width, viewport_height: rect.height, button: null,
+      wheel_x: dx, wheel_y: dy, shift: event.shiftKey === true, control: event.ctrlKey === true,
+      alt: event.altKey === true, meta: event.metaKey === true });
+    if (admitted === false && selected === contact) selected = null;
+    event.preventDefault();
+  };
   const guard = operation => event => {
     try { operation(event); } catch (error) { onError(error); }
   };
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
+  canvas.addEventListener("wheel", guard(wheel), { passive: false, signal });
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   if (onView) {
     // Register before the first paint; input collection never invents a receipt.

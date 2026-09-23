@@ -123,6 +123,10 @@ pub enum SemanticMutation {
     ///
     /// This is construction-time whole-declaration publication. Persistent graph
     /// edits use local graph mutations rather than replacing the whole topology.
+    SetPointerInteractions {
+        scope: SemanticTransactionNodeRef,
+        bindings: crate::SemanticPointerInteractions<SemanticTransactionNodeRef>,
+    },
     SetGraphDeclaration {
         scope: SemanticTransactionNodeRef,
         graph: SemanticTransactionGraphDeclaration,
@@ -170,6 +174,9 @@ impl SemanticMutation {
             Self::ScopeSignal { scope, signal } => vec![*scope, *signal],
             Self::SetForegroundMembers { scope, members } => std::iter::once(*scope)
                 .chain(members.iter().copied())
+                .collect(),
+            Self::SetPointerInteractions { scope, bindings } => std::iter::once(*scope)
+                .chain(bindings.references())
                 .collect(),
             Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
                 .chain(graph.node_references())
@@ -222,6 +229,7 @@ impl SemanticMutation {
             | Self::ClearUpdaters { target, .. } => target.existing(),
             Self::ScopeSignal { scope, .. }
             | Self::SetForegroundMembers { scope, .. }
+            | Self::SetPointerInteractions { scope, .. }
             | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
@@ -258,6 +266,7 @@ impl SemanticMutation {
             | Self::ClearUpdaters { .. }
             | Self::ScopeSignal { .. }
             | Self::SetForegroundMembers { .. }
+            | Self::SetPointerInteractions { .. }
             | Self::SetGraphDeclaration { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
@@ -347,6 +356,9 @@ pub enum SemanticMutationImpact {
         scope: SemanticNodeId,
     },
     /// Authored graph topology/dependency meaning changed on this family root.
+    PointerInteractions {
+        scope: SemanticNodeId,
+    },
     GraphDeclaration {
         scope: SemanticNodeId,
     },
@@ -631,6 +643,19 @@ impl SemanticMutationTransaction {
     ///
     /// The declaration may reference nodes created by this transaction. It is
     /// validated against the final staged family membership and object content.
+    pub fn set_pointer_interactions(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        bindings: crate::SemanticPointerInteractions<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::SetPointerInteractions {
+                scope: scope.into(),
+                bindings,
+            });
+        self
+    }
+
     pub fn set_graph_declaration(
         &mut self,
         scope: impl Into<SemanticTransactionNodeRef>,
@@ -1890,6 +1915,34 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetPointerInteractions { scope, bindings } => {
+                    catalog.ensure_family(*scope, index)?;
+                    bindings.validate().map_err(|reason| {
+                        SemanticMutationTransactionError::InvalidPointerInteractions {
+                            index,
+                            reason,
+                        }
+                    })?;
+                    if let Some(zoom) = bindings.zoom {
+                        catalog.ensure_object(zoom.camera, index)?;
+                        catalog.ensure_signal(zoom.center_signal, index)?;
+                        catalog.ensure_signal(zoom.scale_signal, index)?;
+                    }
+                    if self.mutations[..index].iter().any(|m| matches!(m,
+                        SemanticMutation::SetPointerInteractions { scope: previous, .. } if previous == scope)) {
+                        return Err(SemanticMutationTransactionError::InvalidPointerInteractions { index, reason: "duplicate pointer binding scope" });
+                    }
+                    let unchanged =
+                        scope
+                            .existing()
+                            .and_then(|id| store.node(id))
+                            .is_some_and(|node| {
+                                node.pointer_interactions()
+                                    .map(SemanticTransactionNodeRef::from)
+                                    == *bindings
+                            });
+                    changed.push(!unchanged);
+                }
                 SemanticMutation::SetForegroundMembers { scope, members } => {
                     catalog.ensure_family(*scope, index)?;
                     if staged_foreground.contains_key(scope) {
@@ -2519,6 +2572,10 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    InvalidPointerInteractions {
+        index: usize,
+        reason: &'static str,
+    },
     DuplicateGraphDeclaration {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -2866,6 +2923,7 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointerInteractions { index, reason } => write!(formatter, "semantic mutation {index}: {reason}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"

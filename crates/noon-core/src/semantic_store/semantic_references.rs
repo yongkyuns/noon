@@ -22,6 +22,7 @@ pub(crate) enum SemanticReferenceKind {
     AnimationChild,
     /// Hard authored topology dependency owned by one graph family root.
     GraphDependency,
+    PointerBindingDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +39,9 @@ impl SemanticIncomingReference {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticRemoveNodeEffect {
+    PointerInteractionsChanged {
+        scope: SemanticNodeId,
+    },
     NodeRemoved(SemanticNodeId),
     ForegroundMembersChanged {
         scope: SemanticNodeId,
@@ -65,6 +69,36 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    pub(crate) fn replace_semantic_pointer_interactions(
+        &mut self,
+        scope: SemanticNodeId,
+        bindings: crate::SemanticPointerInteractions,
+    ) {
+        let previous = std::mem::replace(
+            &mut self
+                .node_mut(scope)
+                .expect("validated pointer binding scope")
+                .pointer_interactions,
+            bindings,
+        );
+        let reference =
+            SemanticIncomingReference::new(scope, SemanticReferenceKind::PointerBindingDependency);
+        for target in previous.references() {
+            if let Some(incoming) = self.incoming_references.get_mut(&target) {
+                incoming.retain(|r| *r != reference);
+                if incoming.is_empty() {
+                    self.incoming_references.remove(&target);
+                }
+            }
+        }
+        for target in bindings.references() {
+            let incoming = self.incoming_references.entry(target).or_default();
+            if !incoming.contains(&reference) {
+                incoming.push(reference);
+            }
+        }
+    }
+
     /// Whether this signal participates in any scene execution scope.
     ///
     /// Work is proportional to the signal's direct incoming references; scene
@@ -364,6 +398,19 @@ impl SemanticStore {
                             .push(SemanticRemoveNodeEffect::ForegroundMembersChanged { scope });
                     }
                 }
+                SemanticReferenceKind::PointerBindingDependency => {
+                    let scope = reference.owner;
+                    let mut bindings = self
+                        .node(scope)
+                        .expect("live binding owner")
+                        .pointer_interactions();
+                    bindings.zoom = None;
+                    self.replace_semantic_pointer_interactions(scope, bindings);
+                    outcome.written_slots.insert(scope);
+                    outcome
+                        .effects
+                        .push(SemanticRemoveNodeEffect::PointerInteractionsChanged { scope });
+                }
                 SemanticReferenceKind::ScopedSignal => {
                     let scope = reference.owner;
                     let removed = self
@@ -442,6 +489,12 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             .map(|member| (member, SemanticReferenceKind::ForegroundMember)),
     );
 
+    references.extend(
+        node.pointer_interactions()
+            .references()
+            .into_iter()
+            .map(|target| (target, SemanticReferenceKind::PointerBindingDependency)),
+    );
     if let Some(graph) = node.graph_declaration() {
         references.extend(
             graph

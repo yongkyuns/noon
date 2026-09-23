@@ -650,6 +650,20 @@ class Scene:
         self._edit_membership("replace", (old_mobject, new_mobject))
         return self
 
+    def configure_pointer_interactions(
+        self, *, indicate: bool = True, scroll_zoom: bool = True,
+        scale_factor: float = 1.2, run_time: float = 0.65, max_movement: float = 6.0,
+        zoom_sensitivity: float = 0.002, min_height: float = 0.5, max_height: float = 64.0,
+    ) -> Scene:
+        """Declare native click indication and cursor-anchored zoom before playback.
+
+        Scroll zoom requires MovingCameraScene. Busy clicks are consumed without
+        queuing; pausing freezes animation, not wheel input. Interactive input is
+        not recorded for replay. No Python callback runs on the input/frame path.
+        """
+        return _scene_operations()._configure_pointer_interactions(self, indicate, scroll_zoom,
+            scale_factor, run_time, max_movement, zoom_sensitivity, min_height, max_height)
+
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
         return _scene_operations()._bind_camera_frame(self, mobject)
 

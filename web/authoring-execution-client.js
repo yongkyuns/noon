@@ -520,6 +520,7 @@ export class AuthoringExecutionClient {
       }).catch(error => fault(error, preceding));
     };
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
+      wheelEnabled: () => player.pointerWheelEnabled === true,
       signal,
       isCurrent: () => this.#player === player && this.#transition === null,
       send: submit,

@@ -429,6 +429,25 @@ def _canonical_edit_membership(
     _sync_membership_wrapper_attachments(scene, kind, values)
 
 
+def _configure_pointer_interactions(scene, indicate, scroll_zoom, scale, duration, tolerance,
+                                    sensitivity, min_height, max_height):
+    if not isinstance(indicate, bool) or not isinstance(scroll_zoom, bool):
+        raise TypeError("indicate and scroll_zoom must be booleans")
+    frame = getattr(getattr(scene, "camera", None), "frame", None)
+    if scroll_zoom and frame is None:
+        raise ValueError("scroll zoom requires MovingCameraScene")
+    context = _context(scene)
+    options = engine_call(context.pointerInteractionOptions, operation="Scene.pointer_interactions")
+    if indicate:
+        engine_call(options.setIndicate, float(scale), float(duration), float(tolerance),
+                    operation="Scene.pointer_interactions")
+    if scroll_zoom:
+        engine_call(options.setZoom, frame._semantic_handle, float(sensitivity), float(min_height),
+                    float(max_height), operation="Scene.pointer_interactions")
+    engine_call(context.configurePointerInteractions, options, operation="Scene.pointer_interactions")
+    return scene
+
+
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
     """Bind one context-created semantic camera without constructing Python geometry state."""
     if getattr(mobject, "_scene", None) is not None:

@@ -81,12 +81,20 @@ struct SelectedTarget {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PointerSelectionState {
     max_movement: Option<f32>,
+    show_highlight: bool,
     pending: Option<PendingClick>,
     selected: Option<SelectedTarget>,
     buttons: [u64; 4],
 }
 
 impl PointerSelectionState {
+    pub(super) fn for_indicate(options: Option<noon_core::PointerIndicateOptions>) -> Self {
+        Self {
+            max_movement: options.map(|o| o.max_movement),
+            ..Self::default()
+        }
+    }
+
     pub(super) const fn enabled(&self) -> bool {
         self.max_movement.is_some()
     }
@@ -96,6 +104,7 @@ impl PointerSelectionState {
     pub(super) fn fresh(&self) -> Self {
         Self {
             max_movement: self.max_movement,
+            show_highlight: self.show_highlight,
             ..Self::default()
         }
     }
@@ -146,6 +155,7 @@ impl ExecutionSession {
         }
         self.pointer_selection = PointerSelectionState {
             max_movement: Some(max_movement),
+            show_highlight: true,
             ..PointerSelectionState::default()
         };
         Ok(())
@@ -153,7 +163,8 @@ impl ExecutionSession {
 
     pub fn disable_pointer_fill_selection(&mut self) -> Result<(), ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
-        self.pointer_selection = PointerSelectionState::default();
+        self.pointer_selection =
+            PointerSelectionState::for_indicate(self.pointer_actions.indication());
         Ok(())
     }
 
@@ -172,6 +183,9 @@ impl ExecutionSession {
     /// consuming renderer dirtiness or modifying authored/runtime geometry.
     /// Invisible or no-longer-supported effective geometry has no highlight.
     pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
+        if !self.pointer_selection.show_highlight {
+            return None;
+        }
         let target = self.selected_pointer_target()?;
         let object = self.execution_object_id(target)?;
         let index = self.runtime.frame_index_for_object(object)?;
@@ -311,7 +325,9 @@ impl ExecutionSession {
                     pending.eligible = false;
                 }
             }
-            NativePointerInputKind::Cancel(_) => prepared.state.cancel_press(),
+            NativePointerInputKind::Cancel(_) | NativePointerInputKind::Wheel { .. } => {
+                prepared.state.cancel_press()
+            }
             NativePointerInputKind::Move(_) => {}
         }
         Ok(prepared)

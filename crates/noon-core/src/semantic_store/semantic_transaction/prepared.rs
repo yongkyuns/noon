@@ -718,6 +718,13 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::ForegroundMembers { scope });
                 }
+                SemanticMutation::SetPointerInteractions { scope, bindings } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let bindings = bindings.map(|node| resolve_node_ref(node, &committed_nodes));
+                    store.replace_semantic_pointer_interactions(scope, bindings);
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::PointerInteractions { scope });
+                }
                 SemanticMutation::SetGraphDeclaration { scope, graph } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
                     let vertices = graph
@@ -829,6 +836,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         match effect {
                             SemanticRemoveNodeEffect::NodeRemoved(node) => {
                                 impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
+                            }
+                            SemanticRemoveNodeEffect::PointerInteractionsChanged { scope } => {
+                                impacts.push(SemanticMutationImpact::PointerInteractions {
+                                    scope: *scope,
+                                });
                             }
                             SemanticRemoveNodeEffect::ForegroundMembersChanged { scope } => {
                                 impacts.push(SemanticMutationImpact::ForegroundMembers {

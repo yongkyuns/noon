@@ -1,7 +1,9 @@
 from noon import *
 
-class PointerSelectionGallery(Scene):
+class PointerSelectionGallery(MovingCameraScene):
     def construct(self):
+        self.configure_pointer_interactions()
+
         circle = Circle(radius=1.15, color=BLUE)
         circle.set_fill(BLUE, opacity=0.72)
         circle.shift(LEFT * 2)

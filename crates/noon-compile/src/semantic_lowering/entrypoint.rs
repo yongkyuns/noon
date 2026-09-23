@@ -25,10 +25,30 @@ pub struct SemanticExecutionLoweringOutput {
     compute: ComputeProgram,
     host_callbacks: SemanticHostCallbackPlan,
     camera_object: Option<ObjectId>,
+    pointer_interactions: Option<CompiledPointerInteractions>,
     publication: PublicationContext,
 }
 
+/// Runtime specialization of one root's authored pointer bindings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledPointerInteractions {
+    pub root: SemanticNodeId,
+    pub indicate: Option<noon_core::PointerIndicateOptions>,
+    pub zoom: Option<CompiledPointerZoom>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledPointerZoom {
+    pub camera: SemanticNodeId,
+    pub object: ObjectId,
+    pub center_signal: noon_core::SignalId,
+    pub scale_signal: noon_core::SignalId,
+    pub options: noon_core::PointerZoomOptions,
+}
 impl SemanticExecutionLoweringOutput {
+    pub const fn pointer_interactions(&self) -> Option<CompiledPointerInteractions> {
+        self.pointer_interactions
+    }
+
     pub fn compiled(&self) -> &CompiledScene {
         &self.compiled
     }
@@ -74,6 +94,7 @@ impl SemanticExecutionLoweringOutput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticExecutionLoweringError {
+    InvalidPointerInteractions(&'static str),
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
@@ -108,6 +129,9 @@ impl From<SemanticCompiledSceneError> for SemanticExecutionLoweringError {
 impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointerInteractions(reason) => {
+                write!(formatter, "invalid pointer interactions: {reason}")
+            }
             Self::Object(error) => write!(formatter, "semantic object lowering failed: {error}"),
             Self::Reactive(error) => {
                 write!(formatter, "semantic reactive lowering failed: {error}")
@@ -232,7 +256,7 @@ fn finish_semantic_execution(
     animation_root: Option<(SemanticNodeId, f64)>,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
-    let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
+    let mut reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);
     let mut compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
@@ -247,6 +271,73 @@ fn finish_semantic_execution(
         .map_err(SemanticExecutionLoweringError::InitialAnimation)?;
     }
     let camera_object = validate_camera_object(camera, &compiled)?;
+    let mut pointer_interactions = None;
+    for &root in roots {
+        let bindings = store
+            .node(root)
+            .expect("validated execution root")
+            .pointer_interactions();
+        if !bindings.enabled() {
+            continue;
+        }
+        bindings
+            .validate()
+            .map_err(SemanticExecutionLoweringError::InvalidPointerInteractions)?;
+        if pointer_interactions.is_some() {
+            return Err(SemanticExecutionLoweringError::InvalidPointerInteractions(
+                "only one interactive root is supported per execution",
+            ));
+        }
+        let zoom = if let Some(zoom) = bindings.zoom {
+            let object = staged_index
+                .execution_object_id(zoom.camera)
+                .filter(|object| Some(*object) == camera_object)
+                .ok_or(SemanticExecutionLoweringError::InvalidPointerInteractions(
+                    "zoom requires the reachable canonical camera",
+                ))?;
+            let center_signal = reactive.execution_signal_id(zoom.center_signal).ok_or(
+                SemanticExecutionLoweringError::InvalidPointerInteractions(
+                    "zoom center signal is not in the root scope",
+                ),
+            )?;
+            let scale_signal = reactive.execution_signal_id(zoom.scale_signal).ok_or(
+                SemanticExecutionLoweringError::InvalidPointerInteractions(
+                    "zoom scale signal is not in the root scope",
+                ),
+            )?;
+            for signal in [zoom.center_signal, zoom.scale_signal] {
+                let state = store.semantic_signal_state(signal).map_err(|_| {
+                    SemanticExecutionLoweringError::InvalidPointerInteractions(
+                        "zoom signal is stale",
+                    )
+                })?;
+                if !matches!(
+                    state.source(),
+                    noon_core::SemanticSignalSource::Input(noon_core::SemanticSignalValue::Vec3(_))
+                ) {
+                    return Err(SemanticExecutionLoweringError::InvalidPointerInteractions(
+                        "zoom drivers require vector input signals",
+                    ));
+                }
+            }
+            reactive.bind_pointer_camera(object, center_signal, scale_signal);
+            Some(CompiledPointerZoom {
+                camera: zoom.camera,
+                object,
+                center_signal,
+                scale_signal,
+                options: zoom.options,
+            })
+        } else {
+            None
+        };
+        pointer_interactions = Some(CompiledPointerInteractions {
+            root,
+            indicate: bindings.indicate,
+            zoom,
+        });
+    }
+
     let program = ReactiveProgram::compile_for_execution_domain(
         compiled
             .objects()
@@ -273,6 +364,7 @@ fn finish_semantic_execution(
         compute,
         host_callbacks,
         camera_object,
+        pointer_interactions,
         publication: PublicationContext::new(
             store.scene_revision(),
             ExecutionRevision::default(),

@@ -23,6 +23,7 @@ pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionInputError {
+    InvalidPointerAction(&'static str),
     InvalidPointerClickTolerance,
     PointerNotConfigured,
     ForeignPointerRuntime,
@@ -59,6 +60,7 @@ pub enum ExecutionSessionInputError {
 impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointerAction(reason) => formatter.write_str(reason),
             Self::InvalidPointerClickTolerance => formatter.write_str("click tolerance must be finite and nonnegative logical pixels"),
             Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
@@ -223,7 +225,8 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        self.pointer_selection.enabled()
+        self.has_pointer_actions()
+            || self.pointer_selection.enabled()
             || !self
                 .reactive_projection
                 .native_state_targets(&NativeStateSource::PointerPosition)
@@ -331,6 +334,7 @@ impl ExecutionSession {
         if let Some(event) = input.button_event() {
             self.append_native_event_inputs(&event, &mut inputs);
         }
+        self.prepare_pointer_zoom(input, &mut inputs)?;
         if !inputs.is_empty() {
             self.apply_reactive_input_batch(inputs)?;
         }

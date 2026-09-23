@@ -78,6 +78,21 @@ impl NativePointerPosition {
     }
 }
 
+/// Finite logical-pixel wheel displacement captured with its occurrence.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativeWheelDelta(Vec2);
+impl NativeWheelDelta {
+    pub fn new(value: Vec2) -> Result<Self, NativeInputRuntimeError> {
+        if !NativeInputValue::Vec2(value).is_finite() {
+            return Err(NativeInputRuntimeError::NonFiniteValue);
+        }
+        Ok(Self(value))
+    }
+    pub const fn value(self) -> Vec2 {
+        self.0
+    }
+}
+
 /// Cancellation is not a successful release and must not synthesize a click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativePointerCancellation {
@@ -94,6 +109,10 @@ pub enum NativePointerCancellation {
 /// are not a DOM `buttons` bit mask. Cancellation needs no invented position.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NativePointerInputKind {
+    Wheel {
+        position: NativePointerPosition,
+        delta: NativeWheelDelta,
+    },
     Move(NativePointerPosition),
     Press {
         position: NativePointerPosition,
@@ -162,7 +181,8 @@ impl NativePointerInput {
         match self.kind {
             NativePointerInputKind::Move(position)
             | NativePointerInputKind::Press { position, .. }
-            | NativePointerInputKind::Release { position, .. } => Some(position),
+            | NativePointerInputKind::Release { position, .. }
+            | NativePointerInputKind::Wheel { position, .. } => Some(position),
             NativePointerInputKind::Cancel(_) => None,
         }
     }
@@ -182,13 +202,22 @@ impl NativePointerInput {
         let button = match self.kind {
             NativePointerInputKind::Press { button, .. } => Some((button, true)),
             NativePointerInputKind::Release { button, .. } => Some((button, false)),
-            NativePointerInputKind::Move(_) | NativePointerInputKind::Cancel(_) => None,
+            NativePointerInputKind::Move(_)
+            | NativePointerInputKind::Cancel(_)
+            | NativePointerInputKind::Wheel { .. } => None,
         }
         .map(|(button, pressed)| NativeStateUpdate {
             source: NativeStateSource::PointerButton { button },
             value: NativeInputValue::Bool(pressed),
         });
-        [position, button].into_iter().flatten()
+        let wheel = match self.kind {
+            NativePointerInputKind::Wheel { delta, .. } => Some(NativeStateUpdate {
+                source: NativeStateSource::WheelDelta,
+                value: NativeInputValue::Vec2(delta.value()),
+            }),
+            _ => None,
+        };
+        [position, button, wheel].into_iter().flatten()
     }
 
     /// Preserve existing discrete button-event subscriptions and ingress sequence.
@@ -197,6 +226,7 @@ impl NativePointerInput {
     /// the original `kind()`; this projection is not the interaction dispatcher.
     pub fn button_event(self) -> Option<NativeEventOccurrence> {
         let source = match self.kind {
+            NativePointerInputKind::Wheel { .. } => NativeEventSource::Wheel,
             NativePointerInputKind::Press { button, .. } => {
                 NativeEventSource::PointerDown { button }
             }

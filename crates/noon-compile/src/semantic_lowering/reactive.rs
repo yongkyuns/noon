@@ -161,6 +161,16 @@ impl CompiledScalarSignalTrack {
 }
 
 impl SemanticReactiveProjection {
+    pub(super) fn bind_pointer_camera(
+        &mut self,
+        object: noon_core::ObjectId,
+        center: SignalId,
+        scale: SignalId,
+    ) {
+        self.graph.bind(center, object, Property::Position);
+        self.graph.bind(scale, object, Property::Scale);
+    }
+
     pub fn graph(&self) -> &ReactiveGraphDefinition {
         &self.graph
     }

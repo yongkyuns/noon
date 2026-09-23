@@ -201,7 +201,7 @@ impl SemanticExecutionPlayer {
     }
 
     fn playback_clock(session: &ExecutionSession, duration: f64) -> Result<PlaybackClock, String> {
-        if session.has_required_callbacks() {
+        if session.has_required_callbacks() || session.has_pointer_actions() {
             Ok(PlaybackClock::once())
         } else {
             PlaybackClock::looping(duration).map_err(|error| error.to_string())
@@ -2763,6 +2763,17 @@ impl SemanticExecutionPlayer {
     }
 
     fn advance_to_callback_phase(&mut self, time: f64) -> Result<Option<String>, String> {
+        #[cfg(any(target_arch = "wasm32", test))]
+        if self.session.has_pointer_actions() {
+            let store = self
+                .semantics
+                .as_ref()
+                .ok_or("pointer actions require their live semantic store")?;
+            self.session
+                .advance_pointer_actions_to(&mut store.borrow_mut(), time)
+                .map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
         if self.pending_callback_phase.is_some() {
             return Err("a required callback phase is already pending".into());
         }
@@ -3007,13 +3018,40 @@ impl SemanticExecutionPlayer {
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
         let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
-        self.worker_pointer_presentation.submit(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
-            envelope.input,
-            envelope.presentation,
-        )
+        if self.session.has_pointer_actions() {
+            let store = self
+                .semantics
+                .as_ref()
+                .ok_or("pointer actions require their live semantic store")?;
+            let mut target = crate::browser_pointer_input::ActionPointerTarget {
+                session: &mut self.session,
+                store,
+                activated: false,
+            };
+            let accepted = self.worker_pointer_presentation.submit(
+                &mut target,
+                &mut self.browser_pointer_binding,
+                &mut self.next_native_event_sequence,
+                envelope.input,
+                envelope.presentation,
+            )?;
+            if target.activated {
+                // Re-anchor the existing host clock: time spent asleep must not
+                // skip a freshly activated animation's visible interval.
+                self.clock
+                    .seek(self.session.frame().time)
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(accepted)
+        } else {
+            self.worker_pointer_presentation.submit(
+                &mut self.session,
+                &mut self.browser_pointer_binding,
+                &mut self.next_native_event_sequence,
+                envelope.input,
+                envelope.presentation,
+            )
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3118,6 +3156,9 @@ impl SemanticExecutionPlayer {
     /// A failed capability leaves the final coherent frame and semantic scene intact.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
     pub fn seal_replay(&mut self) -> Result<(), String> {
+        if self.session.has_pointer_actions() {
+            return Err("live pointer actions are not recorded for replay".into());
+        }
         if self.session.replay_scope_active() {
             self.session
                 .seal_replay()
@@ -3141,6 +3182,19 @@ impl SemanticExecutionPlayer {
     pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        if self.session.has_pointer_actions() {
+            let store = self
+                .semantics
+                .as_ref()
+                .ok_or("pointer actions require their live semantic store")?;
+            self.session
+                .advance_pointer_actions_to(&mut store.borrow_mut(), time)
+                .map_err(|e| e.to_string())?;
+        } else {
+            self.session.evaluate(time).map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(any(target_arch = "wasm32", test)))]
         self.session.evaluate(time).map_err(|e| e.to_string())?;
         self.clock = clock;
         self.encoded_delta(false)
@@ -3148,6 +3202,9 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        if self.session.has_pointer_actions() {
+            return Err("live pointer actions require a new authoring run to restart".into());
+        }
         if self.session.has_required_callbacks() {
             return Err(
                 "direct seek is unsupported for required callbacks; begin a new authoring run"
@@ -3163,6 +3220,9 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setLoopDuration))]
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), String> {
+        if self.session.has_pointer_actions() {
+            return Err("live pointer actions do not support looping playback".into());
+        }
         if self.session.has_required_callbacks() {
             return Err(
                 "looping playback is unsupported for opaque required callbacks; begin a new authoring run"
@@ -3174,6 +3234,18 @@ impl SemanticExecutionPlayer {
         self.clock
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())
+    }
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = hasPointerActions))]
+    pub fn has_pointer_actions(&self) -> bool {
+        self.session.has_pointer_actions()
+    }
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = acceptsPointerWheel))]
+    pub fn accepts_pointer_wheel(&self) -> bool {
+        self.session.accepts_pointer_wheel()
+    }
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pointerActionActive))]
+    pub fn pointer_action_active(&self) -> bool {
+        self.session.pointer_action_active()
     }
     pub fn pause(&mut self) {
         self.clock.pause();

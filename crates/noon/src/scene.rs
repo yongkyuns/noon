@@ -1,5 +1,6 @@
 //! Direct authoring scope over one family in the shared semantic store.
 mod image;
+mod pointer_interactions;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,

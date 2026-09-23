@@ -56,6 +56,7 @@ export class ExecutionWorkerClient {
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #ready = null;
   #playing = true;
+  #pointerWheelEnabled = false;
   #onError;
   #onRecoverableError;
   #semanticAuthoringClient = null;
@@ -93,6 +94,8 @@ export class ExecutionWorkerClient {
   get transportMode() {
     return this.#transportMode;
   }
+
+  get pointerWheelEnabled() { return this.#pointerWheelEnabled; }
 
   get renderHost() {
     return this.#renderHost;
@@ -288,6 +291,7 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      this.#pointerWheelEnabled = ready.engine?.pointerWheelEnabled === true;
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
@@ -453,6 +457,7 @@ export class ExecutionWorkerClient {
       }));
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      this.#pointerWheelEnabled = ready.engine?.pointerWheelEnabled === true;
       this.#playing = continuationGeneration === null ? wasPlaying : true;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
@@ -721,6 +726,7 @@ export class ExecutionWorkerClient {
   }
 
   terminate({ preserveHostConfiguration = false } = {}) {
+    this.#pointerWheelEnabled = false;
     // The render owner holds the transferred OffscreenCanvas whether or not an
     // engine has attached yet. Once that owner is terminated, replace the DOM
     // canvas exactly once so a later owner can transfer a fresh element.
@@ -1129,6 +1135,7 @@ export class ExecutionWorkerClient {
   }
 
   #rememberPlaying(result) {
+    if (typeof result?.pointerWheelEnabled === "boolean") this.#pointerWheelEnabled = result.pointerWheelEnabled;
     if (typeof result?.playing === "boolean") {
       this.#playing = result.playing;
     }

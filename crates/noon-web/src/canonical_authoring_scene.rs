@@ -2863,6 +2863,41 @@ mod wasm {
         }
     }
 
+    /// Inert arguments for one atomic Rust semantic declaration, not live state.
+    #[wasm_bindgen]
+    pub struct WasmPointerInteractionOptions {
+        indicate: Option<noon::PointerIndicateOptions>,
+        zoom: Option<(noon::Mobject, noon::PointerZoomOptions)>,
+    }
+    #[wasm_bindgen]
+    impl WasmPointerInteractionOptions {
+        #[wasm_bindgen(js_name = setIndicate)]
+        pub fn set_indicate(&mut self, scale: f64, duration: f64, tolerance: f32) {
+            self.indicate = Some(noon::PointerIndicateOptions {
+                scale_factor: scale,
+                duration,
+                max_movement: tolerance,
+                ..noon::PointerIndicateOptions::default()
+            });
+        }
+        #[wasm_bindgen(js_name = setZoom)]
+        pub fn set_zoom(
+            &mut self,
+            camera: &crate::WasmAuthoringMobjectHandle,
+            sensitivity: f64,
+            min_height: f64,
+            max_height: f64,
+        ) {
+            self.zoom = Some((
+                camera.semantic_mobject().clone(),
+                noon::PointerZoomOptions {
+                    sensitivity,
+                    min_height,
+                    max_height,
+                },
+            ));
+        }
+    }
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
@@ -2870,6 +2905,32 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        #[wasm_bindgen(js_name = pointerInteractionOptions)]
+        pub fn pointer_interaction_options(&self) -> WasmPointerInteractionOptions {
+            WasmPointerInteractionOptions {
+                indicate: None,
+                zoom: None,
+            }
+        }
+        #[wasm_bindgen(js_name = configurePointerInteractions)]
+        pub fn configure_pointer_interactions(
+            &mut self,
+            options: WasmPointerInteractionOptions,
+        ) -> Result<(), JsValue> {
+            if !self.inner.player_ownership.is_unstarted() {
+                return Err(js_error("configure pointer bindings before execution"));
+            }
+            self.inner
+                .scene
+                .configure_pointer_interactions(
+                    options.indicate,
+                    options
+                        .zoom
+                        .as_ref()
+                        .map(|(camera, options)| (camera, *options)),
+                )
+                .map_err(typed_js_error)
+        }
         /// Reconcile wrapper IDs only after Rust has published the completion.
         #[wasm_bindgen(js_name = associatePublishedMobjects)]
         pub fn associate_published_mobjects(

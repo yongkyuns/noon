@@ -25,6 +25,10 @@ pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
 /// preserves its continuation barriers instead of exposing mutable session state.
 pub(crate) trait BrowserPointerTarget {
     fn session(&self) -> &ExecutionSession;
+    fn after_pointer(&mut self, _receipt: NativePointerInputPublication) -> Result<(), String> {
+        Ok(())
+    }
+
     fn configure_pointer(
         &mut self,
         pointer: NativePointerId,
@@ -183,9 +187,45 @@ where
             .map_err(|e| e.to_string())
     }
 }
+/// Borrowed integration of authored actions; semantic and execution ownership do
+/// not move into the browser host. Admission is acknowledged before action dispatch.
+pub(crate) struct ActionPointerTarget<'a> {
+    pub(crate) session: &'a mut ExecutionSession,
+    pub(crate) store: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    pub(crate) activated: bool,
+}
+impl BrowserPointerTarget for ActionPointerTarget<'_> {
+    fn session(&self) -> &ExecutionSession {
+        self.session
+    }
+    fn configure_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        view: u64,
+    ) -> Result<NativePointerInputToken, String> {
+        self.session.configure_pointer(pointer, view)
+    }
+    fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
+        self.session.pointer_token()
+    }
+    fn submit_pointer(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, String> {
+        self.session.submit_pointer(token, input)
+    }
+    fn after_pointer(&mut self, receipt: NativePointerInputPublication) -> Result<(), String> {
+        self.activated = self
+            .session
+            .dispatch_pointer_action(&mut self.store.borrow_mut(), receipt)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
 use noon_core::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
-    NativePointerInputKind, Vec2,
+    NativePointerInputKind, NativeWheelDelta, Vec2,
 };
 use serde::Deserialize;
 
@@ -210,6 +250,8 @@ pub(crate) struct BrowserPointerInput {
     pub(crate) viewport_width: Option<f32>,
     pub(crate) viewport_height: Option<f32>,
     pub(crate) button: Option<u8>,
+    pub(crate) wheel_x: Option<f32>,
+    pub(crate) wheel_y: Option<f32>,
     pub(crate) view_revision: u64,
     #[serde(default)]
     pub(crate) shift: bool,
@@ -225,6 +267,7 @@ pub(crate) struct BrowserPointerInput {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BrowserPointerKind {
     Move,
+    Wheel,
     Press,
     Release,
     Cancel,
@@ -299,7 +342,7 @@ impl BrowserPointerInput {
         if needs_binding
             && !matches!(
                 self.kind,
-                BrowserPointerKind::Move | BrowserPointerKind::Press
+                BrowserPointerKind::Move | BrowserPointerKind::Press | BrowserPointerKind::Wheel
             )
         {
             return Err("browser pointer release/cancellation requires its existing source".into());
@@ -308,6 +351,15 @@ impl BrowserPointerInput {
     }
 
     pub(crate) fn coordinates(self) -> Result<Option<(Vec2, Vec2)>, String> {
+        if self.kind == BrowserPointerKind::Wheel {
+            NativeWheelDelta::new(Vec2::new(
+                self.wheel_x.ok_or("wheel x is missing")?,
+                self.wheel_y.ok_or("wheel y is missing")?,
+            ))
+            .map_err(|e| e.to_string())?;
+        } else if self.wheel_x.is_some() || self.wheel_y.is_some() {
+            return Err("non-wheel input must not contain a wheel delta".into());
+        }
         if self.cancellation().is_some() {
             if self.surface_x.is_some()
                 || self.surface_y.is_some()
@@ -325,7 +377,7 @@ impl BrowserPointerInput {
             BrowserPointerKind::Press | BrowserPointerKind::Release if self.button.is_none() => {
                 return Err("browser pointer edge is missing its button".into())
             }
-            BrowserPointerKind::Move if self.button.is_some() => {
+            BrowserPointerKind::Move | BrowserPointerKind::Wheel if self.button.is_some() => {
                 return Err("browser pointer motion must not contain an edge button".into())
             }
             _ => {}
@@ -418,6 +470,14 @@ fn submit_pointer(
         };
         match wire.kind {
             BrowserPointerKind::Move => NativePointerInputKind::Move(position),
+            BrowserPointerKind::Wheel => NativePointerInputKind::Wheel {
+                position,
+                delta: NativeWheelDelta::new(Vec2::new(
+                    wire.wheel_x.expect("validated wheel"),
+                    wire.wheel_y.expect("validated wheel"),
+                ))
+                .map_err(|e| e.to_string())?,
+            },
             BrowserPointerKind::Press => NativePointerInputKind::Press {
                 position,
                 button: wire.button.expect("validated edge"),
@@ -441,10 +501,11 @@ fn submit_pointer(
         },
         kind,
     );
-    target
+    let receipt = target
         .submit_pointer(&token, input)
         .map_err(|error| error.to_string())?;
     *next_sequence = next;
+    target.after_pointer(receipt)?;
     if wire.cancellation().is_some() {
         binding.as_mut().expect("configured source").retired = true;
     }
@@ -466,6 +527,7 @@ impl BrowserPointerKind {
     pub(crate) fn from_name(name: &str) -> Result<Self, String> {
         match name {
             "move" => Ok(Self::Move),
+            "wheel" => Ok(Self::Wheel),
             "press" => Ok(Self::Press),
             "release" => Ok(Self::Release),
             "cancel" => Ok(Self::Cancel),

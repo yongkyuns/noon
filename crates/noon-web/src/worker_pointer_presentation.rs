@@ -222,7 +222,7 @@ mod admission {
 
         pub(crate) fn submit(
             &mut self,
-            session: &mut ExecutionSession,
+            session: &mut (impl browser_pointer_input::BrowserPointerTarget + ?Sized),
             binding: &mut Option<BrowserPointerBinding>,
             sequence: &mut u64,
             input: BrowserPointerInput,

@@ -232,6 +232,8 @@ export async function attachSemanticEngine(
       time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
         ? player.playbackTimeAt(performance.now()) : player.time(),
       playing: player.isPlaying(), nextPatchSequence: "0",
+      pointerWheelEnabled: player.acceptsPointerWheel?.() === true,
+      pointerActionActive: player.pointerActionActive?.() === true,
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
@@ -922,7 +924,8 @@ export async function attachSemanticEngine(
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = String(error?.message ?? error); }
     }
-    if (initiallyPaused || replayUnavailable !== null) player.pause();
+    // Unrecorded live input disables replay, not its ordinary execution clock.
+    if (initiallyPaused || (replayUnavailable !== null && player.hasPointerActions?.() !== true)) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
@@ -993,7 +996,7 @@ export async function attachSemanticEngine(
       if (stopped) return;
       if (message?.type === "tick") {
         if (!Number.isFinite(message.timestamp)) { fail(new Error("invalid render timestamp")); return; }
-        if (pacing === SEMANTIC_PACING_REALTIME && replayUnavailable === null) {
+        if (pacing === SEMANTIC_PACING_REALTIME && (replayUnavailable === null || player?.hasPointerActions?.() === true)) {
           latestTick = message.timestamp;
           void drain();
         }
@@ -1048,7 +1051,7 @@ export async function attachSemanticEngine(
     } else {
       observeExecutionWake(performance.now(), true);
     }
-    post({ type: "ready", transportMode });
+    post({ type: "ready", transportMode, pointerWheelEnabled: player.acceptsPointerWheel?.() === true });
   } catch (error) { stop(); throw error; }
   return {
     stop,
