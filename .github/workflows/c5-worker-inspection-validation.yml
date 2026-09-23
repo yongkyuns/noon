@@ -121,9 +121,10 @@ jobs:
           from pathlib import Path
           p = Path('crates/noon-web/src/semantic_execution_player.rs')
           s = p.read_text()
-          old = 'self.session.inspection_camera().map_err(|e| e.to_string())?'
-          assert s.count(old) == 1
-          p.write_text(s.replace(old, 'self.session.camera().map_err(|e| e.to_string())?'))
+          # Match the unique method call, not its rustfmt-dependent receiver layout.
+          old = '.inspection_camera()'
+          assert s.count(old) == 1, 'expected one worker transport camera composition'
+          p.write_text(s.replace(old, '.camera()'))
           PY
           set +e
           cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::presentation_tests::inspection::zoom_transports_one_composed_view_without_scene_rows_or_authored_time -- --exact --nocapture > /tmp/c5-worker-proof/negative-control.log 2>&1
