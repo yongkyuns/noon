@@ -77,17 +77,17 @@
     },
     {
       "id": "showcase-transform-ownership",
-      "title": "Transform, replace, or copy",
-      "lesson": "See which source or target reference remains useful after each kind of morph.",
+      "title": "Transform an object or its copy",
+      "lesson": "Transform an object, or transform an explicit copy to keep the original intact.",
       "primary_feature": "transform-ownership",
       "category": "Animation",
       "path": "python/examples/showcase_transform_ownership.py",
-      "features": ["Transform", "ReplacementTransform", "TransformFromCopy", "animate"],
+      "features": ["Transform", "copy", "independent objects", "animate"],
       "duration": 8.2,
       "thumbnail_time": 7.2,
-      "thumbnail_alt": "Three labeled morph outcomes, with the copy retaining its original square and both source and target moving",
+      "thumbnail_alt": "Two pink transformed circles beside a blue original square retained by an explicit copy",
       "still_intervals": [[1.6, 2.2], [5, 5.6], [7, 8.2]],
-      "beats": [{"time": 1.2, "label": "Sources"}, {"time": 3.3, "label": "Three morphs"}, {"time": 6.3, "label": "Animate the surviving references"}, {"time": 7.2, "label": "Copy keeps both"}],
+      "beats": [{"time": 1.2, "label": "Sources"}, {"time": 3.3, "label": "Transform original or copy"}, {"time": 6.3, "label": "Animate the transformed inputs"}, {"time": 7.2, "label": "The original remains unchanged"}],
       "thumbnail": "thumbnails/showcase/showcase-transform-ownership.png"
     },
     {

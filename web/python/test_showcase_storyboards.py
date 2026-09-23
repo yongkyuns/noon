@@ -88,6 +88,46 @@ class FeatureLessonStoryboards(unittest.TestCase):
         self.assertEqual(len(pairs["add_updater"]), 3)
         self.assertCountEqual(pairs["add_updater"], pairs["remove_updater"])
 
+    def test_reactive_targets_are_bound_and_registered_before_first_play(self):
+        source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()
+        tree = ast.parse(source)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        plays = sorted((node for node in calls if isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+                        and node.func.attr in {"play", "wait"}), key=lambda node: node.lineno)
+        first = plays[0]
+        registrations = [node for node in calls if isinstance(node.func, ast.Attribute)
+                         and node.func.attr == "add_updater"]
+        targets = {node.func.value.id for node in registrations}
+        self.assertEqual(targets, {"left", "right", "connector"})
+        self.assertTrue(all(node.lineno < first.lineno for node in registrations))
+        bound = {arg.id for node in calls if isinstance(node.func, ast.Attribute)
+                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+                 and node.func.attr == "add" and node.lineno < first.lineno
+                 for arg in node.args if isinstance(arg, ast.Name)}
+        self.assertTrue(targets <= bound, "detached callbacks alone do not enroll a running scene")
+        faded = {node.args[0].id for node in ast.walk(first) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "FadeIn"
+                 and isinstance(node.args[0], ast.Name)}
+        self.assertTrue(targets <= faded, "pre-enrollment must retain the animated introduction")
+
+    def test_transform_lesson_teaches_explicit_copy_not_unimplemented_animations(self):
+        source = (WEB / "python/examples/showcase_transform_ownership.py").read_text()
+        tree = ast.parse(source)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        names = {node.func.id for node in calls if isinstance(node.func, ast.Name)}
+        unsupported = {"ReplacementTransform", "TransformFromCopy"}
+        self.assertFalse(names & unsupported)
+        copies = [node for node in calls if isinstance(node.func, ast.Attribute) and node.func.attr == "copy"]
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0].func.value.id, "original")
+        morphs = [node for node in calls if isinstance(node.func, ast.Name) and node.func.id == "Transform"]
+        self.assertEqual({node.args[0].id for node in morphs}, {"source", "copied"})
+        manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+        entry = next(item for item in manifest["entries"] if item["id"] == "showcase-transform-ownership")
+        self.assertFalse(set(entry["features"]) & unsupported)
+        self.assertIn("copy", entry["features"])
+
     def test_timeline_uses_decimal_authored_durations(self):
         source = "class Example(Scene):\n def construct(self):\n  self.play(Create(x), run_time=0.1)\n  self.wait(0.2)\n"
         self.assertEqual(literal_timeline(source)[:2], (Decimal("0.3"), [[Decimal("0.1"), Decimal("0.3")]]))

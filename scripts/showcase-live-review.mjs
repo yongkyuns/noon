@@ -24,6 +24,21 @@ export function assertLiveOutcome(entry, observed, expectedBackend) {
   if (entry.performance) assert.ok(observed.objectCount >= 600, "dense scene lost its geometry workload");
 }
 
+// A live seek targets the actual authored endpoint, not its decimal storyboard.
+// Permit only floating-point roundoff between those two representations. Ordinary
+// deterministic samples retain their separate, strict assertCaptureTime policy.
+export function assertLiveEndpoint(entry, authoredDuration, requestedTime, publishedTime) {
+  for (const value of [entry.duration, authoredDuration, requestedTime, publishedTime]) {
+    assert.ok(Number.isFinite(value) && value > 0, "invalid live endpoint time");
+  }
+  const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration, authoredDuration);
+  assert.ok(Math.abs(authoredDuration - entry.duration) <= roundoff,
+    "actual duration differs from the storyboard beyond floating-point roundoff");
+  assert.equal(requestedTime, authoredDuration, "live seek did not target the actual endpoint");
+  assert.ok(Math.abs(publishedTime - authoredDuration) <= roundoff,
+    "live endpoint was not presented at its authored time");
+}
+
 async function main() {
   const { chromium } = await import("playwright");
   const { PNG } = (await import("pngjs")).default;
@@ -31,7 +46,6 @@ async function main() {
   const { browserArgs } = await import("./manim-raster-support.mjs");
   const { createPyodideResourceCache } = await import("./pyodide-resource-cache.mjs");
   const { normalizeShowcaseManifest } = await import("../web/showcase-gallery.js");
-  const { assertCaptureTime } = await import("./showcase-capture-checks.mjs");
   const { seekPausedGallery } = await import("./showcase-playback.mjs");
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
@@ -91,7 +105,19 @@ async function main() {
           clearTimeout(timer);
         }
         result.firstPassWallMsIncludingAuthoring = performance.now() - started;
-        result.stage = "resolved endpoint";
+        // Preserve the unseeked result even when the runtime refuses replay.
+        // An unavailable replay remains a gate failure, not a successful fallback.
+        result.firstPass = await page.evaluate(() => ({
+          selectedExampleId: window.__noonExampleGallery.selectedExampleId,
+          runInFlight: window.__noonExampleGallery.runInFlight,
+          patchState: document.querySelector("#patch-status")?.dataset.state,
+          patch: document.querySelector("#patch-status")?.value,
+          backend: document.querySelector("#status")?.dataset.rendererBackend,
+          controls: { ...document.querySelector(".playback-controls")?.dataset },
+          replayReason: document.querySelector(".playback-controls")?.title,
+        }));
+        await page.locator("#scene").screenshot({ path: path.join(output, `${entry.id}-first-pass.png`) });
+        result.stage = "replay seek to resolved endpoint";
         const requestedTime = await seekPausedGallery(page, entry.duration);
         const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
         const observed = await page.evaluate(() => ({
@@ -104,7 +130,7 @@ async function main() {
         }));
         observed.objectCount = metrics.metrics.objectCount;
         assertLiveOutcome(entry, observed, expectedBackend);
-        assertCaptureTime(entry, { requestedTime, publishedTime: metrics.metrics.time }, requestedTime);
+        assertLiveEndpoint(entry, Number(observed.duration), requestedTime, metrics.metrics.time);
         result.observed = observed;
         result.requestedTime = requestedTime;
         result.publishedTime = metrics.metrics.time;
@@ -116,7 +142,9 @@ async function main() {
         result.endpointPixelSha256 = hash(firstPixels.data);
         result.stage = "restart and recover endpoint";
         await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
-        await seekPausedGallery(page, entry.duration);
+        const replayTime = await seekPausedGallery(page, entry.duration);
+        const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+        assertLiveEndpoint(entry, Number(observed.duration), replayTime, replayMetrics.metrics.time);
         const replay = PNG.sync.read(await canvas.screenshot());
         assert.equal(replay.width, firstPixels.width);
         assert.equal(replay.height, firstPixels.height);

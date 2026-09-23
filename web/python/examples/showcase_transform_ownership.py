@@ -1,48 +1,37 @@
 from noon import *
 
 
-class TransformOwnership(Scene):
+class TransformAndCopy(Scene):
     def construct(self):
-        rows = [1.45, 0.0, -1.45]
-        names = ["Transform", "ReplacementTransform", "TransformFromCopy"]
-        title = Text("After the morph, which object moves?", font_size=28).shift(3.2 * UP)
+        rows = [1.2, -1.2]
+        title = Text("Transform an object or its copy", font_size=29).shift(3.2 * UP)
         labels = [
-            Text(name, font_size=17).move_to(4.5 * LEFT + y * UP)
-            for name, y in zip(names, rows)
+            Text(name, font_size=19).move_to(4.4 * LEFT + y * UP)
+            for name, y in zip(["Transform", "copy() + Transform"], rows)
         ]
-        sources = [
-            Square(side_length=0.9, color=BLUE, fill_opacity=0.7)
-            .move_to(0.75 * LEFT + y * UP)
-            for y in rows
-        ]
+        source = Square(side_length=1.0, color=BLUE, fill_opacity=1.0).move_to(LEFT + rows[0] * UP)
+        original = Square(side_length=1.0, color=BLUE, fill_opacity=1.0).move_to(LEFT + rows[1] * UP)
+        copied = original.copy()
         targets = [
-            Circle(radius=0.48, color=TEAL, fill_opacity=0.7)
-            .move_to(2.5 * RIGHT + y * UP)
+            Circle(radius=0.5, color=TEAL, fill_opacity=1.0).move_to(2.3 * RIGHT + y * UP)
             for y in rows
         ]
         captions = [
-            Text(text, font_size=17, color=TEAL).move_to(4.8 * RIGHT + y * UP)
-            for text, y in zip(["source moves", "target moves", "both remain"], rows)
+            Text(text, font_size=18).move_to(4.9 * RIGHT + y * UP)
+            for text, y in zip(["same object", "separate copy"], rows)
         ]
-        note = Text("The copy keeps its original square.", font_size=22).shift(2.9 * DOWN)
+        note = Text("The original stays blue; only the transformed objects change.", font_size=20).shift(2.8 * DOWN)
 
         self.play(FadeIn(title), *[FadeIn(label) for label in labels], run_time=0.6)
-        self.play(*[Create(source) for source in sources], run_time=1.0)
+        self.play(Create(source), Create(original), run_time=1.0)
         self.wait(0.6)
-        self.play(
-            Transform(sources[0], targets[0]),
-            ReplacementTransform(sources[1], targets[1]),
-            TransformFromCopy(sources[2], targets[2]),
-            run_time=2.2, rate_func=smooth,
-        )
+        # Transform changes its input. A separate copy keeps the original intact.
+        self.play(Transform(source, targets[0]), Transform(copied, targets[1]), run_time=2.2, rate_func=smooth)
         self.play(FadeIn(note), *[FadeIn(caption) for caption in captions], run_time=0.6)
         self.wait(0.6)
-        # These are the public references to animate after each operation.
         self.play(
-            sources[0].animate.shift(0.6 * UP),
-            targets[1].animate.shift(0.6 * UP),
-            targets[2].animate.shift(0.6 * UP),
-            sources[2].animate.shift(0.6 * UP),
+            source.animate.shift(0.6 * RIGHT).set_color(PINK),
+            copied.animate.shift(0.6 * RIGHT).set_color(PINK),
             run_time=1.4, rate_func=smooth,
         )
         self.wait(1.2)

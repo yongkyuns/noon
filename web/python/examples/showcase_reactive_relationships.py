@@ -20,10 +20,6 @@ class ReactiveRelationships(Scene):
         ]
         resolved = Text("The connector follows both endpoints.", font_size=22).shift(2.5 * UP)
 
-        self.play(FadeIn(title), FadeIn(caption), *[FadeIn(label) for label in labels], run_time=0.6)
-        self.play(*[Create(guide) for guide in guides], Create(connector), FadeIn(left), FadeIn(right), run_time=0.9)
-        self.wait(0.5)
-
         def follow_horizontal(dot):
             dot.set_x(horizontal.get_value())
 
@@ -33,9 +29,17 @@ class ReactiveRelationships(Scene):
         def follow_endpoints(line):
             line.match_points(Line(left.get_center(), right.get_center()))
 
+        # Enroll the callback targets before the first play starts execution.
         left.add_updater(follow_horizontal)
         right.add_updater(follow_vertical)
         connector.add_updater(follow_endpoints)
+        self.add(left, right, connector)
+        self.play(
+            FadeIn(title), FadeIn(caption), *[FadeIn(label) for label in labels],
+            FadeIn(left), FadeIn(right), FadeIn(connector), run_time=0.6,
+        )
+        self.play(*[Create(guide) for guide in guides], run_time=0.9)
+        self.wait(0.5)
         self.play(horizontal.animate.set_value(-0.5), vertical.animate.set_value(1.4), run_time=2.4, rate_func=smooth)
         self.wait(0.6)
         self.play(horizontal.animate.set_value(-3.0), vertical.animate.set_value(-1.5), run_time=2.4, rate_func=smooth)
