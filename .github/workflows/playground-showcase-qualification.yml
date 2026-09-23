@@ -10,6 +10,9 @@ on:
       - 'web/python/examples/noon_showcase_manifest.json'
       - 'web/python/test_showcase*.py'
       - 'scripts/showcase-*'
+      - 'crates/noon-compile/src/replay_revision.rs'
+      - 'crates/noon-runtime/src/replay.rs'
+      - 'crates/noon-runtime/src/replay/**'
       - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
 
@@ -45,6 +48,8 @@ jobs:
         uses: ./.github/actions/dev-wasm-build
         with:
           preflight: 'true'
+      - name: Qualify retained family replay in the shared runtime
+        run: cargo test -p noon-runtime replay::family_tests
       - name: Install the repository-pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0

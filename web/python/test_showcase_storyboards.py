@@ -109,7 +109,20 @@ class FeatureLessonStoryboards(unittest.TestCase):
         faded = {node.args[0].id for node in ast.walk(first) if isinstance(node, ast.Call)
                  and isinstance(node.func, ast.Name) and node.func.id == "FadeIn"
                  and isinstance(node.args[0], ast.Name)}
-        self.assertTrue(targets <= faded, "pre-enrollment must retain the animated introduction")
+        self.assertFalse(targets & faded, "FadeIn cannot introduce an already attached callback target")
+        hidden = {node.func.value.id for node in calls if isinstance(node.func, ast.Attribute)
+                  and isinstance(node.func.value, ast.Name) and node.func.attr == "set_opacity"
+                  and node.lineno < first.lineno and len(node.args) == 1
+                  and isinstance(node.args[0], ast.Constant) and node.args[0].value == 0}
+        revealed = {node.func.value.value.id for node in ast.walk(first) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute) and node.func.attr == "set_opacity"
+                    and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "animate"
+                    and isinstance(node.func.value.value, ast.Name) and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Constant) and node.args[0].value == 1}
+        self.assertTrue(targets <= hidden, "pre-enrolled targets must start invisible")
+        self.assertTrue(targets <= revealed, "each callback target needs an animated opacity reveal")
+        self.assertTrue(any(kw.arg == "rate_func" and isinstance(kw.value, ast.Name)
+                            and kw.value.id == "smooth" for kw in first.keywords))
 
     def test_transform_lesson_teaches_explicit_copy_not_unimplemented_animations(self):
         source = (WEB / "python/examples/showcase_transform_ownership.py").read_text()
