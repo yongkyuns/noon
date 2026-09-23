@@ -1,0 +1,85 @@
+name: Pointer development validation
+on:
+  push:
+    branches: [validation/pointer-indicate-zoom-20260923]
+permissions:
+  contents: write
+concurrency:
+  group: pointer-development-validation
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: payload
+      - uses: actions/checkout@v7
+        with:
+          ref: 6ce7954738be263a99b0a0ed4ca0d071984b022b
+          path: source
+          fetch-depth: 0
+      - name: Apply exact candidate
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../proof
+          cat ../payload/.pointer-validation/*.b64 | base64 -d | gzip -d > ../proof/input.patch
+          echo 'eebb9dde28b930775ed5485b66a9d62ec1b8c0bc53f72a00a54f15bae9eaf80f  ../proof/input.patch' | sha256sum -c -
+          git apply --check ../proof/input.patch
+          git apply ../proof/input.patch
+      - name: Install pinned Rust
+        working-directory: source
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-pointer-cargo-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and capture candidate
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git add crates web scripts
+          git diff --cached --binary > ../proof/candidate.patch
+          git write-tree > ../proof/tree.txt
+          git config user.name 'Noon validation'
+          git config user.email 'noreply@github.com'
+          candidate=$(git commit-tree "$(cat ../proof/tree.txt)" -p 6ce7954738be263a99b0a0ed4ca0d071984b022b -m 'WIP: pointer Indicate and wheel zoom candidate')
+          echo "$candidate" > ../proof/commit.txt
+          git push origin "$candidate:refs/heads/validation/pointer-indicate-source-${GITHUB_RUN_ID}"
+          git archive --format=tar.gz "$candidate" > ../proof/source.tar.gz
+      - name: Check shared Rust
+        working-directory: source
+        run: cargo check -p noon-web --all-targets 2>&1 | tee ../proof/rust-check.log
+      - name: Check WASM
+        working-directory: source
+        run: cargo check -p noon-web --target wasm32-unknown-unknown 2>&1 | tee ../proof/wasm-check.log
+      - name: Test shared Rust
+        working-directory: source
+        run: cargo test -p noon-web --lib && cargo test -p noon --lib && cargo test -p noon-core --lib
+      - name: Test browser contracts
+        working-directory: source
+        run: node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee ../proof/js.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pointer-development-proof
+          path: proof
+          retention-days: 7
