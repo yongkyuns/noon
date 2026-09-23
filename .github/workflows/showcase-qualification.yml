@@ -1,0 +1,59 @@
+name: Showcase qualification
+
+on:
+  pull_request:
+    paths:
+      - 'web/*gallery*'
+      - 'web/showcase-*'
+      - 'web/python/examples/showcase_*.py'
+      - 'web/python/examples/noon_showcase_manifest.json'
+      - 'web/python/test_showcase_contract.py'
+      - 'scripts/showcase-*'
+      - '.github/workflows/showcase-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: showcase-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: Actual showcase frames (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl]
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Source and editorial contracts
+        run: |
+          node --test web/showcase-gallery.test.mjs
+          python3 -m unittest discover -s web/python -p test_showcase_contract.py
+          node --check scripts/showcase-capture.mjs
+      - name: Build the existing browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Install the repository-pinned browser tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Capture exact Noon sources, validate temporal samples, and exercise real selection
+        run: node scripts/showcase-capture.mjs
+      - name: Retain the review evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: showcase-review-${{ matrix.backend }}
+          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
+          if-no-files-found: warn
+          retention-days: 7
