@@ -1,0 +1,143 @@
+name: B6 matching foreground proof
+
+on:
+  push:
+    branches: [codex/validate-b6-matching-foreground-20260923]
+    paths:
+      - .github/workflows/b6-matching-foreground-proof.yml
+      - .github/ci/b6-matching-foreground-payload.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: b6-matching-foreground-proof
+  cancel-in-progress: false
+
+env:
+  BASE: 13cac98be05f15be8000b37a4f409073b01e80fb
+  SOURCE_BRANCH: codex/b6-matching-foreground-completion-20260923
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 3
+      - name: Isolate exact master source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/b6-proof"
+          cp .github/ci/b6-matching-foreground-payload.py "$RUNNER_TEMP/b6-payload.py"
+          sha256sum "$RUNNER_TEMP/b6-payload.py" | tee "$RUNNER_TEMP/b6-proof/payload.sha256"
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git clean -ffdx
+          test "$(git rev-parse HEAD)" = "$BASE"
+          git status --porcelain | tee "$RUNNER_TEMP/b6-proof/base-status.txt"
+          test ! -s "$RUNNER_TEMP/b6-proof/base-status.txt"
+          printf 'base=%s\n' "$BASE" > "$RUNNER_TEMP/b6-proof/identity.txt"
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reproduce original ordering failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/b6-payload.py" --regressions
+          set +e
+          cargo test -p noon --no-default-features --lib matching_foreground_completion -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-proof/before.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 2 failed;' "$RUNNER_TEMP/b6-proof/before.log"
+          grep -F 'assertion `left == right` failed' "$RUNNER_TEMP/b6-proof/before.log"
+          test "$(git diff --name-only | wc -l)" -eq 1
+      - name: Apply candidate and format
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/b6-payload.py" --production
+          cargo fmt --all
+          git diff --check
+          git diff --stat | tee "$RUNNER_TEMP/b6-proof/scope.txt"
+      - name: Qualify live matching completion and shared membership
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --lib matching_foreground_completion -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-proof/after.log"
+          cargo test -p noon-core --lib semantic_scene_restructure -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-proof/core.log"
+          cargo test -p noon --no-default-features --lib 2>&1 | tee "$RUNNER_TEMP/b6-proof/noon-lib.log"
+          cargo test -p noon --no-default-features --test foreground_membership --test foreground_declarations --test root_order_acceptance --test root_order_transaction_regressions -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b6-proof/typed.log"
+          cargo check -p noon --no-default-features --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/b6-proof/wasm.log"
+      - name: Complete repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast "$BASE" 2>&1 | tee "$RUNNER_TEMP/b6-proof/fast.log"
+      - name: Publish only the qualified code tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          expected = {
+              'crates/noon-core/src/semantic_store.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground.rs',
+              'crates/noon-core/src/semantic_store/semantic_scene_restructure/foreground_tests.rs',
+              'crates/noon/src/execution_session.rs',
+              'crates/noon/src/execution_session/completion.rs',
+              'crates/noon/src/execution_session/family_transform.rs',
+              'crates/noon/src/execution_session/family_transform_tests.rs',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          assert not subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).strip()
+          subprocess.run(['git', 'add', '--', *sorted(expected)], check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          tree=$(git write-tree)
+          source=$(printf '%s\n' 'B6: preserve foreground ordering at matching completion' | git commit-tree "$tree" -p "$BASE")
+          test "$(git rev-parse "$source^1")" = "$BASE"
+          printf 'source=%s\ntree=%s\n' "$source" "$tree" | tee -a "$RUNNER_TEMP/b6-proof/identity.txt"
+          git push origin "$source:refs/heads/$SOURCE_BRANCH"
+      - name: Retain source and logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/b6-proof"
+          git diff HEAD --binary > "$RUNNER_TEMP/b6-proof/source.patch"
+          git ls-files -z | tar --null -T - -czf "$RUNNER_TEMP/b6-proof/source.tar.gz"
+          git status --porcelain > "$RUNNER_TEMP/b6-proof/final-status.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b6-matching-foreground-proof
+          path: ${{ runner.temp }}/b6-proof
+          retention-days: 14
+          if-no-files-found: error
