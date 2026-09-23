@@ -487,6 +487,9 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
             E::NotSemanticFamily(_) => ("invalid_input", "semantic.not_family"),
             E::NotSemanticAuthoringNode(_) => ("invalid_input", "semantic.not_authoring_node"),
             E::DuplicateMembershipTarget(_) => ("invalid_input", "membership.duplicate_target"),
+            E::InvalidPendingAdmission(_) => {
+                ("invalid_input", "membership.invalid_pending_admission")
+            }
             E::MissingMembershipTarget(_) => ("invalid_input", "membership.missing_target"),
             E::AmbiguousMembershipTarget(_) => ("invalid_input", "membership.ambiguous_target"),
             E::AmbiguousCrossRootAlias(_) => {
@@ -849,6 +852,19 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
 mod tests {
     use super::*;
     use noon_core::SemanticNodeId;
+
+    #[test]
+    fn pending_admission_error_preserves_typed_membership_diagnostic() {
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        let token = transaction.create_node(noon_core::SemanticNodeCreation::family());
+        let error = SemanticSceneOperationError::InvalidPendingAdmission(token);
+        let message = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "membership.invalid_pending_admission");
+        assert_eq!(failure.message, message);
+        assert!(failure.cause.is_none());
+    }
 
     #[test]
     fn typed_membership_chain_preserves_categories_and_sources() {

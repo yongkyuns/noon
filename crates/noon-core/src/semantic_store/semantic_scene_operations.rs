@@ -15,6 +15,8 @@ pub enum SemanticSceneOperationError {
     NotSemanticFamily(SemanticNodeId),
     NotSemanticAuthoringNode(SemanticNodeId),
     DuplicateMembershipTarget(SemanticNodeId),
+    /// A pending admission must name one fresh, unparented object in this transaction.
+    InvalidPendingAdmission(crate::SemanticLocalNodeToken),
     MissingMembershipTarget(SemanticNodeId),
     AmbiguousMembershipTarget(SemanticNodeId),
     /// One local scene restructure would promote the same aliased node from
@@ -59,6 +61,10 @@ impl std::fmt::Display for SemanticSceneOperationError {
                 "semantic membership request repeats node {}:{}",
                 id.slot(),
                 id.generation()
+            ),
+            Self::InvalidPendingAdmission(token) => write!(
+                formatter,
+                "pending admission {token:?} must name one fresh unparented object in this transaction"
             ),
             Self::MissingMembershipTarget(id) => write!(
                 formatter,
