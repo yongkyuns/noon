@@ -68,7 +68,7 @@ impl SceneInstance {
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
         self.require_replay_writable()?;
-        if self.replay_scope_active() {
+        if self.replay_scope_active() || self.has_property_animations() {
             return Ok(None);
         }
         if transaction.mutations().iter().any(|patch| {

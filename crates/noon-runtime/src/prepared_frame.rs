@@ -32,6 +32,7 @@ pub struct PreparedFrameEvaluation {
     stats: EvaluationStats,
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
+    pub(crate) property_animations: crate::property_animation::PreparedPropertyAnimations,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
 }
 
@@ -90,6 +91,10 @@ impl PreparedEffectivePropertyBatch {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedFrameCommitError {
     ReplaySealed,
+    PropertyAnimationConflict {
+        object: noon_core::ObjectId,
+        property: noon_core::Property,
+    },
     ForeignRuntime {
         expected: RuntimeIdentity,
         actual: RuntimeIdentity,
@@ -108,6 +113,8 @@ pub enum PreparedFrameCommitError {
 impl std::fmt::Display for PreparedFrameCommitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PropertyAnimationConflict { object, property } => write!(formatter,
+                "effective write conflicts with active property animation on {object:?}/{property:?}"),
             Self::ReplaySealed => {
                 formatter.write_str("sealed replay cannot publish a live prepared frame")
             }
@@ -370,6 +377,7 @@ impl SceneInstance {
             stats,
             scheduler_stats: preview.stats(),
             prior_driver_rows,
+            property_animations: self.prepare_property_animations(0.0)?,
             reactive,
         })
     }
@@ -454,7 +462,8 @@ impl SceneInstance {
                 actual: self.frame.time,
             });
         }
-        let may_publish = prepared.time != self.frame.time
+        let may_publish = !prepared.property_animations.writes.is_empty()
+            || prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
             || prepared
@@ -467,6 +476,7 @@ impl SceneInstance {
                 self.publication.frame_epoch(),
             ));
         }
+        self.check_property_animation_writes(&effective.writes)?;
         Ok(())
     }
 
@@ -476,7 +486,8 @@ impl SceneInstance {
         effective: PreparedEffectivePropertyBatch,
     ) -> Result<&FrameState, PreparedFrameCommitError> {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
-        let may_publish = prepared.time != self.frame.time
+        let may_publish = !prepared.property_animations.writes.is_empty()
+            || prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
             || prepared
@@ -543,6 +554,17 @@ impl SceneInstance {
             next_drivers.insert(object_index);
         }
 
+        for &(object_index, write) in &prepared.property_animations.writes {
+            let row = final_rows
+                .entry(object_index)
+                .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
+            apply_effective_property_to_row(
+                row.as_mut(&self.frame.objects[object_index].content),
+                write,
+            );
+        }
+        self.property_animations
+            .commit(&prepared.property_animations);
         let time_changed = self.frame.time != prepared.time;
         self.frame.time = prepared.time;
         let mut changed = self.update_requested_family_animations(prepared.time);
@@ -559,7 +581,8 @@ impl SceneInstance {
         }
         self.effective_driver_rows = next_drivers;
         self.last_stats = prepared.stats;
-        if time_changed || changed || reactive_changed {
+        if time_changed || changed || reactive_changed || prepared.property_animations.clock_changed
+        {
             self.publication = self.publication.with_frame_epoch(
                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
             );

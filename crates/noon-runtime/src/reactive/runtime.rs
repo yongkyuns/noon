@@ -65,6 +65,11 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
+    pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
+        self.target_lookup
+            .contains_key(&binding_key(object, property))
+    }
+
     pub(crate) fn has_property_bindings(&self) -> bool {
         !self.targets.is_empty()
     }

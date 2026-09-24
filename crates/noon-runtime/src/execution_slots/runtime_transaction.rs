@@ -233,6 +233,8 @@ impl SceneInstance {
         effective: &PreparedEffectivePropertyBatch,
         expected: PublicationContext,
     ) -> Result<(), AuthoredPublicationError> {
+        self.check_property_animation_writes(&effective.writes)
+            .map_err(AuthoredPublicationError::PreparedFrame)?;
         if expected != self.publication_context()
             || effective.runtime != self.identity
             || effective.expected != expected
