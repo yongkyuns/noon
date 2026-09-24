@@ -54,7 +54,7 @@ jobs:
           rustup show active-toolchain
           rustc --version --verbose
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
         with:
           tool: cargo-llvm-cov
           fallback: none
