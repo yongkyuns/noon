@@ -887,6 +887,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(7),
+                z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
                 },
