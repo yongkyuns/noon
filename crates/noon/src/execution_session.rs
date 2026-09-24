@@ -376,7 +376,7 @@ impl std::fmt::Display for ExecutionSessionFadeError {
             Self::ReactiveBindingsUnsupported => formatter
                 .write_str("single-leaf fade does not yet support reactive object bindings"),
             Self::RequiredCallbacksUnsupported => {
-                formatter.write_str("single-leaf fade does not yet support required host callbacks")
+                formatter.write_str("lifecycle target has active or future host updaters; updater suspension is not supported")
             }
         }
     }
@@ -412,7 +412,7 @@ impl std::fmt::Display for ExecutionSessionCreateError {
                 formatter.write_str("Create does not yet support reactive object bindings")
             }
             Self::RequiredCallbacksUnsupported => {
-                formatter.write_str("Create does not yet support required host callbacks")
+                formatter.write_str("Create target has active or future host updaters; updater suspension is not supported")
             }
         }
     }
@@ -2620,13 +2620,38 @@ impl ExecutionSession {
                 error: ExecutionSessionCreateError::RootIsNotInExecutionDomain,
             });
         }
-        if !self.callback_schedule.is_empty() {
-            return Err(ExecutionSessionAnimationError::CreateTarget {
-                target: error_target,
-                error: ExecutionSessionCreateError::RequiredCallbacksUnsupported,
-            });
-        }
         Ok(())
+    }
+
+    /// Lifecycle admission is local to its target, not the scene's callback history.
+    /// Ancestor updaters can own the same family presentation. Until target-updater
+    /// suspension is supported, reject their nonempty current/future intervals too.
+    /// Closed history is inert, and unrelated callback targets remain admissible.
+    fn lifecycle_target_has_pending_updaters(
+        &self,
+        store: &SemanticStore,
+        target: SemanticNodeId,
+    ) -> bool {
+        let time = self.frame().time;
+        let mut pending = vec![target];
+        let mut visited = HashSet::new();
+        while let Some(target) = pending.pop() {
+            if !visited.insert(target) {
+                continue;
+            }
+            let Some(node) = store.node(target) else {
+                continue;
+            };
+            if node.host_updaters().iter().any(|registration| {
+                registration
+                    .inactive_from()
+                    .is_none_or(|end| end > time.max(registration.active_from()))
+            }) {
+                return true;
+            }
+            pending.extend_from_slice(node.parents());
+        }
+        false
     }
 
     fn require_create_target(
@@ -2634,6 +2659,12 @@ impl ExecutionSession {
         store: &SemanticStore,
         target: SemanticNodeId,
     ) -> Result<(), ExecutionSessionAnimationError> {
+        if self.lifecycle_target_has_pending_updaters(store, target) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target,
+                error: ExecutionSessionCreateError::RequiredCallbacksUnsupported,
+            });
+        }
         let state = store
             .semantic_object_state_checked(target)
             .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
@@ -2881,7 +2912,7 @@ impl ExecutionSession {
                 error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
             });
         }
-        if !self.callback_schedule.is_empty() {
+        if self.lifecycle_target_has_pending_updaters(store, target) {
             return Err(ExecutionSessionAnimationError::FadeTarget {
                 target,
                 error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
@@ -2930,6 +2961,12 @@ impl ExecutionSession {
             ));
         }
         for leaf in &leaves {
+            if self.lifecycle_target_has_pending_updaters(store, *leaf) {
+                return Err(ExecutionSessionAnimationError::FadeTarget {
+                    target: *leaf,
+                    error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+                });
+            }
             let state = store
                 .semantic_object_state_checked(*leaf)
                 .map_err(|error| ExecutionSessionAnimationError::TargetState {
@@ -2982,7 +3019,7 @@ impl ExecutionSession {
                 error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
             });
         }
-        if !self.callback_schedule.is_empty() {
+        if self.lifecycle_target_has_pending_updaters(store, target) {
             return Err(ExecutionSessionAnimationError::FadeTarget {
                 target,
                 error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,

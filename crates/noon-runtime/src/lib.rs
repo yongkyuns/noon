@@ -680,9 +680,9 @@ impl SceneInstance {
                 .ok_or(CompilePatchError::UnknownTrack(*track))?;
             self.compiled.apply_execution_patch(patch)?;
             let mut evaluation = EvaluationStats::default();
-            self.relower_object(
+            self.relower_timeline_object(
                 channel.object_index as usize,
-                self.frame.time,
+                &[Some(channel), None],
                 &mut evaluation,
             );
             self.reapply_reactive_for_object(channel.object_index as usize);
@@ -750,7 +750,7 @@ impl SceneInstance {
         );
         let mut evaluation = EvaluationStats::default();
         for object_index in affected_objects.into_iter().flatten() {
-            self.relower_object(object_index, self.frame.time, &mut evaluation);
+            self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
             self.mark_changed(object_index);
             patch_stats.objects_recomputed += 1;
@@ -822,6 +822,110 @@ impl SceneInstance {
             self.mark_changed(index);
         }
         Ok(())
+    }
+
+    /// A primitive timeline channel owns one property, not its entire frame row.
+    /// Preserve independent effective values, including values left by a stopped
+    /// updater. Composite transform/morph tracks retain their coupled evaluation.
+    fn relower_timeline_object(
+        &mut self,
+        object_index: usize,
+        channels: &[Option<CompiledChannelKey>; 2],
+        stats: &mut EvaluationStats,
+    ) {
+        let relevant = || {
+            channels
+                .iter()
+                .flatten()
+                .filter(|channel| channel.object_index as usize == object_index)
+        };
+        let coupled = [Property::Transform, Property::Morph]
+            .into_iter()
+            .any(|property| {
+                !self
+                    .compiled
+                    .channel_tracks(CompiledChannelKey::new(object_index as u32, property))
+                    .is_empty()
+            });
+        if coupled
+            || relevant()
+                .any(|channel| matches!(channel.property, Property::Transform | Property::Morph))
+        {
+            self.relower_object(object_index, self.frame.time, stats);
+            return;
+        }
+        for channel in relevant() {
+            let object = &self.compiled.objects()[object_index];
+            match channel.property {
+                Property::Position => {
+                    self.frame.objects[object_index].transform.translation = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .translation
+                }
+                Property::Rotation => {
+                    self.frame.objects[object_index].transform.rotation = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .rotation
+                }
+                Property::Scale => {
+                    self.frame.objects[object_index].transform.scale = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .scale
+                }
+                Property::Fill => {
+                    self.frame.objects[object_index].style.fill = object.base_style.fill
+                }
+                Property::Stroke => {
+                    self.frame.objects[object_index].style.stroke = object.base_style.stroke
+                }
+                Property::StrokeWidth => {
+                    self.frame.objects[object_index].style.stroke_width =
+                        object.base_style.stroke_width
+                }
+                Property::Opacity => {
+                    self.frame.objects[object_index].style.opacity = object.base_style.opacity
+                }
+                Property::ZIndex => {
+                    self.frame.objects[object_index].z_index =
+                        initial_z_index(&self.compiled, object_index)
+                }
+                Property::Presence => {
+                    self.frame.presences[object_index] =
+                        initial_channel_bool(&self.compiled, object_index, Property::Presence, true)
+                }
+                Property::Appearance => {
+                    self.frame.objects[object_index].appearance = initial_channel_scalar(
+                        &self.compiled,
+                        object_index,
+                        Property::Appearance,
+                        1.0,
+                    )
+                }
+                Property::Reveal => {
+                    self.frame.reveals[object_index] =
+                        initial_channel_scalar(&self.compiled, object_index, Property::Reveal, 1.0)
+                }
+                Property::Transform | Property::Morph => {
+                    unreachable!("coupled channels were handled above")
+                }
+            }
+            self.reapply_properties(object_index, &[channel.property]);
+            stats.groups_evaluated += self.last_stats.groups_evaluated;
+            stats.tracks_advanced += self.last_stats.tracks_advanced;
+            stats.binary_search_steps += self.last_stats.binary_search_steps;
+        }
     }
 
     fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
