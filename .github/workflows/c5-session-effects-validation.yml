@@ -1,0 +1,165 @@
+name: C5 session effects qualification
+
+on:
+  push:
+    branches: [validation/c5-session-effects-20260924]
+    paths:
+      - scripts/validation/c5-session-effects*.py
+      - .github/workflows/c5-session-effects-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-session-effects-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 8ac9da5faf32ee0b98477d0c90ad05946af5b465
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reconstruct exact clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-session-proof
+          test "$(git rev-parse "$BASE_SHA^{tree}")" = 130d3daefdfbed6ffcaaf690791b09460d61586f
+          python3 scripts/validation/c5-session-effects.py
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-session-proof/rust-version.txt
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-session-proof/paths.txt <<'EOF'
+          crates/noon/src/execution_session.rs
+          crates/noon/src/execution_session/property_animation.rs
+          crates/noon/src/execution_session/property_animation/tests.rs
+          crates/noon/src/lib.rs
+          crates/noon/src/live_program.rs
+          crates/noon/src/live_program/property_animation.rs
+          crates/noon/src/live_program/property_animation/tests.rs
+          crates/noon/src/live_session.rs
+          crates/noon/src/live_session/property_animation.rs
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-session-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-session-proof/paths.txt -
+          git write-tree > /tmp/c5-session-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-session-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-session-proof/source.stat
+          git archive "$(cat /tmp/c5-session-proof/tree.txt)" | gzip > /tmp/c5-session-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-session-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: shared session Indicate activation and independent effect publication')
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-session-proof/tree.txt)"
+          test ! -e .github/workflows/c5-session-effects-validation.yml
+          git diff --exit-code
+          cp crates/noon/src/execution_session/property_animation.rs /tmp/c5-session-good.rs
+          cp crates/noon/src/live_program/property_animation.rs /tmp/c5-live-good.rs
+      - name: Shared action parity and session integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-session-proof/effects.log
+          cargo test -p noon --no-default-features --lib 2>&1 | tee /tmp/c5-session-proof/session.log
+          cargo test -p noon-runtime --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-session-proof/runtime.log
+      - name: Missing effect delivery negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/execution_session/property_animation.rs')
+          s = p.read_text()
+          old = '.advance_property_animations_by(delta)'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, '.advance_property_animations_by(0.0)'))
+          PY
+          set +e
+          cargo test -p noon --no-default-features --lib execution_session::property_animation::tests::independent_indicate_matches_ordinary_semantic_animation_at_every_sample -- --exact --nocapture > /tmp/c5-session-proof/negative-delivery.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-session-good.rs crates/noon/src/execution_session/property_animation.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-session-proof/negative-delivery.log
+          cargo test -p noon --no-default-features --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-session-proof/restored-delivery.log
+      - name: Stale endpoint receipt negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/live_program/property_animation.rs')
+          s = p.read_text()
+          before, after = s.split('pub fn cancel_property_animation(', 1)
+          assert after.count('self.refresh_pending_publication();') == 1
+          p.write_text(before + 'pub fn cancel_property_animation(' + after.replace('self.refresh_pending_publication();', ''))
+          PY
+          set +e
+          cargo test -p noon --no-default-features --lib live_program::property_animation::tests::pending_endpoint_tracks_effect_activation_ticks_and_release_not_an_old_receipt -- --exact --nocapture > /tmp/c5-session-proof/negative-receipt.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-live-good.rs crates/noon/src/live_program/property_animation.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-session-proof/negative-receipt.log
+          cargo test -p noon --no-default-features --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-session-proof/restored-receipt.log
+      - name: WASM and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-session-proof/wasm.log
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-session-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-session-proof/fast.log
+      - name: Publish exact tested source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cmp /tmp/c5-session-good.rs crates/noon/src/execution_session/property_animation.rs
+          cmp /tmp/c5-live-good.rs crates/noon/src/live_program/property_animation.rs
+          git diff --exit-code
+          cp Cargo.lock /tmp/c5-session-proof/Cargo.lock
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-session-proof/tree.txt)"
+          branch="staging/c5-session-effects-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > /tmp/c5-session-proof/commit.txt
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-session-effects-proof
+          path: /tmp/c5-session-proof
+          retention-days: 7
+          if-no-files-found: error
