@@ -5,6 +5,7 @@ on:
     paths:
       - 'web/*gallery*'
       - 'web/showcase-*'
+      - 'web/thumbnails/showcase/**'
       - 'web/playground-playback-controls*'
       - 'web/python/examples/showcase_*.py'
       - 'web/python/examples/noon_showcase_manifest.json'
@@ -62,7 +63,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Source and editorial contracts
         run: |
-          node --test web/showcase-gallery.test.mjs scripts/showcase-*.test.mjs
+          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs
           python3 -m unittest discover -s web/python -p 'test_showcase*.py'
           node --check scripts/showcase-capture.mjs
           node --check scripts/showcase-live-review.mjs

@@ -285,13 +285,16 @@ export class PlaygroundPlaybackControls {
 
   #renderDisabled() {
     if (this.#destroyed) return;
-    const blockCommands = !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive;
+    // Capability denial is not an unfinished command. A completed, non-replayable
+    // scene stays disabled without displaying an indefinite wait cursor/aria-busy.
+    const busy = this.#externalBusy || this.#commandPending || this.#seekActive;
+    const blockCommands = !this.#controllable || busy;
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
-    this.#root.dataset.busy = String(blockCommands);
+    this.#root.dataset.busy = String(busy);
     this.#root.dataset.playing = String(this.#playing);
-    this.#root.setAttribute("aria-busy", String(blockCommands));
+    this.#root.setAttribute("aria-busy", String(busy));
   }
 }
 

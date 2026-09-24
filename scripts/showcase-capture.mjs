@@ -11,6 +11,7 @@ import pngjs from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { posterEvidence } from "./showcase-posters.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { seekPausedGallery, qualifyPlayheadEndpoints } from "./showcase-playback.mjs";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
@@ -142,12 +143,15 @@ try {
   await sheet.close();
   const failed = report.results.filter((result) => result.outcome !== "pass");
   assert.deepEqual(failed.map((result) => result.id), [], "showcase capture failures");
+  const evidence = json(posterEvidence(manifest, report));
+  await writeFile(path.join(output, "capture-evidence.json"), evidence);
   // Stage real posters only after every scene passes. They remain review artifacts;
   // this script does not commit, approve, publish, or modify the catalog's status.
   await mkdir(path.join(root, "web/thumbnails/showcase"), { recursive: true });
   for (const result of report.results) {
     await writeFile(path.join(root, "web/thumbnails/showcase", result.poster), await readFile(path.join(output, result.poster)));
   }
+  await writeFile(path.join(root, "web/thumbnails/showcase/capture-evidence.json"), evidence);
   const decodePage = await context.newPage();
   await decodePage.goto(`${base}/manim-raster-host.html`);
   await decodePage.evaluate(async (paths) => {
