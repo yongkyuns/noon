@@ -1,9 +1,11 @@
-// Review ordinary gallery playback, not deterministic sampling or an FPS benchmark.
+// Review ordinary gallery playback and compare replay against independent
+// forward captures. Neither sampled frames nor video timings are an FPS benchmark.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-replay-checks.mjs";
 
 // First execution and replay are distinct engine capabilities. Keep both results,
 // but do not count a successful first pass as a replacement for failed replay.
@@ -104,8 +106,19 @@ async function main() {
     const identity = await context.request.get(`${base}/runtime-build-identity.json`);
     assert.ok(identity.ok(), "served build identity is missing");
     report.servedBuildIdentity = await identity.json();
+    // The capture job runs immediately before this one against the same build.
+    // Missing/invalid evidence fails each lesson but must not prevent collecting
+    // ordinary-playback videos and existing endpoint diagnostics for the rest.
+    let captureReport;
+    try {
+      const bytes = await readFile(path.join(output, "..", "report.json"));
+      captureReport = JSON.parse(bytes);
+      report.firstPassCaptureReportSha256 = hash(bytes);
+    } catch (error) {
+      report.firstPassCaptureReportError = String(error);
+    }
     for (const entry of manifest.entries) {
-      const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", stage: "open", pageErrors: [] };
+      const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", intermediateReplayOutcome: "not-run", stage: "open", pageErrors: [] };
       report.results.push(result);
       const page = await context.newPage();
       page.setDefaultTimeout(120000);
@@ -195,9 +208,54 @@ async function main() {
         result.restartMatchesFirstPass = true;
         assert.deepEqual(result.pageErrors, []);
         result.restartRestoresEndpoint = true;
+        result.stage = "independent intermediate replay qualification";
+        result.intermediateReplayOutcome = "fail";
+        const oracle = replayOracle(entry, captureReport, {
+          sourceSha256: result.sourceSha256, buildIdentity: report.servedBuildIdentity,
+          browserVersion: report.browserVersion, backendRequested: backend,
+        });
+        // Keep the ordinary-playback recording and endpoint checks at the real
+        // gallery size. Only this additional comparison resizes the actual
+        // canvas to the forward oracle's viewport; never rescale/crop PNGs.
+        await page.addStyleTag({ content: "#scene { width: 960px !important; height: 540px !important; }" });
+        await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await seekPausedGallery(page, entry.duration, 0);
+        result.intermediateViewport = { width: 960, height: 540 };
+        result.intermediateSamples = [];
+        for (const [direction, checkpoints] of [["backward", [...oracle].reverse()], ["forward", oracle]]) {
+          for (const [index, checkpoint] of checkpoints.entries()) {
+            const comparison = { direction, firstPassFilename: checkpoint.filename,
+              firstPassRequestedTime: checkpoint.requestedTime, firstPassPublishedTime: checkpoint.publishedTime,
+              firstPassPixelSha256: checkpoint.pixelSha256, requestedTime: checkpoint.replayTime, outcome: "fail" };
+            result.intermediateSamples.push(comparison);
+            try {
+              const firstBytes = await readFile(path.join(output, "..", checkpoint.filename));
+              const firstImage = PNG.sync.read(firstBytes);
+              assertOracleImage(checkpoint, firstBytes, firstImage);
+              const time = await seekPausedGallery(page, entry.duration, checkpoint.completionProbe ? null : checkpoint.replayTime);
+              const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+              comparison.publishedTime = replayMetrics.metrics.time;
+              comparison.backend = replayMetrics.metrics.backend;
+              comparison.filename = `${entry.id}-${direction}-${index}.png`;
+              const image = PNG.sync.read(await canvas.screenshot({ path: path.join(output, comparison.filename) }));
+              comparison.pixelSha256 = hash(image.data);
+              comparison.width = image.width;
+              comparison.height = image.height;
+              assertReplaySample(entry, checkpoint, time, replayMetrics.metrics);
+              assertLivePixels(firstImage, image);
+              comparison.outcome = "pass";
+            } catch (error) {
+              comparison.error = String(error.stack ?? error);
+            }
+          }
+        }
+        assert.deepEqual(result.pageErrors, []);
+        assert.deepEqual(result.intermediateSamples.filter(sample => sample.outcome !== "pass")
+          .map(sample => `${sample.direction}@${sample.requestedTime}`), [], "intermediate replay differs from first execution");
+        result.intermediateReplayOutcome = "pass";
         result.replayOutcome = "pass";
         result.outcome = "pass";
-        console.log(`PASS live ${entry.id}: normal source run and replay endpoint`);
+        console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
       } catch (error) {
         result.error = String(error.stack ?? error);
         result.failureState = await page.evaluate(() => ({
