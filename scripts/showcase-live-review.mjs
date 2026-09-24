@@ -5,6 +5,27 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// First execution and replay are distinct engine capabilities. Keep both results,
+// but do not count a successful first pass as a replacement for failed replay.
+export function assertFirstPass(entry, observed, expectedBackend) {
+  assert.equal(observed.selectedExampleId, entry.id, "wrong first-pass lesson");
+  assert.equal(observed.patchState, "applied", "first-pass source did not finish successfully");
+  assert.equal(observed.runInFlight, false, "first-pass source is still running");
+  assert.equal(observed.backend, expectedBackend, "wrong first-pass backend");
+  assert.ok(Number.isSafeInteger(observed.objectCount) && observed.objectCount > 0,
+    "first-pass lesson has no resolved composition");
+  if (entry.performance) assert.ok(observed.objectCount >= 600, "dense scene lost its geometry workload");
+  const elapsed = Number(observed.controls?.elapsedSeconds);
+  const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
+  assert.ok(Number.isFinite(elapsed) && Math.abs(elapsed - entry.duration) <= roundoff,
+    "first-pass source did not reach its authored endpoint");
+}
+
+export function assertReplayAvailable(observed) {
+  assert.equal(observed.controls?.controllable, "true",
+    observed.replayReason || "completed source did not admit retained replay");
+}
+
 export function assertLiveOutcome(entry, observed, expectedBackend) {
   assert.equal(observed.selectedExampleId, entry.id, "wrong live lesson");
   assert.equal(observed.patchState, "applied", "source did not finish successfully");
@@ -84,7 +105,7 @@ async function main() {
     assert.ok(identity.ok(), "served build identity is missing");
     report.servedBuildIdentity = await identity.json();
     for (const entry of manifest.entries) {
-      const result = { id: entry.id, outcome: "fail", stage: "open", pageErrors: [] };
+      const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", stage: "open", pageErrors: [] };
       report.results.push(result);
       const page = await context.newPage();
       page.setDefaultTimeout(120000);
@@ -98,6 +119,7 @@ async function main() {
         assert.equal(editorSource, source, "live review must run the exact checked-in source");
         result.sourceSha256 = hash(source);
         result.stage = "ordinary first pass";
+        result.firstPassOutcome = "fail";
         const started = performance.now();
         let timer;
         try {
@@ -128,6 +150,14 @@ async function main() {
           path: path.join(output, `${entry.id}-first-pass.png`),
         }));
         result.firstPassPixelSha256 = hash(firstPass.data);
+        const firstMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+        result.firstPass.objectCount = firstMetrics.metrics.objectCount;
+        assertFirstPass(entry, result.firstPass, expectedBackend);
+        assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
+        result.firstPassOutcome = "pass";
+        result.stage = "replay capability admission";
+        result.replayOutcome = "fail";
+        assertReplayAvailable(result.firstPass);
         result.stage = "replay seek to resolved endpoint";
         const requestedTime = await seekPausedGallery(page, entry.duration);
         const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
@@ -165,6 +195,7 @@ async function main() {
         result.restartMatchesFirstPass = true;
         assert.deepEqual(result.pageErrors, []);
         result.restartRestoresEndpoint = true;
+        result.replayOutcome = "pass";
         result.outcome = "pass";
         console.log(`PASS live ${entry.id}: normal source run and replay endpoint`);
       } catch (error) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertLiveOutcome, assertLiveEndpoint, assertLivePixels } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertLiveOutcome, assertLiveEndpoint, assertLivePixels } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -104,4 +104,24 @@ test("live pixel equality rejects dimensions and every changed RGBA channel", ()
     changed.data[i] ^= 1;
     assert.throws(() => assertLivePixels(firstPass, changed), /unseeked first-pass pixels/);
   }
+});
+
+
+test("successful first execution cannot substitute for unavailable replay", () => {
+  const state = observed();
+  state.controls.controllable = "false";
+  state.replayReason = "Replay unavailable: UnsupportedDomain";
+  assertFirstPass(entry, state, "WebGPU");
+  assert.throws(() => assertReplayAvailable(state), /UnsupportedDomain/);
+  assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
+});
+
+test("first-pass errors and incomplete execution fail before replay is attempted", () => {
+  for (const change of [
+    { patchState: "error" }, { runInFlight: true }, { selectedExampleId: "wrong" },
+    { backend: "WebGL2" }, { objectCount: 0 }, { objectCount: NaN },
+    { controls: { elapsedSeconds: "0" } }, { controls: { elapsedSeconds: "7.999" } },
+    { controls: { elapsedSeconds: "NaN" } },
+  ]) assert.throws(() => assertFirstPass(entry, { ...observed(), ...change }, "WebGPU"));
+  assert.throws(() => assertFirstPass({ ...entry, performance: true }, observed(), "WebGPU"));
 });
