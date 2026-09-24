@@ -21,6 +21,10 @@ for old, new in [
     ('    EffectiveObjectProperties, FrameRowState, FrameState, RuntimeIdentity, SceneInstance,',
      '    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity, SceneInstance,'),
     ('use noon_core::{ObjectId, PublicationContext, Style, Transform2D};', 'use noon_core::PublicationContext;'),
+    ('CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction, ExecutionPatch,',
+     'CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction,'),
+    ('lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene,',
+     'lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene, ExecutionPatch,'),
     ('''            let property_tag = match write {
                 EffectivePropertyWrite::Transform { .. } => 0_u8,
                 EffectivePropertyWrite::Style { .. } => 1_u8,
