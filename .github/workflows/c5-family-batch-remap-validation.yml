@@ -1,0 +1,125 @@
+name: C5 family painter topology qualification
+
+on:
+  push:
+    branches: [validation/c5-family-batch-remap-20260924]
+    paths:
+      - crates/noon-render-wgpu/src/gpu/retained_text/family_plan_set_prepare/tests.rs
+      - scripts/validation/c5-family-batch-remap.py
+      - .github/workflows/c5-family-batch-remap-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-family-batch-remap-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 3546b230d3e0b012b21444946b896d98d21e95c6
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reproduce old cached painter failure with one exact test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-family-proof
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-family-proof/rust-version.txt
+          python3 scripts/validation/c5-family-batch-remap.py negative
+          cargo fmt --all
+          set +e
+          cargo test -p noon-render-wgpu --lib cached_family_geometry_rebuild_remaps_painter_items -- --nocapture > /tmp/c5-family-proof/negative.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/c5-family-proof/negative.log
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/c5-family-proof/negative.log
+          grep -E 'mixed painter item must reference a current path batch|batch.instance_range' /tmp/c5-family-proof/negative.log
+      - name: Repair and retain exact clean product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validation/c5-family-batch-remap.py fixed
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-family-proof/paths.txt <<'EOF'
+          crates/noon-render-wgpu/src/gpu/retained_text/family_plan_set_prepare.rs
+          crates/noon-render-wgpu/src/gpu/retained_text/family_plan_set_prepare/tests.rs
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-family-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-family-proof/paths.txt -
+          git write-tree > /tmp/c5-family-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-family-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-family-proof/source.stat
+          git archive "$(cat /tmp/c5-family-proof/tree.txt)" | gzip > /tmp/c5-family-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-family-proof/tree.txt)" -p "$BASE_SHA" -m 'Fix cached family painter indices after geometry repacking')
+          printf '%s\n' "$candidate" > /tmp/c5-family-proof/commit.txt
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test ! -e .github/workflows/c5-family-batch-remap-validation.yml
+          git diff --exit-code
+      - name: Fixed regression and existing retained renderer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --lib cached_family -- --nocapture 2>&1 | tee /tmp/c5-family-proof/fixed.log
+          cargo test -p noon-render-wgpu --lib 2>&1 | tee /tmp/c5-family-proof/renderer.log
+      - name: WASM and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-family-proof/wasm.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-family-proof/fast.log
+      - name: Publish exact tested two-file source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- $(cat /tmp/c5-family-proof/paths.txt)
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-family-proof/tree.txt)"
+          branch="fix/c5-family-painter-remap-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          printf '%s\n' "$branch" > /tmp/c5-family-proof/branch.txt
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-family-painter-proof
+          path: /tmp/c5-family-proof
+          retention-days: 7
+          if-no-files-found: error
