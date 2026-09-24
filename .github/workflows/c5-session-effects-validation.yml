@@ -52,12 +52,14 @@ jobs:
           mkdir -p /tmp/c5-session-proof
           test "$(git rev-parse "$BASE_SHA^{tree}")" = 130d3daefdfbed6ffcaaf690791b09460d61586f
           python3 scripts/validation/c5-session-effects.py
+          python3 scripts/validation/c5-session-effects-fix.py
           rustup install
           rustc --version --verbose | tee /tmp/c5-session-proof/rust-version.txt
           cargo fmt --all
           cargo fmt --all -- --check
           git diff --check
           cat > /tmp/c5-session-proof/paths.txt <<'EOF'
+          crates/noon-runtime/src/reactive/wake.rs
           crates/noon/src/execution_session.rs
           crates/noon/src/execution_session/property_animation.rs
           crates/noon/src/execution_session/property_animation/tests.rs
