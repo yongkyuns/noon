@@ -14,10 +14,7 @@ impl ExecutionSession {
             return Err(ReplayError::Incomplete);
         }
         self.runtime.begin_replay_retention(limits)?;
-        if !self.callback_schedule.is_empty()
-            || !self.signal_timeline.is_empty()
-            || self.derived_display_plan.is_some()
-        {
+        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
             self.runtime.invalidate_replay_domain();
         }
         self.replay_pinned_exits = Some(Default::default());
@@ -29,10 +26,7 @@ impl ExecutionSession {
         if self.pending_segment_completion.is_some() || self.pending_callback.is_some() {
             return Err(ReplayError::Incomplete);
         }
-        if !self.callback_schedule.is_empty()
-            || !self.signal_timeline.is_empty()
-            || self.derived_display_plan.is_some()
-        {
+        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
             return Err(ReplayError::UnsupportedDomain);
         }
         self.runtime.seal_replay()
@@ -49,11 +43,27 @@ impl ExecutionSession {
     /// Explicitly return to the authored frontier and release history and pinned
     /// execution identities. The historical projection cannot be edited in place.
     pub fn discard_replay_retention(&mut self) {
+        if let Some(end) = self.runtime.replay_end_time() {
+            self.evaluate_signal_timeline(end, super::ExecutionEvaluationMode::Seek)
+                .expect("a sealed scalar timeline can restore its authored frontier");
+        }
         self.runtime.discard_replay_retention();
         self.pointer_selection.reset();
         self.sync_spatial_index();
         self.release_replay_slots();
     }
+    /// Retain only the immutable extension's budget marker, not another schedule.
+    pub(super) fn commit_scalar_timeline_append(
+        &mut self,
+        prepared: noon_runtime::PreparedSignalTimelineAppend,
+    ) {
+        self.runtime.retain_scalar_timeline_change(&prepared);
+        self.signal_timeline.commit_append(prepared);
+        if self.runtime.replay_scope_active() && !self.runtime.replay_retention_valid() {
+            self.release_replay_slots();
+        }
+    }
+
     fn release_replay_slots(&mut self) {
         if let Some(pinned) = self.replay_pinned_exits.take() {
             for object in pinned {

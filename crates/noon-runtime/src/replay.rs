@@ -54,7 +54,7 @@ pub struct ReplayStats {
 #[derive(Clone, Debug)]
 struct Revision {
     time: f64,
-    inverse: CompiledReplayRevision,
+    inverse: Option<CompiledReplayRevision>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayHistory {
@@ -121,6 +121,26 @@ impl SceneInstance {
             .as_ref()
             .is_some_and(|history| history.end.is_some())
     }
+    pub fn replay_end_time(&self) -> Option<f64> {
+        self.replay_history.as_ref().and_then(|history| history.end)
+    }
+
+    /// Account for immutable scalar plan extensions in the same finite history budget.
+    /// Their original schedule remains resident and time-qualified; there is no copy to exchange.
+    pub fn retain_scalar_timeline_change(
+        &mut self,
+        timeline: &crate::PreparedSignalTimelineAppend,
+    ) {
+        if timeline.entries.is_empty() {
+            return;
+        }
+        if timeline.runtime != self.runtime_identity() || timeline.current != self.frame.time {
+            self.invalidate_replay_domain();
+            return;
+        }
+        self.retain_supported_replay_change(None, timeline.entries.len());
+    }
+
     pub fn replay_stats(&self) -> ReplayStats {
         self.replay_history
             .as_ref()
@@ -197,43 +217,48 @@ impl SceneInstance {
         self.compiled.prepare_replay_revision(patch)
     }
     pub(crate) fn retain_replay_change(&mut self, change: Option<CompiledReplayRevision>) {
+        match change {
+            Some(change) => {
+                let cost = change.retention_cost();
+                self.retain_supported_replay_change(Some(change), cost);
+            }
+            None => self.invalidate_replay_domain(),
+        }
+    }
+
+    fn retain_supported_replay_change(
+        &mut self,
+        inverse: Option<CompiledReplayRevision>,
+        cost: usize,
+    ) {
         let Some(history) = self.replay_history.as_mut() else {
             return;
         };
         if history.failure.is_some() || history.end.is_some() {
             return;
         }
-        let failure = match change.as_ref() {
-            None => Some(ReplayError::UnsupportedDomain),
-            Some(change)
-                if history.revisions.len() >= history.limits.revisions
-                    || change.retention_cost()
-                        > history
-                            .limits
-                            .payloads
-                            .saturating_sub(history.stats.payloads_retained) =>
-            {
-                Some(ReplayError::RetentionLimit)
-            }
-            Some(_)
-                if history
-                    .revisions
-                    .last()
-                    .is_some_and(|revision| revision.time > self.frame.time) =>
-            {
-                Some(ReplayError::InvalidRange)
-            }
-            _ => None,
+        let failure = if history.revisions.len() >= history.limits.revisions
+            || cost
+                > history
+                    .limits
+                    .payloads
+                    .saturating_sub(history.stats.payloads_retained)
+        {
+            Some(ReplayError::RetentionLimit)
+        } else if history
+            .revisions
+            .last()
+            .is_some_and(|revision| revision.time > self.frame.time)
+        {
+            Some(ReplayError::InvalidRange)
+        } else {
+            None
         };
         if let Some(error) = failure {
-            history.failure = Some(error);
-            history.revisions.clear();
-            history.applied = 0;
-            history.stats = ReplayStats::default();
+            self.invalidate_replay(error);
             return;
         }
-        let inverse = change.expect("supported capture checked above");
-        history.stats.payloads_retained += inverse.retention_cost();
+        history.stats.payloads_retained += cost;
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse,
@@ -292,10 +317,11 @@ impl SceneInstance {
             } else {
                 history.applied
             };
-            let revision = &mut history.revisions[index].inverse;
-            rows.extend(revision.object_indices());
-            channels.extend(revision.channels());
-            self.compiled.exchange_replay_revision(revision);
+            if let Some(revision) = &mut history.revisions[index].inverse {
+                rows.extend(revision.object_indices());
+                channels.extend(revision.channels());
+                self.compiled.exchange_replay_revision(revision);
+            }
             if backward {
                 history.applied -= 1;
             } else {
