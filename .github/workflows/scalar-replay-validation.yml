@@ -1,0 +1,105 @@
+name: Isolated scalar replay validation
+on:
+  push:
+    branches: [work/1718-scalar-replay-validation]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: proposal
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: c34ab6a16e7b79c52434c01d620a665128ee9900
+          path: candidate
+          persist-credentials: false
+      - name: Apply exact candidate and permanent qualification hook
+        working-directory: candidate
+        run: |
+          mkdir -p ../evidence
+          python3 - <<'PY'
+          import gzip, hashlib, pathlib, subprocess
+          patch = gzip.decompress(pathlib.Path('../proposal/.github/proposals/scalar-candidate.patch.gz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest() == '741e5712a66dcb7f39da4449930cc99698d69bf448db04a6b07b0650637378d9'
+          pathlib.Path('../evidence/input.patch').write_bytes(patch)
+          subprocess.run(['git','apply','--check','-'],input=patch,check=True)
+          subprocess.run(['git','apply','-'],input=patch,check=True)
+          path=pathlib.Path('.github/workflows/playground-showcase-qualification.yml')
+          text=path.read_text()
+          needle="      - 'crates/noon/tests/callback_lifecycle_admission.rs'"
+          assert text.count(needle)==1
+          text=text.replace(needle,needle+"\n      - 'crates/noon/tests/scalar_timeline_replay.rs'\n      - 'crates/noon-runtime/src/signal_timeline.rs'\n      - 'crates/noon-runtime/src/prepared_frame.rs'\n      - 'crates/noon-runtime/src/execution_slots/runtime_transaction.rs'")
+          needle='          cargo test -p noon-runtime --test display_channel_mutation'
+          assert text.count(needle)==1
+          text=text.replace(needle,needle+'\n          cargo test -p noon --no-default-features --test scalar_timeline_replay')
+          path.write_text(text)
+          PY
+          git add -N crates/noon-runtime/src/signal_timeline.rs crates/noon/tests/scalar_timeline_replay.rs
+      - name: Native formatting and regression qualification
+        id: native
+        working-directory: candidate
+        run: |
+          set -o pipefail
+          rustup install
+          rustup component add rustfmt clippy
+          git diff --name-only --diff-filter=AM -- '*.rs' | xargs rustfmt --edition 2021
+          git diff --check
+          cargo test -p noon --no-default-features --test scalar_timeline_replay 2>&1 | tee ../evidence/scalar-tests.log
+          cargo test -p noon --no-default-features --lib --tests 2>&1 | tee ../evidence/noon-tests.log
+          cargo test -p noon-runtime --lib --tests 2>&1 | tee ../evidence/runtime-tests.log
+          cargo clippy -p noon --no-default-features --test scalar_timeline_replay -- -D warnings 2>&1 | tee ../evidence/clippy.log
+      - name: Retain exact tested sources
+        if: always()
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,pathlib,shutil,subprocess
+          dest=pathlib.Path('../evidence'); dest.mkdir(exist_ok=True)
+          patch=subprocess.check_output(['git','diff','--binary','--no-renames'])
+          (dest/'candidate.patch').write_bytes(patch)
+          changes=[]
+          for line in subprocess.check_output(['git','diff','--name-status','--no-renames'],text=True).splitlines():
+              status,path=line.split('\t'); entry={'path':path,'status':status}
+              if status!='D':
+                  raw=pathlib.Path(path).read_bytes(); target=dest/'sources'/path
+                  target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
+                  entry.update(sha256=hashlib.sha256(raw).hexdigest(),git_blob=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest())
+              changes.append(entry)
+          (dest/'manifest.json').write_text(json.dumps(changes,indent=2)+'\n')
+          PY
+      - name: Store successful file blobs without moving refs
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          import base64,json,os,pathlib,urllib.request
+          manifest=json.loads(pathlib.Path('../evidence/manifest.json').read_text())
+          for entry in manifest:
+              if entry['status']=='D':continue
+              raw=pathlib.Path(entry['path']).read_bytes()
+              payload=json.dumps({'encoding':'base64','content':base64.b64encode(raw).decode()}).encode()
+              request=urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs',data=payload,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(request) as response: result=json.load(response)
+              assert result['sha']==entry['git_blob'],entry['path']
+              entry['stored_blob']=result['sha']
+          pathlib.Path('../evidence/blobs.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: scalar-replay-candidate
+          path: evidence
+          include-hidden-files: true
+          retention-days: 7
