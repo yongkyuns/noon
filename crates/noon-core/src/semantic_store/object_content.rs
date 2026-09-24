@@ -230,6 +230,7 @@ pub struct SemanticObjectState {
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
     signal_bindings: Vec<SemanticSignalBinding>,
+    pointer_click_action: Option<crate::SemanticPointerClickAction>,
 }
 
 impl SemanticObjectState {
@@ -241,6 +242,7 @@ impl SemanticObjectState {
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
             signal_bindings: Vec::new(),
+            pointer_click_action: None,
         }
     }
 
@@ -258,6 +260,7 @@ impl SemanticObjectState {
             presentation: self.presentation,
             role: self.role,
             signal_bindings: self.signal_bindings.clone(),
+            pointer_click_action: self.pointer_click_action,
         }
     }
 
@@ -283,6 +286,17 @@ impl SemanticObjectState {
 
     pub fn set_role(&mut self, role: SemanticObjectRole) {
         self.role = role;
+    }
+
+    pub const fn pointer_click_action(&self) -> Option<crate::SemanticPointerClickAction> {
+        self.pointer_click_action
+    }
+
+    pub(crate) fn set_pointer_click_action(
+        &mut self,
+        action: Option<crate::SemanticPointerClickAction>,
+    ) {
+        self.pointer_click_action = action;
     }
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {

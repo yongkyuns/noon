@@ -81,6 +81,7 @@ struct SelectedTarget {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PointerSelectionState {
     max_movement: Option<f32>,
+    select_on_click: bool,
     pending: Option<PendingClick>,
     selected: Option<SelectedTarget>,
     buttons: [u64; 4],
@@ -96,6 +97,7 @@ impl PointerSelectionState {
     pub(super) fn fresh(&self) -> Self {
         Self {
             max_movement: self.max_movement,
+            select_on_click: self.select_on_click,
             ..Self::default()
         }
     }
@@ -140,12 +142,30 @@ impl ExecutionSession {
         &mut self,
         max_movement: f32,
     ) -> Result<(), ExecutionSessionInputError> {
+        self.configure_pointer_fill_clicks(max_movement, true)
+    }
+
+    /// Recognize the same ordered fill clicks without enabling editor selection.
+    /// A language-neutral action binding may consume the accepted occurrence.
+    pub fn enable_pointer_fill_clicks(
+        &mut self,
+        max_movement: f32,
+    ) -> Result<(), ExecutionSessionInputError> {
+        self.configure_pointer_fill_clicks(max_movement, false)
+    }
+
+    fn configure_pointer_fill_clicks(
+        &mut self,
+        max_movement: f32,
+        select_on_click: bool,
+    ) -> Result<(), ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
         if !max_movement.is_finite() || max_movement < 0.0 {
             return Err(ExecutionSessionInputError::InvalidPointerClickTolerance);
         }
         self.pointer_selection = PointerSelectionState {
             max_movement: Some(max_movement),
+            select_on_click,
             ..PointerSelectionState::default()
         };
         Ok(())
@@ -292,16 +312,18 @@ impl ExecutionSession {
                             PointerFillOutcome::Miss => None,
                             _ => unreachable!("eligible press is a decided hit or miss"),
                         };
-                        prepared.state.selected = target.map(|node| SelectedTarget {
-                            node,
-                            publication: query.publication(),
-                        });
+                        if prepared.state.select_on_click {
+                            prepared.state.selected = target.map(|node| SelectedTarget {
+                                node,
+                                publication: query.publication(),
+                            });
+                            prepared.changed = target != previous_selection;
+                        }
                         prepared.click = Some(PointerSelectionClick {
                             target,
                             press: pending.press,
                             release: input,
                         });
-                        prepared.changed = target != previous_selection;
                     }
                     prepared.query = Some(query);
                 }

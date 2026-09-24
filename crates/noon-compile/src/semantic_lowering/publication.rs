@@ -313,6 +313,7 @@ fn validate_mutations(
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::ReplaceStyle { .. }
+                | SemanticMutation::SetPointerClickAction { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
@@ -623,6 +624,13 @@ fn lower_semantic_publication(
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().3 = true;
+                }
+            }
+            SemanticMutation::SetPointerClickAction { object, .. } => {
+                // An authored declaration still publishes coherently, but does
+                // not rewrite geometry, paint, content, or runtime drivers.
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default();
                 }
             }
             SemanticMutation::ReplaceStyle { object, .. } => {

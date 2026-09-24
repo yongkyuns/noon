@@ -6,6 +6,37 @@ use noon_core::AnimationOptions;
 use noon_runtime::PropertyAnimationToken;
 
 impl<C: LiveContinuation> LiveProgram<C> {
+    /// Configure click recognition without changing editor selection presentation.
+    pub fn set_pointer_fill_clicks(
+        &mut self,
+        max_movement: Option<f32>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure pointer clicks")?;
+        let session = self.scene.owned_execution_mut();
+        match max_movement {
+            Some(value) => session.enable_pointer_fill_clicks(value),
+            None => session.disable_pointer_fill_selection(),
+        }
+        .map_err(LiveProgramError::Input)
+    }
+
+    /// Admit input and execute its authored action through this program's live owner.
+    /// Action failures are retained inside the accepted-input publication.
+    pub fn submit_pointer_input_with_actions(
+        &mut self,
+        token: &crate::integration::NativePointerInputToken,
+        input: noon_core::NativePointerInput,
+    ) -> Result<crate::PointerActionPublication, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("dispatch pointer input actions")?;
+        let publication = self
+            .scene
+            .owned_live()
+            .submit_pointer_input_with_actions(token, input)
+            .map_err(LiveProgramError::Effect)?;
+        self.refresh_pending_publication();
+        Ok(publication)
+    }
+
     /// Start an action without resuming source or advancing its awaited segment.
     /// Target handles are checked against this program's actual semantic store.
     pub fn start_indicate_effect(

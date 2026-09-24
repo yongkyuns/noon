@@ -6,7 +6,9 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod pointer_actions;
 mod property_animation;
+pub use pointer_actions::{PointerActionPublication, PointerClickActionOutcome};
 
 mod coordinates;
 mod family_layout;

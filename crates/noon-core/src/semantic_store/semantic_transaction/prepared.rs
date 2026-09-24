@@ -651,6 +651,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::ZIndex { node });
                 }
+                SemanticMutation::SetPointerClickAction { object, action } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted click target")
+                        .semantic_object_state_mut()
+                        .expect("preflighted object")
+                        .set_pointer_click_action(action);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::PointerClickAction { object });
+                }
                 SemanticMutation::ReplaceStyle { object, style } => {
                     let object = resolve_node_ref(object, &committed_nodes);
                     set_object_style(store, object, style);

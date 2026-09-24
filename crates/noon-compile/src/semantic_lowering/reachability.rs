@@ -224,6 +224,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
+                | SemanticMutationImpact::PointerClickAction { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }

@@ -556,6 +556,7 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectContent(object)
         | SemanticMutationKey::ObjectStyle(object)
+        | SemanticMutationKey::PointerClickAction(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
@@ -591,6 +592,9 @@ pub(super) fn duplicate_mutation_error(
         }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }
+        }
+        SemanticMutationKey::PointerClickAction(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicatePointerClickAction { index, object }
         }
         SemanticMutationKey::ObjectStyle(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateStyle { index, object }
