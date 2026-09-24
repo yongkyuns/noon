@@ -602,6 +602,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         }
     }
 
@@ -764,6 +765,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
         assert!(mirror.apply_family(invalid).is_err());
         assert_ne!(mirror.frame().unwrap().time, 2.0);
@@ -805,6 +807,7 @@ mod tests {
             resource_additions: None,
             transient_presentations: Vec::new(),
             selection_overlay: None,
+            pointer_view: None,
         };
 
         assert!(mirror.apply_family(invalid).is_err());

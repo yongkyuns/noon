@@ -2309,3 +2309,100 @@ test("selection configuration rejection does not drain or replace the current wa
     assert.equal(f.player.time(), 0);
   } finally { endpoint?.stop(); f.close(); }
 });
+
+for (const cancelFails of [false, true]) {
+  test(`worker receipt invalidations retain the acknowledged frame behind backpressure${cancelFails ? " and stop on cancellation failure" : ""}`, async () => {
+    const f = fixture();
+    let endpoint;
+    const calls = [];
+    try {
+      f.player.notePointerPresentationJson = (json) => {
+        calls.push(["presented", JSON.parse(json).presentation]);
+        return true;
+      };
+      f.player.invalidatePointerPresentationJson = (json) => {
+        calls.push(["cancel", JSON.parse(json).presentation]);
+        if (cancelFails) throw new Error("guarded cancellation failed");
+        return true;
+      };
+      const ready = next(f.control.port2);
+      const initial = nextMatching(f.render.port2, m => m.type === "execution_delta");
+      endpoint = await f.attach();
+      await ready;
+      const first = await initial;
+      const receiptA = { session: first.session, sequence: first.sequence, presentation: 1, view_revision: 1 };
+      const acknowledged = nextMatching(f.control.port2, m => m.type === "pointer_presented");
+      f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence, pointerReceipt: receiptA });
+      await acknowledged;
+      const secondDelta = nextMatching(f.render.port2, m => m.type === "execution_delta");
+      await request(f.control.port2, "seek", 401, { time: 0.5 });
+      const second = await secondDelta;
+      // Both consumed acknowledgements are withheld, so lifecycle cleanup must
+      // stay ordered behind the existing transport boundary rather than recurse.
+      const receiptB = { ...receiptA, sequence: second.sequence, presentation: 2 };
+      const invalidatedB = nextMatching(f.control.port2, m =>
+        m.type === "pointer_presentation_invalidated" && m.receipt.presentation === 2);
+      f.render.port2.postMessage({ type: "pointer_presentation_invalidated", receipt: receiptA });
+      f.render.port2.postMessage({ type: "execution_presented", session: second.session, sequence: second.sequence, pointerReceipt: receiptB });
+      f.render.port2.postMessage({ type: "pointer_presentation_invalidated", receipt: receiptB });
+      await invalidatedB;
+      assert.deepEqual(calls, [["presented", 1]], "repaint acknowledgement waits for old contact cleanup");
+      const failure = cancelFails
+        ? nextMatching(f.control.port2, m => m.type === "error" && /guarded cancellation failed/.test(m.message))
+        : null;
+      f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+      if (failure) await failure;
+      else {
+        // A later render-port message is an ordered fence after writable delivery.
+        const receiptC = { ...receiptB, presentation: 3 };
+        const recovered = nextMatching(f.control.port2, m =>
+          m.type === "pointer_presented" && m.receipt.presentation === 3);
+        f.render.port2.postMessage({ type: "execution_presented", session: second.session, sequence: second.sequence, pointerReceipt: receiptC });
+        await recovered;
+      }
+      assert.deepEqual(calls, cancelFails
+        ? [["presented", 1], ["cancel", 1]]
+        : [["presented", 1], ["cancel", 1], ["presented", 3]],
+      "cancel frame A, never acknowledge already-invalidated frame B");
+      assert.equal(f.stats().stopped, cancelFails ? 1 : 0);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
+for (const [width, height] of [[0, 0], [0, 400], [800, 0]]) {
+  test(`unavailable pointer view ${width}x${height} cannot block registration or reveal`, async () => {
+    const f = fixture();
+    let endpoint, watchdog;
+    try {
+      f.player.setBrowserPointerViewJson = () => {};
+      f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+      const ready = next(f.control.port2);
+      const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      endpoint = await f.attach(); await ready;
+      const first = await initial;
+      f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+      f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence });
+      const hidden = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      const registered = nextMatching(f.control.port2, message => message.requestId === 501);
+      f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
+        type: "browser_pointer_view", requestId: 501, view: { revision: 1, width, height } });
+      const hiddenDelta = await hidden;
+      // Consumption can succeed while a zero-sized surface cannot present.
+      f.render.port2.postMessage({ type: "execution_ack", session: hiddenDelta.session, sequence: hiddenDelta.sequence });
+      const reply = await Promise.race([registered, new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error("unavailable view registration waited for impossible presentation")), 1000);
+      })]);
+      clearTimeout(watchdog);
+      assert.equal(reply.type, "browser_pointer_view");
+      const visible = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      const revealed = nextMatching(f.control.port2, message => message.requestId === 502);
+      f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
+        type: "browser_pointer_view", requestId: 502, view: { revision: 2, width: 800, height: 400 } });
+      const visibleDelta = await visible;
+      f.render.port2.postMessage({ type: "execution_ack", session: visibleDelta.session, sequence: visibleDelta.sequence });
+      f.render.port2.postMessage({ type: "execution_presented", session: visibleDelta.session, sequence: visibleDelta.sequence });
+      assert.equal((await revealed).type, "browser_pointer_view");
+      assert.equal(f.player.time(), 0);
+    } finally { clearTimeout(watchdog); endpoint?.stop(); f.close(); }
+  });
+}

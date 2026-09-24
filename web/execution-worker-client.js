@@ -47,6 +47,9 @@ export class ExecutionWorkerClient {
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #nativeInputsInFlight = 0;
+  #pointerView = null;
+  #pointerViewRegistration = null;
+  #pointerReceipt = null;
   #session = 0;
   #loopDurationSeconds = 4;
   #transportMode = null;
@@ -419,6 +422,11 @@ export class ExecutionWorkerClient {
     this.#engineWorker = candidate;
     this.#attachCurrentWorkerEvents(candidate, ENGINE_CHANNEL, "engine");
     this.#session = nextSession;
+    // Equal platform dimensions still require registration in the new owner.
+    // Neither a view nor a receipt is replayed across transport sessions.
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
+    this.#pointerReceipt = null;
     this.#rejectOwner("engine", reconnectError);
 
     try {
@@ -568,11 +576,67 @@ export class ExecutionWorkerClient {
     return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
   }
 
-  // Forward one occurrence-local browser pointer record. Surface coordinates
-  // remain CSS pixels; Rust converts them against the current camera/publication.
+  // Platform view registration is not proof of presentation. Retire the locally
+  // observed receipt synchronously, before registration or input can yield.
+  setBrowserPointerView(revision, width, height) {
+    this.#requireStarted();
+    if (!Number.isSafeInteger(revision) || revision < 0 || !Number.isFinite(width) ||
+        !Number.isFinite(height) || width < 0 || height < 0 ||
+        (this.#pointerView !== null && revision < this.#pointerView.revision)) {
+      throw new TypeError("invalid or retired browser pointer view");
+    }
+    if (this.#pointerView?.revision === revision) {
+      if (this.#pointerView.width !== width || this.#pointerView.height !== height) {
+        throw new TypeError("browser pointer view revision reused with different geometry");
+      }
+      if (this.#pointerViewRegistration?.view === this.#pointerView) {
+        return this.#pointerViewRegistration.delivery;
+      }
+      return Promise.resolve({ type: "browser_pointer_view" });
+    }
+    const view = Object.freeze({ revision, width, height });
+    this.#pointerView = view;
+    this.#pointerReceipt = null;
+    const requested = this.#requestNativeInput("browser_pointer_view", { view });
+    let delivery;
+    delivery = requested.then(
+      result => {
+        if (this.#pointerViewRegistration?.delivery === delivery) {
+          this.#pointerViewRegistration = null;
+        }
+        return result;
+      },
+      error => {
+        if (this.#pointerViewRegistration?.delivery === delivery) {
+          this.#pointerViewRegistration = null;
+          if (this.#pointerView === view) {
+            // The DOM mapping changed, so never restore the old receipt. Leave
+            // registration absent so the exact same revision can be retried.
+            this.#pointerView = null;
+            this.#pointerReceipt = null;
+          }
+        }
+        throw error;
+      },
+    );
+    this.#pointerViewRegistration = { view, delivery };
+    return delivery;
+  }
+
+  get pointerPresentation() {
+    return this.#pointerReceipt?.session === this.#session &&
+      this.#pointerReceipt.view_revision === this.#pointerView?.revision &&
+      this.#candidateEngineWorker === null && this.#fatalOwner === null
+      ? this.#pointerReceipt : null;
+  }
+
+  // Pin the last observed successful presentation at collection, before readiness
+  // or delivery yields. A later acknowledgement never relabels this occurrence.
   async submitBrowserPointerInput(input) {
     this.#requireStarted();
-    return this.#requestNativeInput("browser_pointer_input", input);
+    return this.#requestNativeInput("browser_pointer_input", {
+      input, presentation: this.pointerPresentation,
+    });
   }
 
   // Forward one normalized semantic native-event source to the canonical session.
@@ -677,6 +741,9 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#pointerReceipt = null;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
     this.#renderPrepared = null;
     this.#preparedStartReservation = null;
     this.#ready = null;
@@ -800,6 +867,26 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "engine" && message.type === "pointer_presented") {
+          const receipt = message.receipt;
+          if (!receipt || ![receipt.session, receipt.sequence, receipt.presentation, receipt.view_revision]
+              .every(value => Number.isSafeInteger(value) && value >= 0) || receipt.presentation === 0) {
+            throw new Error("invalid worker pointer presentation receipt");
+          }
+          if (receipt.session === this.#session && receipt.view_revision === this.#pointerView?.revision &&
+              (this.#pointerReceipt === null || receipt.presentation >= this.#pointerReceipt.presentation)) {
+            this.#pointerReceipt = Object.freeze({ session: receipt.session, sequence: receipt.sequence,
+              presentation: receipt.presentation, view_revision: receipt.view_revision });
+          }
+          return;
+        }
+        if (owner === "engine" && message.type === "pointer_presentation_invalidated") {
+          const current = this.#pointerReceipt, receipt = message.receipt;
+          if (current !== null && receipt && current.session === receipt.session &&
+              current.sequence === receipt.sequence && current.presentation === receipt.presentation &&
+              current.view_revision === receipt.view_revision) this.#pointerReceipt = null;
+          return;
+        }
         if (message.type === "ready") {
           resolveReady?.(message);
           return;
@@ -943,6 +1030,9 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#pointerReceipt = null;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
     this.#renderPrepared = null;
     this.#ready = null;
     for (const pending of this.#pending.values()) {

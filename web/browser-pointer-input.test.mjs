@@ -104,7 +104,11 @@ function pointerCanvas(t) {
   } };
 }
 
-const pointerMessages = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
+// Unwrap only for the pre-existing collector assertions; worker receipt tests
+// below assert the full immutable wire envelope independently.
+const pointerMessages = engine => engine.messages
+  .filter(message => message.type === "browser_pointer_input")
+  .map(({ input, ...envelope }) => ({ ...envelope, ...input }));
 
 // Supply raw samples; browsers can copy one parent button label into several
 // samples. Test the real collector/client route, not a second click recognizer.

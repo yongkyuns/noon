@@ -159,3 +159,42 @@ fn terminal_program_rejects_contextual_input_configuration_observation_and_deliv
     ));
     assert_eq!(program.session().publication_context(), before);
 }
+
+#[test]
+fn selection_configuration_preserves_program_phase_and_frame_contracts() {
+    let scene = Scene::new();
+    let mut program = scene.into_live_program(Finish).unwrap();
+    // Like the existing host-input methods, configuration is allowed before
+    // the first continuation resumes; it must not drive that continuation.
+    program.set_pointer_fill_selection(Some(4.0)).unwrap();
+    assert_eq!(program.status(), LiveProgramStatus::ReadyToResume);
+    program.set_pointer_fill_selection(None).unwrap();
+    assert!(!program.session().has_native_pointer_subscribers());
+    program.resume().unwrap();
+    let frame = program.session().frame().clone();
+    program.set_pointer_fill_selection(Some(4.0)).unwrap();
+    assert!(program.session().has_native_pointer_subscribers());
+    assert!(program.set_pointer_fill_selection(Some(f32::NAN)).is_err());
+    assert!(program.session().has_native_pointer_subscribers());
+    program.set_pointer_fill_selection(None).unwrap();
+    assert!(!program.session().has_native_pointer_subscribers());
+    assert_eq!(program.session().frame(), &frame);
+    assert_eq!(program.status(), LiveProgramStatus::Finished);
+}
+
+#[test]
+fn terminal_program_cannot_reconfigure_transient_selection() {
+    let mut program = Scene::new().into_live_program(Fail).unwrap();
+    program.set_pointer_fill_selection(Some(4.0)).unwrap();
+    assert!(program.resume().is_err());
+    let frame = program.session().frame().clone();
+    for setting in [None, Some(2.0)] {
+        assert!(matches!(
+            program.set_pointer_fill_selection(setting),
+            Err(LiveProgramError::InvalidState { .. })
+        ));
+        assert!(program.session().has_native_pointer_subscribers());
+        assert_eq!(program.session().frame(), &frame);
+        assert_eq!(program.status(), LiveProgramStatus::Terminal);
+    }
+}

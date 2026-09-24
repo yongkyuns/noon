@@ -21,6 +21,9 @@ await mkdir(artifacts, { recursive: true });
 let server;
 let browser;
 let runtimeCache;
+const captures = {};
+const report = { interaction: "pointer-fill-selection" };
+let failure;
 
 function changedPixels(leftBytes, rightBytes) {
   const left = PNG.sync.read(leftBytes);
@@ -115,6 +118,7 @@ try {
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 0 && box.height > 0, "gallery canvas is not drawable");
   const baseline = await canvas.screenshot();
+  captures.baseline = baseline;
 
   const beforeSelect = await page.evaluate(async () =>
     Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
@@ -125,7 +129,9 @@ try {
   );
   await waitForPresentation(page, beforeSelect);
   const selected = await canvas.screenshot();
+  captures.selected = selected;
   const selectedChanged = changedPixels(baseline, selected);
+  report.selectedChanged = selectedChanged;
   assert.ok(selectedChanged > 500, `selection changed only ${selectedChanged} pixels`);
 
   const beforeClear = await page.evaluate(async () =>
@@ -134,27 +140,43 @@ try {
   await page.mouse.click(box.x + 18, box.y + 18);
   await waitForPresentation(page, beforeClear);
   const cleared = await canvas.screenshot();
+  captures.cleared = cleared;
   const clearDifference = changedPixels(baseline, cleared);
+  report.clearDifference = clearDifference;
   assert.equal(clearDifference, 0, "background clear must restore the authored image exactly");
   assert.deepEqual(errors, []);
 
-  const report = {
-    selectedChanged,
-    clearDifference,
-    renderer: await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend),
-    interaction: "pointer-fill-selection",
-  };
-  await writeFile(
-    path.join(artifacts, "result.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  await writeFile(path.join(artifacts, "baseline.png"), baseline);
-  await writeFile(path.join(artifacts, "selected.png"), selected);
-  await writeFile(path.join(artifacts, "cleared.png"), cleared);
-  console.log(
-    `Gallery pointer selection passed: selectedChanged=${selectedChanged}, clearDifference=${clearDifference}`,
-  );
+  report.renderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
+} catch (error) {
+  failure = error;
+  throw error;
 } finally {
-  await browser?.close();
-  server?.kill("SIGTERM");
+  // Persist the original captures after the verdict, including failed/partial
+  // runs. Do not insert artifact I/O, extra captures or waits into the sample path.
+  try {
+    const writes = await Promise.allSettled([
+      ...Object.entries(captures).map(([name, bytes]) =>
+        writeFile(path.join(artifacts, `${name}.png`), bytes),
+      ),
+      writeFile(
+        path.join(artifacts, "result.json"),
+        `${JSON.stringify({ ...report, error: failure ? String(failure) : null }, null, 2)}\n`,
+      ),
+    ]);
+    const rejected = writes.find((write) => write.status === "rejected");
+    if (rejected) {
+      if (!failure) throw rejected.reason;
+      // Failure to retain diagnostics must not hide the original assertion.
+      console.error("Could not retain gallery selection diagnostics:", rejected.reason);
+    }
+  } finally {
+    try {
+      await browser?.close();
+    } finally {
+      server?.kill("SIGTERM");
+    }
+  }
 }
+console.log(
+  `Gallery pointer selection passed: selectedChanged=${report.selectedChanged}, clearDifference=${report.clearDifference}`,
+);

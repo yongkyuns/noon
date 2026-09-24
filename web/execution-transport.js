@@ -44,10 +44,18 @@ export function executionDeltaMetadata(json) {
   if (typeof delta.snapshot !== "boolean") {
     throw new Error("execution delta snapshot flag must be boolean");
   }
+  const view = delta.pointer_view;
+  if (view !== undefined && (view === null || !Number.isSafeInteger(view.revision) || view.revision < 0 ||
+      !Number.isFinite(view.width) || !Number.isFinite(view.height) || view.width <= 0 || view.height <= 0)) {
+    throw new Error("execution delta has an invalid pointer view");
+  }
   return {
     session: delta.session,
     sequence: delta.sequence,
     snapshot: delta.snapshot,
+    ...(view === undefined ? {} : { pointerView: Object.freeze({
+      revision: view.revision, width: view.width, height: view.height,
+    }) }),
   };
 }
 

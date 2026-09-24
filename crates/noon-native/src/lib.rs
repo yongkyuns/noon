@@ -262,7 +262,7 @@ struct NativeApp {
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
-    last_selection_highlight: Option<noon::integration::PointerSelectionHighlight>,
+    last_selection_presentation: Option<noon::integration::PointerSelectionPresentation>,
     error: Option<NativeHostError>,
     #[cfg(test)]
     exit_after_present: Option<f64>,
@@ -308,7 +308,7 @@ impl NativeApp {
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
-            last_selection_highlight: None,
+            last_selection_presentation: None,
             error: None,
             #[cfg(test)]
             exit_after_present: None,
@@ -489,9 +489,21 @@ impl NativeApp {
             gpu.set_camera(camera)?;
             gpu.acquire(window.clone())?
         };
-        let Some(acquired) = acquired else {
-            return Ok(());
+        let acquired = match acquired {
+            NativeSurfaceAcquisition::Ready(frame) => frame,
+            NativeSurfaceAcquisition::Deferred => return Ok(()),
+            NativeSurfaceAcquisition::Reset => {
+                self.rebind_pointer_view()?;
+                return Ok(());
+            }
         };
+        // Capture exactly the view about to be drawn, but do not install it as
+        // a receipt until queue submission and presentation have succeeded.
+        let frame_size = {
+            let gpu = self.gpu.as_ref().expect("drawable native GPU");
+            PhysicalSize::new(gpu.config.width, gpu.config.height)
+        };
+        let pointer_frame = self.capture_pointer_presentation(frame_size, window.scale_factor())?;
         let viewport_aspect = {
             let gpu = self
                 .gpu
@@ -503,7 +515,7 @@ impl NativeApp {
             .viewport_bounds(viewport_aspect)
             .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
         let visibility = self.execution.query_viewport(viewport_bounds);
-        let highlight = self.execution.session().pointer_selection_highlight();
+        let highlight = self.execution.session().pointer_selection_presentation();
         let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
         let force_full_redraw = self.force_full_redraw;
         let Some(((surface_texture, reconfigure_after_present), publication)) =
@@ -577,18 +589,28 @@ impl NativeApp {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
         let presented = publication.context();
-        self.last_selection_highlight = highlight;
+        debug_assert_eq!(pointer_frame.publication(), presented);
+        self.pointer.presented = Some(pointer_frame);
+        self.pointer.refresh_pending = false;
+        self.last_selection_presentation = highlight;
         self.execution.admit_presented_publication(presented)?;
         #[cfg(test)]
         {
             self.presented_frame_time = Some(self.execution.frame_time());
         }
         self.force_full_redraw = false;
+        if reconfigure_after_present {
+            // The submitted image belongs to the old surface configuration.
+            self.rebind_pointer_view()?;
+        }
         Ok(())
     }
 
     fn publication_pending(&self) -> bool {
-        self.force_full_redraw || self.execution.frame_pending() || self.selection_overlay_pending()
+        self.force_full_redraw
+            || self.execution.frame_pending()
+            || self.selection_overlay_pending()
+            || self.pointer.refresh_pending
     }
 
     /// Bind runtime invalidation consumption to a successful surface acquisition.
@@ -707,6 +729,13 @@ impl ApplicationHandler for NativeApp {
                     self.fail(event_loop, error);
                 }
             }
+            WindowEvent::Moved(_) => {
+                // A window-system move can invalidate the cached local cursor
+                // before a new CursorMoved event is delivered.
+                if let Err(error) = self.rebind_pointer_view() {
+                    self.fail(event_loop, error);
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.pointer.modifiers = modifiers.state();
             }
@@ -814,6 +843,12 @@ impl ApplicationHandler for NativeApp {
             }
         }
     }
+}
+
+enum NativeSurfaceAcquisition {
+    Ready((wgpu::SurfaceTexture, bool)),
+    Deferred,
+    Reset,
 }
 
 struct NativeGpu {
@@ -929,16 +964,20 @@ impl NativeGpu {
     fn acquire(
         &mut self,
         window: Arc<Window>,
-    ) -> Result<Option<(wgpu::SurfaceTexture, bool)>, NativeHostError> {
+    ) -> Result<NativeSurfaceAcquisition, NativeHostError> {
         match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => Ok(Some((texture, false))),
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Ok(Some((texture, true))),
+            wgpu::CurrentSurfaceTexture::Success(texture) => {
+                Ok(NativeSurfaceAcquisition::Ready((texture, false)))
+            }
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                Ok(NativeSurfaceAcquisition::Ready((texture, true)))
+            }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                Ok(None)
+                Ok(NativeSurfaceAcquisition::Deferred)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
-                Ok(None)
+                Ok(NativeSurfaceAcquisition::Reset)
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface = self
@@ -946,7 +985,7 @@ impl NativeGpu {
                     .create_surface(window)
                     .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
                 self.surface.configure(&self.device, &self.config);
-                Ok(None)
+                Ok(NativeSurfaceAcquisition::Reset)
             }
             wgpu::CurrentSurfaceTexture::Validation => Err(NativeHostError::Gpu(
                 "surface acquisition reported a validation failure".to_owned(),
