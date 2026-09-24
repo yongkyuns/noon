@@ -46,7 +46,9 @@ jobs:
           git status --porcelain --untracked-files=all > ci-artifacts/foreground-matching/worktree-before.txt
           git diff "$QUALIFIED_BASE" HEAD --binary > ci-artifacts/foreground-matching/integration.diff
       - name: Test overlap assertions and missing-evidence rejection
-        run: node --test scripts/foreground-matching-checks.test.mjs
+        run: |
+          node --test scripts/foreground-matching-*.test.mjs
+          python3 scripts/foreground-matching-membership.test.py
       - name: Build exact-source browser package
         uses: ./.github/actions/dev-wasm-build
         with:
@@ -65,22 +67,50 @@ jobs:
       - name: Capture pinned Manim and real Python-worker overlap frames
         id: raster
         continue-on-error: true
-        run: node scripts/manim-raster-differential.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts/foreground-matching
+          node scripts/manim-raster-differential.mjs 2>&1 | tee ci-artifacts/foreground-matching/raster.log
       - name: Enforce whole-frame raster tolerances
         id: tolerances
         if: always() && steps.raster.outcome == 'success'
         continue-on-error: true
-        run: node scripts/manim-raster-enforce.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts/foreground-matching
+          node scripts/manim-raster-enforce.mjs 2>&1 | tee ci-artifacts/foreground-matching/tolerances.log
       - name: Prove actual overlap order and visible target occurrences
         id: witnesses
         if: always() && steps.raster.outcome == 'success'
         continue-on-error: true
-        run: node scripts/foreground-matching-checks.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts/foreground-matching
+          node scripts/foreground-matching-checks.mjs 2>&1 | tee ci-artifacts/foreground-matching/witnesses.log
       - name: Prove sparse and dense forward playback agree exactly
         id: cadence
         if: always() && steps.raster.outcome == 'success'
         continue-on-error: true
-        run: node scripts/shared-playback-raster.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts/foreground-matching
+          node scripts/shared-playback-raster.mjs 2>&1 | tee ci-artifacts/foreground-matching/cadence.log
+      - name: Record qualification outcomes
+        if: always()
+        env:
+          RASTER: ${{ steps.raster.outcome }}
+          TOLERANCES: ${{ steps.tolerances.outcome }}
+          WITNESSES: ${{ steps.witnesses.outcome }}
+          CADENCE: ${{ steps.cadence.outcome }}
+        run: |
+          mkdir -p ci-artifacts/foreground-matching
+          printf 'raster=%s\ntolerances=%s\nwitnesses=%s\ncadence=%s\n' \
+            "$RASTER" "$TOLERANCES" "$WITNESSES" "$CADENCE" \
+            > ci-artifacts/foreground-matching/outcomes.txt
       - name: Retain source, reference, pixels and strict verdicts
         if: always()
         uses: actions/upload-artifact@v7

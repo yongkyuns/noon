@@ -14,13 +14,21 @@ def diamond(x, layer):
     ).shift(x * RIGHT).set_z_index(layer)
 
 
-def assert_membership(scene, display, foreground):
+def assert_membership(scene, display, foreground, *, just_declared=False):
     # Cairo may admit an inert plain Mobject for Wait. Exclude only that exact
     # reference-only placeholder; extra drawable or family roots still fail.
     actual = [root for root in scene.mobjects if not (
         type(root) is Mobject and root.get_num_points() == 0 and not root.submobjects
     )]
-    assert len(actual) == len(display) and all(a is b for a, b in zip(actual, display))
+    # ManimCE 0.21 Cairo add_foreground_mobjects() first updates declarations,
+    # then add() appends its arguments AND those declarations. Only immediately
+    # after that call, accept its exact repeated foreground suffix as well as
+    # Noon's unique-root representation. Never generally deduplicate roots.
+    expected_displays = [display, display + foreground] if just_declared else [display]
+    assert any(
+        len(actual) == len(expected) and all(a is b for a, b in zip(actual, expected))
+        for expected in expected_displays
+    ), f"scene roots differ: actual={actual!r}, expected={expected_displays!r}"
     actual_foreground = scene.foreground_mobjects
     assert len(actual_foreground) == len(foreground)
     assert all(a is b for a, b in zip(actual_foreground, foreground))
@@ -44,10 +52,10 @@ def exercise(scene, source_is_foreground=False, target_layer=0):
     if source_is_foreground:
         # The matched source is above left but below right in declaration order.
         scene.add_foreground_mobjects(left, source, right)
-        assert_membership(scene, [left, source, right], [left, source, right])
+        assert_membership(scene, [left, source, right], [left, source, right], just_declared=True)
     else:
         scene.add_foreground_mobjects(left, right)
-        assert_membership(scene, [source, left, right], [left, right])
+        assert_membership(scene, [source, left, right], [left, right], just_declared=True)
 
     scene.play(TransformMatchingShapes(source, target), run_time=2, rate_func=linear)
     assert_membership(scene, [target, left, right], [left, right])
