@@ -44,6 +44,7 @@ jobs:
           text=text.replace(needle,needle+'\n          cargo test -p noon --no-default-features --test scalar_timeline_replay')
           path.write_text(text)
           PY
+          python3 ../proposal/.github/proposals/refine_scalar.py
           git add -N crates/noon-runtime/src/signal_timeline.rs crates/noon/tests/scalar_timeline_replay.rs
       - name: Native formatting and regression qualification
         id: native
@@ -63,7 +64,7 @@ jobs:
         working-directory: candidate
         run: |
           python3 - <<'PY'
-          import hashlib,json,pathlib,shutil,subprocess
+          import hashlib,json,pathlib,subprocess
           dest=pathlib.Path('../evidence'); dest.mkdir(exist_ok=True)
           patch=subprocess.check_output(['git','diff','--binary','--no-renames'])
           (dest/'candidate.patch').write_bytes(patch)
