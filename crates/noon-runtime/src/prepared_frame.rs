@@ -1,49 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use noon_compile::{
-    CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction, ExecutionPatch,
-};
-use noon_core::{ObjectId, PublicationContext, Style, Transform2D};
+use noon_compile::{CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction};
+use noon_core::PublicationContext;
 use noon_core::{ReactiveValue, SignalId};
 
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
     effective_object_conservative_bounds, upper_bound_start, EffectiveBoundsBasis,
-    EffectiveObjectProperties, FrameRowState, FrameState, RuntimeIdentity, SceneInstance,
-    TrackGroup, PROPERTY_ORDER,
+    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
+    SceneInstance, TrackGroup, PROPERTY_ORDER,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
-
-/// One transient host-driver value. These writes affect only the effective frame;
-/// they never modify the compiled base or authored scene revision.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EffectivePropertyWrite {
-    Transform {
-        object: ObjectId,
-        transform: Transform2D,
-    },
-    Style {
-        object: ObjectId,
-        style: Style,
-    },
-}
-
-impl EffectivePropertyWrite {
-    const fn object(self) -> ObjectId {
-        match self {
-            Self::Transform { object, .. } | Self::Style { object, .. } => object,
-        }
-    }
-
-    fn as_execution_patch(self) -> ExecutionPatch {
-        match self {
-            Self::Transform { object, transform } => {
-                ExecutionPatch::SetTransform { object, transform }
-            }
-            Self::Style { object, style } => ExecutionPatch::SetStyle { object, style },
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 struct PreparedFrameRow {
@@ -425,10 +392,10 @@ impl SceneInstance {
         let mut seen = HashSet::new();
         let mut retained = Vec::with_capacity(writes.len());
         for write in writes.iter().copied().rev() {
-            let property_tag = match write {
-                EffectivePropertyWrite::Transform { .. } => 0_u8,
-                EffectivePropertyWrite::Style { .. } => 1_u8,
-            };
+            // Full Transform/Style writes overlap their component writes. Keep
+            // that relative order; only a later write of the same shape fully
+            // supersedes an earlier one. Validate even superseded writes above.
+            let property_tag = std::mem::discriminant(&write);
             if !seen.insert((write.object(), property_tag)) {
                 continue;
             }
@@ -604,7 +571,7 @@ impl SceneInstance {
 #[cfg(test)]
 mod tests {
     use noon_compile::{
-        lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene,
+        lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene, ExecutionPatch,
         SemanticExecutionIndex,
     };
     use noon_core::{

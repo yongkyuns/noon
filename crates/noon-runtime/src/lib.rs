@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod derived_display_evaluation;
+mod effective_write;
 mod execution_slots;
 mod frame;
 mod prepared_frame;
@@ -13,6 +14,8 @@ mod spatial_index;
 pub use replay::{ReplayError, ReplayLimits, ReplayStats};
 
 pub use derived_display_evaluation::*;
+use effective_write::apply_effective_property_to_row;
+pub use effective_write::EffectivePropertyWrite;
 pub use execution_slots::*;
 use frame::{frame_row_mut, EffectiveBoundsBasis, FrameRowMut, FrameRowState};
 pub use frame::{EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState};
@@ -1553,16 +1556,6 @@ fn apply_group_to_row(
         value,
         preserve_render_frame,
     )
-}
-
-fn apply_effective_property_to_row(row: FrameRowMut<'_>, write: EffectivePropertyWrite) {
-    match write {
-        EffectivePropertyWrite::Transform { transform, .. } => {
-            release_render_transform(row.render_geometry, row.render_transform, *row.transform);
-            *row.transform = transform;
-        }
-        EffectivePropertyWrite::Style { style, .. } => *row.style = style,
-    }
 }
 
 fn apply_evaluated_value(
