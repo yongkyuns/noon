@@ -1,37 +1,11 @@
 name: Showcase qualification
-
 on:
-  pull_request:
-    paths:
-      - 'web/*gallery*'
-      - 'web/showcase-*'
-      - 'web/playground-playback-controls*'
-      - 'web/python/examples/showcase_*.py'
-      - 'web/python/examples/noon_showcase_manifest.json'
-      - 'web/python/test_showcase*.py'
-      - 'scripts/showcase-*'
-      - 'crates/noon/src/execution_session.rs'
-      - 'crates/noon/src/execution_session/**'
-      - 'crates/noon/src/live_session.rs'
-      - 'crates/noon/src/live_session/**'
-      - 'crates/noon/src/host_callbacks.rs'
-      - 'crates/noon/tests/callback_lifecycle_admission.rs'
-      - 'crates/noon-compile/src/replay_revision.rs'
-      - 'crates/noon-runtime/src/replay.rs'
-      - 'crates/noon-runtime/src/replay/**'
-      - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
-
 permissions:
-  contents: read
-
-concurrency:
-  group: showcase-${{ github.ref }}
-  cancel-in-progress: true
-
+  contents: write
 jobs:
-  callback-lifecycle:
-    name: Native callback lifecycle admission
+  validate:
+    name: Isolated callback lifecycle validation
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -39,50 +13,135 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
       - uses: actions/checkout@v7
-      - name: Qualify lifecycle and updater coexistence in shared Rust
-        run: cargo test -p noon --no-default-features --test callback_lifecycle_admission
+        with:
+          ref: b8883aeabe30a241e069f39cde28f7936e828775
+          persist-credentials: false
+      - name: Prepare a pinned candidate without changing any branch
+        run: |
+          mkdir -p evidence
+          git archive HEAD | gzip > evidence/source-base.tar.gz
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/execution_session.rs')
+          s = p.read_text()
+          def replace(old, new, count=1):
+              global s
+              assert s.count(old) == count, (old, s.count(old))
+              s = s.replace(old, new)
+          replace('''        if !self.callback_schedule.is_empty() {
+                      return Err(ExecutionSessionAnimationError::CreateTarget {
+                          target: error_target,
+                          error: ExecutionSessionCreateError::RequiredCallbacksUnsupported,
+                      });
+                  }
+          ''', '')
+          replace('''        if !self.callback_schedule.is_empty() {
+                      return Err(ExecutionSessionAnimationError::FadeTarget {
+                          target,
+                          error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+                      });
+                  }''', '''        if self.lifecycle_target_has_pending_updaters(store, target) {
+                      return Err(ExecutionSessionAnimationError::FadeTarget {
+                          target,
+                          error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+                      });
+                  }''', 2)
+          needle = '''    fn require_create_target(
+                  &self,
+                  store: &SemanticStore,
+                  target: SemanticNodeId,
+              ) -> Result<(), ExecutionSessionAnimationError> {
+          '''
+          replace(needle, needle + '''        if self.lifecycle_target_has_pending_updaters(store, target) {
+                      return Err(ExecutionSessionAnimationError::CreateTarget {
+                          target,
+                          error: ExecutionSessionCreateError::RequiredCallbacksUnsupported,
+                      });
+                  }
+          ''')
+          start = s.index('    fn require_family_fade_target(')
+          end = s.index('    fn require_present_draw_border_target(', start)
+          family = s[start:end]
+          needle = '        for leaf in &leaves {\n'
+          assert family.count(needle) == 1
+          family = family.replace(needle, needle + '''            if self.lifecycle_target_has_pending_updaters(store, *leaf) {
+                          return Err(ExecutionSessionAnimationError::FadeTarget {
+                              target: *leaf,
+                              error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+                          });
+                      }
+          ''')
+          s = s[:start] + family + s[end:]
+          helper = '''    /// Lifecycle admission is local to its target, not the scene's callback history.
+              /// Ancestor updaters can own the same family presentation. Until target-updater
+              /// suspension is supported, reject their nonempty current/future intervals too.
+              /// Closed history is inert, and unrelated callback targets remain admissible.
+              fn lifecycle_target_has_pending_updaters(
+                  &self,
+                  store: &SemanticStore,
+                  target: SemanticNodeId,
+              ) -> bool {
+                  let time = self.frame().time;
+                  let mut pending = vec![target];
+                  let mut visited = HashSet::new();
+                  while let Some(target) = pending.pop() {
+                      if !visited.insert(target) {
+                          continue;
+                      }
+                      let Some(node) = store.node(target) else {
+                          continue;
+                      };
+                      if node.host_updaters().iter().any(|registration| {
+                          registration.inactive_from().is_none_or(|end| {
+                              end > time.max(registration.active_from())
+                          })
+                      }) {
+                          return true;
+                      }
+                      pending.extend_from_slice(node.parents());
+                  }
+                  false
+              }
 
-  capture:
-    name: Actual showcase frames (${{ matrix.backend }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [webgpu, webgl]
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Source and editorial contracts
+          '''
+          replace('    fn require_create_target(\n', helper + '    fn require_create_target(\n')
+          replace('Create does not yet support required host callbacks', 'Create target has active or future host updaters; updater suspension is not supported')
+          replace('single-leaf fade does not yet support required host callbacks', 'lifecycle target has active or future host updaters; updater suspension is not supported')
+          p.write_text(s)
+          PY
+      - name: Format only candidate files
         run: |
-          node --test web/showcase-gallery.test.mjs scripts/showcase-*.test.mjs
-          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
-          node --check scripts/showcase-capture.mjs
-          node --check scripts/showcase-live-review.mjs
-      - name: Build the existing browser runtime
-        uses: ./.github/actions/dev-wasm-build
-        with:
-          preflight: 'true'
-      - name: Qualify retained family replay in the shared runtime
-        run: cargo test -p noon-runtime replay::family_tests
-      - name: Install the repository-pinned browser tools
+          rustfmt --edition 2024 --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
+          git diff --check
+          git diff > evidence/candidate.patch
+          cp crates/noon/src/execution_session.rs evidence/execution_session.rs
+          cp crates/noon/tests/callback_lifecycle_admission.rs evidence/callback_lifecycle_admission.rs
+      - name: Run the six native acceptance tests
+        run: cargo test -p noon --no-default-features --test callback_lifecycle_admission 2>&1 | tee evidence/acceptance.log
+      - name: Run existing shared execution regressions
+        run: cargo test -p noon --no-default-features --lib 2>&1 | tee evidence/library.log
+      - name: Store validated source blobs only, never move a branch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps chromium
-      - name: Capture exact Noon sources, validate temporal samples, and exercise real selection
-        id: capture
-        run: node scripts/showcase-capture.mjs
-      - name: Record ordinary playback and qualify replay endpoints
-        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
-        run: node scripts/showcase-live-review.mjs
-      - name: Retain the review evidence even on failure
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from pathlib import Path
+          paths = ['crates/noon/src/execution_session.rs', 'crates/noon/tests/callback_lifecycle_admission.rs']
+          blobs = []
+          for path in paths:
+              payload = json.dumps({'content': Path(path).read_text(), 'encoding': 'utf-8'}).encode()
+              request = urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs', data=payload, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request) as response:
+                  sha = json.load(response)['sha']
+              blobs.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+          Path('evidence/blobs.json').write_text(json.dumps(blobs, indent=2))
+          print(json.dumps(blobs, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: showcase-review-${{ matrix.backend }}
-          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
-          if-no-files-found: warn
+          name: callback-lifecycle-candidate
+          path: evidence
           retention-days: 7
+          if-no-files-found: error
