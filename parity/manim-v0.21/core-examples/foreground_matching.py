@@ -81,7 +81,10 @@ def exercise(scene, source_is_foreground=False, target_layer=0):
         scene.add_foreground_mobjects(left, right)
         assert_membership(scene, [source, left, right], [left, right], just_declared=True)
 
-    matching = TransformMatchingShapes(source, target)
+    # Matching constructs child animations before play(); its children keep
+    # their constructor easing even when the outer play uses a linear clock.
+    # Pin both scopes to linear for the overlap oracle's color witnesses.
+    matching = TransformMatchingShapes(source, target, rate_func=linear)
     empty_fade_source = reference_empty_fade_source(matching)
     scene.play(matching, run_time=2, rate_func=linear)
     assert_membership(scene, [target, left, right], [left, right],

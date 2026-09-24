@@ -1,4 +1,4 @@
-"""Test the fixture's exact identity assertion, not Manim or Noon rendering."""
+"""Test fixture identity assertions and timing inputs, not engine rendering."""
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -151,6 +151,24 @@ class MembershipTests(unittest.TestCase):
         missing_child.animations.pop()
         with self.assertRaises(AssertionError):
             reference_empty_fade_source(missing_child)
+
+    def test_matching_children_and_outer_play_are_explicitly_linear(self):
+        # The overlap oracle expects linear color interpolation. A play-level
+        # rate function does not override matching's already-created children.
+        exercise = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "exercise")
+        calls = [node for node in ast.walk(exercise) if isinstance(node, ast.Call)]
+        constructors = [call for call in calls if isinstance(call.func, ast.Name)
+                        and call.func.id == "TransformMatchingShapes"]
+        plays = [call for call in calls if isinstance(call.func, ast.Attribute)
+                 and call.func.attr == "play"]
+        self.assertEqual(len(constructors), 1)
+        self.assertEqual(len(plays), 1)
+        for label, call in (("matching children", constructors[0]), ("outer play", plays[0])):
+            with self.subTest(scope=label):
+                rates = [keyword.value for keyword in call.keywords if keyword.arg == "rate_func"]
+                self.assertEqual(len(rates), 1)
+                self.assertEqual(ast.unparse(rates[0]), "linear")
 
     def test_fixture_records_reference_identity_before_play_and_checks_every_boundary(self):
         exercise = next(node for node in module.body if isinstance(node, ast.FunctionDef)
