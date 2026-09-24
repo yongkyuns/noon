@@ -94,13 +94,14 @@ function pointerCanvas(t) {
   return { canvas, listeners, rect, win, emit(type, values = {}) {
     if (type === "pointerdown") buttons = 1;
     if (type === "pointerup" || type === "pointercancel") buttons = 0;
-    const event = new Event(type);
+    const event = new Event(type, { cancelable: type === "wheel" });
     Object.assign(event, {
       clientX: 110, clientY: 220,
       button: type === "pointermove" ? -1 : 0, buttons,
       pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
     });
     target.dispatchEvent(event);
+    return event;
   } };
 }
 
@@ -405,4 +406,145 @@ test("an unbound held coalesced pointer keeps ordinary parent validation without
   assert.equal(errors.length, 1);
   assert.match(errors[0].message, /coordinates must be finite/);
   assert.equal(pointerMessages(engine).length, 0);
+});
+
+const workerWheel = { clientX: 330, clientY: 200, deltaMode: 0, deltaX: 0, deltaY: -100 };
+function presentForWheel(engine, presentation = 1, sequence = 0) {
+  const view = engine.messages.findLast(m => m.type === "browser_pointer_view").view;
+  const receipt = { session: 1, sequence, presentation, view_revision: view.revision };
+  engine.emitMessage(envelope("noon.engine", "pointer_presented", { receipt }));
+  return receipt;
+}
+
+test("worker inspection is opt-in and does not consume a wheel without a displayed frame", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  presentForWheel(engine);
+  assert.equal(dom.listeners.has("wheel"), false);
+  const event = dom.emit("wheel", workerWheel); await inputTurn();
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
+});
+
+test("worker wheel pins the receipt, bounds bursts, and retires the exact old contact once", async t => {
+  const dom = pointerCanvas(t); const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { inspectionZoom: true, onRecoverableError: e => errors.push(e) });
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
+  const receipt = presentForWheel(engine);
+  dom.emit("pointerdown"); await inputTurn(); acknowledgePointers(engine);
+  const old = pointerMessages(engine).at(-1);
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, true);
+  for (let i = 0; i < 40; i++) assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
+  await inputTurn();
+  const messages = engine.messages.filter(m => m.type === "inspection_scroll");
+  assert.equal(messages.length, 1);
+  const sent = messages[0];
+  assert.deepEqual(sent.presentation, receipt);
+  assert.equal(sent.input.surface_x, 320); assert.equal(sent.input.surface_y, 180);
+  assert.equal(sent.input.delta_pixels, -100);
+  engine.emitMessage(envelope("noon.engine", sent.type, { requestId: sent.requestId, inspectionScrollChanged: true }));
+  await inputTurn();
+  dom.emit("pointerup"); await inputTurn();
+  assert.equal(pointerMessages(engine).length, 1, "successful zoom must not send release or a second cancellation");
+  presentForWheel(engine, 2, 1);
+  dom.emit("pointerdown"); dom.emit("pointerup"); await inputTurn(); acknowledgePointers(engine);
+  assert.ok(pointerMessages(engine).at(-1).source_id > old.source_id);
+  assert.deepEqual(errors, []);
+});
+
+for (const outcome of [false, null]) {
+  test(`worker ${outcome === null ? "rejected" : "no-op"} wheel preserves its unmodified contact`, async t => {
+    const dom = pointerCanvas(t);
+    const { engine } = await startInputClient(t, dom.canvas, { inspectionZoom: true });
+    presentForWheel(engine); dom.emit("pointerdown"); await inputTurn(); acknowledgePointers(engine);
+    dom.emit("wheel", workerWheel); await inputTurn();
+    const sent = engine.messages.findLast(m => m.type === "inspection_scroll");
+    engine.emitMessage(envelope("noon.engine", sent.type, { requestId: sent.requestId, inspectionScrollChanged: outcome }));
+    await inputTurn(); dom.emit("pointerup"); await inputTurn(); acknowledgePointers(engine);
+    const input = pointerMessages(engine);
+    assert.deepEqual(input.map(m => m.kind), ["press", "release"]);
+    assert.equal(input[0].source_id, input[1].source_id);
+  });
+}
+
+test("late worker zoom completion cannot retire a replacement pointer contact", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas, { inspectionZoom: true });
+  presentForWheel(engine); dom.emit("pointerdown"); await inputTurn(); acknowledgePointers(engine);
+  dom.emit("wheel", workerWheel); await inputTurn();
+  const sent = engine.messages.findLast(m => m.type === "inspection_scroll");
+  dom.emit("pointercancel"); dom.emit("pointerdown"); await inputTurn(); acknowledgePointers(engine);
+  const fresh = pointerMessages(engine).at(-1);
+  engine.emitMessage(envelope("noon.engine", sent.type, { requestId: sent.requestId, inspectionScrollChanged: true }));
+  await inputTurn(); dom.emit("pointerup"); await inputTurn(); acknowledgePointers(engine);
+  assert.equal(pointerMessages(engine).at(-1).kind, "release");
+  assert.equal(pointerMessages(engine).at(-1).source_id, fresh.source_id);
+});
+
+// The fake ResizeObserver never fires automatically. Registration must come
+// from attaching the chosen endpoint, not incidental layout or a first input.
+test("reconcile registers the new view before readiness without admitting transition input", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { client, render, engine: oldEngine } = await startInputClient(t, dom.canvas, {
+    inspectionZoom: true, onRecoverableError: error => errors.push(error),
+  });
+  presentForWheel(oldEngine);
+  const oldViewCount = oldEngine.messages.filter(m => m.type === "browser_pointer_view").length;
+  const replacement = new FakeSemanticAuthoringClient(); replacement.autoRespond = false;
+  let complete = false;
+  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
+  void switching.then(() => { complete = true; }, () => {});
+  await waitForRequest(render, "rebuild_engine");
+  dom.win.dispatchEvent(new Event("resize"));
+  dom.emit("pointerdown");
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
+  await inputTurn();
+  assert.equal(oldEngine.messages.filter(m => m.type === "browser_pointer_view").length, oldViewCount);
+  assert.equal(pointerMessages(oldEngine).length, 0);
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await inputTurn();
+  const attachment = replacement.attachments.at(-1), engine = attachment.controlPort.peer;
+  const registration = engine.messages.findLast(m => m.type === "browser_pointer_view");
+  assert.ok(registration, "new view must register while transition input is still disabled");
+  assert.equal(complete, false, "reconcile waits for the chosen view's real publication");
+  const receipt = { session: attachment.options.session, sequence: 1, presentation: 1,
+    view_revision: registration.view.revision };
+  engine.emitMessage(envelope("noon.engine", "pointer_presented", { receipt }));
+  dom.emit("pointerdown");
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false,
+    "a receipt does not enable input before transition completion");
+  await inputTurn();
+  assert.equal(pointerMessages(engine).length, 0);
+  assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
+  replacement.autoRespond = true;
+  engine.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
+  await switching;
+  replacement.autoRespond = false;
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, true,
+    "the first wheel after readiness needs no resize notification or priming event");
+  await inputTurn();
+  const scroll = engine.messages.findLast(m => m.type === "inspection_scroll");
+  assert.deepEqual(scroll.presentation, receipt);
+  engine.emitMessage(envelope("noon.engine", scroll.type, { requestId: scroll.requestId, inspectionScrollChanged: false }));
+  await inputTurn();
+  assert.deepEqual(errors, []);
+});
+
+test("failed reconciliation leaves the old collector and receipt usable", async t => {
+  const dom = pointerCanvas(t);
+  const { client, engine } = await startInputClient(t, dom.canvas, { inspectionZoom: true });
+  const receipt = presentForWheel(engine);
+  const replacement = new FakeSemanticAuthoringClient(); replacement.failContext = "bad";
+  const switching = client.reconcileSemanticExecution({ contextId: "bad" }, { authoringClient: replacement });
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
+  dom.emit("pointerdown");
+  await assert.rejects(switching, /semantic context rejected/);
+  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, true);
+  await inputTurn();
+  const scroll = engine.messages.findLast(m => m.type === "inspection_scroll");
+  assert.deepEqual(scroll.presentation, receipt);
+  assert.equal(pointerMessages(engine).length, 0);
+  engine.emitMessage(envelope("noon.engine", scroll.type, { requestId: scroll.requestId, inspectionScrollChanged: false }));
+  await inputTurn();
 });

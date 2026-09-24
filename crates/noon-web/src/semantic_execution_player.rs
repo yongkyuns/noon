@@ -2231,7 +2231,10 @@ impl SemanticExecutionPlayer {
             .map(crate::SelectionOverlayPresentation::from_presentation)
             .transpose()
             .map_err(|error| error.to_string())?;
-        let camera = self.session.camera().map_err(|e| e.to_string())?;
+        let camera = self
+            .session
+            .inspection_camera()
+            .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
         let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
         #[cfg(any(target_arch = "wasm32", test))]
@@ -3013,6 +3016,20 @@ impl SemanticExecutionPlayer {
             &mut self.next_native_event_sequence,
             envelope.input,
             envelope.presentation,
+        )
+    }
+
+    /// Admit one collection-time inspection occurrence through the same owned
+    /// session and retained presentation path as pointer input.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = scrollInspectionViewJson))]
+    pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
+        let input = serde_json::from_str(json)
+            .map_err(|error| format!("invalid inspection scroll JSON: {error}"))?;
+        self.worker_pointer_presentation.scroll(
+            &mut self.session,
+            &mut self.browser_pointer_binding,
+            input,
         )
     }
 

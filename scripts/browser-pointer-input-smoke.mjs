@@ -1,4 +1,4 @@
-// Network-free browser DOM qualification of the production collector, not Rust
+// Local-only browser DOM qualification of the production collector, not Rust
 // selection or raster proof. Trusted mouse events and injected coalesced packets
 // are recorded separately so synthetic histories cannot masquerade as hardware.
 import assert from "node:assert/strict";
@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.resolve(process.env.NOON_POINTER_DOM_ARTIFACTS ??
@@ -15,8 +16,9 @@ const source = await readFile(path.join(root, "web/browser-pointer-input.js"), "
 const report = { scope: "dom-collector-only", status: "running",
   collectorSha256: createHash("sha256").update(source).digest("hex"), cases: [] };
 await mkdir(output, { recursive: true });
-let browser;
+let browser, server;
 try {
+  server = await serveRepository(root, 0);
   browser = await playwright.chromium.launch({ headless: true,
     ...(process.env.NOON_CHROMIUM_EXECUTABLE
       ? { executablePath: process.env.NOON_CHROMIUM_EXECUTABLE } : { channel: "chromium" }),
@@ -31,11 +33,15 @@ try {
       const errors = [];
       page.on("pageerror", error => errors.push(String(error)));
       try {
-        await page.setContent('<style>body{margin:0}#scene{position:absolute;left:20px;top:30px;width:640px;height:360px;touch-action:none}</style><canvas id="scene" width="640" height="360"></canvas>');
-        await page.evaluate(async source => {
-          const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-          const { attachBrowserPointerInput } = await import(url);
-          URL.revokeObjectURL(url);
+        // Give the unmodified module graph a real same-origin base. Blob/data
+        // URLs cannot resolve the collector's relative production imports.
+        const fixtureUrl = `${server.baseUrl}/pointer-dom-fixture.html`;
+        await page.route(fixtureUrl, route => route.fulfill({ contentType: "text/html",
+          body: '<style>body{margin:0}#scene{position:absolute;left:20px;top:30px;width:640px;height:360px;touch-action:none}</style><canvas id="scene" width="640" height="360"></canvas>',
+        }));
+        await page.goto(fixtureUrl);
+        await page.evaluate(async () => {
+          const { attachBrowserPointerInput } = await import("/web/browser-pointer-input.js");
           const canvas = document.querySelector("#scene");
           const controller = new AbortController();
           let sourceId = 0, view = 0, current = true;
@@ -69,7 +75,7 @@ try {
               canvas.dispatchEvent(parent);
             },
           };
-        }, source);
+        });
         await act(page);
         const state = await page.evaluate(() => ({ events: pointerProbe.events,
           faults: pointerProbe.faults, raw: pointerProbe.raw }));
@@ -185,5 +191,6 @@ try {
   console.error(report.error);
 } finally {
   await browser?.close();
+  await server?.close();
   await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
 }
