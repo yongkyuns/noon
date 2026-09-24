@@ -1,0 +1,105 @@
+name: Foreground matching qualification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/noon*/**'
+      - 'web/python/**'
+      - 'web/*semantic*'
+      - 'web/*authoring*'
+      - 'web/manim-raster-host*'
+      - 'scripts/manim-raster-*'
+      - 'scripts/shared-playback-raster*'
+      - 'scripts/foreground-matching-*'
+      - 'parity/manim-v0.21/core-examples/foreground_matching.py'
+      - 'parity/manim-v0.21/foreground-matching-manifest.json'
+      - '.github/actions/dev-wasm-build/**'
+      - '.github/workflows/foreground-matching-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foreground-matching-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  overlap-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      NOON_MANIM_RASTER_MANIFEST: parity/manim-v0.21/foreground-matching-manifest.json
+      NOON_MANIM_RASTER_ARTIFACTS: foreground-matching-artifacts
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Record source identity before building
+        env:
+          QUALIFIED_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          mkdir -p ci-artifacts/foreground-matching
+          git rev-parse HEAD > ci-artifacts/foreground-matching/source-sha.txt
+          printf '%s\n' "$QUALIFIED_BASE" > ci-artifacts/foreground-matching/base-sha.txt
+          git status --porcelain --untracked-files=all > ci-artifacts/foreground-matching/worktree-before.txt
+          git diff "$QUALIFIED_BASE" HEAD --binary > ci-artifacts/foreground-matching/integration.diff
+      - name: Test overlap assertions and missing-evidence rejection
+        run: node --test scripts/foreground-matching-checks.test.mjs
+      - name: Build exact-source browser package
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+          cache-ref: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install pinned Cairo reference and browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check 'manim==0.21.0'
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Capture pinned Manim and real Python-worker overlap frames
+        id: raster
+        continue-on-error: true
+        run: node scripts/manim-raster-differential.mjs
+      - name: Enforce whole-frame raster tolerances
+        id: tolerances
+        if: always() && steps.raster.outcome == 'success'
+        continue-on-error: true
+        run: node scripts/manim-raster-enforce.mjs
+      - name: Prove actual overlap order and visible target occurrences
+        id: witnesses
+        if: always() && steps.raster.outcome == 'success'
+        continue-on-error: true
+        run: node scripts/foreground-matching-checks.mjs
+      - name: Prove sparse and dense forward playback agree exactly
+        id: cadence
+        if: always() && steps.raster.outcome == 'success'
+        continue-on-error: true
+        run: node scripts/shared-playback-raster.mjs
+      - name: Retain source, reference, pixels and strict verdicts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foreground-matching-${{ github.sha }}
+          path: |
+            ci-artifacts/foreground-matching
+            foreground-matching-artifacts
+          retention-days: 14
+          if-no-files-found: error
+      - name: Require every qualification stage
+        if: always()
+        env:
+          RASTER: ${{ steps.raster.outcome }}
+          TOLERANCES: ${{ steps.tolerances.outcome }}
+          WITNESSES: ${{ steps.witnesses.outcome }}
+          CADENCE: ${{ steps.cadence.outcome }}
+        run: |
+          test "$RASTER" = success
+          test "$TOLERANCES" = success
+          test "$WITNESSES" = success
+          test "$CADENCE" = success
