@@ -66,6 +66,9 @@ mod image_content;
 pub use image_content::*;
 mod semantic_image_resources;
 
+mod pointer_actions;
+pub use pointer_actions::*;
+
 mod object_content;
 pub use object_content::*;
 

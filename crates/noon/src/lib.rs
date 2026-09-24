@@ -198,8 +198,8 @@ pub use live_program::{
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
-    TransformToRequest,
+    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, PointerActionPublication,
+    PointerClickActionOutcome, SubsetDisplayMode, TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
@@ -208,17 +208,17 @@ pub use noon_core::{
     GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
     RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId, SemanticObjectProperty,
-    SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
-    SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
-    StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan,
-    TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,
-    BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
-    DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B,
-    GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
-    MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D,
-    PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B,
-    TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
-    YELLOW_E,
+    SemanticObjectState, SemanticPaint, SemanticPointerClickAction, SemanticSignalValue,
+    SemanticStyle, SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError,
+    TextSourceFill, TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK,
+    BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
+    DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD,
+    GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK,
+    MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B,
+    PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU,
+    TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
+    YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 pub use noon_geometry::{

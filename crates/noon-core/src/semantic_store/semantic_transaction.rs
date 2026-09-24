@@ -88,6 +88,10 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
     },
+    SetPointerClickAction {
+        object: SemanticTransactionNodeRef,
+        action: Option<crate::SemanticPointerClickAction>,
+    },
     ChangeSubscription {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
@@ -163,6 +167,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
+            | Self::SetPointerClickAction { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
@@ -216,6 +221,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
+            | Self::SetPointerClickAction { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
@@ -247,6 +253,9 @@ impl SemanticMutation {
             }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
+            Self::SetPointerClickAction { object, .. } => {
+                Some(SemanticMutationKey::PointerClickAction(*object))
+            }
             Self::ChangeSubscription {
                 object, property, ..
             } => Some(SemanticMutationKey::Subscription {
@@ -287,6 +296,7 @@ pub(super) enum SemanticMutationKey {
     },
     ObjectContent(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
+    PointerClickAction(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
@@ -328,6 +338,10 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     ObjectStyle {
+        object: SemanticNodeId,
+    },
+    /// Declaration-only metadata; no execution property or membership changed.
+    PointerClickAction {
         object: SemanticNodeId,
     },
     Subscription {
@@ -529,6 +543,20 @@ impl SemanticMutationTransaction {
             node: node.into(),
             value,
         });
+        self
+    }
+
+    /// Author or remove one object's self-targeting primary-click action.
+    pub fn set_pointer_click_action(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        action: Option<crate::SemanticPointerClickAction>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::SetPointerClickAction {
+                object: object.into(),
+                action,
+            });
         self
     }
 
@@ -1710,6 +1738,25 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetPointerClickAction { object, action } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if action.is_some_and(|action| !action.is_valid()) {
+                        return Err(
+                            SemanticMutationTransactionError::InvalidPointerClickAction {
+                                index,
+                                object: *object,
+                            },
+                        );
+                    }
+                    let did_change = state.pointer_click_action() != *action;
+                    state.set_pointer_click_action(*action);
+                    changed.push(did_change);
+                }
                 SemanticMutation::ChangeSubscription {
                     object,
                     property,
@@ -2519,6 +2566,14 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    InvalidPointerClickAction {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
+    DuplicatePointerClickAction {
+        index: usize,
+        object: SemanticNodeId,
+    },
     DuplicateGraphDeclaration {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -2866,6 +2921,10 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPointerClickAction { index, object } => write!(formatter,
+                "semantic transaction mutation {index} has invalid pointer-click action on {object:?}"),
+            Self::DuplicatePointerClickAction { index, object } => write!(formatter,
+                "semantic transaction mutation {index} duplicates pointer-click action on {object:?}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"
@@ -3376,3 +3435,6 @@ mod foreground_tests;
 
 #[cfg(test)]
 mod graph_tests;
+
+#[cfg(test)]
+mod pointer_action_tests;
