@@ -23,6 +23,7 @@ pub enum TimelineWakeState {
 pub struct RuntimeWakeState {
     frame_pending: bool,
     timeline: TimelineWakeState,
+    property_animation_pending: bool,
 }
 
 impl RuntimeWakeState {
@@ -34,8 +35,16 @@ impl RuntimeWakeState {
         self.timeline
     }
 
+    /// Independent interaction-domain demand. It does not authorize advancing
+    /// a paused authored timeline; hosts drive it through the runtime delta API.
+    pub const fn property_animation_pending(self) -> bool {
+        self.property_animation_pending
+    }
+
     pub const fn is_quiescent(self) -> bool {
-        !self.frame_pending && matches!(self.timeline, TimelineWakeState::Quiescent)
+        !self.property_animation_pending
+            && !self.frame_pending
+            && matches!(self.timeline, TimelineWakeState::Quiescent)
     }
 
     /// Combine another execution-owned cadence observation without transferring
@@ -93,6 +102,7 @@ impl SceneInstance {
         RuntimeWakeState {
             frame_pending: !self.changes.is_empty(),
             timeline: self.timeline_scheduler.wake_state(),
+            property_animation_pending: self.has_property_animations(),
         }
         .with_additional_timeline(
             self.next_replay_revision_time()
