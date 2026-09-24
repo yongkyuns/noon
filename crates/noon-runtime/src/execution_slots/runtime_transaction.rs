@@ -64,6 +64,7 @@ pub struct PreparedAuthoredPlanChange {
     scene_revision: SceneRevision,
     execution_revision: ExecutionRevision,
     frame_epoch: FrameEpoch,
+    scalar_timeline: bool,
 }
 
 /// A fully validated authored plan revision plus a sparse reactive update at the
@@ -151,6 +152,7 @@ impl SceneInstance {
             scene_revision,
             execution_revision,
             frame_epoch,
+            scalar_timeline: false,
         })
     }
 
@@ -166,13 +168,57 @@ impl SceneInstance {
                 actual: current,
             });
         }
-        self.invalidate_replay_domain();
+        if !prepared.scalar_timeline {
+            self.invalidate_replay_domain();
+        }
         self.publication = PublicationContext::new(
             prepared.scene_revision,
             prepared.execution_revision,
             prepared.frame_epoch,
         );
         Ok(&self.frame)
+    }
+
+    /// A scalar extension is proven by the compiler-derived, runtime-pinned schedule append.
+    pub fn prepare_scalar_timeline_plan_change(
+        &self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        timeline: &crate::PreparedSignalTimelineAppend,
+    ) -> Result<PreparedAuthoredPlanChange, AuthoredPublicationError> {
+        if timeline.runtime != self.runtime_identity() || timeline.current != self.frame.time {
+            return Err(AuthoredPublicationError::StaleEffectiveCarryForward);
+        }
+        let mut plan = self.prepare_authored_plan_change(expected, scene_revision)?;
+        plan.scalar_timeline = true;
+        Ok(plan)
+    }
+
+    /// Only current-time authored Holds can authorize a persistent scalar input update.
+    pub fn prepare_scalar_timeline_value_change(
+        &mut self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        timeline: &crate::PreparedSignalTimelineAppend,
+    ) -> Result<PreparedAuthoredReactivePlanChange, AuthoredPublicationError> {
+        let plan = self.prepare_scalar_timeline_plan_change(expected, scene_revision, timeline)?;
+        let inputs = timeline
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold)
+                    if hold.start_time() == self.frame.time =>
+                {
+                    Ok((hold.execution_signal(), ReactiveValue::Scalar(hold.value())))
+                }
+                _ => Err(AuthoredPublicationError::StaleEffectiveCarryForward),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut prepared =
+            self.prepare_authored_reactive_plan_change(expected, scene_revision, &inputs)?;
+        prepared.plan = plan;
+        prepared.frame.authored_scalar_inputs = true;
+        Ok(prepared)
     }
 
     /// Prepare one current-time reactive value change and the authored plan

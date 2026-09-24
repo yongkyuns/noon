@@ -9,8 +9,13 @@ mod prepared_frame;
 mod reactive;
 mod renderer_publication;
 mod replay;
+mod signal_timeline;
 mod spatial_index;
 pub use replay::{ReplayError, ReplayLimits, ReplayStats};
+pub use signal_timeline::{
+    PreparedSignalTimelineAppend, SignalTimelineAppendError, SignalTimelinePreview,
+    SignalTimelineSchedule,
+};
 
 pub use derived_display_evaluation::*;
 pub use execution_slots::*;
@@ -53,9 +58,20 @@ pub struct EvaluationStats {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
     ReplaySealed,
-    ReplayTimeOutsideRange { time: f64, start: f64, end: f64 },
+    ForeignScalarTimeline {
+        expected: RuntimeIdentity,
+        actual: RuntimeIdentity,
+    },
+    ReplayTimeOutsideRange {
+        time: f64,
+        start: f64,
+        end: f64,
+    },
     InvalidTime(f64),
-    NonMonotonicPreparedAdvance { current: f64, requested: f64 },
+    NonMonotonicPreparedAdvance {
+        current: f64,
+        requested: f64,
+    },
     FrameEpochExhausted(noon_core::FrameEpoch),
     RequiredCallbackPending,
     RequiredCallbackBarrier,
@@ -67,6 +83,12 @@ impl std::fmt::Display for EvaluationError {
         match self {
             Self::ReplaySealed => {
                 formatter.write_str("sealed replay cannot stage live effective mutations")
+            }
+            Self::ForeignScalarTimeline { expected, actual } => {
+                write!(
+                    formatter,
+                    "scalar timeline belongs to runtime {actual:?}, not {expected:?}"
+                )
             }
             Self::ReplayTimeOutsideRange { time, start, end } => {
                 write!(formatter, "replay time {time} is outside {start}..={end}")

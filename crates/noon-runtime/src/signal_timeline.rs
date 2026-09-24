@@ -1,8 +1,11 @@
+//! Compiler-derived scalar timelines and their sparse evaluation previews.
+//! The execution session owns one schedule; previews cannot contain arbitrary
+//! external inputs and are pinned to that session's runtime incarnation.
 use std::collections::{BTreeSet, HashMap};
 
+use crate::{RuntimeIdentity, TimelineWakeState};
 use noon_compile::{CompiledScalarSignalTimelineEntry, CompiledScalarSignalTrack};
 use noon_core::{evaluate_scalar_track, ReactiveValue, SemanticNodeId, SignalId};
-use noon_runtime::TimelineWakeState;
 
 #[derive(Clone, Debug)]
 struct SignalTimelineGroup {
@@ -27,14 +30,16 @@ struct SignalTimelineEvent {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct SignalTimelinePreview {
+pub struct SignalTimelinePreview {
+    pub(crate) runtime: RuntimeIdentity,
+    pub(crate) time: f64,
     event_cursor: usize,
     active: BTreeSet<usize>,
     inputs: Vec<(SignalId, ReactiveValue)>,
 }
 
 impl SignalTimelinePreview {
-    pub(super) fn inputs(&self) -> &[(SignalId, ReactiveValue)] {
+    pub fn inputs(&self) -> &[(SignalId, ReactiveValue)] {
         &self.inputs
     }
 }
@@ -86,13 +91,15 @@ impl std::fmt::Display for SignalTimelineAppendError {
 impl std::error::Error for SignalTimelineAppendError {}
 
 #[derive(Clone, Debug)]
-pub(super) struct PreparedSignalTimelineAppend {
-    entries: Vec<CompiledScalarSignalTimelineEntry>,
-    current: f64,
+pub struct PreparedSignalTimelineAppend {
+    pub(crate) runtime: RuntimeIdentity,
+    pub(crate) entries: Vec<CompiledScalarSignalTimelineEntry>,
+    pub(crate) current: f64,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(super) struct SignalTimelineSchedule {
+#[derive(Clone, Debug)]
+pub struct SignalTimelineSchedule {
+    runtime: RuntimeIdentity,
     groups: Vec<SignalTimelineGroup>,
     group_by_signal: HashMap<SemanticNodeId, usize>,
     events: Vec<SignalTimelineEvent>,
@@ -103,7 +110,7 @@ pub(super) struct SignalTimelineSchedule {
 }
 
 impl SignalTimelineSchedule {
-    pub(super) fn new(entries: Vec<CompiledScalarSignalTimelineEntry>) -> Self {
+    pub fn new(runtime: RuntimeIdentity, entries: Vec<CompiledScalarSignalTimelineEntry>) -> Self {
         let mut groups = Vec::<SignalTimelineGroup>::new();
         let mut group_by_signal = HashMap::new();
         for entry in entries {
@@ -145,11 +152,14 @@ impl SignalTimelineSchedule {
         });
 
         let mut schedule = Self {
+            runtime,
             groups,
             group_by_signal,
             events,
             owned_signals,
-            ..Self::default()
+            event_cursor: 0,
+            active: BTreeSet::new(),
+            initialized: false,
         };
         if !schedule.groups.is_empty() {
             let preview = schedule.preview_seek(0.0);
@@ -158,26 +168,33 @@ impl SignalTimelineSchedule {
         schedule
     }
 
-    pub(super) fn owns(&self, signal: SemanticNodeId) -> bool {
+    /// Rebind the derived schedule when its owning session explicitly clones the runtime.
+    pub fn clone_for_runtime(&self, runtime: RuntimeIdentity) -> Self {
+        let mut cloned = self.clone();
+        cloned.runtime = runtime;
+        cloned
+    }
+
+    pub fn owns(&self, signal: SemanticNodeId) -> bool {
         self.owned_signals.contains(&signal)
     }
 
     /// Whether this signal has any authored timeline meaning. Raw execution
     /// input must never override such a signal, including after a Hold releases
     /// ordinary authoring ownership or while the runtime is seeking history.
-    pub(super) fn has_history(&self, signal: SemanticNodeId) -> bool {
+    pub fn has_history(&self, signal: SemanticNodeId) -> bool {
         self.group_by_signal.contains_key(&signal)
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }
 
-    pub(super) fn is_coherent_at(&self, current: f64, requested: f64) -> bool {
+    pub fn is_coherent_at(&self, current: f64, requested: f64) -> bool {
         self.initialized && current == requested
     }
 
-    pub(super) fn prepare_append_batch(
+    pub fn prepare_append_batch(
         &self,
         entries: impl IntoIterator<Item = CompiledScalarSignalTimelineEntry>,
         current: f64,
@@ -243,10 +260,14 @@ impl SignalTimelineSchedule {
                 },
             );
         }
-        Ok(PreparedSignalTimelineAppend { entries, current })
+        Ok(PreparedSignalTimelineAppend {
+            runtime: self.runtime,
+            entries,
+            current,
+        })
     }
 
-    pub(super) fn commit_append(&mut self, prepared: PreparedSignalTimelineAppend) {
+    pub fn commit_append(&mut self, prepared: PreparedSignalTimelineAppend) {
         if prepared.entries.is_empty() {
             return;
         }
@@ -301,7 +322,7 @@ impl SignalTimelineSchedule {
         self.initialized = true;
     }
 
-    pub(super) fn preview(&self, current: f64, time: f64) -> SignalTimelinePreview {
+    pub fn preview(&self, current: f64, time: f64) -> SignalTimelinePreview {
         if time < current {
             return self.preview_seek(time);
         }
@@ -324,6 +345,8 @@ impl SignalTimelineSchedule {
             cursor += 1;
         }
         SignalTimelinePreview {
+            runtime: self.runtime,
+            time,
             event_cursor: cursor,
             active,
             inputs: touched
@@ -339,7 +362,7 @@ impl SignalTimelineSchedule {
         }
     }
 
-    pub(super) fn preview_seek(&self, time: f64) -> SignalTimelinePreview {
+    pub fn preview_seek(&self, time: f64) -> SignalTimelinePreview {
         let event_cursor = self.events.partition_point(|event| event.time <= time);
         let mut active = BTreeSet::new();
         for (index, group) in self.groups.iter().enumerate() {
@@ -356,6 +379,8 @@ impl SignalTimelineSchedule {
             }
         }
         SignalTimelinePreview {
+            runtime: self.runtime,
+            time,
             event_cursor,
             active,
             inputs: self
@@ -371,13 +396,13 @@ impl SignalTimelineSchedule {
         }
     }
 
-    pub(super) fn commit(&mut self, preview: SignalTimelinePreview) {
+    pub fn commit(&mut self, preview: SignalTimelinePreview) {
         self.event_cursor = preview.event_cursor;
         self.active = preview.active;
         self.initialized = true;
     }
 
-    pub(super) fn wake_state(&self) -> TimelineWakeState {
+    pub fn wake_state(&self) -> TimelineWakeState {
         if !self.initialized && !self.groups.is_empty() {
             return TimelineWakeState::Continuous;
         }
@@ -392,13 +417,11 @@ impl SignalTimelineSchedule {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn entry_count(&self) -> usize {
+    pub fn entry_count(&self) -> usize {
         self.groups.iter().map(|group| group.entries.len()).sum()
     }
 
-    #[cfg(test)]
-    pub(super) fn event_count(&self) -> usize {
+    pub fn event_count(&self) -> usize {
         self.events.len()
     }
 }
@@ -474,5 +497,97 @@ fn value_at(entries: &[CompiledScalarSignalTimelineEntry], initial: f32, time: f
             time,
         ) as f32,
         CompiledScalarSignalTimelineEntry::Hold(hold) => hold.value(),
+    }
+}
+
+impl crate::SceneInstance {
+    fn validate_scalar_preview(
+        &self,
+        preview: &SignalTimelinePreview,
+    ) -> Result<(), crate::EvaluationError> {
+        if preview.runtime != self.runtime_identity() {
+            return Err(crate::EvaluationError::ForeignScalarTimeline {
+                expected: self.runtime_identity(),
+                actual: preview.runtime,
+            });
+        }
+        if !preview.time.is_finite() {
+            return Err(crate::EvaluationError::InvalidTime(preview.time));
+        }
+        self.validate_replay_time(preview.time)
+    }
+
+    /// Evaluate compiler-derived scalar inputs through the ordinary staged frame path.
+    pub fn advance_to_with_scalar_timeline(
+        &mut self,
+        preview: &SignalTimelinePreview,
+    ) -> Result<&crate::FrameState, crate::EvaluationError> {
+        self.validate_scalar_preview(preview)?;
+        if self.replay_is_sealed() {
+            return self.evaluate_retained_scalar_preview(preview, false);
+        }
+        let mut prepared =
+            self.prepare_advance_to_with_reactive_inputs(preview.time, preview.inputs())?;
+        prepared.authored_scalar_inputs = true;
+        let effective = self
+            .prepare_effective_property_batch(&[])
+            .expect("empty batch");
+        Ok(self
+            .commit_prepared_frame(prepared, effective)
+            .expect("exclusive prepared scalar commit"))
+    }
+
+    /// Historical scalar values come from the same immutable authored tracks and holds,
+    /// never a caller-supplied input batch. Raw input APIs keep their replay guards.
+    pub fn seek_with_scalar_timeline(
+        &mut self,
+        preview: &SignalTimelinePreview,
+    ) -> Result<&crate::FrameState, crate::EvaluationError> {
+        self.evaluate_retained_scalar_preview(preview, true)
+    }
+
+    fn evaluate_retained_scalar_preview(
+        &mut self,
+        preview: &SignalTimelinePreview,
+        seek: bool,
+    ) -> Result<&crate::FrameState, crate::EvaluationError> {
+        self.validate_scalar_preview(preview)?;
+        if preview.inputs().is_empty() {
+            return if seek {
+                self.seek(preview.time)
+            } else {
+                self.advance_to(preview.time)
+            };
+        }
+        let prepared = self
+            .reactive
+            .as_mut()
+            .ok_or(crate::EvaluationError::Reactive(
+                noon_core::ReactiveError::UnknownSignal(preview.inputs()[0].0),
+            ))?
+            .prepare_input_batch(preview.inputs())
+            .map_err(crate::EvaluationError::Reactive)?;
+        let changed = !prepared.is_empty();
+        if self.publication.frame_epoch().checked_next().is_none() {
+            return Err(crate::EvaluationError::FrameEpochExhausted(
+                self.publication.frame_epoch(),
+            ));
+        }
+        let stats = self
+            .reactive
+            .as_mut()
+            .expect("prepared scalar inputs have a runtime")
+            .commit_prepared_input_batch(prepared);
+        let publication = self.publication;
+        if seek {
+            self.seek(preview.time)?;
+        } else {
+            self.advance_to(preview.time)?;
+        }
+        self.last_reactive_stats = stats;
+        if changed && self.publication == publication {
+            self.publish_effective_change();
+        }
+        Ok(&self.frame)
     }
 }

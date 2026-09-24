@@ -10,8 +10,8 @@ use noon_runtime::{
     PreparedFrameEvaluation, RuntimeIdentity,
 };
 
-use super::signal_timeline::SignalTimelinePreview;
 use super::{ExecutionEvaluationMode, ExecutionSession};
+use noon_runtime::SignalTimelinePreview;
 
 pub(super) const CALLBACK_TRANSFORM_DOMAIN: u8 = 1;
 pub(super) const CALLBACK_STYLE_DOMAIN: u8 = 2;

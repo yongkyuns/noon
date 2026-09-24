@@ -17,7 +17,6 @@ pub use selection::{
 };
 mod publication;
 mod replay;
-mod signal_timeline;
 pub use callback::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
     CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
@@ -26,13 +25,13 @@ pub use callback::{
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
 };
 pub use completion::ExecutionSegmentCompletionError;
+pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
     EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
 };
-pub use signal_timeline::SignalTimelineAppendError;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
-use signal_timeline::SignalTimelineSchedule;
+use noon_runtime::SignalTimelineSchedule;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -688,7 +687,9 @@ impl Clone for ExecutionSession {
             spatial_index: self.spatial_index.clone(),
             last_spatial_update: self.last_spatial_update,
             reactive_projection: self.reactive_projection.clone(),
-            signal_timeline: self.signal_timeline.clone(),
+            signal_timeline: self
+                .signal_timeline
+                .clone_for_runtime(runtime.runtime_identity()),
             runtime,
             camera_object: self.camera_object,
             next_activation_track_id: self.next_activation_track_id,
@@ -838,10 +839,11 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let mut reactive_projection = lowered.reactive().clone();
-        let signal_timeline =
-            SignalTimelineSchedule::new(reactive_projection.take_scalar_timeline());
+        let scalar_timeline = reactive_projection.take_scalar_timeline();
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
         let mut runtime = SceneInstance::from_semantic_execution(lowered);
+        let signal_timeline =
+            SignalTimelineSchedule::new(runtime.runtime_identity(), scalar_timeline);
         let mut spatial_index = ExecutionSpatialIndex::default();
         let live_slots = runtime.painter_order().iter().filter_map(|&index| {
             let index = index as usize;
@@ -1510,9 +1512,10 @@ impl ExecutionSession {
         let mut segment = ExecutionSegment::from_duration(start_time, duration)?;
         let runtime_publication = self
             .runtime
-            .prepare_authored_plan_change(
+            .prepare_scalar_timeline_plan_change(
                 self.publication_context(),
                 prepared.proposed_scene_revision(),
+                &schedule,
             )
             .map_err(|error| {
                 ExecutionSessionAnimationError::AuthoredPublication(
@@ -1529,7 +1532,7 @@ impl ExecutionSession {
         );
 
         let (_result, store) = prepared.commit_with_store();
-        self.signal_timeline.commit_append(schedule);
+        self.commit_scalar_timeline_append(schedule);
         self.runtime
             .apply_prepared_authored_plan_change(runtime_publication)
             .expect("scalar authored plan publication was preflighted under exclusive ownership");
@@ -1580,18 +1583,16 @@ impl ExecutionSession {
         })?;
         let entry =
             lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
-        let noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold) = &entry else {
+        let noon_compile::CompiledScalarSignalTimelineEntry::Hold(_) = &entry else {
             unreachable!("persistent scalar publication prepared one Hold entry")
         };
-        let execution_signal = hold.execution_signal();
-        let hold_value = hold.value();
         let schedule = self.signal_timeline.prepare_append_batch([entry], time)?;
         let runtime_publication = self
             .runtime
-            .prepare_authored_reactive_plan_change(
+            .prepare_scalar_timeline_value_change(
                 self.publication_context(),
                 prepared.proposed_scene_revision(),
-                &[(execution_signal, ReactiveValue::Scalar(hold_value))],
+                &schedule,
             )
             .map_err(|error| {
                 ExecutionSessionAnimationError::AuthoredPublication(
@@ -1600,7 +1601,7 @@ impl ExecutionSession {
             })?;
 
         let (_result, store) = prepared.commit_with_store();
-        self.signal_timeline.commit_append(schedule);
+        self.commit_scalar_timeline_append(schedule);
         self.runtime
             .apply_prepared_authored_reactive_plan_change(runtime_publication)
             .expect("persistent scalar publication was preflighted under exclusive ownership");
@@ -3558,7 +3559,7 @@ impl ExecutionSession {
                 handled_scalar_signals,
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
-        self.signal_timeline.commit_append(scalar_timeline);
+        self.commit_scalar_timeline_append(scalar_timeline);
         debug_assert!(result.resolve(root).is_some());
         let activation_scene_revision = self.publication_context().scene_revision();
         let family_transform_completion =
@@ -3702,11 +3703,9 @@ impl ExecutionSession {
             self.signal_timeline.preview(current, time)
         };
         if requires_seek {
-            self.runtime
-                .seek_with_reactive_inputs(time, preview.inputs())?;
+            self.runtime.seek_with_scalar_timeline(&preview)?;
         } else {
-            self.runtime
-                .advance_to_with_reactive_inputs(time, preview.inputs())?;
+            self.runtime.advance_to_with_scalar_timeline(&preview)?;
         }
         self.signal_timeline.commit(preview);
         if requires_seek {

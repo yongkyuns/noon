@@ -17,6 +17,10 @@ on:
       - 'crates/noon/src/live_session/**'
       - 'crates/noon/src/host_callbacks.rs'
       - 'crates/noon/tests/callback_lifecycle_admission.rs'
+      - 'crates/noon/tests/scalar_timeline_replay.rs'
+      - 'crates/noon-runtime/src/signal_timeline.rs'
+      - 'crates/noon-runtime/src/prepared_frame.rs'
+      - 'crates/noon-runtime/src/execution_slots/runtime_transaction.rs'
       - 'crates/noon-compile/src/replay_revision.rs'
       - 'crates/noon-runtime/src/lib.rs'
       - 'crates/noon-runtime/tests/display_channel_mutation.rs'
@@ -46,6 +50,7 @@ jobs:
         run: |
           cargo test -p noon --no-default-features --test callback_lifecycle_admission
           cargo test -p noon-runtime --test display_channel_mutation
+          cargo test -p noon --no-default-features --test scalar_timeline_replay
 
   capture:
     name: Actual showcase frames (${{ matrix.backend }})
