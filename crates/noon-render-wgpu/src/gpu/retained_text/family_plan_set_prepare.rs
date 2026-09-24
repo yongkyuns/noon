@@ -663,10 +663,44 @@ impl RetainedFramePreparer {
         self.incremental_stats.scratch_reuses =
             self.incremental_stats.scratch_reuses.saturating_add(1);
         let scratch_changes = FrameChanges::objects(scratch_changes);
-        self.project_mixed_visibility(frame.retained, visible_object_indices);
+        if let Some(indices) = visible_object_indices {
+            self.project_image_visibility(indices);
+        }
         let geometry = self
             .geometry
             .prepare_incremental(&self.scratch, &scratch_changes);
+        // A stable family plan does not imply stable child packing. Analytic
+        // reveal endpoints and shared glyph-mesh changes may rebuild geometry,
+        // invalidating the path/instance indices retained by the mixed stream.
+        if geometry.stats.full_rebuilds > 0 {
+            self.render_items.clear();
+            rebuild_mixed_order(
+                &mut self.render_items,
+                &self.sources,
+                &self.snapshot_text_items,
+                &geometry,
+            );
+            rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+            self.incremental_stats.mixed_order_rebuilds = self
+                .incremental_stats
+                .mixed_order_rebuilds
+                .saturating_add(1);
+        }
+        // Visibility candidates can be unchanged while their path indices moved.
+        // Project only after repairing the canonical mixed painter stream.
+        if let Some(indices) = visible_object_indices {
+            if let Some(projected) = project_mixed_visibility_cached(
+                frame.retained,
+                indices,
+                &self.render_items,
+                &self.render_item_ranges,
+                &mut self.visible_projection_ready,
+                &mut self.visible_projection_candidates,
+                &mut self.visible_render_items,
+            ) {
+                self.visibility_stats.record(indices.len(), projected);
+            }
+        }
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             image_objects: self.images.objects.len(),
@@ -779,3 +813,6 @@ fn selected_family_plan<'a>(
     }
     Ok(Some((state, plan)))
 }
+
+#[cfg(test)]
+mod tests;
