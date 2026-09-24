@@ -18,13 +18,15 @@ struct PreparedFrameRow {
     state: FrameRowState,
 }
 
-/// Sparse, unpublished timeline/native evaluation for a required callback phase.
+/// Sparse, unpublished effective frame. Ordinary timeline/native evaluation
+/// and samples that preserve the already-coherent base share this publication.
 #[derive(Clone, Debug)]
 pub struct PreparedFrameEvaluation {
     runtime: RuntimeIdentity,
     expected: PublicationContext,
     base_time: f64,
     time: f64,
+    resample_base: bool,
     requested_channels: Vec<CompiledChannelKey>,
     requested_family_animations: Vec<usize>,
     cursor_updates: Vec<(CompiledChannelKey, usize)>,
@@ -32,6 +34,7 @@ pub struct PreparedFrameEvaluation {
     stats: EvaluationStats,
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
+    pub(crate) property_animations: crate::property_animation::PreparedPropertyAnimations,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
 }
 
@@ -90,6 +93,10 @@ impl PreparedEffectivePropertyBatch {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedFrameCommitError {
     ReplaySealed,
+    PropertyAnimationConflict {
+        object: noon_core::ObjectId,
+        property: noon_core::Property,
+    },
     ForeignRuntime {
         expected: RuntimeIdentity,
         actual: RuntimeIdentity,
@@ -108,6 +115,8 @@ pub enum PreparedFrameCommitError {
 impl std::fmt::Display for PreparedFrameCommitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PropertyAnimationConflict { object, property } => write!(formatter,
+                "effective write conflicts with active property animation on {object:?}/{property:?}"),
             Self::ReplaySealed => {
                 formatter.write_str("sealed replay cannot publish a live prepared frame")
             }
@@ -357,6 +366,7 @@ impl SceneInstance {
             expected: self.publication,
             base_time: self.frame.time,
             time,
+            resample_base: true,
             requested_channels: preview.requested().to_vec(),
             requested_family_animations: preview.requested_family_animations().to_vec(),
             cursor_updates: cursor_updates.into_iter().collect(),
@@ -370,7 +380,35 @@ impl SceneInstance {
             stats,
             scheduler_stats: preview.stats(),
             prior_driver_rows,
+            property_animations: self.prepare_property_animations(0.0)?,
             reactive,
+        })
+    }
+
+    /// Preserve the coherent base for an independent effective-only sample.
+    /// In particular, do not run unrelated timeline groups, reactive bindings,
+    /// host outputs or family endpoints again merely because a driver ticks.
+    pub(crate) fn prepare_current_effective_frame(
+        &self,
+    ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        if self.replay_is_sealed() {
+            return Err(EvaluationError::ReplaySealed);
+        }
+        Ok(PreparedFrameEvaluation {
+            runtime: self.identity,
+            expected: self.publication,
+            base_time: self.frame.time,
+            time: self.frame.time,
+            resample_base: false,
+            requested_channels: Vec::new(),
+            requested_family_animations: Vec::new(),
+            cursor_updates: Vec::new(),
+            rows: Vec::new(),
+            stats: EvaluationStats::default(),
+            scheduler_stats: TimelineSchedulerStats::default(),
+            prior_driver_rows: 0,
+            property_animations: self.prepare_property_animations(0.0)?,
+            reactive: None,
         })
     }
 
@@ -454,7 +492,8 @@ impl SceneInstance {
                 actual: self.frame.time,
             });
         }
-        let may_publish = prepared.time != self.frame.time
+        let may_publish = !prepared.property_animations.writes.is_empty()
+            || prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
             || prepared
@@ -467,6 +506,7 @@ impl SceneInstance {
                 self.publication.frame_epoch(),
             ));
         }
+        self.check_property_animation_writes(&effective.writes)?;
         Ok(())
     }
 
@@ -476,7 +516,8 @@ impl SceneInstance {
         effective: PreparedEffectivePropertyBatch,
     ) -> Result<&FrameState, PreparedFrameCommitError> {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
-        let may_publish = prepared.time != self.frame.time
+        let may_publish = !prepared.property_animations.writes.is_empty()
+            || prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
             || prepared
@@ -504,15 +545,17 @@ impl SceneInstance {
             self.invalidate_replay_domain();
         }
 
-        self.timeline_scheduler.advance(prepared.time);
-        debug_assert_eq!(
-            self.timeline_scheduler.requested(),
-            prepared.requested_channels
-        );
-        debug_assert_eq!(
-            self.timeline_scheduler.requested_family_animations(),
-            prepared.requested_family_animations
-        );
+        if prepared.resample_base {
+            self.timeline_scheduler.advance(prepared.time);
+            debug_assert_eq!(
+                self.timeline_scheduler.requested(),
+                prepared.requested_channels
+            );
+            debug_assert_eq!(
+                self.timeline_scheduler.requested_family_animations(),
+                prepared.requested_family_animations
+            );
+        }
         for (channel, cursor) in &prepared.cursor_updates {
             if let Some(group) = self.groups.get_mut(channel) {
                 group.cursor = *cursor;
@@ -543,9 +586,21 @@ impl SceneInstance {
             next_drivers.insert(object_index);
         }
 
+        for &(object_index, write) in &prepared.property_animations.writes {
+            let row = final_rows
+                .entry(object_index)
+                .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
+            apply_effective_property_to_row(
+                row.as_mut(&self.frame.objects[object_index].content),
+                write,
+            );
+        }
+        self.property_animations
+            .commit(&prepared.property_animations);
         let time_changed = self.frame.time != prepared.time;
         self.frame.time = prepared.time;
-        let mut changed = self.update_requested_family_animations(prepared.time);
+        let mut changed =
+            prepared.resample_base && self.update_requested_family_animations(prepared.time);
         for (object_index, row) in final_rows {
             if row.differs_from_frame(&self.frame, object_index) {
                 let priority_changed = row.z_index != self.frame.objects[object_index].z_index;
@@ -557,9 +612,14 @@ impl SceneInstance {
                 changed = true;
             }
         }
-        self.effective_driver_rows = next_drivers;
+        if prepared.resample_base {
+            self.effective_driver_rows = next_drivers;
+        } else {
+            self.effective_driver_rows.extend(next_drivers);
+        }
         self.last_stats = prepared.stats;
-        if time_changed || changed || reactive_changed {
+        if time_changed || changed || reactive_changed || prepared.property_animations.clock_changed
+        {
             self.publication = self.publication.with_frame_epoch(
                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
             );

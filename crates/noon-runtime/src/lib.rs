@@ -7,6 +7,8 @@ mod effective_write;
 mod execution_slots;
 mod frame;
 mod prepared_frame;
+mod property_animation;
+pub use property_animation::{PropertyAnimationError, PropertyAnimationToken};
 mod reactive;
 mod renderer_publication;
 mod replay;
@@ -61,6 +63,8 @@ pub enum EvaluationError {
     NonMonotonicPreparedAdvance { current: f64, requested: f64 },
     FrameEpochExhausted(noon_core::FrameEpoch),
     RequiredCallbackPending,
+    InvalidEffectiveWrite(CompilePatchError),
+    PreparedCommit(PreparedFrameCommitError),
     RequiredCallbackBarrier,
     Reactive(noon_core::ReactiveError),
 }
@@ -82,6 +86,8 @@ impl std::fmt::Display for EvaluationError {
             Self::FrameEpochExhausted(epoch) => {
                 write!(formatter, "frame epoch exhausted after {epoch:?}")
             }
+            Self::InvalidEffectiveWrite(error) => error.fmt(formatter),
+            Self::PreparedCommit(error) => error.fmt(formatter),
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
@@ -96,6 +102,8 @@ impl std::error::Error for EvaluationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Reactive(error) => Some(error),
+            Self::InvalidEffectiveWrite(error) => Some(error),
+            Self::PreparedCommit(error) => Some(error),
             _ => None,
         }
     }
@@ -166,6 +174,7 @@ pub struct SceneInstance {
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    property_animations: property_animation::PropertyAnimations,
     active_family_animation_indices: BTreeSet<usize>,
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
 }
@@ -189,6 +198,7 @@ impl Clone for SceneInstance {
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            property_animations: self.property_animations.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
         }
@@ -226,6 +236,7 @@ impl SceneInstance {
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            property_animations: property_animation::PropertyAnimations::default(),
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
         };
@@ -410,6 +421,9 @@ impl SceneInstance {
         }
         self.validate_replay_time(time)?;
         self.select_replay_revision(time);
+        if self.has_property_animations() && time >= self.frame.time {
+            return self.advance_property_animation_frame(time);
+        }
         if time >= self.frame.time {
             self.advance_unchecked(time);
         } else {
@@ -426,8 +440,14 @@ impl SceneInstance {
         self.validate_replay_time(time)?;
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
+        let had_property_animations = self.has_property_animations();
+        if had_property_animations && self.publication.frame_epoch().checked_next().is_none() {
+            return Err(EvaluationError::FrameEpochExhausted(
+                self.publication.frame_epoch(),
+            ));
+        }
         self.seek_unchecked(time);
-        if self.frame.time != previous_time {
+        if self.frame.time != previous_time || had_property_animations {
             self.publish_effective_change();
         }
         Ok(&self.frame)
@@ -439,6 +459,9 @@ impl SceneInstance {
         }
         self.validate_replay_time(time)?;
         self.select_replay_revision(time);
+        if self.has_property_animations() && time >= self.frame.time {
+            return self.advance_property_animation_frame(time);
+        }
         let previous_time = self.frame.time;
         if time < previous_time {
             self.seek_unchecked(time);
@@ -479,6 +502,14 @@ impl SceneInstance {
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
+        if !self.property_animations.is_empty() && self.compiled.patch_changes_execution(patch) {
+            // Retirement is part of this atomic publication, not a speculative
+            // preflight side effect. Validate first so a failed edit preserves it.
+            self.compiled.preflight_execution_transaction(
+                &noon_compile::ExecutionMutationTransaction::from_mutations([patch.clone()]),
+            )?;
+            self.retire_property_animations_for_patch(patch);
+        }
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
             patch,
@@ -922,6 +953,7 @@ impl SceneInstance {
     }
 
     fn seek_unchecked(&mut self, time: f64) {
+        self.property_animations.clear();
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
         self.active_family_animation_indices.clear();
