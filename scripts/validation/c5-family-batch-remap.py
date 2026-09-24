@@ -32,20 +32,7 @@ new = '''        let scratch_changes = FrameChanges::objects(scratch_changes);
                 &self.snapshot_text_items,
                 &geometry,
             );
-            reorder_mixed_items(&mut self.render_items, frame.retained, &self.painter_order_indices);
             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
-            self.incremental_stats.mixed_order_rebuilds = self
-                .incremental_stats
-                .mixed_order_rebuilds
-                .saturating_add(1);
-        } else if let Some(range) = changes.painter_order_range() {
-            reorder_mixed_items_range(
-                &mut self.render_items,
-                &mut self.render_item_ranges,
-                frame.retained,
-                &self.painter_order_indices,
-                range,
-            );
             self.incremental_stats.mixed_order_rebuilds = self
                 .incremental_stats
                 .mixed_order_rebuilds
