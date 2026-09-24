@@ -34,11 +34,12 @@ export class AuthoringExecutionClient {
   #pointerViewRevision = 0;
   #pointerSourceSequence = 0;
   #pointerCollector = null;
+  #inspectionZoom = false;
   #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
 
-  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null, inspectionZoom = false } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("AuthoringExecutionClient requires an HTMLCanvasElement");
     }
@@ -48,6 +49,10 @@ export class AuthoringExecutionClient {
     if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
       throw new TypeError("AuthoringExecutionClient onRecoverableError must be a function");
     }
+    if (typeof inspectionZoom !== "boolean") {
+      throw new TypeError("inspectionZoom must be a boolean");
+    }
+    this.#inspectionZoom = inspectionZoom;
     this.#canvas = canvas;
     this.#onError = onError;
     this.#onRecoverableError = onRecoverableError;
@@ -486,6 +491,10 @@ export class AuthoringExecutionClient {
     const canvas = this.#canvas;
     const player = this.#player;
     const generation = this.#lifecycleGeneration;
+    // This collector belongs to the endpoint already chosen by this transition.
+    // It can register that endpoint's view now, but not admit input until the
+    // transition completes. A later transition must retire both capabilities.
+    const attachingTransition = this.#transition;
     let previousDelivery = Promise.resolve();
     let initialViewDelivery = previousDelivery;
     const report = (error) => {
@@ -493,6 +502,7 @@ export class AuthoringExecutionClient {
       else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
     };
     let lastInput = null;
+    let inspectionInFlight = false;
     const fault = async (error, preceding = previousDelivery) => {
       if (signal.aborted) return;
       controller.abort();
@@ -521,7 +531,9 @@ export class AuthoringExecutionClient {
     };
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,
-      isCurrent: () => this.#player === player && this.#transition === null,
+      isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
+        (this.#transition === null || this.#transition === attachingTransition),
+      isInputEnabled: () => this.#transition === null,
       send: submit,
       allocateSource: () => {
         if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
@@ -533,6 +545,23 @@ export class AuthoringExecutionClient {
       advanceView: () => this.#advancePointerView(),
       onError: error => { void fault(error); },
       maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+      asynchronousWheel: true,
+      onWheel: this.#inspectionZoom ? input => {
+        // A DOM wheel has no associated pointer identity. Retain its own cursor
+        // and the last successful render receipt, not a cached mouse position.
+        // One pending request is sufficient: never queue or relabel a burst.
+        if (inspectionInFlight || player.pointerPresentation === null || input.delta_pixels === 0) return;
+        inspectionInFlight = true;
+        const delivery = player.scrollInspectionView(input);
+        previousDelivery = delivery;
+        return delivery.then(result => {
+          const value = result.inspectionScrollChanged;
+          if (value !== null && typeof value !== "boolean") {
+            throw new TypeError("invalid worker inspection acknowledgement");
+          }
+          return value ?? undefined;
+        }).finally(() => { inspectionInFlight = false; });
+      } : undefined,
       onView: (revision, width, height) => {
         const preceding = previousDelivery;
         const delivery = player.setBrowserPointerView(revision, width, height);

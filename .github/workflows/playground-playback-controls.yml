@@ -21,6 +21,8 @@ on:
       - "scripts/pointer-selection-*.mjs"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
+      - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
   pull_request:
@@ -43,6 +45,8 @@ on:
       - "scripts/pointer-selection-*.mjs"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
+      - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
@@ -123,6 +127,8 @@ jobs:
           node scripts/pointer-selection-qualification.mjs
           node scripts/pointer-selection-direct-qualification.mjs
           node scripts/direct-pointer-presentation-qualification.mjs
+          node scripts/direct-inspection-qualification.mjs
+          node scripts/worker-inspection-qualification.mjs
       - name: Qualify public gallery pointer selection
         env:
           NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/gallery-pointer-selection
@@ -157,6 +163,8 @@ jobs:
             browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/pointer-selection-direct
             browser-smoke-artifacts/direct-pointer-presentation
+            browser-smoke-artifacts/direct-inspection
+            browser-smoke-artifacts/worker-inspection
             browser-smoke-artifacts/gallery-pointer-selection
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress

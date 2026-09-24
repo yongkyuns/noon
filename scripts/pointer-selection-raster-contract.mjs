@@ -22,29 +22,34 @@ export function selectionFixtureSource() {
     "        self.add(shape0, shape1, label)", ""].join("\n");
 }
 
-export function shapeSurfaceCenter(shape) {
-  const pixels = VIEW.height / VIEW.cameraHeight;
-  return { x: VIEW.width / 2 + shape.x * pixels, y: VIEW.height / 2 - shape.y * pixels };
+export function shapeSurfaceCenter(shape, view = VIEW) {
+  const pixels = view.height / view.cameraHeight;
+  return { x: view.width / 2 + (shape.x - (view.centerX ?? 0)) * pixels,
+    y: view.height / 2 - (shape.y - (view.centerY ?? 0)) * pixels };
 }
 
-function requireImage(image) {
+function requireImage(image, view = VIEW) {
+  assert.ok(Number.isSafeInteger(view.width) && view.width > 0 &&
+    Number.isSafeInteger(view.height) && view.height > 0 &&
+    Number.isFinite(view.cameraHeight) && view.cameraHeight > 0 &&
+    Number.isFinite(view.centerX ?? 0) && Number.isFinite(view.centerY ?? 0), "invalid expected camera view");
   assert.ok(image && Number.isSafeInteger(image.width) && Number.isSafeInteger(image.height), "invalid image dimensions");
-  assert.equal(image.width, VIEW.width); assert.equal(image.height, VIEW.height);
+  assert.equal(image.width, view.width); assert.equal(image.height, view.height);
   assert.equal(image.data?.length, image.width * image.height * 4, "expected decoded RGBA pixels");
 }
 
-function localPoint(shape, x, y) {
-  const units = VIEW.cameraHeight / VIEW.height;
-  const worldX = (x + 0.5 - VIEW.width / 2) * units - shape.x;
-  const worldY = (VIEW.height / 2 - y - 0.5) * units - shape.y;
+function localPoint(shape, x, y, view) {
+  const units = view.cameraHeight / view.height;
+  const worldX = (x + 0.5 - view.width / 2) * units + (view.centerX ?? 0) - shape.x;
+  const worldY = (view.height / 2 - y - 0.5) * units + (view.centerY ?? 0) - shape.y;
   const cos = Math.cos(shape.rotation), sin = Math.sin(shape.rotation);
   return { x: (cos * worldX + sin * worldY) / shape.scaleX,
     y: (-sin * worldX + cos * worldY) / shape.scaleY };
 }
 
-function inside(shape, x, y, marginPixels) {
-  const point = localPoint(shape, x, y);
-  const margin = marginPixels * VIEW.cameraHeight / VIEW.height;
+function inside(shape, x, y, marginPixels, view) {
+  const point = localPoint(shape, x, y, view);
+  const margin = marginPixels * view.cameraHeight / view.height;
   if (shape.kind === "circle") {
     const radius = shape.radius + margin / Math.min(Math.abs(shape.scaleX), Math.abs(shape.scaleY));
     return radius > 0 && Math.hypot(point.x, point.y) <= radius;
@@ -59,8 +64,8 @@ export function assertExactPixels(actual, expected, label) {
   assert.equal(firstDifference, -1, `${label}: RGBA pixels must be identical`);
 }
 
-export function assertSelectionPixels(before, after, shape) {
-  requireImage(before); requireImage(after);
+export function assertSelectionPixels(before, after, shape, view = VIEW) {
+  requireImage(before, view); requireImage(after, view);
   let changed = 0, interior = 0, changedInterior = 0;
   for (let y = 0; y < before.height; y++) {
     for (let x = 0; x < before.width; x++) {
@@ -68,9 +73,9 @@ export function assertSelectionPixels(before, after, shape) {
       const differs = [0, 1, 2, 3].some(channel => before.data[offset + channel] !== after.data[offset + channel]);
       if (differs) {
         changed++;
-        assert.ok(inside(shape, x, y, 2), `selection changed unrelated pixel (${x}, ${y})`);
+        assert.ok(inside(shape, x, y, 2, view), `selection changed unrelated pixel (${x}, ${y})`);
       }
-      if (inside(shape, x, y, -2)) {
+      if (inside(shape, x, y, -2, view)) {
         interior++;
         if (differs) changedInterior++;
       }

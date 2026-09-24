@@ -579,3 +579,5 @@ fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
         .commit_required_callback_phase(phase.finish())
         .unwrap();
 }
+
+mod inspection;
