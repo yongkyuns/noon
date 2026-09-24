@@ -512,6 +512,10 @@ export async function attachSemanticEngine(
       // authorizes no input and is applied before the next leased publication.
       player?.setBrowserPointerViewJson(JSON.stringify(view));
       pointerView = Object.freeze({ revision: view.revision, width: view.width, height: view.height });
+    } else if (message.type === "inspection_scroll") {
+      return player.scrollInspectionViewJson(JSON.stringify({
+        ...message.input, presentation: message.presentation,
+      }));
     } else if (message.type === "browser_pointer_input") {
       const {
         channel: _channel,
@@ -543,13 +547,15 @@ export async function attachSemanticEngine(
              (controls[0].type === "native_state_input" ||
               controls[0].type === "native_event" ||
               controls[0].type === "browser_pointer_input" ||
+              controls[0].type === "inspection_scroll" ||
               controls[0].type === "browser_pointer_view" ||
               controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
         try {
           const accepted = applyNativeInput(message);
           post({ requestId: message.requestId, ...state(message.type),
-            ...(message.type === "browser_pointer_input" ? { pointerInputAccepted: accepted } : {}) });
+            ...(message.type === "browser_pointer_input" ? { pointerInputAccepted: accepted } : {}),
+            ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: accepted ?? null } : {}) });
         } catch (error) { fail(error, message.requestId); }
         appliedInput = true;
       }
@@ -785,6 +791,7 @@ export async function attachSemanticEngine(
           case "native_state_input":
           case "native_event":
           case "browser_pointer_input":
+          case "inspection_scroll":
           case "pointer_fill_selection":
           case "browser_pointer_view": {
             pointerInputAccepted = applyNativeInput(message);
@@ -815,6 +822,7 @@ export async function attachSemanticEngine(
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
+          ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         });
       } catch (error) {
         if (message.type === "sample_to_authored_time" && continuation !== null) {
@@ -941,7 +949,7 @@ export async function attachSemanticEngine(
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection",
+          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -974,6 +982,7 @@ export async function attachSemanticEngine(
             (message.type === "native_state_input" ||
              message.type === "native_event" ||
              message.type === "browser_pointer_input" ||
+             message.type === "inspection_scroll" ||
              message.type === "pointer_fill_selection")) {
           throw new Error("native input requires an active Python source continuation segment");
         }

@@ -789,3 +789,46 @@ for (const operation of ["engine-restart", "semantic-replacement"]) {
     } finally { client.terminate(); await pending?.catch(() => {}); }
   });
 }
+
+const inspectionInput = { view_revision: 3, viewport_width: 800, viewport_height: 400,
+  surface_x: 500, surface_y: 200, delta_pixels: -100 };
+
+for (const collected of [null, pointerReceipt()]) {
+  test(`inspection pins its receipt and normalized cursor before yielding (${collected === null ? "unpresented" : "presented"})`, async () => {
+    const { client, engine } = await startClient();
+    try {
+      await registerPointerView(client, engine);
+      if (collected) engine.emitMessage(engineMessage("pointer_presented", { receipt: collected }));
+      const input = { ...inspectionInput };
+      const pending = client.scrollInspectionView(input);
+      input.surface_x = 9;
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(2, 1) }));
+      const sent = await waitForRequest(engine, "inspection_scroll");
+      assert.deepEqual(sent.input, inspectionInput);
+      assert.deepEqual(sent.presentation, collected);
+      engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, inspectionScrollChanged: null }));
+      assert.equal((await pending).inspectionScrollChanged, null);
+    } finally { client.terminate(); }
+  });
+}
+
+test("inspection shares native ingress capacity and never evicts pending pointer input", async () => {
+  const { client, engine } = await startClient(); const pending = [];
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i++) {
+      pending.push(observeResult(client.scrollInspectionView(inspectionInput)));
+    }
+    await assert.rejects(client.submitBrowserPointerInput(pointerInput), /in-flight capacity is full/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+    assert.equal(engine.messages.filter(m => m.type === "browser_pointer_input").length, 0);
+  } finally { client.terminate(); await Promise.all(pending); }
+});
+
+test("inspection reserved before termination is never delivered to a retired endpoint", async () => {
+  const { client, engine } = await startClient();
+  const pending = observeResult(client.scrollInspectionView(inspectionInput));
+  client.terminate();
+  assert.match((await pending).error?.message ?? "", /retired|transition|terminated/i);
+  assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
+});

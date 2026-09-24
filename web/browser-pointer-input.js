@@ -2,10 +2,12 @@
 // input source, never a scene target. Runtime signals remain owned by Rust.
 // Additional contacts are ignored while the selected pointer has buttons down.
 // No OS/DOM capture is requested; leaving the content viewport cancels.
+import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
+
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, windowTarget = window,
+  signal, isCurrent, isInputEnabled = () => true, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -14,6 +16,9 @@ export function attachBrowserPointerInput(canvas, {
   let view = null;
   let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
+  // A newly attached endpoint may register its view while input is gated by
+  // an ownership transition. Registration is not an input occurrence or receipt.
+  const inputActive = () => active() && isInputEnabled();
   const cancel = (kind = "cancel") => {
     if (selected === null) return;
     const previous = selected;
@@ -55,7 +60,7 @@ export function attachBrowserPointerInput(canvas, {
     return rect;
   };
   const receive = (type, event, receiptRect = null) => {
-    if (!active()) return;
+    if (!inputActive()) return;
     // -1 is the non-pointing-device ID, not a source for pointer gestures.
     if (event.isPrimary !== true || event.pointerId === -1) return;
     if (!Number.isInteger(event.pointerId) || event.pointerId < -2147483648 ||
@@ -129,7 +134,7 @@ export function attachBrowserPointerInput(canvas, {
     return true;
   };
   const collect = (type, event) => {
-    if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
+    if (!inputActive() || event.isPrimary !== true || event.pointerId === -1) return;
     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
     // A held contact without an admitted press cannot resume after cancellation
     // or enter from outside. Keep ordinary parent validation/ignore semantics;
@@ -161,10 +166,46 @@ export function attachBrowserPointerInput(canvas, {
   const guard = operation => event => {
     try { operation(event); } catch (error) { onError(error); }
   };
+  if (onWheel) {
+    canvas.addEventListener("wheel", guard(event => {
+      if (!inputActive()) return;
+      if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+        throw new TypeError("wheel cursor coordinates must be finite");
+      }
+      const rect = currentView();
+      if (rect === null) return;
+      const delta = wheelDeltaCssPixels(canvas, event, () => wheelLinePixels(canvas), rect);
+      const contact = selected;
+      const changed = onWheel({
+        view_revision: viewRevision(), viewport_width: rect.width, viewport_height: rect.height,
+        surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top, delta_pixels: delta.y,
+      });
+      if (asynchronousWheel && changed instanceof Promise) {
+        // Worker acceptance is asynchronous. Consume a submitted request, but
+        // not a synchronous refusal. A later rejection cannot undo DOM scrolling.
+        // Completion retires only the captured contact, not a newer replacement.
+        event.preventDefault();
+        void changed.then(value => {
+          if (value !== undefined && typeof value !== "boolean") {
+            throw new TypeError("worker inspection admission must resolve to a boolean or undefined");
+          }
+          if (active() && value === true && selected === contact) selected = null;
+        }).catch(error => { if (active()) onError(error); });
+        return;
+      }
+      if (changed !== undefined && typeof changed !== "boolean") {
+        throw new TypeError("direct inspection admission must return a synchronous boolean or undefined");
+      }
+      // Shared Rust already cancelled a changed view's semantic gesture. Retire
+      // only its DOM contact; sending another cancellation would use a dead token.
+      if (changed === true) selected = null;
+      if (changed !== undefined) event.preventDefault();
+    }), { passive: false, signal });
+  }
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
-  windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  windowTarget.addEventListener("blur", guard(() => { if (inputActive()) cancel("focus_lost"); }), { signal });
   if (onView) {
     // Register before the first paint; input collection never invents a receipt.
     // Scroll/resize/element resize can invalidate mapping without pointer motion.

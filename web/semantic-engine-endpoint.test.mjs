@@ -2406,3 +2406,33 @@ for (const [width, height] of [[0, 0], [0, 400], [800, 0]]) {
     } finally { clearTimeout(watchdog); endpoint?.stop(); f.close(); }
   });
 }
+
+for (const outcome of [true, false, undefined]) {
+  test(`worker inspection control preserves shared acceptance ${String(outcome)} and never advances authored time`, async () => {
+    const f = fixture(); let endpoint; const calls = [];
+    f.player.scrollInspectionViewJson = json => { calls.push(JSON.parse(json)); return outcome; };
+    try {
+      const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
+      const input = { view_revision: 1, viewport_width: 800, viewport_height: 400,
+        surface_x: 400, surface_y: 200, delta_pixels: -100 };
+      const presentation = { session: 7, sequence: 0, presentation: 1, view_revision: 1 };
+      const result = await request(f.control.port2, "inspection_scroll", 991, { input, presentation });
+      assert.equal(result.type, "inspection_scroll");
+      assert.equal(result.inspectionScrollChanged, outcome ?? null);
+      assert.deepEqual(calls, [{ ...input, presentation }]);
+      assert.equal(result.time, 0);
+      assert.deepEqual(f.stats().nativeInputs, [], "inspection must not also emit a semantic wheel occurrence");
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
+test("worker inspection errors retain their cause without admitting or resuming execution", async () => {
+  const f = fixture(); let endpoint;
+  f.player.scrollInspectionViewJson = () => { throw new Error("required callback pending"); };
+  try {
+    const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
+    const result = await request(f.control.port2, "inspection_scroll", 992, { input: {}, presentation: null });
+    assert.equal(result.type, "error"); assert.match(result.message, /required callback pending/);
+    assert.equal(f.player.time(), 0); assert.equal(f.stats().completedSegments, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
