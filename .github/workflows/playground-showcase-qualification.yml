@@ -30,9 +30,9 @@ jobs:
       - name: Prepare a pinned candidate without changing any branch
         run: |
           mkdir -p evidence
-          git archive HEAD | gzip > evidence/source-base.tar.gz
           python3 ../proposal/scripts/ci-callback-lifecycle-candidate.py
           cat ../proposal/scripts/ci-callback-lifecycle-extra.rs >> crates/noon/tests/callback_lifecycle_admission.rs
+          python3 ../proposal/scripts/ci-display-channel-candidate.py
           python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/noon/tests/callback_lifecycle_admission.rs')
@@ -45,20 +45,27 @@ jobs:
           s = s.replace('// Both a leaf request and a nested request must preserve the same semantics.', '// Direct, leaf-composition and nested requests must preserve the same semantics.')
           p.write_text(s)
           PY
-      - name: Format and check only candidate files with the crate edition
+      - name: Format and check candidate files with their crate edition
         run: |
-          rustfmt --edition 2021 --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
-          rustfmt --edition 2021 --check --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
+          paths=(crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs crates/noon-runtime/src/lib.rs crates/noon-runtime/tests/display_channel_mutation.rs)
+          rustfmt --edition 2021 --config skip_children=true "${paths[@]}"
+          rustfmt --edition 2021 --check --config skip_children=true "${paths[@]}"
+          git add -N crates/noon-runtime/tests/display_channel_mutation.rs
           git diff --check
           git diff > evidence/candidate.patch
-          cp crates/noon/src/execution_session.rs evidence/execution_session.rs
-          cp crates/noon/tests/callback_lifecycle_admission.rs evidence/callback_lifecycle_admission.rs
-      - name: Run native acceptance tests
-        run: cargo test -p noon --no-default-features --test callback_lifecycle_admission 2>&1 | tee evidence/acceptance.log
+          for path in "${paths[@]}"; do mkdir -p "evidence/$(dirname "$path")"; cp "$path" "evidence/$path"; done
+      - name: Run native acceptance and display-channel tests
+        run: |
+          cargo test -p noon --no-default-features --test callback_lifecycle_admission 2>&1 | tee evidence/acceptance.log
+          cargo test -p noon-runtime --test display_channel_mutation 2>&1 | tee evidence/display-channels.log
       - name: Run existing library and integration regressions
-        run: cargo test -p noon --no-default-features --lib --tests 2>&1 | tee evidence/regressions.log
+        run: |
+          cargo test -p noon --no-default-features --lib --tests 2>&1 | tee evidence/regressions.log
+          cargo test -p noon-runtime --lib --tests 2>&1 | tee evidence/runtime-regressions.log
       - name: Lint candidate integration tests
-        run: cargo clippy -p noon --no-default-features --test callback_lifecycle_admission -- -D warnings 2>&1 | tee evidence/clippy.log
+        run: |
+          cargo clippy -p noon --no-default-features --test callback_lifecycle_admission -- -D warnings 2>&1 | tee evidence/clippy.log
+          cargo clippy -p noon-runtime --test display_channel_mutation -- -D warnings 2>&1 | tee evidence/runtime-clippy.log
       - name: Store validated source blobs only, never move a branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,7 +73,7 @@ jobs:
           python3 - <<'PY'
           import json, os, urllib.request
           from pathlib import Path
-          paths = ['crates/noon/src/execution_session.rs', 'crates/noon/tests/callback_lifecycle_admission.rs']
+          paths = ['crates/noon/src/execution_session.rs', 'crates/noon/tests/callback_lifecycle_admission.rs', 'crates/noon-runtime/src/lib.rs', 'crates/noon-runtime/tests/display_channel_mutation.rs']
           blobs = []
           for path in paths:
               payload = json.dumps({'content': Path(path).read_text(), 'encoding': 'utf-8'}).encode()
