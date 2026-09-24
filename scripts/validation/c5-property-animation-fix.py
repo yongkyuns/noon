@@ -128,4 +128,75 @@ fn effect_sample_cost_does_not_follow_unrelated_active_timeline_groups() {
 }
 '''
 p.write_text(s)
+
+# Explicit seeks retire drivers even when both authored time and signal values
+# remain equal; old prepared samples must still be invalidated by a fresh epoch.
+p = 'crates/noon-runtime/src/reactive/runtime.rs'
+replace(p, '''        let effective_changed = !prepared.is_empty();
+        if effective_changed {''', '''        let had_property_animations = self.has_property_animations();
+        if had_property_animations && self.publication.frame_epoch().checked_next().is_none() {
+            return Err(crate::EvaluationError::FrameEpochExhausted(self.publication.frame_epoch()));
+        }
+        let effective_changed = !prepared.is_empty();
+        if effective_changed {''')
+replace(p, '        if self.frame.time != previous_time || effective_changed {',
+           '        if self.frame.time != previous_time || effective_changed || had_property_animations {')
+p = 'crates/noon-runtime/src/lib.rs'
+replace(p, '''        let had_property_animations = self.has_property_animations();
+        self.seek_unchecked(time);''', '''        let had_property_animations = self.has_property_animations();
+        if had_property_animations && self.publication.frame_epoch().checked_next().is_none() {
+            return Err(EvaluationError::FrameEpochExhausted(self.publication.frame_epoch()));
+        }
+        self.seek_unchecked(time);''')
+
+p = Path('crates/noon-runtime/src/property_animation/tests.rs')
+p.write_text(p.read_text() + '''
+#[test]
+fn unchanged_reactive_seek_retires_effect_and_invalidates_its_prepared_sample() {
+    use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
+    use noon_core::{SemanticStore, SemanticObjectState, StoredGeometry,
+        SemanticVec3, SemanticObjectProperty, ReactiveValue};
+    let mut store = SemanticStore::new();
+    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 }));
+    store.attach_to_scene(target).unwrap();
+    let signal = store.insert_semantic_input_signal(SemanticVec3::ZERO).unwrap();
+    store.bind_semantic_signal(signal, target, SemanticObjectProperty::Translation).unwrap();
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+    let signal = lowered.reactive().execution_signal_id(signal).unwrap();
+    let object = index.execution_object_id(target).unwrap();
+    let mut runtime = SceneInstance::from_semantic_execution(lowered);
+    let mut track = scale(1); track.object = object;
+    let token = runtime.start_restoring_property_animation(&[track]).unwrap();
+    runtime.advance_property_animations_by(0.5).unwrap();
+    let prepared = runtime.prepare_advance_to(0.0).unwrap();
+    let batch = runtime.prepare_effective_property_batch(&[]).unwrap();
+    let before = runtime.publication_context();
+    runtime.seek_with_reactive_inputs(0.0, &[(signal, ReactiveValue::from(Vec2::ZERO))]).unwrap();
+    assert!(runtime.property_animation_elapsed(token).is_none());
+    assert_ne!(runtime.publication_context(), before);
+    assert_eq!(runtime.effective_object(object).unwrap().transform.scale, Vec2::ONE);
+    assert!(matches!(runtime.commit_prepared_frame(prepared, batch),
+        Err(PreparedFrameCommitError::StalePublication { .. })));
+}
+
+#[test]
+fn separate_claims_on_one_object_release_without_retiring_each_other() {
+    let mut runtime = instance(1, &[]);
+    let mut fill = scale(1);
+    fill.property = Property::Fill;
+    fill.values = TrackValues::Color { from: Some(Color::BLUE), to: Some(Color::YELLOW) };
+    let shape = runtime.start_restoring_property_animation(&[scale(1)]).unwrap();
+    let paint = runtime.start_restoring_property_animation(&[fill]).unwrap();
+    runtime.advance_property_animations_by(0.5).unwrap();
+    assert_eq!(runtime.frame().objects[0].style.fill, Some(Color::YELLOW));
+    runtime.cancel_property_animation(shape).unwrap();
+    assert_eq!(runtime.frame().objects[0].transform.scale, Vec2::ONE);
+    assert_eq!(runtime.frame().objects[0].style.fill, Some(Color::YELLOW));
+    assert_eq!(runtime.property_animation_elapsed(paint), Some(0.5));
+    runtime.advance_property_animations_by(0.5).unwrap();
+    assert_eq!(runtime.frame().objects[0].style.fill, Some(Color::BLUE));
+    assert!(!runtime.has_property_animations());
+}
+''')
 print('Independent samples preserve coherent base and remain local to active effects')
