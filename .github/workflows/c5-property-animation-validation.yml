@@ -1,0 +1,154 @@
+name: C5 restoring property animation qualification
+
+on:
+  push:
+    branches: [validation/c5-property-animation-20260924]
+    paths:
+      - scripts/validation/c5-property-animation.py
+      - scripts/validation/c5-property-animation-fix.py
+      - .github/workflows/c5-property-animation-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: c5-property-animation-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 6ac0d5cad212e68b62d8856bbdfee0cf14e888f0
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reconstruct and retain exact clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-property-proof
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/validation/c5-property-animation.py')
+          # Correct one transcribed payload character; the decompressed patch's
+          # independent SHA-256 remains mandatory before applying any source.
+          source = p.read_text().replace('VqpgCY5qJ06', 'VqpgCY5qv06')
+          exec(compile(source, str(p), 'exec'))
+          fix = Path('scripts/validation/c5-property-animation-fix.py')
+          if fix.exists():
+              exec(compile(fix.read_text(), str(fix), 'exec'))
+          PY
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-property-proof/rust-version.txt
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-property-proof/paths.txt <<'EOF'
+          crates/noon-runtime/src/execution_slots/prepared_value_publication.rs
+          crates/noon-runtime/src/execution_slots/runtime_transaction.rs
+          crates/noon-runtime/src/lib.rs
+          crates/noon-runtime/src/prepared_frame.rs
+          crates/noon-runtime/src/property_animation.rs
+          crates/noon-runtime/src/property_animation/tests.rs
+          crates/noon-runtime/src/reactive/runtime.rs
+          crates/noon-runtime/src/reactive/wake.rs
+          crates/noon-runtime/src/replay.rs
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-property-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-property-proof/paths.txt -
+          git write-tree > /tmp/c5-property-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-property-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-property-proof/source.stat
+          git archive "$(cat /tmp/c5-property-proof/tree.txt)" | gzip > /tmp/c5-property-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-property-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: runtime-owned restoring property animation lifecycle')
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-property-proof/tree.txt)"
+          test ! -e .github/workflows/c5-property-animation-validation.yml
+          git diff --exit-code
+          git rev-parse HEAD > /tmp/c5-property-proof/candidate.txt
+          cp crates/noon-runtime/src/property_animation.rs /tmp/c5-property-good.rs
+      - name: Effect lifecycle and ordinary publication regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-runtime --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-property-proof/effects.log
+          cargo test -p noon-runtime --lib 2>&1 | tee /tmp/c5-property-proof/runtime.log
+          cargo test -p noon-runtime --tests 2>&1 | tee /tmp/c5-property-proof/runtime-integration.log
+          cargo test -p noon --no-default-features --lib 2>&1 | tee /tmp/c5-property-proof/session.log
+      - name: Retained completed-effect negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-runtime/src/property_animation.rs')
+          s = p.read_text()
+          old = 'let finished = elapsed >= active.duration;'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'let finished = false;'))
+          PY
+          set +e
+          cargo test -p noon-runtime --lib property_animation::tests::independent_time_midpoint_exact_release_and_retrigger -- --exact --nocapture > /tmp/c5-property-proof/negative.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-property-good.rs crates/noon-runtime/src/property_animation.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-property-proof/negative.log
+          cargo test -p noon-runtime --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-property-proof/restored.log
+      - name: WASM and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-property-proof/wasm.log
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-property-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-property-proof/fast.log
+      - name: Publish exact tested source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cmp /tmp/c5-property-good.rs crates/noon-runtime/src/property_animation.rs
+          git diff --exit-code
+          cp Cargo.lock /tmp/c5-property-proof/Cargo.lock
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-property-proof/tree.txt)"
+          branch="staging/c5-property-animation-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > /tmp/c5-property-proof/commit.txt
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-property-animation-proof
+          path: /tmp/c5-property-proof
+          retention-days: 7
+          if-no-files-found: error
