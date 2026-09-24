@@ -16,10 +16,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Build the unchanged engine
-        uses: ./.github/actions/dev-wasm-build
+      - name: Preserve disposable observation recipe
+        run: cp .github/proposals/checkpoint-observations.patch "$RUNNER_TEMP/checkpoint-observations.patch"
+      - name: Checkout exact PR source without diagnostic workflow files
+        uses: actions/checkout@v7
         with:
-          preflight: 'true'
+          ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
+          persist-credentials: false
       - name: Install repository-pinned capture tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -30,10 +33,14 @@ jobs:
           name: checkpoint-browser
           path: ~/.cache/ms-playwright/chromium_headless_shell-*/**
           retention-days: 1
+      - name: Build and preflight the unchanged PR engine
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
       - name: Add read-only observations in this disposable checkout
         run: |
-          git apply --check .github/proposals/checkpoint-observations.patch
-          git apply .github/proposals/checkpoint-observations.patch
+          git apply --check "$RUNNER_TEMP/checkpoint-observations.patch"
+          git apply "$RUNNER_TEMP/checkpoint-observations.patch"
           node --check web/main.js
           node --check scripts/showcase-capture.mjs
           node --check scripts/showcase-live-review.mjs
@@ -48,7 +55,7 @@ jobs:
         run: |
           mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
           git diff --binary > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/instrumentation.patch
-          cp .github/proposals/checkpoint-observations.patch browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+          cp "$RUNNER_TEMP/checkpoint-observations.patch" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
           cp web/main.js scripts/showcase-capture.mjs scripts/showcase-live-review.mjs browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
       - uses: actions/upload-artifact@v7
         if: always()
