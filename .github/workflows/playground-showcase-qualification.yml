@@ -32,17 +32,33 @@ jobs:
           mkdir -p evidence
           git archive HEAD | gzip > evidence/source-base.tar.gz
           python3 ../proposal/scripts/ci-callback-lifecycle-candidate.py
-      - name: Format only candidate files
+          cat ../proposal/scripts/ci-callback-lifecycle-extra.rs >> crates/noon/tests/callback_lifecycle_admission.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/tests/callback_lifecycle_admission.rs')
+          s = p.read_text()
+          s = s.replace('for route in 0..3 {', 'for route in [ActivationRoute::Direct, ActivationRoute::Leaf, ActivationRoute::Nested] {')
+          s = s.replace('let nested = route == 2;', 'let nested = matches!(route, ActivationRoute::Nested);')
+          s = s.replace('if route == 0 {', 'if matches!(route, ActivationRoute::Direct) {')
+          s = s.replace('route={route}', 'route={route:?}')
+          s = s.replace('fn qualify_unrelated_callback(lifecycle: Lifecycle) {', '#[derive(Clone, Copy, Debug)]\nenum ActivationRoute { Direct, Leaf, Nested }\n\nfn qualify_unrelated_callback(lifecycle: Lifecycle) {')
+          s = s.replace('// Both a leaf request and a nested request must preserve the same semantics.', '// Direct, leaf-composition and nested requests must preserve the same semantics.')
+          p.write_text(s)
+          PY
+      - name: Format and check only candidate files with the crate edition
         run: |
-          rustfmt --edition 2024 --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
+          rustfmt --edition 2021 --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
+          rustfmt --edition 2021 --check --config skip_children=true crates/noon/src/execution_session.rs crates/noon/tests/callback_lifecycle_admission.rs
           git diff --check
           git diff > evidence/candidate.patch
           cp crates/noon/src/execution_session.rs evidence/execution_session.rs
           cp crates/noon/tests/callback_lifecycle_admission.rs evidence/callback_lifecycle_admission.rs
       - name: Run native acceptance tests
         run: cargo test -p noon --no-default-features --test callback_lifecycle_admission 2>&1 | tee evidence/acceptance.log
-      - name: Run existing shared execution regressions
-        run: cargo test -p noon --no-default-features --lib 2>&1 | tee evidence/library.log
+      - name: Run existing library and integration regressions
+        run: cargo test -p noon --no-default-features --lib --tests 2>&1 | tee evidence/regressions.log
+      - name: Lint candidate integration tests
+        run: cargo clippy -p noon --no-default-features --test callback_lifecycle_admission -- -D warnings 2>&1 | tee evidence/clippy.log
       - name: Store validated source blobs only, never move a branch
         env:
           GH_TOKEN: ${{ github.token }}
