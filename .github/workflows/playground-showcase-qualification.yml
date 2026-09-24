@@ -10,6 +10,12 @@ on:
       - 'web/python/examples/noon_showcase_manifest.json'
       - 'web/python/test_showcase*.py'
       - 'scripts/showcase-*'
+      - 'crates/noon/src/execution_session.rs'
+      - 'crates/noon/src/execution_session/**'
+      - 'crates/noon/src/live_session.rs'
+      - 'crates/noon/src/live_session/**'
+      - 'crates/noon/src/host_callbacks.rs'
+      - 'crates/noon/tests/callback_lifecycle_admission.rs'
       - 'crates/noon-compile/src/replay_revision.rs'
       - 'crates/noon-runtime/src/replay.rs'
       - 'crates/noon-runtime/src/replay/**'
@@ -24,6 +30,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  callback-lifecycle:
+    name: Native callback lifecycle admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Qualify lifecycle and updater coexistence in shared Rust
+        run: cargo test -p noon --no-default-features --test callback_lifecycle_admission
+
   capture:
     name: Actual showcase frames (${{ matrix.backend }})
     runs-on: ubuntu-latest
