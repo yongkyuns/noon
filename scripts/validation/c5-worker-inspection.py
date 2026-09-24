@@ -9,6 +9,8 @@ EXPECTED = 'c9f551f121284f3f884055c6f55a82b028fa2bccb61d592903960fc6ef4b8443'
 ORACLE_COMMIT = '1ee487af88dc6972bb4b734b4532413861f8bd46'
 FIXTURE_COMMIT = '4b15c3d8152d0f9e93b35c2057fc8060af9d4e45'
 FIXTURE_SHA256 = '669e1f2e780f9927fd0de170f6d2ad0b567f692aedb9d1f7e8c6d2e23e8c3e05'
+LIFECYCLE_COMMIT = '6b7617615ca6707cf57bad56292b4e23097f934f'
+LIFECYCLE_SHA256 = 'f2527059889b115ae956e0eba8d7faff4a3194612f00c404a5539ce636bb6afc'
 s = Path('scripts/validation/c5-worker-inspection.patch.gz.b64').read_text().strip()
 # Correct one known transport transcription, not source code. Gzip integrity
 # and the complete original patch digest must both hold before applying it.
@@ -38,4 +40,13 @@ fixture_path = Path('scripts/worker-inspection-qualification.mjs')
 assert hashlib.sha256(fixture_path.read_bytes()).hexdigest() == 'ad7fd2349ee179824780c0b4f62c14295025dc011af0a2b780d94b6ee132bc64'
 fixture_path.write_bytes(fixture)
 (proof / 'fixture-sha256.txt').write_text(FIXTURE_SHA256 + '\n')
+# View registration belongs to attachment readiness, not input admission.
+# Preserve the existing browser assertions: no retries or priming wheel events.
+lifecycle = subprocess.check_output(['git', 'show', LIFECYCLE_COMMIT + ':scripts/validation/c5-inspection-lifecycle.patch'])
+assert hashlib.sha256(lifecycle).hexdigest() == LIFECYCLE_SHA256
+lifecycle_path = proof / 'lifecycle.patch'
+lifecycle_path.write_bytes(lifecycle)
+subprocess.run(['git', 'apply', '--check', str(lifecycle_path)], check=True)
+subprocess.run(['git', 'apply', str(lifecycle_path)], check=True)
+(proof / 'lifecycle-sha256.txt').write_text(LIFECYCLE_SHA256 + '\n')
 print('Applied exact worker inspection delta:', actual)
