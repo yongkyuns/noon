@@ -17,9 +17,9 @@ s = s.replace(old, new)
 old = '            self.relower_object(object_index, self.frame.time, &mut evaluation);'
 assert s.count(old) == 1
 s = s.replace(old, '''            self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);''')
-helper = '''    /// Visibility channels do not own affine or paint state. Re-evaluating one
-    /// must preserve those independent effective domains, including values left
-    /// by an updater that has already stopped. No callback history is needed here.
+helper = '''    /// A primitive timeline channel owns one property, not its entire frame row.
+    /// Preserve independent effective values, including values left by a stopped
+    /// updater. Composite transform/morph tracks retain their coupled evaluation.
     fn relower_timeline_object(
         &mut self,
         object_index: usize,
@@ -27,16 +27,25 @@ helper = '''    /// Visibility channels do not own affine or paint state. Re-eva
         stats: &mut EvaluationStats,
     ) {
         let relevant = || channels.iter().flatten().filter(|channel| channel.object_index as usize == object_index);
-        if relevant().any(|channel| !matches!(channel.property, Property::Presence | Property::Appearance | Property::Reveal)) {
+        if relevant().any(|channel| matches!(channel.property, Property::Transform | Property::Morph)) {
             self.relower_object(object_index, self.frame.time, stats);
             return;
         }
         for channel in relevant() {
+            let object = &self.compiled.objects()[object_index];
             match channel.property {
+                Property::Position => self.frame.objects[object_index].transform.translation = affine_base_at_time(&self.compiled, object_index, object.base_transform, self.frame.time).translation,
+                Property::Rotation => self.frame.objects[object_index].transform.rotation = affine_base_at_time(&self.compiled, object_index, object.base_transform, self.frame.time).rotation,
+                Property::Scale => self.frame.objects[object_index].transform.scale = affine_base_at_time(&self.compiled, object_index, object.base_transform, self.frame.time).scale,
+                Property::Fill => self.frame.objects[object_index].style.fill = object.base_style.fill,
+                Property::Stroke => self.frame.objects[object_index].style.stroke = object.base_style.stroke,
+                Property::StrokeWidth => self.frame.objects[object_index].style.stroke_width = object.base_style.stroke_width,
+                Property::Opacity => self.frame.objects[object_index].style.opacity = object.base_style.opacity,
+                Property::ZIndex => self.frame.objects[object_index].z_index = initial_z_index(&self.compiled, object_index),
                 Property::Presence => self.frame.presences[object_index] = initial_channel_bool(&self.compiled, object_index, Property::Presence, true),
                 Property::Appearance => self.frame.objects[object_index].appearance = initial_channel_scalar(&self.compiled, object_index, Property::Appearance, 1.0),
                 Property::Reveal => self.frame.reveals[object_index] = initial_channel_scalar(&self.compiled, object_index, Property::Reveal, 1.0),
-                _ => unreachable!("visibility-only channels were checked above"),
+                Property::Transform | Property::Morph => unreachable!("coupled channels were handled above"),
             }
             self.reapply_properties(object_index, &[channel.property]);
             stats.groups_evaluated += self.last_stats.groups_evaluated;
@@ -140,5 +149,28 @@ fn display_channel_reconciliation_preserves_independent_effective_domains() {
         assert_eq!(instance.frame().objects[0].appearance, 1.0);
         assert_eq!(instance.frame().reveal(0), 1.0);
     }
+}
+
+#[test]
+fn affine_fade_channels_preserve_unowned_effective_components() {
+    let mut instance = instance_with_retained_effective_state();
+    let before = instance.frame().objects.clone();
+    let mut scale = track(Property::Scale);
+    scale.values = TrackValues::Vec2 { from: before[0].transform.scale, to: before[0].transform.scale * 0.5 };
+    instance.apply_execution_patch(&ExecutionPatch::AddTrack(scale)).unwrap();
+    instance.advance_to(1.5).unwrap();
+    assert_eq!(instance.frame().objects[0].transform.translation, before[0].transform.translation);
+    assert_eq!(instance.frame().objects[0].transform.rotation, before[0].transform.rotation);
+    assert_eq!(instance.frame().objects[0].transform.scale, before[0].transform.scale * 0.75);
+    assert_eq!(instance.frame().objects[0].style, before[0].style);
+    assert_eq!(instance.frame().objects[1], before[1]);
+    instance.advance_to(2.0).unwrap();
+    instance.apply_execution_patch(&ExecutionPatch::ReconcileTrack {
+        track: TrackId::new(7), object: ObjectId::new(0), property: Property::Scale, end_time: 2.0,
+    }).unwrap();
+    assert_eq!(instance.frame().objects[0].transform.translation, before[0].transform.translation);
+    assert_eq!(instance.frame().objects[0].transform.rotation, before[0].transform.rotation);
+    assert_eq!(instance.frame().objects[0].style, before[0].style);
+    assert_eq!(instance.frame().objects[1], before[1]);
 }
 ''')
