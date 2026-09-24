@@ -25,19 +25,21 @@ jobs:
         with:
           ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
           persist-credentials: false
-      - name: Record actual source and separate diagnostic trigger
+      - name: Record actual source and separate diagnostic trigger outside the checkout
         run: |
-          mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
-          git rev-parse HEAD > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/checkout.txt
-          printf '%s\n' "$GITHUB_SHA" > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/trigger.txt
+          git rev-parse HEAD > "$RUNNER_TEMP/checkpoint-checkout.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/checkpoint-trigger.txt"
           rustup install
           rustup target add wasm32-unknown-unknown
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
-      - name: Build and preflight the pinned source with the normal entrypoint
-        run: bash scripts/build-web-demo.sh
+      - name: Build and preflight the clean pinned source with the normal entrypoint
+        run: |
+          test -z "$(git status --porcelain --untracked-files=all)"
+          bash scripts/build-web-demo.sh
+          node --input-type=module -e 'import fs from "node:fs"; import assert from "node:assert/strict"; const identity=JSON.parse(fs.readFileSync("web/runtime-build-identity.json")); assert.equal(identity.sourceRevision,"a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9");'
       - name: Install repository-pinned capture tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -61,6 +63,8 @@ jobs:
           mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
           git diff --binary > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/instrumentation.patch
           cp "$RUNNER_TEMP/checkpoint-observations.patch" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+          cp "$RUNNER_TEMP/checkpoint-checkout.txt" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/checkout.txt
+          cp "$RUNNER_TEMP/checkpoint-trigger.txt" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/trigger.txt
           cp web/main.js scripts/showcase-capture.mjs scripts/showcase-live-review.mjs browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
       - uses: actions/upload-artifact@v7
         if: always()
