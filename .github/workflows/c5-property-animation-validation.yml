@@ -122,6 +122,27 @@ jobs:
           test "$result" -ne 0
           grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-property-proof/negative.log
           cargo test -p noon-runtime --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-property-proof/restored.log
+      - name: Authored-resampling negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-runtime/src/property_animation.rs')
+          s = p.read_text()
+          old = '.prepare_current_effective_frame()'
+          assert s.count(old) == 2
+          p.write_text(s.replace(old, '.prepare_advance_to(self.frame.time)'))
+          PY
+          set +e
+          cargo test -p noon-runtime --lib property_animation::tests::effect_only_ticks_preserve_unrelated_host_override_until_authored_time_moves -- --exact --nocapture > /tmp/c5-property-proof/negative-resampling.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-property-good.rs crates/noon-runtime/src/property_animation.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-property-proof/negative-resampling.log
+          grep -F 'independent effect sample must not re-run an unrelated authored driver' /tmp/c5-property-proof/negative-resampling.log
+          cargo test -p noon-runtime --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-property-proof/restored-resampling.log
       - name: WASM and repository fast gate
         shell: bash
         run: |
