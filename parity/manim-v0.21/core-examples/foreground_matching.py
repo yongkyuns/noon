@@ -14,7 +14,23 @@ def diamond(x, layer):
     ).shift(x * RIGHT).set_z_index(layer)
 
 
-def assert_membership(scene, display, foreground, *, just_declared=False):
+def reference_empty_fade_source(animation):
+    # Only the pinned reference exposes these internal child animations. Record
+    # the exact empty FadeOut source before playback; do not discover/whitelist
+    # arbitrary empty roots after cleanup or make Noon reproduce Cairo debris.
+    if not type(animation).__module__.startswith("manim."):
+        return None
+    assert type(animation) is TransformMatchingShapes
+    assert len(animation.animations) == 3
+    fade = animation.animations[1]
+    assert type(fade) is FadeOut
+    empty = fade.mobject
+    assert type(empty) is VGroup and empty.get_num_points() == 0
+    assert not empty.submobjects and not empty.updaters
+    return empty
+
+
+def assert_membership(scene, display, foreground, *, just_declared=False, empty_fade_source=None):
     # Cairo may admit an inert plain Mobject for Wait. Exclude only that exact
     # reference-only placeholder; extra drawable or family roots still fail.
     actual = [root for root in scene.mobjects if not (
@@ -25,6 +41,14 @@ def assert_membership(scene, display, foreground, *, just_declared=False):
     # after that call, accept its exact repeated foreground suffix as well as
     # Noon's unique-root representation. Never generally deduplicate roots.
     expected_displays = [display, display + foreground] if just_declared else [display]
+    if empty_fade_source is not None:
+        # Foreground admission can split Cairo's animation group, leaving its
+        # inert FadeOut source as one leading root after matching cleanup. Only
+        # this pre-recorded identity is permitted, in exactly that position.
+        assert not just_declared
+        assert type(empty_fade_source) is VGroup and empty_fade_source.get_num_points() == 0
+        assert not empty_fade_source.submobjects and not empty_fade_source.updaters
+        expected_displays.append([empty_fade_source] + display)
     assert any(
         len(actual) == len(expected) and all(a is b for a, b in zip(actual, expected))
         for expected in expected_displays
@@ -57,8 +81,11 @@ def exercise(scene, source_is_foreground=False, target_layer=0):
         scene.add_foreground_mobjects(left, right)
         assert_membership(scene, [source, left, right], [left, right], just_declared=True)
 
-    scene.play(TransformMatchingShapes(source, target), run_time=2, rate_func=linear)
-    assert_membership(scene, [target, left, right], [left, right])
+    matching = TransformMatchingShapes(source, target)
+    empty_fade_source = reference_empty_fade_source(matching)
+    scene.play(matching, run_time=2, rate_func=linear)
+    assert_membership(scene, [target, left, right], [left, right],
+                      empty_fade_source=empty_fade_source)
     assert tuple(source.submobjects) == source_members
     assert tuple(target.submobjects) == target_members
     # Matching cleanup restores authored source geometry instead of making its
@@ -67,11 +94,14 @@ def exercise(scene, source_is_foreground=False, target_layer=0):
         assert abs(member.get_center()[0] - x) < 1e-6
         assert abs(member.get_center()[1]) < 1e-6
     scene.wait(0.2)
-    assert_membership(scene, [target, left, right], [left, right])
+    assert_membership(scene, [target, left, right], [left, right],
+                      empty_fade_source=empty_fade_source)
     scene.add(later)
-    assert_membership(scene, [target, later, left, right], [left, right])
+    assert_membership(scene, [target, later, left, right], [left, right],
+                      empty_fade_source=empty_fade_source)
     scene.wait(0.2)
-    assert_membership(scene, [target, later, left, right], [left, right])
+    assert_membership(scene, [target, later, left, right], [left, right],
+                      empty_fade_source=empty_fade_source)
     assert tuple(source.submobjects) == source_members
     assert tuple(target.submobjects) == target_members
 
