@@ -4,6 +4,8 @@ mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
 mod input;
+#[cfg(test)]
+mod matching_foreground_tests;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
@@ -1806,11 +1808,31 @@ impl ExecutionSession {
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
-                // Manim admits the matching presentation after surviving roots
-                // during play setup. Preserve source identity and internal topology:
-                // its existing family-order mutation is part of this same atomic
-                // declaration, never a renderer-only z-index or draw-order override.
-                declaration.reorder_member(root, *source, None);
+                // A partial foreground declaration would split the active source
+                // projection during admission. That topology is not supported by
+                // matching's stable source plan; reject before any publication.
+                // This restriction does not apply to generic completion replacement.
+                for &foreground in store
+                    .node(root)
+                    .expect("validated root")
+                    .foreground_members()
+                {
+                    if foreground != *source
+                        && noon_core::semantic_scene_root_contains(store, *source, foreground)
+                            .map_err(|error| {
+                                ExecutionSessionAnimationError::InvalidComposition(
+                                    error.to_string(),
+                                )
+                            })?
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "matching activation does not support partial foreground source declarations".into(),
+                        ));
+                    }
+                }
+                // Matching presentation uses the same foreground-aware admission
+                // as ordinary targets, with stable source identity and topology.
+                admitted.insert((*source).into());
                 Ok(declaration.create_matching_family_transform_animation(
                     *source,
                     *target_state,
@@ -3270,12 +3292,6 @@ impl ExecutionSession {
                                     error.to_string(),
                                 )
                             })?;
-                    let plan = family_transform::build_matching_family_transform_plan(
-                        &self.runtime,
-                        &payload,
-                        activation.matching().source_members(),
-                    )
-                    .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                     let replacement_root = lifecycle
                             .as_ref()
                             .map(PreparedAnimationLifecycle::root)
@@ -3285,6 +3301,14 @@ impl ExecutionSession {
                                         .into(),
                                 )
                             })?;
+                    let plan = family_transform::build_matching_family_transform_plan(
+                        self,
+                        prepared.store(),
+                        replacement_root,
+                        &payload,
+                        activation.matching().source_members(),
+                    )
+                    .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                     (
                         payload.stable_tracks().to_vec(),
                         plan,

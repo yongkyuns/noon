@@ -55,6 +55,11 @@ jobs:
       - name: Check transient viewport integration
         run: cargo test -p noon --all-features --test transient_viewport
 
+      - name: Qualify transient before/after anchor pixels
+        run: |
+          cargo test -p noon-render-wgpu --test transient_anchor_order \
+            -- --include-ignored --nocapture --test-threads=1
+
       - name: Qualify secondary viewport camera and composition isolation
         run: |
           cargo test -p noon-render-wgpu --test secondary_viewport \

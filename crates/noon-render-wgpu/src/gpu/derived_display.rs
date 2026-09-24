@@ -136,8 +136,10 @@ fn upload_all<T: Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, values: &[T]) 
     bytes.len()
 }
 
-type ResolvedTransientAnchors =
-    HashMap<RenderPrimitive, BTreeMap<usize, Vec<PreparedDerivedDisplaySlot>>>;
+type ResolvedTransientAnchors = HashMap<
+    RenderPrimitive,
+    BTreeMap<(usize, noon_runtime::TransientAnchorSide), Vec<PreparedDerivedDisplaySlot>>,
+>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TransientResolutionStats {
@@ -149,7 +151,7 @@ struct TransientResolutionStats {
 
 /// Resolve each publication-local occurrence exactly once. Stable painter order is
 /// deliberately not copied here: the retained ordered-batch stream remains the sole
-/// authority and transient rows are spliced after their stable anchors during draw.
+/// authority and transient rows are spliced beside their stable anchors during draw.
 fn resolve_transient_anchors(
     stable: &PreparedFrame<'_>,
     derived: &PreparedDerivedDisplay,
@@ -191,7 +193,7 @@ fn resolve_transient_anchors(
         resolved
             .entry(primitive)
             .or_default()
-            .entry(instance_index)
+            .entry((instance_index, slot.anchor_side))
             .or_default()
             .push(slot);
         stats.occurrences_resolved += 1;
@@ -392,15 +394,18 @@ impl GpuRenderer {
         let mut stats = DrawStats::default();
         let mut inserted = 0usize;
 
-        for (&anchor_instance, slots) in insertions.range(range_start..range_end) {
+        use noon_runtime::TransientAnchorSide::{After, Before};
+        for (&(anchor_instance, side), slots) in
+            insertions.range((range_start, Before)..(range_end, Before))
+        {
             let anchor = u32::try_from(anchor_instance)
                 .expect("stable anchor instance count exceeds wgpu limits");
-            let after_anchor = anchor
-                .checked_add(1)
+            let boundary = anchor
+                .checked_add(u32::from(side == After))
                 .expect("stable anchor instance count exceeds wgpu limits");
-            if cursor < after_anchor {
+            if cursor < boundary {
                 let mut segment = resolved.clone();
-                segment.batch.instance_range = cursor..after_anchor;
+                segment.batch.instance_range = cursor..boundary;
                 let drawn = self.draw_resolved_ordered_batch(
                     pass,
                     stable,
@@ -416,7 +421,7 @@ impl GpuRenderer {
                 stats.instances_drawn += drawn.instances_drawn;
                 inserted += 1;
             }
-            cursor = after_anchor;
+            cursor = boundary;
         }
 
         if cursor < resolved.batch.instance_range.end {
@@ -746,7 +751,9 @@ mod tests {
         assert_eq!(
             resolved
                 .get(&RenderPrimitive::Circle)
-                .and_then(|by_instance| by_instance.get(&0))
+                .and_then(
+                    |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))
+                )
                 .map(Vec::len),
             Some(COUNT as usize)
         );
@@ -797,14 +804,18 @@ mod tests {
         assert_eq!(
             resolved
                 .get(&RenderPrimitive::Circle)
-                .and_then(|by_instance| by_instance.get(&0))
+                .and_then(
+                    |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))
+                )
                 .map(|slots| slots[0].occurrence_index),
             Some(7)
         );
         assert_eq!(
             resolved
                 .get(&RenderPrimitive::Rectangle)
-                .and_then(|by_instance| by_instance.get(&0))
+                .and_then(
+                    |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))
+                )
                 .map(|slots| slots[0].occurrence_index),
             Some(8)
         );

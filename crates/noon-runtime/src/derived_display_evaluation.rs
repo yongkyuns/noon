@@ -9,11 +9,12 @@ use crate::{DerivedDisplayObject, DerivedDisplayObjectState};
 
 /// Painter placement for one identity-free transient animation occurrence.
 ///
-/// `AfterStable` preserves the existing source-copy semantics. `LayerEnd` carries no
+/// `BeforeStable` and `AfterStable` place a row beside its real anchor. `LayerEnd` carries no
 /// synthetic source anchor and is reserved for detached authored transient bases; it
 /// remains fail-closed in this evaluator until renderer publication supports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransientPresentationPainterPlacement {
+    BeforeStable { anchor_object_index: u32 },
     AfterStable { anchor_object_index: u32 },
     LayerEnd,
 }
@@ -121,6 +122,14 @@ impl DerivedDisplayAnimationPlan {
             }
             let state = derived_from_row(occurrence.base.text_bounds, base_content, row);
             let object = match occurrence.painter_placement {
+                TransientPresentationPainterPlacement::BeforeStable {
+                    anchor_object_index,
+                } => DerivedDisplayObject::new(
+                    anchor_object_index,
+                    occurrence.occurrence_index,
+                    state,
+                )
+                .with_anchor_side(crate::TransientAnchorSide::Before),
                 TransientPresentationPainterPlacement::AfterStable {
                     anchor_object_index,
                 } => DerivedDisplayObject::new(
@@ -394,6 +403,30 @@ mod tests {
         assert_eq!(end[0].state().transform.translation, Vec2::new(10.0, 0.0));
         assert_eq!(end[0].state().appearance, 1.0);
         assert_eq!(plan.evaluate(9.0).unwrap(), end);
+    }
+
+    #[test]
+    fn before_anchor_evaluation_preserves_side_and_deterministic_samples() {
+        let mut occurrence = after_stable(
+            3,
+            7,
+            base(GeometryRef::circle(1.0)),
+            vec![track(
+                Property::Appearance,
+                TrackValues::Scalar { from: 0.0, to: 1.0 },
+            )],
+        );
+        occurrence.painter_placement = TransientPresentationPainterPlacement::BeforeStable {
+            anchor_object_index: 3,
+        };
+        let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
+        assert!(plan.evaluate(0.5).unwrap().is_empty());
+        let middle = plan.evaluate(2.0).unwrap();
+        assert_eq!(middle[0].anchor_side(), crate::TransientAnchorSide::Before);
+        assert_eq!(middle[0].anchor_object_index(), 3);
+        assert_eq!(middle[0].state().appearance, 0.5);
+        assert_eq!(plan.evaluate(3.0).unwrap()[0].state().appearance, 1.0);
+        assert_eq!(plan.evaluate(2.0).unwrap(), middle);
     }
 
     #[test]

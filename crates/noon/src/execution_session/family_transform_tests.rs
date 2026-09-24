@@ -1344,3 +1344,91 @@ fn matching_foreground_completion_keeps_surviving_foreground_after_target() {
 fn matching_foreground_completion_retires_source_without_promoting_target() {
     assert_matching_foreground_completion(true);
 }
+
+#[test]
+fn matching_leftover_uses_before_anchor_in_foreground_only_layer() {
+    let mut store = SemanticStore::new();
+    let leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[leaf]);
+    let front = object(&mut store, 0.0);
+    let target_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let leftover = matching_path_object(&mut store, matching_kite(), 0.0);
+    let target = family(&mut store, &[target_leaf, leftover]);
+    let root = family(&mut store, &[source, front]);
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.set_z_index(front, 5.0);
+    declaration.set_z_index(leftover, 5.0);
+    declaration.set_foreground_members(root, [front]);
+    declaration.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let front_id = session.execution_index.execution_object_id(front).unwrap();
+    let segment = session
+        .declare_and_activate_composition(
+            &mut store,
+            root,
+            &SemanticCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state: target,
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            },
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    for time in [0.0, 0.5, 1.0] {
+        session.advance_segment_to(segment, time).unwrap();
+        let publication = session.take_renderer_publication();
+        let transient = &publication.transient_presentations()[0];
+        assert_eq!(
+            transient.anchor_side(),
+            noon_runtime::TransientAnchorSide::Before
+        );
+        assert_eq!(
+            publication.frame().objects[transient.anchor_object_index() as usize].id,
+            front_id
+        );
+        assert_eq!(transient.state().z_index, 5.0);
+    }
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(store.node(root).unwrap().members(), [target, front]);
+}
+
+#[test]
+fn matching_partial_foreground_source_rejects_before_publication() {
+    let mut store = SemanticStore::new();
+    let a = matching_path_object(&mut store, matching_triangle(), -1.0);
+    let b = matching_path_object(&mut store, matching_kite(), 1.0);
+    let source = family(&mut store, &[a, b]);
+    let c = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let target = family(&mut store, &[c]);
+    let root = family(&mut store, &[source]);
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.set_foreground_members(root, [b]);
+    declaration.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.take_frame_changes();
+    let context = session.publication_context();
+    let frame = session.frame().clone();
+    let revision = store.scene_revision();
+    let result = session.declare_and_activate_composition(
+        &mut store,
+        root,
+        &SemanticCompositionRequest::MatchingFamilyTransformTo {
+            source,
+            target_state: target,
+            options: AnimationOptions::new().run_time(1.0),
+        },
+        AnimationOptions::new(),
+    );
+    assert!(matches!(
+        result,
+        Err(ExecutionSessionAnimationError::InvalidComposition(_))
+    ));
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.node(root).unwrap().members(), [source]);
+    assert_eq!(store.node(root).unwrap().foreground_members(), [b]);
+    assert!(session.take_frame_changes().is_empty());
+}
