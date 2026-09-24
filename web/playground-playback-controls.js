@@ -71,7 +71,9 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.type = "range";
     this.#scrubber.className = "playback-scrubber";
     this.#scrubber.min = "0";
-    this.#scrubber.step = "0.001";
+    // A millisecond step truncates endpoints such as 2.5999999999999996 to
+    // 2.599 in the browser. Preserve the exact authored range and seek value.
+    this.#scrubber.step = "any";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
     this.#liveStatus = document.createElement("span");
@@ -186,7 +188,12 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending) return;
     const target = Number(this.#scrubber.value);
     if (!Number.isFinite(target)) return;
-    this.#timeSeconds = Math.min(Math.max(target, 0), this.#durationSeconds);
+    const bounded = Math.min(Math.max(target, 0), this.#durationSeconds);
+    // Browsers may serialize a range value to fewer digits than its max.
+    // Restore only an endpoint within floating-point roundoff, not a time step.
+    const endpointRoundoff = 8 * Number.EPSILON * this.#durationSeconds;
+    this.#timeSeconds = this.#durationSeconds - bounded <= endpointRoundoff
+      ? this.#durationSeconds : bounded;
     this.#desiredSeek = this.#timeSeconds;
     this.#renderTime();
     void this.#drainSeek();
