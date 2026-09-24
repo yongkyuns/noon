@@ -8,3 +8,21 @@ patch = zlib.decompress(base64.b64decode("""eNq1Wn1v27wR/z+fgsWAQIJlJU6aNnXXZy26
 assert hashlib.sha256(patch).hexdigest() == 'f4c9eedee149e94ce8d8df1b9bcc36b275b962ca59f76c3605d201a2509f42c0'
 subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
 subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+
+from pathlib import Path
+p = Path('crates/noon/src/execution_session/property_animation/tests.rs')
+s = p.read_text()
+a = 'IndicateOptions::new(1.0, Color::YELLOW)'
+b = 'IndicateOptions::new(1.0, Color::rgba(1.0, 1.0, 0.0, 1.0))'
+assert s.count(a) == 1
+s = s.replace(a, b)
+a = '''    let effect = start(&scene, &target, &mut session);
+    let overlay = session.begin_required_callback_phase(0.0, [target.node_id()]).unwrap();'''
+b = '''    let effect = start(&scene, &target, &mut session);
+    let dirty_before_barrier = session.wake_state().frame_pending();
+    let overlay = session.begin_required_callback_phase(0.0, [target.node_id()]).unwrap();'''
+assert s.count(a) == 1
+s = s.replace(a, b)
+a = '    assert!(session.wake_state().frame_pending());'
+assert s.count(a) == 1
+p.write_text(s.replace(a, '    assert_eq!(session.wake_state().frame_pending(), dirty_before_barrier);'))
