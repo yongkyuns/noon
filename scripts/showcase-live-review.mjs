@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-replay-checks.mjs";
+import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
 
 // First execution and replay are distinct engine capabilities. Keep both results,
 // but do not count a successful first pass as a replacement for failed replay.
@@ -101,6 +102,14 @@ async function main() {
       recordVideo: { dir: path.join(output, "recordings"), size: report.viewport },
     });
     report.browserVersion = browser.version();
+    // Keep collecting ordinary playback even if the independent layout fixture
+    // fails. Its result remains fatal to the overall qualification.
+    try {
+      const shell = await readFile(path.join(root, "web/index.html"), "utf8");
+      report.viewportQualification = { outcome: "pass", ...await qualifyReplayViewport(browser, PNG.sync.read, shell) };
+    } catch (error) {
+      report.viewportQualification = { outcome: "fail", error: String(error.stack ?? error) };
+    }
     const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
     await cache.install(context);
     const identity = await context.request.get(`${base}/runtime-build-identity.json`);
@@ -217,10 +226,9 @@ async function main() {
         // Keep the ordinary-playback recording and endpoint checks at the real
         // gallery size. Only this additional comparison resizes the actual
         // canvas to the forward oracle's viewport; never rescale/crop PNGs.
-        await page.addStyleTag({ content: "#scene { width: 960px !important; height: 540px !important; }" });
-        await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await layoutReplayViewport(canvas, captureReport.viewport);
         await seekPausedGallery(page, entry.duration, 0);
-        result.intermediateViewport = { width: 960, height: 540 };
+        result.intermediateViewport = await replayViewport(canvas, captureReport.viewport);
         result.intermediateSamples = [];
         for (const [direction, checkpoints] of [["backward", [...oracle].reverse()], ["forward", oracle]]) {
           for (const [index, checkpoint] of checkpoints.entries()) {
@@ -280,6 +288,7 @@ async function main() {
       }
     }
     report.runtimeResources = cache.stats();
+    assert.equal(report.viewportQualification.outcome, "pass", "browser capture layout fixture failed");
     assert.deepEqual(report.results.filter((result) => result.outcome !== "pass").map((result) => result.id), [],
       "normal-playback review failures");
   } finally {
