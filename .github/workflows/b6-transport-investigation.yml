@@ -1,0 +1,132 @@
+# Ephemeral #1722 validation only. Remove after recovery; never merge this branch.
+name: B6 stable-layer transport investigation
+on:
+  push:
+    branches: ['codex/b6-transport-check-4063f3ec']
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: investigation
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 4063f3ecd1298140ec6721fe795be32be5994dd8
+          path: candidate
+          persist-credentials: false
+      - name: Apply exact reviewed six-file candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 4063f3ecd1298140ec6721fe795be32be5994dd8
+          mkdir ../evidence
+          echo '594d3ea517eb4e8b282081b792ea9a02b9b5e7c44a8d0804471137cd67fa9ef1  ../investigation/b6-repair.patch' | sha256sum --check
+          git apply --check ../investigation/b6-repair.patch
+          git apply ../investigation/b6-repair.patch
+          git diff --check
+      - name: Use repository-pinned Rust
+        run: rustup install && rustup show active-toolchain
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Format and retain exact candidate
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git add crates/noon-web/src/renderer_observation/retained.rs crates/noon-web/src/retained_execution_transport.rs crates/noon-web/src/retained_execution_transport/z_index_tests.rs crates/noon-web/src/retained_family_execution_transport.rs web/authoring-render-transition-runtime.test.mjs web/semantic-engine-endpoint.test.mjs
+          test -z "$(git diff --name-only)"
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
+          git diff --cached --check
+          git diff --cached --binary > ../evidence/candidate.patch
+          git diff --cached --stat > ../evidence/candidate-stat.txt
+          git write-tree > ../evidence/candidate-tree.txt
+          cargo fmt --all -- --check
+      - name: Native transport regressions and existing noon-web tests
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --lib 2>&1 | tee ../evidence/native-tests.log
+      - name: Decoder-zero negative control
+        run: |
+          set -euo pipefail
+          file=crates/noon-web/src/retained_execution_transport.rs
+          cp "$file" ../evidence/correct-transport.rs
+          trap 'cp ../evidence/correct-transport.rs "$file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/retained_execution_transport.rs')
+          text = p.read_text()
+          old = '    FrameObjectState {\n        z_index: object.z_index,\n        id: object.object,'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, old.replace('object.z_index', '0.0')))
+          PY
+          if cargo test -p noon-web --lib retained_execution_transport::z_index_tests 2>&1 | tee ../evidence/negative-control.log; then
+            echo 'ERROR: decoder-zero mutation was not caught'
+            exit 1
+          fi
+          grep -q 'test result: FAILED' ../evidence/negative-control.log
+          grep -q 'real_transient_packing_preserves_nonzero_anchor_layers_on_both_sides ... FAILED' ../evidence/negative-control.log
+          cp ../evidence/correct-transport.rs "$file"
+          cargo test -p noon-web --lib retained_execution_transport::z_index_tests 2>&1 | tee ../evidence/restored-tests.log
+      - name: Compile WASM production and tests
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --target wasm32-unknown-unknown --tests 2>&1 | tee ../evidence/wasm-check.log
+      - name: JavaScript and fixture checks
+        run: |
+          set -euo pipefail
+          node --test web/semantic-engine-endpoint.test.mjs web/authoring-render-transition-runtime.test.mjs scripts/foreground-matching-checks.test.mjs scripts/foreground-matching-evidence.test.mjs 2>&1 | tee ../evidence/js-tests.log
+          python3 scripts/foreground-matching-membership.test.py -v 2>&1 | tee ../evidence/python-tests.log
+      - name: Store validated Git objects without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -z "$(git diff --name-only)"
+          python3 - <<'PY'
+          import base64, json, os, subprocess, urllib.request
+          from pathlib import Path
+          base = 'https://api.github.com/repos/yongkyuns/noon/git/'
+          def post(endpoint, body):
+              req = urllib.request.Request(base + endpoint, data=json.dumps(body).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'}, method='POST')
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+          paths = subprocess.check_output(['git','diff','--cached','--name-only'], text=True).splitlines()
+          expected = {'crates/noon-web/src/renderer_observation/retained.rs', 'crates/noon-web/src/retained_execution_transport.rs', 'crates/noon-web/src/retained_execution_transport/z_index_tests.rs', 'crates/noon-web/src/retained_family_execution_transport.rs', 'web/authoring-render-transition-runtime.test.mjs', 'web/semantic-engine-endpoint.test.mjs'}
+          assert set(paths) == expected
+          entries = []
+          for path in paths:
+              sha = post('blobs', {'content': base64.b64encode(Path(path).read_bytes()).decode(), 'encoding': 'base64'})['sha']
+              assert sha == subprocess.check_output(['git','hash-object',path], text=True).strip()
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': sha})
+          tree = post('trees', {'base_tree': '555899d432f871a23f229a9942eb67b9e4b4f47e', 'tree': entries})['sha']
+          assert tree == Path('../evidence/candidate-tree.txt').read_text().strip()
+          commit = post('commits', {'message': 'B6: preserve stable z-index across retained worker transport\n\nCarry required finite stable layers through snapshot and sparse publications.\nBump protocol to v6; retain strict same-layer transient validation.\nAdd production round-trip, atomic rejection, and renderer packing regressions.\n\nNative tests, WASM test compilation, and decoder-zero negative control passed.\nFull foreground rendering parity and duration completion remain unqualified.', 'tree': tree, 'parents': ['4063f3ecd1298140ec6721fe795be32be5994dd8']})['sha']
+          Path('../evidence/candidate-commit.txt').write_text(commit + '\n')
+          Path('../evidence/published-blobs.json').write_text(json.dumps(entries, indent=2) + '\n')
+          print('VALIDATED_CANDIDATE_COMMIT=' + commit)
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b6-stable-layer-investigation
+          path: evidence
+          retention-days: 3
+          if-no-files-found: error
