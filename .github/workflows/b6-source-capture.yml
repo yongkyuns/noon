@@ -1,0 +1,32 @@
+# Ephemeral investigation branch for #1722; never merge this workflow.
+name: B6 exact-source capture
+on:
+  push:
+    branches: ['codex/b6-source-capture-4063f3ec']
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 4063f3ecd1298140ec6721fe795be32be5994dd8
+          persist-credentials: false
+      - name: Archive only tracked source from the verified qualification head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 4063f3ecd1298140ec6721fe795be32be5994dd8
+          mkdir source-capture
+          git rev-parse HEAD > source-capture/source-sha.txt
+          git ls-tree -r HEAD > source-capture/tree.txt
+          git archive --format=tar.gz HEAD > source-capture/source.tar.gz
+          sha256sum source-capture/source.tar.gz > source-capture/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: b6-source-4063f3ec
+          path: source-capture
+          retention-days: 1
+          if-no-files-found: error
