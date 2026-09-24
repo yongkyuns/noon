@@ -12,6 +12,8 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       NOON_SHOWCASE_BACKEND: webgpu
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -23,20 +25,23 @@ jobs:
         with:
           ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
           persist-credentials: false
+      - name: Record actual source and separate diagnostic trigger
+        run: |
+          mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
+          git rev-parse HEAD > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/checkout.txt
+          printf '%s\n' "$GITHUB_SHA" > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/trigger.txt
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Build and preflight the pinned source with the normal entrypoint
+        run: bash scripts/build-web-demo.sh
       - name: Install repository-pinned capture tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-      - name: Retain the pinned browser for offline renderer reproduction
-        uses: actions/upload-artifact@v7
-        with:
-          name: checkpoint-browser
-          path: ~/.cache/ms-playwright/chromium_headless_shell-*/**
-          retention-days: 1
-      - name: Build and preflight the unchanged PR engine
-        uses: ./.github/actions/dev-wasm-build
-        with:
-          preflight: 'true'
       - name: Add read-only observations in this disposable checkout
         run: |
           git apply --check "$RUNNER_TEMP/checkpoint-observations.patch"
