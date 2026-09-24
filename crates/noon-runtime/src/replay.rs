@@ -72,10 +72,11 @@ impl SceneInstance {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
         }
-        let unsupported = self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings())
+        let unsupported = self.has_property_animations()
+            || self
+                .reactive
+                .as_ref()
+                .is_some_and(|reactive| reactive.has_property_bindings())
             || !self.compiled.family_animation_plans().is_empty();
         self.replay_history = Some(ReplayHistory {
             start: self.frame.time,
