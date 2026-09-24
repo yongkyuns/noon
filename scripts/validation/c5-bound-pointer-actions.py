@@ -1,12 +1,187 @@
-"""Temporary qualification input; omitted from the clean product tree."""
-import base64, hashlib, subprocess, zlib
+"""Staging-only source reconstruction, excluded from the clean product commit."""
 from pathlib import Path
-BASE = "2ccf83664b51f4bc973e01736acf1fae138d33ae"
-PATCH = "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 KqAYzMU bm0BIMz2tUYnJ1bQ gob/WUqBgXD3MzQ06L252ubGJ2H2FK vpl7QcdqUKbe/y kb7Wq73I wse/fQNv/qzW00cI5hnYSgSUjCce1XtE1ymH1nDCIp1Bmc8c zn4/xXqskK1JPvvs0on57RKp6MtVunO hpm+Z5aAVJczo92EKsy/sBuZee19g8/37R Pe sIfRDFtLLPcE4/e rgX33hW1/V324/krLrNr1pak3XaUSEZXKSrTjVXkBT0HwBR+fqCxdDzxUlvXtNgzgSN Sk s jdS/r1mpd43nucr0fo0rY2FlptfIRhp84P3MVG0m86TnKPRhXvR avt5kl++wtjlaH4rv uplWLH0GE9oO8KH aQK RGoSdPgi1fwmy5jC5D6Q4BePRJd+Bvo5WTkDsFnpNFFbMXkVFrXlXuhkz6G7OT0dkzk9PRu7gtFEPaYoueBJT sGXUhdOkIFXtG/M8jdjIJfcaswMitJXIeSWledqC9oBJd2qPf51XUw621IYZtTVmwUpFpOXDJDVp9i8hOn nczI9PH8B94zkvfH81gqAclyoP8Vbr/Lq37fb+RNo0jLPAnskMzZ2+t40vs mfpONNOc43ztJqGkmp1ZuxIPvIjzwck0IPz4dgd nG/D ehtqI+SPlD0iYRiFU36hb62uqEWc25dUSCI3xPD4g1v8lKNynjgQIPpxuvDgb8ByKrZ26G6vOX Tm1NeH5K7l4jTNQpa5zjcSOYrvXDvc/h8v7TeiuRQtiLdzMHZTPwl7X/i1L86j8iZPkPQbqy5om4AV6yxxXmRZr2WR4Xa aYcqEQFoJzueimE7M0eTuDasrF6NkC1gRnj20Ko2+8+iJ842R267laGh0o9oRg5twbGbWgw7sXmfWbn6O5uvYb64MYzE8HYy503oy5lZ4k8i+ZTk mV27RWFQTqZYUarNVr3KIZLSNfDJx1nn0T+Z2cDSU4X++XlFykO0AtmK+Fah6fVlJcQOilowIgPibPaPhBd/aH16MNyZGLGTka5gX4WQyXxaTyfMoB8f/xkiItQ0XaTEYy7dzXBy59Aug20RqJgn7O3nn8dfTp2QDy3slq3RPq3bUEVwnU/XZo57CzqINv1KbAVryyV m qaIy g3jnXfg4voJfLfT/DE8GtkFvBGH+8+8oe/HRgst8K/1C+Ou+IvtOCvqVwUiBP/GvgXlcy2mycHWeTsRXzi5x7jhSz5g4hpef9c+LnWy5SMCkRU5yfuSMIKk4GQ5AgURYzV6WkU6BQQfUtoLyC+aKHf6OawscW+Ar5xAHuE2lP W Oph5KMPkvA9ssG+Xxa4CW Snzc2L+elpOJzvvLm5FULat ud4TNu eu LNHsTSvLNK2Lm+bfXFXqb cfW TByHZ6gv6PFnIu9RJnlt9UJHOiWV7vFy zfe4bzCP4t9SjDIURZQIiXzw2idT3AfAFwWsRXxh59wdj/Ti3FvFmIc4T6Ife4pemDCw0sCcsSmqBmnPCaCy/4caYVVWfFa+CwCR3R0uB7Gn a8nWnYb/hbFJpfmo8Vn7TmL9q+P4nhgjel nL8gYFrljcqmn28UrvE6juXbpCRr3dUCqksDIrtSXT6upkcPh1Y3+l0zAmW4YvnAFWoN2ggl38ZcolkAK9b118gmEXU3Xz3Pwia bs10c9OdYz3Hf+rnJcg09ZRcYG lzA ACDGjAcc64hm3mE/UDLwgXS6jwr4u/GmPGORjHcc6Drx6UE mmPkPwTlnwgYX3m+m jnsApo pRNDsOxs g0LmXv7WxWeSidMTPaOOKImWF KUZAoHZSpOAz8maYqwICLCv4QVWcLf+IgPjJyudhYntQCcnjA5JHCFrEoSxEA0VlOwow7o1jH84M5xp+Ey2ME3i61u+eYtV1JU ZD2MZO6V7aXZxjhr1bx TUfx5YSJ/bxQJ3KILMiKeZwW+RQdlwJ3uQcGJVDX7kjYOhYEzSPLh+6QKxa uvNI4hrYr1fP0V+OzegEfSqQYZF421cvHKOcLLuYZsATrfvnl3u+9tlJptK6xpktAdNlyVdyUs6ort8qMXDVpqwIRPj+pC+VDC9R1X3OapXE88+FqWlzD5FgYIUa/pwL5LeS/K0Og8uLlQKrCJVxz0vRRp/1UBi49qkB5/ey1K8ojsDrCdXqHx96gc omefPXs78ZlDRLW W ohbx3yEduVwULtE8F6+/u7l65fv/1GDpFe+TSbZYubzIhVEFcDT/wmmhsbPepi6m1TokiFSL0oa7Gn8yYS AxX7dpeWgRwJbJIrtNW0CuFHRm9VfLl9ttdjG+6T4UlTPcrscu/fPDuKmo e3NncW+edhWAuQ6+1wA+2UxrMkYTx5UWW5hlLcBiwXmVQ38EEvYnv4wF3HzAraqbb i1rrh1ZPWyjwxUNQsY7lCpQA uVe5CubqYfGFvlPMhSWeCKBpeDZfJYLZi80UzfHZ ZLcU5pEPR38sul18D/xRW DpoNKzXCiaQYTxu5YK4UwBMB Cib598dwdovYxjQmtRvhEke pTVFxPxVpx0aLKxH0hWHVekCCagg4F2X6/DWLpjFWpah0l3iNM5j3wqf Eu3wvlLg cqk2iRTBfA/NLTC PwkSQvJxRCrCDbe2dvAoH0HX2MnB5BPjucJqBJlCy9e4yGU6C1RFquXMLXmSMTVkfjXusBUyLOD jmh1ktEjBuW8o17dwSZqtN2cI5CW5u6hUqQyK3LPtGgJRmQ9x+HoxPchMh9cjAZhcP4wVbLGi+6bOdVA0dnPUzoLh7/K40+Pv/afOm/Eky1MS881bB6K8HhKwbKQPSnK1gEiPLPXNdTOB ZMyuvtX79iLTRhKoWHujBQWSMm8JwHt88QbpmHxXt5v3CNGmaHhIJbqnD77vEId9RUs2zyOFtd4aIVvyHDr81W/pZbeLoEI3g6YP7YBZI NWat/DtjKDmG NThUEXd mhZQ/umf6cd8ob6RkqiNLZpuBdLWK EhrdXKYaEe8Yhr4tN/sG2jLOUK3Y/vrRZ1SEIzBuHgOGAz zzufs2AWjB5MMxrvurd yNKB RFdwp7aDjr2ptJp74UKkelSRkGMRo25kthbAby6m/tI2WxZ5CjDqO4iWfc szBhjGWws+urxPln10fb6nE3jiW1zyAw+jHZY eUp6JIQMgjr7Q9HQ9pNccj3uvgYVZzY6XrZPJC lpDzsmqLDtkiLlZG UOymc1u4Z7OAXVe1E+6yfNpiFO8b1VeKGvSDWV0kaVM hc+Mkdl0CaRu qeGtr0K SWSRup8mAIR3LUOEfqqGpN+3YYIJTsWRBesHn gef75yL8YsUYl2wVkTZd2GURHs cijvBBnTFS7CXyKhe95huK2XvRlnJ4VZ+/q NWBSXAVYwUzvJA7GSf2l/3mKYSQGGaoQdz4aylJbjvkU5kKuzIRO b4pqE7HVroa94X8T1z6V/S3EnNRD5iTlY7N1UWB rE+en9dnJpXPyMy/OGpNhGeuHpVpnY+qqObgX19opeVEsbJTi VPnbpAcvJ9YuVaqGatThZ+zNq5XaHM/jJU Aq+rS0XaAS35NjdzB0DgYnQ3c4UvNXzZ Pec d4y jvhbiovNCcHKintEEV419hjTrVW4L5PVuiCRrjdVCNJkHi3WG VN+7jyKYz7bvGfQi5pm9S1Hjd+yIF0k0T953XvuL5lDVbfgYyMw7sHnDqa1UpgVS/xZjLXbuBukn1rXa+Cd2E8Wa3/BDhO2BqclljGK SOsAMW7o7PV6Kcrt g4CtyK0Pg nWWsUSdBxfF3PRa+zS1+vcajX8v4s79OK9RF2vQW2G0Ye7aJX67CZk9QBjQGzAJowzhRv gk/HcBwp lP/Y9+FCOJe1hGrZdOP9JRM04sf/lioO08xlPLVTnWyqWbcbVuhbxPYwZGLTCC8LvKnCRZy+YJT9o1k10cKUWlX+q3K5iaKrG+065btNn88KHX6/d5+St4ewM8GXR86g4uOmkZ24/A4zv gsh/WBQRvgMSrKM/Rg6g02bH9TPG5dSI6ycXsUe8rBhF3BP+k bjq5E+WOjxWJUQjSeg3+Ap4UghfU6iuNSPZy77Dpn lYjxCvPuVnCMiaes176q94XdBu/1A3zYd tkKPnY/ojWP2Hi/Lpm2Y2nt8DstwxvrNMXcmOdl2KgthMG96ZKK+SSMh sf20ydVhCtFDImKY4NqNnhMYUVJm3TdV6Kdg u0u70OLyG6i7Kfqr xeiUVppYfYT Gx/iMRkIn0yKkzJNwwR3VEmDunkNj nqdxGkrtTchpIKO LG BpCL9Yc9rtkYUcTSzRw78hogQhqc sGJ4PPS8Ij49Pw3F7hCCG2iMBcZPcufEFeLEH+EudwMRK2xg3nlZZusj85WRyu2feE AEE3cCfZ3Mwg+z7aM6CmyBmz8mmUulC5c6LJCQbBTeSaEmCc5UuV2ke8YMlQMJcLv nzzP/0LTlf769ZQjpc9BdyXs zn+IKP7BUP3773b8Abq18nu+M63/lh+WbOMnjJqLGQ7VzUO74HMMLMGH+QiXbpCCcrxLmKV6UGuTdgIYs8vn6jdbRpOm4qLJsVJSLke7nN+T4tKXyndWVM/IJWlTfh4oc9MYKa3L6mO9+Cq8U7eLkOv/Ij9ZTi1wASm exj4qTh8bhsWEjAU9TytC0puIXq+F+ECzza yv94n67SOF3cVP4UFKFrP7KsYJ9xxBu/uAamgYAf/y gJRFm1z5J73gLJv1sngg3fUk rqHe6EvRW7X2VZjY0V/xIhdPkELmrJ1HtG yqF6VMI17+A8Rd8zt3qut/EQ72FDFXo54g3vs mz2V/vRp349ZqMT86gRssFwevrcNSvd2wrpf6P3G0RU914iGrD6vq2Y3yy/x7+z9AO78lfyn/8B05CQ6cLf orC4JlFwBDbvgUUwM1H+6z9RbQtWw2vvqAEX6hv973crX4LWLiJMO VRN77mLDR+H9F/AGPnVdb79/tnVX/DXX1/w/06fid/f it9X7iYzUarkI1lINvUl8zaZkE2DZJb/7Hw0Gw88bzTyxxejs03mZSPYJtOzcSDtbdLOpjsaoCap aBE lrkKjg iJTT4gOb5OJlCX18HtsPXcpW4w+vpqQ6kWdESVrn3dp xCtvOG6Pr57qb d2uZOQqt vAy n iagEEvmAsjRsOU CjM6bzQfaO8XCWi qsGvxq2BNLwhwnPP atR/Mi+L1Ocxn6liHvVypMl4edRNbjK+NMMR17FmHY E5FhQv3qpZ8SFk7LbCPtWl5WG6sZsXI1JY3e1EdUJpTrFW/xWrIe/O GKB44Rnj4+jPI6ALVKhgN/hxEF1VVUqYrBOdDLljt6Fi5BcImc1OaPk4BRVz/VQUGkf orrLF0vrnlrQCEP X+fkXWEvRZbpCSQ+ZA4LBIsCs GBlMoZHKgBelOQQfBppo0OOgv71CpPp1jN AVJGB rz8VaommitZ2ClqRKYrSxNkXlWAI ZZGJD VjuHg hzQpQ iwdNG0+s mukDXx+gNFQSH i5c1 ekcPx/7AJ itiUcn9YkU5be pCoNHZJgi4pL3K xry3eQlEq8xIYzY1upk3uQNsoMg b3jLKOk/lMTQjcNUe/uFDT7vVr7SSoA6cEEUhe0tG ltoPT/0sUfvx/pWYCPHDj34S4DW SgE9+VFBrzgXlz kqQIlIH9RnGgr1FrZHjL/DgUF EVE3j3Gpt9yqOkvATD7EqLeE5l5eKUEWF6HSys1BbN5rR8Qm7eQEAWnF14HhudzocnFx1spwajxVBqT6FVpF5D5xSo7TnYFRbNEFA4jjj3ZYw+GEEKJHRmN84v1YTZ ZIINUYFrETatwy8e2kQ62Vqzxp dbt4C/bZbPxsDl7lJiEKQQ7kUJEkK0p5/7y yi+m cYU3112X72NjYC7jOh0SHY4Hg9Og40dgDu9TzsDOx ie1Hv/ct/DOACNd kZ IotJbpW1hjm yAZloWgMpBv+SqLcScJfWgLcGVb ZBQIHNMeGDiOO WLlk80HSA sEwfJ2/5imj unR+KM+eHNo dr TWF3f5HgiD/u5Jmgui9Tx0Z5lN6h/hbal3XvVs pgaCmTBZPI2u FTX+NHg2+3i67vKSeJnMt gVXnxVYJT/K O6LxEI FjGECb+v2zBCEBhMpQRrxMunfqsNrA2GNhNu2xSsBYGObD7ctRtw7MLBW3vd tzf2WyQ2rW36n2lCLfhHpXHEz8i4y8gzP7kuG40f1FEsRy3Tu6gyLbHZ2b tRMe gTwOlV5fi6GItufpDXfDv6HBo99xpZlZbsDnqnmEPnmA18BNFQs7NlJ09fal mHP7YwncKhbBbxaJjfxd8JiYI08xet lV+lP8K Af44nYQrUs+2s ixmnA38pvNI F2IccSG3eDJMf+aoVrADonWnpIBr17N1KAlEqlKRpHN+IbJKhLsPgCtXY2iwrZMlz mrfA7UtjWORPRBKy+eC674YpANm/+dp3fyL7W3DPWOcBZxeuc+xqB/gbP+YVvox a/ID7ITfMI25itjOwaAvx0HVFs cuPMgKfZJ9RkMD Eaw99BRfmrAp5kXP99FN27g1/XEXrnRKhc50ZiQMlxZvVDzU5KlhNec rsqEeXbol2ZcJRbEoRVZS irKQR1JtZsmtZWeR PS lR7igK3+MYDWuTi34ksAnMp3RsBS+/DC5qnu1+ZaCwJEoys/pxJPPKa+ikAO+8b BLmNKgk4aInWC4aFu2i/nz5p9qV+pk r Zqhz zf2v1OnvZUtthzvksz3ayCyk1APE t4FHq45J1pJKBme9iRBfUD VTZIt aROQ6CDLb4BF27fdc/6BYqOLfPEanYwRaa1ri+p/BRjr xak0UEOre HMtsc3tb bVjeQgF KhmGNumVU86247tCI5X zsNU doaYpTDBT7X UCYRnOiaWthZ/VO0i+pa+6BpHYL MmXW637q7I7dnE2X9lVt7/dqu/WaTROoISni7FASFxyuxfwQzC3LeyA1dDdKJHg9mcWpKVSHy/RuyP ojhrzr8P00tBXdFXO1AXHFbckx IoH un m1lJYUZ oA/7YHWDEg9Dw CjbFc53jsXBnx+KYs5Amdj5FfQvy lOUX3i9PTk6bYdrWP3oNI llJxl aV6yvR+wKADQuQSOEsG FENfh1sM8nPERDz81mWUJOQj8mCmHFJC rA+k+Ifmiz7JjNJsWUQAhUfBPfAjsZXMM3F+qNE0S5dl6ZjYSi v4eimda3ynQnwmxcFk FACjr9fdPETCTuXpmnJyzU6GRT7bE2/tYqnSGEI8lZ0R+k58A4iSOFzzKfVV y3m1B2iTiQyWNRRr8i99uCcm eoLMYjfUoHan dNwm1Hhy jq ePqy gpTUQYSWk2VUtvXyBeMQmb3LJK5lUAqST Lj ahQNbCUjqFBJ419+VfrPhdm8ryuwZwfsM0yRP0xVjWC+4LONVyxVTpijMFfIVE9pCO HEAvgh1CJ JF755Q47qaw CIcBNNviizdzfya muNoyg3Qw6PEBH iwgFT6k6gW/fw8PAqMp7X+jKF6GN uabBLqwQ3rHqko p6wpIJ6hjiIYvE6Dl618p7phhuOAtK02oQB9NZ45+kAf/EflD00kIzYQ7V98cEBbaZdG2u6pi98Fo4Wvy08ttgMuGnvUtC9PkZDYsKEW26+G6WH9gEru2U7/0/H8RxtGa57Z/akd0fKhkz7uBYkGi qaKvmo4SH5EmUe/IfNgD95g/51PYIM9k91Bg C607sQ SqZnwZpZwWZY RED3Bo44pXNcFTapArihdiL0dUAWCKVH NhoGWq5H8sS2lNqvClwwmJMjVg/+dvvQiIc bZsV+U00vvzLbfz2Ur1b5ob2mBuz4kf2Hpjdx3XK4Qens+FFMLx3Dv/I1s1ycHa yqZ1llT1EpZJZ/tKcH+bGjKzYqzQkp72WIw5tSWNe5GRcfyPqnzanh0WRC08BU1uLefQZP+TH22v2xBRUd FidZL2XBQ7AWA x/N3SwVE1SaIM1oPabvW Pv tNZJQut5gqFFD1uiOPA g faqLf6+rZci9m7tUYXN8/TBUnU9srS+4p6JK KmhM7dRW rw5c+GXl8QqrC1thCDQ8tFU7cS5cuZM3cUbOHfbFa3pH Sw3GqYW mcljhf8CT1AnGr5l197knElfSSImRspcqHnrB/aKeLD119utSk2NyPMEZrfFLhZ/F0ZEw/ZRo50V6jfFQ/YbBpGQ/yE3ik7JReUoP9azLK2sL A YRV5jjPo1Txf31GjsUOZ+Ul0F8eaBXns/MN6DLi5GPqAWZ73wcQb3hXNCcKwHrbNQCaHzzLcKsQdMXBt4lzDO6HZk+EA9YE5634rmUjJA05Hnw/scAS/ohYSxHGSrcREyn8Qhl5WBWg/nVm ooRitEood0fMxb1w4kFgLaG7Sl5DybTym8FqPCW8IRrDyZs4ABUM3ibAAFOcUrM1h+W6gUpLpKB0qCnZN17b0rxStHCVzrnW/qxjmNFxks DJA5ooPzFmK MsHmpxc4Fw4gXxqsKRN68QX0boZpy9hZ3+z7NJbI6e Up5WfRAEe LqLOHpiGUuExu ZBwhXv2E+dW4I8t3JU80Ys sf aZkdK3ZMYSGGx5+XEYN o oSnLIWbptlUZg25R2/ow aqq1swWzla5Adau lUJ3zjMfwW5oSNmWcGhr20TNOZSYNCfYZQ9m XUkb1Vwi7yImvK/NFHQzV8/aWL5IvIc bccC+XkxVaeakl+dxA923ZAXEN1p6tV5QjzaM55GKvS2UzHeJk1JKqmSuw d4gUK1G9ZDh9DpaXFMnGo5wQktqa4CtoSz30v pu+zJb m ns1gL ERxPA0qk4Jr09j03rhUz6d3VjdSp2KpZbS+aLvMXkIpe7raX38RCtVz bTjZ2XhP20rJq WGfzhbdhTG SLt5TH12U7GD3+OY9kWbSZzvA5PIRLvWPFPxsnzw2s9tr2rl4m7Kod4NtLaUm9UEzwXlDT39/IMVStdiVza1XzKdQXhNyb0pbSgsFuCgqN7+5DPZNey0k3KdR1luaJ0OWmvrhT6xupiC4Jt0dZ3kbSgOOYpbuh+Uw thJDIh+pRS cbM1trqTD1lQ9s1I1x7LOsOuKn pgrqilKmpgrwO1GGzFWEefY3tFSeRqCnWULy xnjHVpv8EQA uH9TLJtBSZD f/8DSwXxX5pf4z9giSsSLUMKw5z+1W9Rr0qg12M33EbiRenDQGLLKtSvS3qAlss2Z7EJ7Y4/6Gtzg/YpEms5+o3G5r5PfCaOBwMjwy pvij4fFr9aNuOI7u5uTrWW4un3atSnJy pnnHaw1C/v9fr85ZpKeh/gt51n1pR6Mf vb2n6VsC6lAP5Kwt3iSn axv/cMb fvBBfFFpnVB1JvWz5Z1tF/AYnlWZhukU9QDfp/ATuUNxn3iioxUB/h1tb0U6BrH7FWP17yS9I5p4RXq7OK47Y3cPGjcj05SG3Tea mLd4nx1s5j0Qv6/0RLW DOCij6is2WB/DP0mRs nzKu0EXWDsBMkRxPHsIU bIHrb+F+3h6j9TwFg m E35CdugUz9w+9qgqc6EMvFUE9fgZFbMZTCofZv4vy7xfl/vD6xe8SCZQ9pxs+9aJ9fs0v0mUUcC3Hv+uiEl+K2g+d+2oLke5ZnlgrTTS/N6KXI2r7iF0+QlJ6VZaB2vH/yQQ3K3v2T5Y4YhtO+2zAjsWU3b9ZQHkVDWfxpRhHfqSm3ma9ke frrlpt3dfbQ0ZTe2yrfGu8jVvsDFNhU+6Lie9IY/yDaoLhyU+4K6wKac0pP0RMn8uQhZlT3Ca3s7yKJlu5HRHGL23QbRjg0Wc3+NnOeoCEN2nZtc9aKE6pPX105GjQsGI98z9px2/4MRc8uFgpVhWHLnzee1EJIocaAr+rjYZL+540/a7v5SI2/0d2cqlQbEcvgbRg17FD7rdb0hm+O/v9jRtPDnXO4DYlcDu8yWSmbV50D2ookUWF EGpGyvSr+O3d+XKs8eWggS9bmIO/vsZXUmEL7LbYmLjb+x9R6szcA=="
-patch = zlib.decompress(base64.b64decode(PATCH))
-assert hashlib.sha256(patch).hexdigest() == "d730d16dc6ef922dee85cb30073878a5430768270947b206d520815b96fba806"
-assert subprocess.check_output(["git", "rev-parse", f"{BASE}^{{tree}}"]).decode().strip() == "c4ca5b9f5fbd01b951172aea81217f6830539249"
-subprocess.run(["git", "apply", "--check", "-"], input=patch, check=True)
-subprocess.run(["git", "apply", "-"], input=patch, check=True)
-Path("/tmp/c5-click-proof").mkdir(exist_ok=True)
-Path("/tmp/c5-click-proof/paths.txt").write_text("crates/noon-compile/src/semantic_lowering/projection.rs\ncrates/noon-compile/src/semantic_lowering/publication.rs\ncrates/noon-compile/src/semantic_lowering/reachability.rs\ncrates/noon-core/src/semantic_store.rs\ncrates/noon-core/src/semantic_store/object_content.rs\ncrates/noon-core/src/semantic_store/pointer_actions.rs\ncrates/noon-core/src/semantic_store/semantic_transaction.rs\ncrates/noon-core/src/semantic_store/semantic_transaction/pointer_action_tests.rs\ncrates/noon-core/src/semantic_store/semantic_transaction/prepared.rs\ncrates/noon-core/src/semantic_store/semantic_transaction/provisional.rs\ncrates/noon/src/execution_session/selection.rs\ncrates/noon/src/lib.rs\ncrates/noon/src/live_program/property_animation.rs\ncrates/noon/src/live_session.rs\ncrates/noon/src/live_session/pointer_actions.rs\ncrates/noon/src/live_session/pointer_actions/tests.rs\n")
+import subprocess
+
+BASE = '2ccf83664b51f4bc973e01736acf1fae138d33ae'
+assert subprocess.check_output(['git', 'rev-parse', f'{BASE}^{{tree}}']).decode().strip() == 'c4ca5b9f5fbd01b951172aea81217f6830539249'
+changed = set()
+def edit(path, old, new, count=1):
+    p = Path(path)
+    source = p.read_text()
+    assert source.count(old) == count, (path, old, source.count(old))
+    p.write_text(source.replace(old, new))
+    changed.add(path)
+
+edit('crates/noon-core/src/semantic_store.rs', 'mod object_content;', 'mod pointer_actions;\npub use pointer_actions::*;\n\nmod object_content;')
+p = 'crates/noon-core/src/semantic_store/object_content.rs'
+edit(p, '    signal_bindings: Vec<SemanticSignalBinding>,', '    signal_bindings: Vec<SemanticSignalBinding>,\n    pointer_click_action: Option<crate::SemanticPointerClickAction>,')
+edit(p, '            signal_bindings: Vec::new(),', '            signal_bindings: Vec::new(),\n            pointer_click_action: None,')
+edit(p, '            signal_bindings: self.signal_bindings.clone(),', '            signal_bindings: self.signal_bindings.clone(),\n            pointer_click_action: self.pointer_click_action,')
+edit(p, '    pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {', '''    pub const fn pointer_click_action(&self) -> Option<crate::SemanticPointerClickAction> {
+        self.pointer_click_action
+    }
+
+    pub(crate) fn set_pointer_click_action(&mut self, action: Option<crate::SemanticPointerClickAction>) {
+        self.pointer_click_action = action;
+    }
+
+    pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {''')
+p = 'crates/noon-core/src/semantic_store/semantic_transaction.rs'
+edit(p, '    ChangeSubscription {\n        object: SemanticTransactionNodeRef,', '''    SetPointerClickAction {
+        object: SemanticTransactionNodeRef,
+        action: Option<crate::SemanticPointerClickAction>,
+    },
+    ChangeSubscription {
+        object: SemanticTransactionNodeRef,''')
+edit(p, '            | Self::ReplaceStyle { object, .. }', '            | Self::ReplaceStyle { object, .. }\n            | Self::SetPointerClickAction { object, .. }', 2)
+edit(p, '            Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),', '''            Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
+            Self::SetPointerClickAction { object, .. } => Some(SemanticMutationKey::PointerClickAction(*object)),''')
+edit(p, '    ObjectStyle(SemanticTransactionNodeRef),', '    ObjectStyle(SemanticTransactionNodeRef),\n    PointerClickAction(SemanticTransactionNodeRef),')
+edit(p, '    ObjectStyle {\n        object: SemanticNodeId,\n    },', '''    ObjectStyle {
+        object: SemanticNodeId,
+    },
+    /// Declaration-only metadata; no execution property or membership changed.
+    PointerClickAction { object: SemanticNodeId },''')
+edit(p, '    /// Change the authored signal driver for one object property.\n    pub fn change_subscription(', '''    /// Author or remove one object's self-targeting primary-click action.
+    pub fn set_pointer_click_action(
+        &mut self, object: impl Into<SemanticTransactionNodeRef>,
+        action: Option<crate::SemanticPointerClickAction>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetPointerClickAction { object: object.into(), action });
+        self
+    }
+
+    /// Change the authored signal driver for one object property.
+    pub fn change_subscription(''')
+edit(p, '''                SemanticMutation::ChangeSubscription {
+                    object,
+                    property,
+                    signal,
+                } => {
+                    let state = catalog.staged_object_state(''', '''                SemanticMutation::SetPointerClickAction { object, action } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects, &mut staged_object_order, *object, index,
+                    )?;
+                    if action.is_some_and(|action| !action.is_valid()) {
+                        return Err(SemanticMutationTransactionError::InvalidPointerClickAction { index, object: *object });
+                    }
+                    let did_change = state.pointer_click_action() != *action;
+                    state.set_pointer_click_action(*action);
+                    changed.push(did_change);
+                }
+                SemanticMutation::ChangeSubscription {
+                    object,
+                    property,
+                    signal,
+                } => {
+                    let state = catalog.staged_object_state(''')
+edit(p, 'pub enum SemanticMutationTransactionError {', '''pub enum SemanticMutationTransactionError {
+    InvalidPointerClickAction { index: usize, object: SemanticTransactionNodeRef },
+    DuplicatePointerClickAction { index: usize, object: SemanticNodeId },''')
+edit(p, '''impl std::fmt::Display for SemanticMutationTransactionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {''', '''impl std::fmt::Display for SemanticMutationTransactionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPointerClickAction { index, object } => write!(formatter,
+                "semantic transaction mutation {index} has invalid pointer-click action on {object:?}"),
+            Self::DuplicatePointerClickAction { index, object } => write!(formatter,
+                "semantic transaction mutation {index} duplicates pointer-click action on {object:?}"),''')
+edit(p, 'mod graph_tests;', 'mod graph_tests;\n\n#[cfg(test)]\nmod pointer_action_tests;')
+p = 'crates/noon-core/src/semantic_store/semantic_transaction/provisional.rs'
+edit(p, '        | SemanticMutationKey::ObjectStyle(object)', '        | SemanticMutationKey::ObjectStyle(object)\n        | SemanticMutationKey::PointerClickAction(object)')
+edit(p, '        SemanticMutationKey::ObjectStyle(SemanticTransactionNodeRef::Existing(object)) => {', '''        SemanticMutationKey::PointerClickAction(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicatePointerClickAction { index, object }
+        }
+        SemanticMutationKey::ObjectStyle(SemanticTransactionNodeRef::Existing(object)) => {''')
+p = 'crates/noon-core/src/semantic_store/semantic_transaction/prepared.rs'
+edit(p, '                SemanticMutation::ReplaceStyle { object, style } => {', '''                SemanticMutation::SetPointerClickAction { object, action } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store.node_mut(object).expect("preflighted click target")
+                        .semantic_object_state_mut().expect("preflighted object")
+                        .set_pointer_click_action(action);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::PointerClickAction { object });
+                }
+                SemanticMutation::ReplaceStyle { object, style } => {''')
+for p in ['crates/noon-compile/src/semantic_lowering/projection.rs', 'crates/noon-compile/src/semantic_lowering/reachability.rs']:
+    edit(p, '                | SemanticMutationImpact::ObjectStyle { .. }', '                | SemanticMutationImpact::ObjectStyle { .. }\n                | SemanticMutationImpact::PointerClickAction { .. }')
+p = 'crates/noon-compile/src/semantic_lowering/publication.rs'
+edit(p, '                | SemanticMutation::ReplaceStyle { .. }', '                | SemanticMutation::ReplaceStyle { .. }\n                | SemanticMutation::SetPointerClickAction { .. }')
+edit(p, '            SemanticMutation::ReplaceStyle { object, .. } => {', '''            SemanticMutation::SetPointerClickAction { object, .. } => {
+                // An authored declaration still publishes coherently, but does
+                // not rewrite geometry, paint, content, or runtime drivers.
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default();
+                }
+            }
+            SemanticMutation::ReplaceStyle { object, .. } => {''')
+p = 'crates/noon/src/execution_session/selection.rs'
+edit(p, '    max_movement: Option<f32>,', '    max_movement: Option<f32>,\n    select_on_click: bool,')
+edit(p, '            max_movement: self.max_movement,', '            max_movement: self.max_movement,\n            select_on_click: self.select_on_click,')
+edit(p, '        self.ensure_direct_input_ingress_available()?;\n        if !max_movement.is_finite()', '''        self.configure_pointer_fill_clicks(max_movement, true)
+    }
+
+    /// Recognize the same ordered fill clicks without enabling editor selection.
+    /// A language-neutral action binding may consume the accepted occurrence.
+    pub fn enable_pointer_fill_clicks(&mut self, max_movement: f32) -> Result<(), ExecutionSessionInputError> {
+        self.configure_pointer_fill_clicks(max_movement, false)
+    }
+
+    fn configure_pointer_fill_clicks(&mut self, max_movement: f32, select_on_click: bool) -> Result<(), ExecutionSessionInputError> {
+        self.ensure_direct_input_ingress_available()?;
+        if !max_movement.is_finite()''')
+edit(p, '            max_movement: Some(max_movement),', '            max_movement: Some(max_movement),\n            select_on_click,')
+edit(p, '''                        prepared.state.selected = target.map(|node| SelectedTarget {
+                            node,
+                            publication: query.publication(),
+                        });''', '''                        if prepared.state.select_on_click {
+                            prepared.state.selected = target.map(|node| SelectedTarget {
+                                node,
+                                publication: query.publication(),
+                            });
+                            prepared.changed = target != previous_selection;
+                        }''')
+edit(p, '                        prepared.changed = target != previous_selection;\n                    }', '                    }')
+p = 'crates/noon/src/live_session.rs'
+edit(p, 'mod property_animation;', 'mod property_animation;\nmod pointer_actions;\npub use pointer_actions::{PointerActionPublication, PointerClickActionOutcome};')
+p = 'crates/noon/src/lib.rs'
+edit(p, '    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,', '    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, PointerActionPublication,\n    PointerClickActionOutcome, SubsetDisplayMode,')
+edit(p, '    SemanticObjectState, SemanticPaint, SemanticSignalValue,', '    SemanticPointerClickAction, SemanticObjectState, SemanticPaint, SemanticSignalValue,')
+p = 'crates/noon/src/live_program/property_animation.rs'
+edit(p, 'impl<C: LiveContinuation> LiveProgram<C> {', '''impl<C: LiveContinuation> LiveProgram<C> {
+    /// Configure click recognition without changing editor selection presentation.
+    pub fn set_pointer_fill_clicks(&mut self, max_movement: Option<f32>) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure pointer clicks")?;
+        let session = self.scene.owned_execution_mut();
+        match max_movement {
+            Some(value) => session.enable_pointer_fill_clicks(value),
+            None => session.disable_pointer_fill_selection(),
+        }.map_err(LiveProgramError::Input)
+    }
+
+    /// Admit input and execute its authored action through this program's live owner.
+    /// Action failures are retained inside the accepted-input publication.
+    pub fn submit_pointer_input_with_actions(
+        &mut self,
+        token: &crate::integration::NativePointerInputToken,
+        input: noon_core::NativePointerInput,
+    ) -> Result<crate::PointerActionPublication, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("dispatch pointer input actions")?;
+        let publication = self.scene.owned_live()
+            .submit_pointer_input_with_actions(token, input)
+            .map_err(LiveProgramError::Effect)?;
+        self.refresh_pending_publication();
+        Ok(publication)
+    }
+''')
+changed.update([
+    'crates/noon-core/src/semantic_store/pointer_actions.rs',
+    'crates/noon-core/src/semantic_store/semantic_transaction/pointer_action_tests.rs',
+    'crates/noon/src/live_session/pointer_actions.rs',
+    'crates/noon/src/live_session/pointer_actions/tests.rs',
+])
+for path in changed:
+    assert Path(path).is_file(), path
+Path('/tmp/c5-click-proof').mkdir(exist_ok=True)
+Path('/tmp/c5-click-proof/paths.txt').write_text(''.join(path+'\n' for path in sorted(changed)))
