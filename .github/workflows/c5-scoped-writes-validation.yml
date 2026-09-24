@@ -1,0 +1,144 @@
+name: C5 scoped effective writes qualification
+
+on:
+  push:
+    branches: [validation/c5-scoped-effective-writes-20260924]
+    paths:
+      - crates/noon-runtime/src/**
+      - scripts/validation/c5-scoped-writes.py
+      - .github/workflows/c5-scoped-writes-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: c5-scoped-effective-writes-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 5231a00c54aecf96a1fc363034047f7e9075e740
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Verify and capture clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-scoped-proof
+          python3 scripts/validation/c5-scoped-writes.py
+          rustup install
+          rustc --version --verbose | tee /tmp/c5-scoped-proof/rust-version.txt
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          cat > /tmp/c5-scoped-proof/paths.txt <<'EOF'
+          crates/noon-runtime/src/effective_write.rs
+          crates/noon-runtime/src/effective_write/tests.rs
+          crates/noon-runtime/src/lib.rs
+          crates/noon-runtime/src/prepared_frame.rs
+          EOF
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-scoped-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-scoped-proof/paths.txt -
+          git write-tree > /tmp/c5-scoped-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-scoped-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-scoped-proof/source.stat
+          git archive "$(cat /tmp/c5-scoped-proof/tree.txt)" | gzip > /tmp/c5-scoped-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-scoped-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: exact scoped effective write qualification candidate')
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-scoped-proof/tree.txt)"
+          test ! -e .github/workflows/c5-scoped-writes-validation.yml
+          git diff --exit-code
+          cp crates/noon-runtime/src/effective_write.rs /tmp/c5-scoped-good.rs
+      - name: Scoped writes and existing publication regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-runtime --lib effective_write::tests -- --nocapture 2>&1 | tee /tmp/c5-scoped-proof/scoped.log
+          cargo test -p noon-runtime --lib prepared_frame::tests -- --nocapture 2>&1 | tee /tmp/c5-scoped-proof/prepared.log
+          cargo test -p noon --no-default-features --lib inspection -- --nocapture 2>&1 | tee /tmp/c5-scoped-proof/inspection.log
+      - name: Whole-transform overwrite negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-runtime/src/effective_write.rs')
+          s = p.read_text()
+          old = 'let (property, value) = match write {'
+          assert s.count(old) == 1
+          new = '''if let EffectivePropertyWrite::Scale { scale, .. } = write {
+              *row.transform = Transform2D { scale, ..Transform2D::IDENTITY };
+              return;
+          }
+          ''' + old
+          p.write_text(s.replace(old, new))
+          PY
+          set +e
+          cargo test -p noon-runtime --lib effective_write::tests::scale_and_fill_preserve_newly_evaluated_translation_rotation_and_opacity -- --exact --nocapture > /tmp/c5-scoped-proof/negative.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-scoped-good.rs crates/noon-runtime/src/effective_write.rs
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-scoped-proof/negative.log
+          cargo test -p noon-runtime --lib effective_write::tests -- --nocapture 2>&1 | tee /tmp/c5-scoped-proof/restored.log
+      - name: WASM and repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-scoped-proof/wasm.log
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-scoped-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-scoped-proof/fast.log
+      - name: Publish exact tested source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cmp /tmp/c5-scoped-good.rs crates/noon-runtime/src/effective_write.rs
+          git diff --exit-code -- $(cat /tmp/c5-scoped-proof/paths.txt)
+          cp Cargo.lock /tmp/c5-scoped-proof/Cargo.lock
+          tree=$(cat /tmp/c5-scoped-proof/tree.txt)
+          test "$(git rev-parse HEAD^{tree})" = "$tree"
+          branch="staging/c5-scoped-writes-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > /tmp/c5-scoped-proof/commit.txt
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-scoped-effective-writes-proof
+          path: /tmp/c5-scoped-proof
+          retention-days: 7
+          if-no-files-found: error
