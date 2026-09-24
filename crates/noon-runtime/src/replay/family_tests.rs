@@ -87,7 +87,10 @@ fn family_replay_matches_first_pass_across_mapped_reverse_and_membership_changes
 
     let plans = runtime.family_animation_plans().as_ptr();
     assert_eq!(runtime.family_animation_plans().len(), 2);
-    assert_eq!(frames[4].family_animations[0].unwrap().overall_progress, 1.0);
+    assert_eq!(
+        frames[4].family_animations[0].unwrap().overall_progress,
+        1.0
+    );
     assert!(frames[5].family_animations[0].is_none());
     assert!(frames[9].family_animations[0].unwrap().reverse_member_order);
     assert!(frames[10].family_animations[0].is_none());

@@ -189,7 +189,7 @@ impl SceneInstance {
                 noon_core::RateFunction::Linear,
             );
             let (start, _) =
-                noon_core::continuous_time_map_interval(timing, &animation.time_map)?;
+                noon_core::continuous_time_map_interval(timing, &animation.time_map).ok()?;
             if start < self.frame.time {
                 return None;
             }
