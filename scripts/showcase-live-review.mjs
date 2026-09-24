@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-replay-checks.mjs";
+import { waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
 
 // First execution and replay are distinct engine capabilities. Keep both results,
@@ -182,7 +183,7 @@ async function main() {
         assertReplayAvailable(result.firstPass);
         result.stage = "replay seek to resolved endpoint";
         const requestedTime = await seekPausedGallery(page, entry.duration);
-        const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+        const metrics = await waitForPublishedGalleryFrame(page, requestedTime, entry.duration);
         const observed = await page.evaluate(() => ({
           selectedExampleId: window.__noonExampleGallery.selectedExampleId,
           runInFlight: window.__noonExampleGallery.runInFlight,
@@ -207,7 +208,7 @@ async function main() {
         result.stage = "restart and recover endpoint";
         await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
         const replayTime = await seekPausedGallery(page, entry.duration);
-        const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+        const replayMetrics = await waitForPublishedGalleryFrame(page, replayTime, entry.duration);
         assertLiveEndpoint(entry, Number(observed.duration), replayTime, replayMetrics.metrics.time);
         const replay = PNG.sync.read(await canvas.screenshot({
           path: path.join(output, `${entry.id}-restart.png`),
@@ -228,6 +229,7 @@ async function main() {
         // canvas to the forward oracle's viewport; never rescale/crop PNGs.
         await layoutReplayViewport(canvas, captureReport.viewport);
         await seekPausedGallery(page, entry.duration, 0);
+        await waitForPublishedGalleryFrame(page, 0, entry.duration);
         result.intermediateViewport = await replayViewport(canvas, captureReport.viewport);
         result.intermediateSamples = [];
         for (const [direction, checkpoints] of [["backward", [...oracle].reverse()], ["forward", oracle]]) {
@@ -241,7 +243,7 @@ async function main() {
               const firstImage = PNG.sync.read(firstBytes);
               assertOracleImage(checkpoint, firstBytes, firstImage);
               const time = await seekPausedGallery(page, entry.duration, checkpoint.completionProbe ? null : checkpoint.replayTime);
-              const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+              const replayMetrics = await waitForPublishedGalleryFrame(page, time, entry.duration);
               comparison.publishedTime = replayMetrics.metrics.time;
               comparison.backend = replayMetrics.metrics.backend;
               comparison.filename = `${entry.id}-${direction}-${index}.png`;
