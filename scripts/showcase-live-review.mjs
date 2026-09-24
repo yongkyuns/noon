@@ -39,6 +39,13 @@ export function assertLiveEndpoint(entry, authoredDuration, requestedTime, publi
     "live endpoint was not presented at its authored time");
 }
 
+// Both replay paths must reproduce ordinary execution, not just agree with each other.
+export function assertLivePixels(firstPass, replay) {
+  assert.equal(replay.width, firstPass.width, "replay width differs from first pass");
+  assert.equal(replay.height, firstPass.height, "replay height differs from first pass");
+  assert.ok(replay.data.equals(firstPass.data), "replay differs from unseeked first-pass pixels");
+}
+
 async function main() {
   const { chromium } = await import("playwright");
   const { PNG } = (await import("pngjs")).default;
@@ -116,7 +123,11 @@ async function main() {
           controls: { ...document.querySelector(".playback-controls")?.dataset },
           replayReason: document.querySelector(".playback-controls")?.title,
         }));
-        await page.locator("#scene").screenshot({ path: path.join(output, `${entry.id}-first-pass.png`) });
+        const canvas = page.locator("#scene");
+        const firstPass = PNG.sync.read(await canvas.screenshot({
+          path: path.join(output, `${entry.id}-first-pass.png`),
+        }));
+        result.firstPassPixelSha256 = hash(firstPass.data);
         result.stage = "replay seek to resolved endpoint";
         const requestedTime = await seekPausedGallery(page, entry.duration);
         const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
@@ -134,21 +145,24 @@ async function main() {
         result.observed = observed;
         result.requestedTime = requestedTime;
         result.publishedTime = metrics.metrics.time;
-        const canvas = page.locator("#scene");
-        const first = await canvas.screenshot();
-        const firstPixels = PNG.sync.read(first);
-        assert.ok(firstPixels.width >= 320 && firstPixels.height >= 180, "live canvas is too small");
-        await writeFile(path.join(output, `${entry.id}-endpoint.png`), first);
-        result.endpointPixelSha256 = hash(firstPixels.data);
+        const endpoint = PNG.sync.read(await canvas.screenshot({
+          path: path.join(output, `${entry.id}-endpoint.png`),
+        }));
+        result.endpointPixelSha256 = hash(endpoint.data);
+        assert.ok(endpoint.width >= 320 && endpoint.height >= 180, "live canvas is too small");
+        assertLivePixels(firstPass, endpoint);
+        result.endpointMatchesFirstPass = true;
         result.stage = "restart and recover endpoint";
         await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
         const replayTime = await seekPausedGallery(page, entry.duration);
         const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
         assertLiveEndpoint(entry, Number(observed.duration), replayTime, replayMetrics.metrics.time);
-        const replay = PNG.sync.read(await canvas.screenshot());
-        assert.equal(replay.width, firstPixels.width);
-        assert.equal(replay.height, firstPixels.height);
-        assert.ok(replay.data.equals(firstPixels.data), "replay did not reproduce the resolved pixels");
+        const replay = PNG.sync.read(await canvas.screenshot({
+          path: path.join(output, `${entry.id}-restart.png`),
+        }));
+        result.restartPixelSha256 = hash(replay.data);
+        assertLivePixels(firstPass, replay);
+        result.restartMatchesFirstPass = true;
         assert.deepEqual(result.pageErrors, []);
         result.restartRestoresEndpoint = true;
         result.outcome = "pass";

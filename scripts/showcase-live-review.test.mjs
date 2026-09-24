@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertLiveOutcome, assertLiveEndpoint } from "./showcase-live-review.mjs";
+import { assertLiveOutcome, assertLiveEndpoint, assertLivePixels } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -67,5 +67,41 @@ test("live endpoint rejects missing or coerced timestamps", () => {
       const times = [8, 8, 8, 8]; times[index] = value;
       assert.throws(() => assertLiveEndpoint({ duration: times[0] }, ...times.slice(1)));
     }
+  }
+});
+
+function pixels(data = [0, 10, 20, 255, 30, 40, 50, 255]) {
+  return { width: 2, height: 1, data: Buffer.from(data) };
+}
+
+test("both replay paths must reproduce independent unseeked pixels", () => {
+  const firstPass = pixels();
+  const before = Buffer.from(firstPass.data);
+  assertLivePixels(firstPass, pixels());
+  assertLivePixels(firstPass, pixels());
+  assert.ok(firstPass.data.equals(before));
+});
+
+test("two identical wrong replays cannot substitute for the first pass", () => {
+  const firstPass = pixels();
+  const endpoint = pixels();
+  endpoint.data[0] ^= 1;
+  const restart = { ...endpoint, data: Buffer.from(endpoint.data) };
+  // This is the old replay-versus-replay check: it passes despite the regression.
+  assert.ok(endpoint.data.equals(restart.data));
+  for (const replay of [endpoint, restart]) {
+    assert.throws(() => assertLivePixels(firstPass, replay), /unseeked first-pass pixels/);
+  }
+});
+
+test("live pixel equality rejects dimensions and every changed RGBA channel", () => {
+  const firstPass = pixels();
+  assert.throws(() => assertLivePixels(firstPass, { ...pixels(), width: 1, height: 2 }));
+  assert.throws(() => assertLivePixels(firstPass, { ...pixels(), height: 2 }));
+  assert.throws(() => assertLivePixels(firstPass, { ...pixels(), data: Buffer.alloc(0) }));
+  for (let i = 0; i < firstPass.data.length; i++) {
+    const changed = pixels();
+    changed.data[i] ^= 1;
+    assert.throws(() => assertLivePixels(firstPass, changed), /unseeked first-pass pixels/);
   }
 });
