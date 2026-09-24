@@ -10,12 +10,13 @@ use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransactionGraphDeclaration, SemanticTransformInterpolation,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransactionGraphDeclaration,
+    SemanticTransactionGraphEdgeDependency, SemanticTransformInterpolation,
     SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::{CompositionTimeMap, TrackTiming};
@@ -2240,13 +2241,94 @@ fn validate_graph_declaration(
                 "graph edge Line must be a direct edge-family member",
             ));
         }
+        let line_state = object_state(binding.line());
         if !matches!(
-            object_state(binding.line()).and_then(|state| state.content.geometry()),
+            line_state.and_then(|state| state.content.geometry()),
             Some(StoredGeometry::Line { .. })
         ) {
             return Err(invalid(
                 "graph edge dependency component must be an analytic Line",
             ));
+        }
+
+        let edge_members = preflight
+            .family_edges
+            .members_for_read(store, binding.family())
+            .into_iter()
+            .collect::<HashSet<_>>();
+        match (edge.directed, binding.dependency()) {
+            (false, SemanticTransactionGraphEdgeDependency::Line) => {
+                if edge_members.len() != 1 {
+                    return Err(invalid(
+                        "undirected graph edge family must contain exactly its designated Line",
+                    ));
+                }
+            }
+            (
+                true,
+                SemanticTransactionGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                },
+            ) => {
+                if !policy.is_valid() {
+                    return Err(invalid(
+                        "graph Arrow endpoint policy must be finite and nonnegative",
+                    ));
+                }
+                if !matches!(
+                    line_state.map(SemanticObjectState::role),
+                    Some(SemanticObjectRole::ArrowShaft(_))
+                ) {
+                    return Err(invalid(
+                        "directed graph edge Line must retain the shared Arrow shaft role",
+                    ));
+                }
+
+                let mut expected_members = HashSet::with_capacity(3);
+                expected_members.insert(binding.line());
+                for (tip, expected_role) in [
+                    (Some(end_tip), SemanticObjectRole::ArrowEndTip),
+                    (start_tip, SemanticObjectRole::ArrowStartTip),
+                ] {
+                    let Some(tip) = tip else {
+                        continue;
+                    };
+                    catalog.ensure_object(tip, index)?;
+                    if removed(tip) || !semantic_objects.insert(tip) {
+                        return Err(invalid(
+                            "graph Arrow tip identities must be distinct live semantic objects",
+                        ));
+                    }
+                    if !matches!(object_state(tip), Some(state) if state.role() == expected_role) {
+                        return Err(invalid(
+                            "graph Arrow tip dependency must reference the matching shared Arrow role",
+                        ));
+                    }
+                    if !edge_members.contains(&tip) {
+                        return Err(invalid(
+                            "graph Arrow tip dependency must be a direct edge-family member",
+                        ));
+                    }
+                    expected_members.insert(tip);
+                }
+                if edge_members != expected_members {
+                    return Err(invalid(
+                        "directed graph edge family must contain exactly its shaft and declared tips",
+                    ));
+                }
+            }
+            (false, SemanticTransactionGraphEdgeDependency::Arrow { .. }) => {
+                return Err(invalid(
+                    "undirected graph edges must use Line endpoint dependencies",
+                ));
+            }
+            (true, SemanticTransactionGraphEdgeDependency::Line) => {
+                return Err(invalid(
+                    "directed graph edges must use shared Arrow endpoint dependencies",
+                ));
+            }
         }
 
         if !vertices_by_id.contains_key(&edge.start) || !vertices_by_id.contains_key(&edge.end) {

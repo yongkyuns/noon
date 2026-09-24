@@ -214,16 +214,24 @@ where
                 let graph_vertices = staged_vertices
                     .iter()
                     .map(|vertex| (vertex.id, vertex.node));
-                let graph_edges = staged_edges.iter().map(|edge| {
-                    let (family, line) = match &edge.geometry {
-                        StagedEdgeGeometry::Line { family, line } => (*family, *line),
-                        StagedEdgeGeometry::Arrow(arrow) => (arrow.family, arrow.shaft),
-                    };
-                    SemanticTransactionGraphEdgeBinding::new(
-                        edge.edge.id,
-                        family.into(),
-                        line.into(),
-                    )
+                let graph_edges = staged_edges.iter().map(|edge| match &edge.geometry {
+                    StagedEdgeGeometry::Line { family, line } => {
+                        SemanticTransactionGraphEdgeBinding::new(
+                            edge.edge.id,
+                            (*family).into(),
+                            (*line).into(),
+                        )
+                    }
+                    StagedEdgeGeometry::Arrow(arrow) => {
+                        SemanticTransactionGraphEdgeBinding::new_arrow(
+                            edge.edge.id,
+                            arrow.family.into(),
+                            arrow.shaft.into(),
+                            arrow.end_tip.into(),
+                            arrow.start_tip.map(Into::into),
+                            arrow.endpoint_policy,
+                        )
+                    }
                 });
                 transaction.set_graph_declaration(
                     root,

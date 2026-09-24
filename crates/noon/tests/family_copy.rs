@@ -2,7 +2,7 @@ use noon::{
     AnimationOptions, ManimArrow, ManimArrowOptions, ManimArrowVectorField, RateFunction, Scene,
     VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
 };
-use noon_core::{SemanticObjectProperty, SemanticVec3};
+use noon_core::{SemanticGraphEdgeDependency, SemanticObjectProperty, SemanticVec3};
 use std::rc::Rc;
 
 #[test]
@@ -302,4 +302,51 @@ fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
     assert_eq!(binding.line(), copied_line.node_id());
     assert_ne!(binding.family(), source_edge.family().node_id());
     assert_ne!(binding.line(), source_edge.line().node_id());
+}
+
+#[test]
+fn directed_graph_family_copy_remaps_arrow_dependency_components() {
+    let mut scene = Scene::new();
+    let graph = scene
+        .digraph([("a", (-2.0, 0.0)), ("b", (2.0, 0.0))], [("a", "b")])
+        .unwrap();
+    let edge_id = graph.edge_id(&"a", &"b").unwrap();
+    let source_edge = graph.edge(&"a", &"b").unwrap();
+    let source_arrow = source_edge.arrow().expect("DiGraph edge uses shared Arrow");
+
+    let copied = graph.family().copy_family().unwrap();
+    let copied_family = copied.family(source_arrow.family()).unwrap();
+    let copied_shaft = copied.mobject(source_arrow.shaft()).unwrap();
+    let copied_end_tip = copied.mobject(source_arrow.end_tip()).unwrap();
+
+    let store = scene.integration_store().borrow();
+    let declaration = store
+        .semantic_graph_declaration(copied.root().node_id())
+        .unwrap()
+        .expect("copied DiGraph root retains graph semantics");
+    let binding = declaration.edge_binding(edge_id).unwrap();
+
+    assert_eq!(binding.family(), copied_family.node_id());
+    assert_eq!(binding.line(), copied_shaft.node_id());
+    match binding.dependency() {
+        SemanticGraphEdgeDependency::Arrow {
+            end_tip,
+            start_tip,
+            policy,
+        } => {
+            assert_eq!(end_tip, copied_end_tip.node_id());
+            assert_eq!(start_tip, None);
+            assert!(policy.is_valid());
+            assert_eq!(policy.buff(), 0.15);
+            assert_eq!(policy.tip_length(), noon::DEFAULT_ARROW_TIP_LENGTH);
+            assert_eq!(
+                policy.max_tip_length_to_length_ratio(),
+                noon::DEFAULT_ARROW_TIP_LENGTH_RATIO
+            );
+        }
+        SemanticGraphEdgeDependency::Line => panic!("DiGraph copy lost Arrow dependency semantics"),
+    }
+    assert_ne!(binding.family(), source_arrow.family().node_id());
+    assert_ne!(binding.line(), source_arrow.shaft().node_id());
+    assert_ne!(copied_end_tip.node_id(), source_arrow.end_tip().node_id());
 }

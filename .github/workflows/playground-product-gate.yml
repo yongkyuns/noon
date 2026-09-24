@@ -37,7 +37,7 @@ concurrency:
 jobs:
   build:
     name: Build product comparison packages
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, X64, noon-mac]
     timeout-minutes: 35
     outputs:
       baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
@@ -179,7 +179,7 @@ jobs:
     name: Runtime, visual, latency, and FPS regression
     needs: build
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, X64, noon-mac]
     timeout-minutes: 20
     env:
       NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}

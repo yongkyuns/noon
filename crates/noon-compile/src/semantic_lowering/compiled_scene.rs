@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceHandle, ObjectContentRef, Rect, SemanticNodeId,
@@ -6,15 +6,17 @@ use noon_core::{
 };
 
 use crate::{
-    CompiledObject, CompiledResourceError, CompiledResources, CompiledScene, DynamicProperties,
+    CompiledGraphEdgeDependency, CompiledGraphEdgeKind, CompiledObject, CompiledResourceError,
+    CompiledResources, CompiledScene, DynamicProperties,
 };
 
-use super::SemanticExecutionProjection;
+use super::{SemanticExecutionGraphEdgeKind, SemanticExecutionProjection};
 
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
     TooManyObjects(usize),
+    TooManyGraphDependencies(usize),
     InvalidPresentation {
         node: SemanticNodeId,
     },
@@ -42,6 +44,10 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::TooManyObjects(count) => {
                 write!(formatter, "semantic projection contains too many objects: {count}")
             }
+            Self::TooManyGraphDependencies(count) => write!(
+                formatter,
+                "semantic projection contains too many graph endpoint dependencies: {count}"
+            ),
             Self::UnsupportedSignalBindings { node, count } => write!(
                 formatter,
                 "semantic object {}:{} carries {count} native-reactive signal binding(s) before compiled execution slots consume semantic bindings",
@@ -173,6 +179,68 @@ fn materialize_semantic_projection(
     for (rank, &index) in family_order.iter().enumerate() {
         family_ranks[index as usize] = Some(rank as u32);
     }
+
+    let mut graph_edge_dependencies = Vec::with_capacity(projection.graph_edges().len());
+    let mut graph_incident_dependencies = HashMap::<u32, Vec<u32>>::new();
+    let mut graph_dirty_dependencies = HashMap::<u32, Vec<u32>>::new();
+    for dependency in projection.graph_edges() {
+        let dependency_index = u32::try_from(graph_edge_dependencies.len()).map_err(|_| {
+            SemanticCompiledSceneError::TooManyGraphDependencies(projection.graph_edges().len())
+        })?;
+        let start_vertex_index = object_indices[&dependency.start_vertex];
+        let end_vertex_index = object_indices[&dependency.end_vertex];
+        let line_index = object_indices[&dependency.line];
+        let kind = match dependency.kind {
+            SemanticExecutionGraphEdgeKind::Line => CompiledGraphEdgeKind::Line,
+            SemanticExecutionGraphEdgeKind::Arrow {
+                end_tip,
+                start_tip,
+                policy,
+            } => CompiledGraphEdgeKind::Arrow {
+                end_tip_index: object_indices[&end_tip],
+                start_tip_index: start_tip.map(|tip| object_indices[&tip]),
+                policy,
+            },
+        };
+        graph_edge_dependencies.push(CompiledGraphEdgeDependency::new(
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+        ));
+        graph_incident_dependencies
+            .entry(start_vertex_index)
+            .or_default()
+            .push(dependency_index);
+        graph_dirty_dependencies
+            .entry(start_vertex_index)
+            .or_default()
+            .push(dependency_index);
+        if end_vertex_index != start_vertex_index {
+            graph_incident_dependencies
+                .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+            graph_dirty_dependencies
+                .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+        }
+        for owned_row in std::iter::once(line_index).chain(match kind {
+            CompiledGraphEdgeKind::Line => [None, None].into_iter().flatten(),
+            CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } => [Some(end_tip_index), start_tip_index].into_iter().flatten(),
+        }) {
+            graph_dirty_dependencies
+                .entry(owned_row)
+                .or_default()
+                .push(dependency_index);
+        }
+    }
+
     Ok(CompiledScene {
         family_order,
         family_ranks,
@@ -187,6 +255,9 @@ fn materialize_semantic_projection(
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
+        graph_edge_dependencies,
+        graph_incident_dependencies,
+        graph_dirty_dependencies,
         resources,
     })
 }

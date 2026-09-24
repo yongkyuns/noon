@@ -11,12 +11,106 @@ use crate::{
     SemanticTransactionNodeRef,
 };
 
+/// Geometry-independent policy required to reconstruct one Graph-owned Arrow
+/// from effective vertex centers.
+///
+/// The values are authored semantics rather than compiler constants. Graph
+/// lowering can therefore recompute buff shortening and tip sizing without
+/// depending on frontend defaults or reverse-engineering an already-capped tip.
+#[derive(Clone, Copy, Debug)]
+pub struct SemanticGraphArrowPolicy {
+    buff: f64,
+    tip_length: f64,
+    max_tip_length_to_length_ratio: f64,
+}
+
+impl SemanticGraphArrowPolicy {
+    pub const fn new(buff: f64, tip_length: f64, max_tip_length_to_length_ratio: f64) -> Self {
+        Self {
+            buff,
+            tip_length,
+            max_tip_length_to_length_ratio,
+        }
+    }
+
+    pub const fn buff(self) -> f64 {
+        self.buff
+    }
+
+    pub const fn tip_length(self) -> f64 {
+        self.tip_length
+    }
+
+    pub const fn max_tip_length_to_length_ratio(self) -> f64 {
+        self.max_tip_length_to_length_ratio
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.buff.is_finite()
+            && self.buff >= 0.0
+            && self.tip_length.is_finite()
+            && self.tip_length >= 0.0
+            && self.max_tip_length_to_length_ratio.is_finite()
+            && self.max_tip_length_to_length_ratio >= 0.0
+    }
+
+    fn canonical_bits(value: f64) -> u64 {
+        if value == 0.0 {
+            0
+        } else {
+            value.to_bits()
+        }
+    }
+}
+
+impl PartialEq for SemanticGraphArrowPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        Self::canonical_bits(self.buff) == Self::canonical_bits(other.buff)
+            && Self::canonical_bits(self.tip_length) == Self::canonical_bits(other.tip_length)
+            && Self::canonical_bits(self.max_tip_length_to_length_ratio)
+                == Self::canonical_bits(other.max_tip_length_to_length_ratio)
+    }
+}
+
+impl Eq for SemanticGraphArrowPolicy {}
+
+impl std::hash::Hash for SemanticGraphArrowPolicy {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Self::canonical_bits(self.buff).hash(state);
+        Self::canonical_bits(self.tip_length).hash(state);
+        Self::canonical_bits(self.max_tip_length_to_length_ratio).hash(state);
+    }
+}
+
+/// Effective endpoint dependency carried by one Graph edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticGraphEdgeDependency {
+    Line,
+    Arrow {
+        end_tip: SemanticNodeId,
+        start_tip: Option<SemanticNodeId>,
+        policy: SemanticGraphArrowPolicy,
+    },
+}
+
+impl SemanticGraphEdgeDependency {
+    fn referenced_nodes(self) -> [Option<SemanticNodeId>; 2] {
+        match self {
+            Self::Line => [None, None],
+            Self::Arrow {
+                end_tip, start_tip, ..
+            } => [Some(end_tip), start_tip],
+        }
+    }
+}
+
 /// One authored semantic binding for a stable graph edge identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SemanticGraphEdgeBinding {
     id: GraphEdgeId,
     family: SemanticNodeId,
     line: SemanticNodeId,
+    dependency: SemanticGraphEdgeDependency,
 }
 
 impl SemanticGraphEdgeBinding {
@@ -24,8 +118,14 @@ impl SemanticGraphEdgeBinding {
         id: GraphEdgeId,
         family: SemanticNodeId,
         line: SemanticNodeId,
+        dependency: SemanticGraphEdgeDependency,
     ) -> Self {
-        Self { id, family, line }
+        Self {
+            id,
+            family,
+            line,
+            dependency,
+        }
     }
 
     pub const fn id(self) -> GraphEdgeId {
@@ -38,6 +138,20 @@ impl SemanticGraphEdgeBinding {
 
     pub const fn line(self) -> SemanticNodeId {
         self.line
+    }
+
+    pub const fn dependency(self) -> SemanticGraphEdgeDependency {
+        self.dependency
+    }
+
+    fn referenced_nodes(self) -> [Option<SemanticNodeId>; 4] {
+        let dependency = self.dependency.referenced_nodes();
+        [
+            Some(self.family),
+            Some(self.line),
+            dependency[0],
+            dependency[1],
+        ]
     }
 }
 
@@ -162,8 +276,31 @@ impl SemanticGraphDeclaration {
             self.data
                 .edges
                 .values()
-                .flat_map(|edge| [edge.family(), edge.line()]),
+                .copied()
+                .flat_map(SemanticGraphEdgeBinding::referenced_nodes)
+                .flatten(),
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticTransactionGraphEdgeDependency {
+    Line,
+    Arrow {
+        end_tip: SemanticTransactionNodeRef,
+        start_tip: Option<SemanticTransactionNodeRef>,
+        policy: SemanticGraphArrowPolicy,
+    },
+}
+
+impl SemanticTransactionGraphEdgeDependency {
+    fn node_references(self) -> [Option<SemanticTransactionNodeRef>; 2] {
+        match self {
+            Self::Line => [None, None],
+            Self::Arrow {
+                end_tip, start_tip, ..
+            } => [Some(end_tip), start_tip],
+        }
     }
 }
 
@@ -173,15 +310,42 @@ pub struct SemanticTransactionGraphEdgeBinding {
     id: GraphEdgeId,
     family: SemanticTransactionNodeRef,
     line: SemanticTransactionNodeRef,
+    dependency: SemanticTransactionGraphEdgeDependency,
 }
 
 impl SemanticTransactionGraphEdgeBinding {
+    /// Construct an undirected/plain Line edge binding.
     pub const fn new(
         id: GraphEdgeId,
         family: SemanticTransactionNodeRef,
         line: SemanticTransactionNodeRef,
     ) -> Self {
-        Self { id, family, line }
+        Self {
+            id,
+            family,
+            line,
+            dependency: SemanticTransactionGraphEdgeDependency::Line,
+        }
+    }
+
+    pub const fn new_arrow(
+        id: GraphEdgeId,
+        family: SemanticTransactionNodeRef,
+        line: SemanticTransactionNodeRef,
+        end_tip: SemanticTransactionNodeRef,
+        start_tip: Option<SemanticTransactionNodeRef>,
+        policy: SemanticGraphArrowPolicy,
+    ) -> Self {
+        Self {
+            id,
+            family,
+            line,
+            dependency: SemanticTransactionGraphEdgeDependency::Arrow {
+                end_tip,
+                start_tip,
+                policy,
+            },
+        }
     }
 
     pub const fn id(self) -> GraphEdgeId {
@@ -194,6 +358,20 @@ impl SemanticTransactionGraphEdgeBinding {
 
     pub const fn line(self) -> SemanticTransactionNodeRef {
         self.line
+    }
+
+    pub const fn dependency(self) -> SemanticTransactionGraphEdgeDependency {
+        self.dependency
+    }
+
+    fn node_references(self) -> [Option<SemanticTransactionNodeRef>; 4] {
+        let dependency = self.dependency.node_references();
+        [
+            Some(self.family),
+            Some(self.line),
+            dependency[0],
+            dependency[1],
+        ]
     }
 }
 
@@ -248,7 +426,9 @@ impl SemanticTransactionGraphDeclaration {
             self.data
                 .edges
                 .iter()
-                .flat_map(|edge| [edge.family(), edge.line()]),
+                .copied()
+                .flat_map(SemanticTransactionGraphEdgeBinding::node_references)
+                .flatten(),
         )
     }
 }
@@ -287,8 +467,18 @@ mod tests {
             topology,
             vec![(a, id(1)), (b, id(2)), (c, id(3))],
             vec![
-                SemanticGraphEdgeBinding::from_resolved(ab, id(10), id(11)),
-                SemanticGraphEdgeBinding::from_resolved(bc, id(12), id(13)),
+                SemanticGraphEdgeBinding::from_resolved(
+                    ab,
+                    id(10),
+                    id(11),
+                    SemanticGraphEdgeDependency::Line,
+                ),
+                SemanticGraphEdgeBinding::from_resolved(
+                    bc,
+                    id(12),
+                    id(13),
+                    SemanticGraphEdgeDependency::Line,
+                ),
             ],
         );
         assert_eq!(graph.vertex_node(a), Some(id(1)));
@@ -299,6 +489,22 @@ mod tests {
             graph.incident_edge_nodes(b).unwrap(),
             vec![(ab, id(10)), (bc, id(12))]
         );
+    }
+
+    #[test]
+    fn arrow_policy_preserves_constructor_values_and_component_references() {
+        let policy = SemanticGraphArrowPolicy::new(0.25, 0.35, 0.25);
+        assert!(policy.is_valid());
+        assert_eq!(policy.buff(), 0.25);
+        assert_eq!(policy.tip_length(), 0.35);
+        assert_eq!(policy.max_tip_length_to_length_ratio(), 0.25);
+
+        let dependency = SemanticGraphEdgeDependency::Arrow {
+            end_tip: id(20),
+            start_tip: Some(id(21)),
+            policy,
+        };
+        assert_eq!(dependency.referenced_nodes(), [Some(id(20)), Some(id(21))]);
     }
 
     #[test]
@@ -313,6 +519,7 @@ mod tests {
                 edge,
                 id(10),
                 id(11),
+                SemanticGraphEdgeDependency::Line,
             )],
         );
         assert_eq!(graph.incident_edges(vertex).unwrap(), &[edge]);
