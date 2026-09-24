@@ -65,6 +65,11 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
+    pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
+        self.target_lookup
+            .contains_key(&binding_key(object, property))
+    }
+
     pub(crate) fn has_property_bindings(&self) -> bool {
         !self.targets.is_empty()
     }
@@ -367,6 +372,12 @@ impl SceneInstance {
             })?
             .prepare_input_batch(inputs)
             .map_err(crate::EvaluationError::Reactive)?;
+        let had_property_animations = self.has_property_animations();
+        if had_property_animations && self.publication.frame_epoch().checked_next().is_none() {
+            return Err(crate::EvaluationError::FrameEpochExhausted(
+                self.publication.frame_epoch(),
+            ));
+        }
         let effective_changed = !prepared.is_empty();
         if effective_changed {
             self.invalidate_replay_input();
@@ -378,7 +389,7 @@ impl SceneInstance {
             .commit_prepared_input_batch(prepared);
         self.seek_unchecked(time);
         self.last_reactive_stats = stats;
-        if self.frame.time != previous_time || effective_changed {
+        if self.frame.time != previous_time || effective_changed || had_property_animations {
             self.publish_effective_change();
         }
         Ok(&self.frame)
