@@ -6,6 +6,7 @@ on:
     paths:
       - crates/**
       - scripts/validation/c5-bound-pointer-actions.py
+      - scripts/validation/c5-bound-pointer-program.py
       - .github/workflows/c5-bound-pointer-actions-validation.yml
   workflow_dispatch:
 
@@ -51,6 +52,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/c5-click-proof
           python3 scripts/validation/c5-bound-pointer-actions.py
+          python3 scripts/validation/c5-bound-pointer-program.py
           rustup install
           rustc --version --verbose > /tmp/c5-click-proof/rust-version.txt
           cargo fmt --all
@@ -77,6 +79,7 @@ jobs:
           set -euo pipefail
           cargo test -p noon-core --lib pointer_action_tests -- --nocapture 2>&1 | tee /tmp/c5-click-proof/semantic.log
           cargo test -p noon --no-default-features --lib live_session::pointer_actions::tests -- --nocapture 2>&1 | tee /tmp/c5-click-proof/actions.log
+          cargo test -p noon --no-default-features --lib live_program::property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-click-proof/program.log
           cargo test -p noon --no-default-features --lib execution_session::selection::tests -- --nocapture 2>&1 | tee /tmp/c5-click-proof/selection.log
       - name: Omitted dispatch negative control
         shell: bash
