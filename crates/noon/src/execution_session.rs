@@ -5,6 +5,7 @@ mod family_transform;
 mod family_transform_tests;
 mod input;
 mod inspection;
+mod property_animation;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
@@ -425,6 +426,9 @@ impl std::error::Error for ExecutionSessionCreateError {}
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
+    EffectInput(ExecutionSessionInputError),
+    PropertyAnimation(noon_runtime::PropertyAnimationError),
+    CallbackTerminated,
     RequiredCallbackPending,
     SegmentCompletionPending,
     ForeignSemanticStore,
@@ -474,6 +478,9 @@ pub enum ExecutionSessionAnimationError {
 impl std::fmt::Display for ExecutionSessionAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EffectInput(error) => error.fmt(formatter),
+            Self::PropertyAnimation(error) => error.fmt(formatter),
+            Self::CallbackTerminated => formatter.write_str("required callback execution has terminated"),
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
@@ -1064,8 +1071,17 @@ impl ExecutionSession {
     /// Read runtime-owned presentation dirtiness and timeline cadence without
     /// exposing the runtime scheduler or introducing a host-side timing model.
     pub fn wake_state(&self) -> RuntimeWakeState {
+        let wake = self.runtime.wake_state();
+        // Demand is not permission to bypass a callback barrier. Retain the
+        // operations and their elapsed state, but never request effect ticks
+        // which this session must reject. Callback settlement reopens demand.
+        let wake = if self.require_property_animation_ingress().is_err() {
+            wake.without_property_animation_wake()
+        } else {
+            wake
+        };
         if self.callback_termination.is_some() {
-            return self.runtime.wake_state().without_timeline_wake();
+            return wake.without_timeline_wake();
         }
         let callback_timeline = if self.pending_callback.is_some() {
             noon_runtime::TimelineWakeState::Continuous
@@ -1073,9 +1089,7 @@ impl ExecutionSession {
             self.callback_schedule
                 .wake_timeline(self.runtime.frame().time)
         };
-        self.runtime
-            .wake_state()
-            .with_additional_timeline(callback_timeline)
+        wake.with_additional_timeline(callback_timeline)
             .with_additional_timeline(self.signal_timeline.wake_state())
     }
 

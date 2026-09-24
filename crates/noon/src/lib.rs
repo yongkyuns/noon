@@ -170,6 +170,8 @@ pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };
+pub use noon_runtime::PropertyAnimationToken;
+
 pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,

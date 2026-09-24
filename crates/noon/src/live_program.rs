@@ -9,6 +9,7 @@
 use std::error::Error;
 
 mod inspection;
+mod property_animation;
 
 use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
@@ -83,6 +84,7 @@ pub enum LiveProgramError<E> {
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
     Inspection(crate::InspectionNavigationError),
+    Effect(crate::LiveSessionError),
     Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
     Continuation(E),
@@ -113,6 +115,7 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::Inspection(error) => error.fmt(formatter),
+            Self::Effect(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Continuation(error) => error.fmt(formatter),
@@ -126,6 +129,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
             Self::Inspection(error) => Some(error),
+            Self::Effect(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Continuation(error) => Some(error),
@@ -180,6 +184,11 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// underlying tokenless wait already reports a complete interval.
     pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
         let wake = self.session().wake_state();
+        if matches!(self.phase, LiveProgramPhase::Terminal) {
+            return wake
+                .without_timeline_wake()
+                .without_property_animation_wake();
+        }
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
             // Endpoint presentation, authoring resumption, and a finished source

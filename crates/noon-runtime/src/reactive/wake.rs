@@ -68,6 +68,13 @@ impl RuntimeWakeState {
         self
     }
 
+    /// Suppress only effect-domain demand while a session cannot admit its
+    /// ticks. This observation does not cancel operations or clear dirtiness.
+    pub fn without_property_animation_wake(mut self) -> Self {
+        self.property_animation_pending = false;
+        self
+    }
+
     pub fn without_timeline_wake(mut self) -> Self {
         self.timeline = TimelineWakeState::Quiescent;
         self
