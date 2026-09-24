@@ -16,6 +16,8 @@ fn accepted_bound_click_refreshes_endpoint_without_resuming_source() {
     use noon_core::{NativeInputModifiers, NativePointerId, NativePointerInput,
         NativePointerInputKind, NativePointerPosition, Vec2};
     let (mut program, indicated) = fixture();
+    // Circle constructors are outline-only. Fill picking must observe a visible fill.
+    program.scene.owned_live().set_fill(&indicated, 0.0, 0.5, 1.0, 1.0).unwrap();
     program.scene.owned_live().set_pointer_click_action(
         &indicated, Some(SemanticPointerClickAction::default()),
     ).unwrap();
@@ -35,7 +37,7 @@ fn accepted_bound_click_refreshes_endpoint_without_resuming_source() {
         let result = program.submit_pointer_input_with_actions(&token, input).unwrap();
         if down { assert_eq!(result.action().unwrap(), PointerClickActionOutcome::None); }
         else {
-            let PointerClickActionOutcome::Started(token) = result.action().unwrap() else { panic!("missing click effect") };
+            let PointerClickActionOutcome::Started(token) = result.action().unwrap() else { panic!("missing click effect: {result:?}") };
             effect = Some(token);
         }
     }
