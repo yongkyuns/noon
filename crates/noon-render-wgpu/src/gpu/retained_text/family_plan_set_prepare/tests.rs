@@ -4,6 +4,7 @@ use noon_core::{
     FamilyAnimationMode, FamilyAnimationState, RateFunction,
     RetainedFamilyAnimationPlanBuilder, SemanticStore,
 };
+use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
 use super::*;
 
@@ -17,9 +18,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        // Real glyph outlines, including a repeated glyph, share the ordinary
-        // packing path used by Write/DrawBorderThenFill in the gallery.
-        let artifact = compile_typst_resource("ABA", TypstMode::Markup).unwrap();
+        // Borrow an existing bundled test face, then use the real plain-text
+        // shaper. Family Write intentionally does not accept Typst resources.
+        let seed = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let face = &seed.resource.runs[0].font;
+        let data = seed.fonts.get_for_face(face).unwrap().data.clone();
+        let font = NativeFontFace::new(face.family.clone(), data, face.face_index).unwrap();
+        let artifact = NativeTextCompiler::new()
+            .compile_plain("ABA", &font, &NativeTextOptions::new(1.0)).unwrap();
         let bounds = artifact.resource.bounds;
         let mut texts = TextResourceArena::new();
         let text = texts.insert(artifact.resource).unwrap();
