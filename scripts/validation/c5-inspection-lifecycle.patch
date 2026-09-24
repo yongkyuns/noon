@@ -1,0 +1,161 @@
+diff --git a/web/authoring-execution-client.js b/web/authoring-execution-client.js
+index 79f5dde..5e4ce62 100644
+--- a/web/authoring-execution-client.js
++++ b/web/authoring-execution-client.js
+@@ -491,6 +491,10 @@ export class AuthoringExecutionClient {
+     const canvas = this.#canvas;
+     const player = this.#player;
+     const generation = this.#lifecycleGeneration;
++    // This collector belongs to the endpoint already chosen by this transition.
++    // It can register that endpoint's view now, but not admit input until the
++    // transition completes. A later transition must retire both capabilities.
++    const attachingTransition = this.#transition;
+     let previousDelivery = Promise.resolve();
+     let initialViewDelivery = previousDelivery;
+     const report = (error) => {
+@@ -527,7 +531,9 @@ export class AuthoringExecutionClient {
+     };
+     this.#pointerCollector = attachBrowserPointerInput(canvas, {
+       signal,
+-      isCurrent: () => this.#player === player && this.#transition === null,
++      isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
++        (this.#transition === null || this.#transition === attachingTransition),
++      isInputEnabled: () => this.#transition === null,
+       send: submit,
+       allocateSource: () => {
+         if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
+diff --git a/web/browser-pointer-input.js b/web/browser-pointer-input.js
+index b61458b..1d46e8b 100644
+--- a/web/browser-pointer-input.js
++++ b/web/browser-pointer-input.js
+@@ -7,7 +7,7 @@ import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
+ const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
+ 
+ export function attachBrowserPointerInput(canvas, {
+-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window,
++  signal, isCurrent, isInputEnabled = () => true, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window,
+ }) {
+   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
+     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
+@@ -16,6 +16,9 @@ export function attachBrowserPointerInput(canvas, {
+   let view = null;
+   let unavailableViewReported = false;
+   const active = () => !signal.aborted && isCurrent();
++  // A newly attached endpoint may register its view while input is gated by
++  // an ownership transition. Registration is not an input occurrence or receipt.
++  const inputActive = () => active() && isInputEnabled();
+   const cancel = (kind = "cancel") => {
+     if (selected === null) return;
+     const previous = selected;
+@@ -57,7 +60,7 @@ export function attachBrowserPointerInput(canvas, {
+     return rect;
+   };
+   const receive = (type, event, receiptRect = null) => {
+-    if (!active()) return;
++    if (!inputActive()) return;
+     // -1 is the non-pointing-device ID, not a source for pointer gestures.
+     if (event.isPrimary !== true || event.pointerId === -1) return;
+     if (!Number.isInteger(event.pointerId) || event.pointerId < -2147483648 ||
+@@ -131,7 +134,7 @@ export function attachBrowserPointerInput(canvas, {
+     return true;
+   };
+   const collect = (type, event) => {
+-    if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
++    if (!inputActive() || event.isPrimary !== true || event.pointerId === -1) return;
+     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
+     // A held contact without an admitted press cannot resume after cancellation
+     // or enter from outside. Keep ordinary parent validation/ignore semantics;
+@@ -165,7 +168,7 @@ export function attachBrowserPointerInput(canvas, {
+   };
+   if (onWheel) {
+     canvas.addEventListener("wheel", guard(event => {
+-      if (!active()) return;
++      if (!inputActive()) return;
+       if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+         throw new TypeError("wheel cursor coordinates must be finite");
+       }
+@@ -202,7 +205,7 @@ export function attachBrowserPointerInput(canvas, {
+   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
+     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
+   }
+-  windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
++  windowTarget.addEventListener("blur", guard(() => { if (inputActive()) cancel("focus_lost"); }), { signal });
+   if (onView) {
+     // Register before the first paint; input collection never invents a receipt.
+     // Scroll/resize/element resize can invalidate mapping without pointer motion.
+diff --git a/web/browser-pointer-input.test.mjs b/web/browser-pointer-input.test.mjs
+index 7bd5f13..e3efbe5 100644
+--- a/web/browser-pointer-input.test.mjs
++++ b/web/browser-pointer-input.test.mjs
+@@ -480,3 +480,71 @@ test("late worker zoom completion cannot retire a replacement pointer contact",
+   assert.equal(pointerMessages(engine).at(-1).kind, "release");
+   assert.equal(pointerMessages(engine).at(-1).source_id, fresh.source_id);
+ });
++
++// The fake ResizeObserver never fires automatically. Registration must come
++// from attaching the chosen endpoint, not incidental layout or a first input.
++test("reconcile registers the new view before readiness without admitting transition input", async t => {
++  const dom = pointerCanvas(t);
++  const errors = [];
++  const { client, render, engine: oldEngine } = await startInputClient(t, dom.canvas, {
++    inspectionZoom: true, onRecoverableError: error => errors.push(error),
++  });
++  presentForWheel(oldEngine);
++  const oldViewCount = oldEngine.messages.filter(m => m.type === "browser_pointer_view").length;
++  const replacement = new FakeSemanticAuthoringClient(); replacement.autoRespond = false;
++  let complete = false;
++  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
++  void switching.then(() => { complete = true; }, () => {});
++  await waitForRequest(render, "rebuild_engine");
++  dom.win.dispatchEvent(new Event("resize"));
++  dom.emit("pointerdown");
++  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
++  await inputTurn();
++  assert.equal(oldEngine.messages.filter(m => m.type === "browser_pointer_view").length, oldViewCount);
++  assert.equal(pointerMessages(oldEngine).length, 0);
++  replyRender(render, "rebuild_engine", "engine_rebuilt");
++  await inputTurn();
++  const attachment = replacement.attachments.at(-1), engine = attachment.controlPort.peer;
++  const registration = engine.messages.findLast(m => m.type === "browser_pointer_view");
++  assert.ok(registration, "new view must register while transition input is still disabled");
++  assert.equal(complete, false, "reconcile waits for the chosen view's real publication");
++  const receipt = { session: attachment.options.session, sequence: 1, presentation: 1,
++    view_revision: registration.view.revision };
++  engine.emitMessage(envelope("noon.engine", "pointer_presented", { receipt }));
++  dom.emit("pointerdown");
++  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false,
++    "a receipt does not enable input before transition completion");
++  await inputTurn();
++  assert.equal(pointerMessages(engine).length, 0);
++  assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
++  replacement.autoRespond = true;
++  engine.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
++  await switching;
++  replacement.autoRespond = false;
++  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, true,
++    "the first wheel after readiness needs no resize notification or priming event");
++  await inputTurn();
++  const scroll = engine.messages.findLast(m => m.type === "inspection_scroll");
++  assert.deepEqual(scroll.presentation, receipt);
++  engine.emitMessage(envelope("noon.engine", scroll.type, { requestId: scroll.requestId, inspectionScrollChanged: false }));
++  await inputTurn();
++  assert.deepEqual(errors, []);
++});
++
++test("failed reconciliation leaves the old collector and receipt usable", async t => {
++  const dom = pointerCanvas(t);
++  const { client, engine } = await startInputClient(t, dom.canvas, { inspectionZoom: true });
++  const receipt = presentForWheel(engine);
++  const replacement = new FakeSemanticAuthoringClient(); replacement.failContext = "bad";
++  const switching = client.reconcileSemanticExecution({ contextId: "bad" }, { authoringClient: replacement });
++  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, false);
++  dom.emit("pointerdown");
++  await assert.rejects(switching, /semantic context rejected/);
++  assert.equal(dom.emit("wheel", workerWheel).defaultPrevented, true);
++  await inputTurn();
++  const scroll = engine.messages.findLast(m => m.type === "inspection_scroll");
++  assert.deepEqual(scroll.presentation, receipt);
++  assert.equal(pointerMessages(engine).length, 0);
++  engine.emitMessage(envelope("noon.engine", scroll.type, { requestId: scroll.requestId, inspectionScrollChanged: false }));
++  await inputTurn();
++});
