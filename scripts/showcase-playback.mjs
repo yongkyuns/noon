@@ -1,6 +1,20 @@
 // Browser UI automation only. The production player still owns playback and seek.
 import assert from "node:assert/strict";
 
+export async function waitForPublishedGalleryFrame(page, targetTime, storyboardDuration) {
+  assert.ok(Number.isFinite(targetTime) && targetTime >= 0);
+  assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
+  const tolerance = 8 * Number.EPSILON * Math.max(1, storyboardDuration);
+  await page.waitForFunction(async ({ targetTime, tolerance }) => {
+    const gallery = window.__noonExampleGallery;
+    if (!gallery) return false;
+    const report = await gallery.executionMetrics();
+    const time = Number(report?.metrics?.time);
+    return Number.isFinite(time) && Math.abs(time - targetTime) <= tolerance;
+  }, { targetTime, tolerance });
+  return page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+}
+
 export async function seekPausedGallery(page, storyboardDuration, sampleTime = null) {
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
   assert.ok(sampleTime === null || (Number.isFinite(sampleTime) && sampleTime >= 0 && sampleTime <= storyboardDuration),

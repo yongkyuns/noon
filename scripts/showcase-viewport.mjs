@@ -34,14 +34,28 @@ export async function layoutReplayViewport(canvas, size) {
   }, size);
 }
 
-export async function replayViewport(canvas, expected) {
-  const observed = await canvas.evaluate(element => {
-    const { x, y, width, height } = element.getBoundingClientRect();
-    return { bounds: { x, y, width, height },
-      bitmap: { width: element.width, height: element.height }, deviceScaleFactor: window.devicePixelRatio };
-  });
-  assertReplayViewport(observed, expected);
-  return observed;
+export async function replayViewport(canvas, expected, { attempts = 120 } = {}) {
+  validSize(expected);
+  assert.ok(Number.isSafeInteger(attempts) && attempts > 0, "invalid replay viewport wait");
+  let observed;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    observed = await canvas.evaluate(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { bounds: { x, y, width, height },
+        bitmap: { width: element.width, height: element.height }, deviceScaleFactor: window.devicePixelRatio };
+    });
+    try {
+      assertReplayViewport(observed, expected);
+      return observed;
+    } catch (error) {
+      lastError = error;
+    }
+    // ResizeObserver delivery and the renderer-worker resize acknowledgement are
+    // asynchronous. Wait for host-owned convergence; never assign canvas.width/height.
+    await canvas.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  }
+  throw lastError ?? new Error("renderer did not acknowledge replay viewport");
 }
 
 // A real browser regression, run before live review using its already-installed
