@@ -1,0 +1,65 @@
+--- a/web/main.js
++++ b/web/main.js
+@@ -1437,6 +1437,10 @@
+     async executionMetrics() {
+       return player?.metrics() ?? null;
+     },
++    // Read-only qualification view of the existing owner, not a retained scene.
++    async executionDebugFrame() {
++      return player?.debugFrame() ?? null;
++    },
+     get generationDiagnostics() {
+       return generations.diagnostics;
+     },
+--- a/scripts/showcase-capture.mjs
++++ b/scripts/showcase-capture.mjs
+@@ -20,6 +20,8 @@
+ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+ const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+ normalizeShowcaseManifest(manifest);
++// Investigation-only subset; the public catalog and primary qualification are unchanged.
++manifest.entries = manifest.entries.filter(entry => ["showcase-dynamic-scene", "showcase-coordinate-plotting"].includes(entry.id));
+ const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
+ const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
+ assert.ok(["webgl", "webgpu"].includes(backend));
+@@ -107,7 +109,14 @@
+         const filename = `${entry.id}-${String(time).replace(".", "_")}.png`;
+         const image = validateImage(bytes, `${entry.id}@${time}`);
+         await writeFile(path.join(output, filename), bytes);
+-        result.samples.push({ ...sample, completionProbe, ...image, filename });
++        // Retain the authoritative effective state separately from the pixels.
++        // This diagnostic never replaces the independent image oracle.
++        const effectiveFrame = await page.evaluate(() => window.noonHostRaster.debugFrame());
++        const effectiveFrameFilename = filename.replace(/\.png$/, ".frame.json");
++        const effectiveBytes = json(effectiveFrame);
++        await writeFile(path.join(output, effectiveFrameFilename), effectiveBytes);
++        result.samples.push({ ...sample, completionProbe, ...image, filename,
++          effectiveFrameFilename, effectiveFrameSha256: hash(effectiveBytes) });
+         if (time === posterTime) poster = bytes;
+         if (entry.performance && time >= 3.1) assert.ok(sample.objectCount >= 600, `${entry.id}: dense phases must retain the geometry workload`);
+       }
+--- a/scripts/showcase-live-review.mjs
++++ b/scripts/showcase-live-review.mjs
+@@ -82,6 +82,8 @@
+   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+   const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+   normalizeShowcaseManifest(manifest);
++// Investigation-only subset; the public catalog and primary qualification are unchanged.
++manifest.entries = manifest.entries.filter(entry => ["showcase-dynamic-scene", "showcase-coordinate-plotting"].includes(entry.id));
+   const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
+   assert.ok(["webgl", "webgpu"].includes(backend));
+   const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
+@@ -248,6 +250,13 @@
+               comparison.backend = replayMetrics.metrics.backend;
+               comparison.filename = `${entry.id}-${direction}-${index}.png`;
+               const image = PNG.sync.read(await canvas.screenshot({ path: path.join(output, comparison.filename) }));
++              // Store the runtime observation before pixel equality can fail.
++              // Do not infer a scheduler bug solely from a displayed-image mismatch.
++              const effectiveFrame = await page.evaluate(() => window.__noonExampleGallery.executionDebugFrame());
++              comparison.effectiveFrameFilename = comparison.filename.replace(/\.png$/, ".frame.json");
++              const effectiveBytes = json(effectiveFrame);
++              comparison.effectiveFrameSha256 = hash(effectiveBytes);
++              await writeFile(path.join(output, comparison.effectiveFrameFilename), effectiveBytes);
+               comparison.pixelSha256 = hash(image.data);
+               comparison.width = image.width;
+               comparison.height = image.height;

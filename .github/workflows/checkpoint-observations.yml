@@ -1,0 +1,58 @@
+name: Isolated checkpoint observations
+on:
+  push:
+    branches: [work/1718-checkpoint-observations]
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: webgpu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build the unchanged engine
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Install repository-pinned capture tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Retain the pinned browser for offline renderer reproduction
+        uses: actions/upload-artifact@v7
+        with:
+          name: checkpoint-browser
+          path: ~/.cache/ms-playwright/chromium_headless_shell-*/**
+          retention-days: 1
+      - name: Add read-only observations in this disposable checkout
+        run: |
+          git apply --check .github/proposals/checkpoint-observations.patch
+          git apply .github/proposals/checkpoint-observations.patch
+          node --check web/main.js
+          node --check scripts/showcase-capture.mjs
+          node --check scripts/showcase-live-review.mjs
+      - name: Record forward source execution and effective state
+        id: capture
+        run: node scripts/showcase-capture.mjs
+      - name: Record actual retained replay and effective state
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-live-review.mjs
+      - name: Retain failed comparisons and exact instrumentation
+        if: always()
+        run: |
+          mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
+          git diff --binary > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/instrumentation.patch
+          cp .github/proposals/checkpoint-observations.patch browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+          cp web/main.js scripts/showcase-capture.mjs scripts/showcase-live-review.mjs browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: checkpoint-observations
+          path: browser-smoke-artifacts/showcase/webgpu
+          retention-days: 7
