@@ -44,6 +44,24 @@ jobs:
           s = s.replace('fn qualify_unrelated_callback(lifecycle: Lifecycle) {', '#[derive(Clone, Copy, Debug)]\nenum ActivationRoute { Direct, Leaf, Nested }\n\nfn qualify_unrelated_callback(lifecycle: Lifecycle) {')
           s = s.replace('// Both a leaf request and a nested request must preserve the same semantics.', '// Direct, leaf-composition and nested requests must preserve the same semantics.')
           p.write_text(s)
+          p = Path('crates/noon-runtime/src/lib.rs')
+          s = p.read_text()
+          old = '        if relevant().any(|channel| matches!(channel.property, Property::Transform | Property::Morph)) {'
+          new = '''        let coupled = [Property::Transform, Property::Morph].into_iter().any(|property| {
+                      !self.compiled.channel_tracks(CompiledChannelKey::new(object_index as u32, property)).is_empty()
+                  });
+                  if coupled || relevant().any(|channel| matches!(channel.property, Property::Transform | Property::Morph)) {'''
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new))
+          p = Path('.github/workflows/playground-showcase-qualification.yml')
+          s = p.read_text()
+          old = "      - 'crates/noon-runtime/src/replay.rs'"
+          assert s.count(old) == 1
+          s = s.replace(old, "      - 'crates/noon-runtime/src/lib.rs'\n      - 'crates/noon-runtime/tests/display_channel_mutation.rs'\n" + old)
+          old = '        run: cargo test -p noon --no-default-features --test callback_lifecycle_admission'
+          assert s.count(old) == 1
+          s = s.replace(old, '        run: |\n          cargo test -p noon --no-default-features --test callback_lifecycle_admission\n          cargo test -p noon-runtime --test display_channel_mutation')
+          p.write_text(s)
           PY
       - name: Format and check candidate files with their crate edition
         run: |
@@ -53,6 +71,7 @@ jobs:
           git add -N crates/noon-runtime/tests/display_channel_mutation.rs
           git diff --check
           git diff > evidence/candidate.patch
+          paths+=(.github/workflows/playground-showcase-qualification.yml)
           for path in "${paths[@]}"; do mkdir -p "evidence/$(dirname "$path")"; cp "$path" "evidence/$path"; done
       - name: Run native acceptance and display-channel tests
         run: |
@@ -73,7 +92,7 @@ jobs:
           python3 - <<'PY'
           import json, os, urllib.request
           from pathlib import Path
-          paths = ['crates/noon/src/execution_session.rs', 'crates/noon/tests/callback_lifecycle_admission.rs', 'crates/noon-runtime/src/lib.rs', 'crates/noon-runtime/tests/display_channel_mutation.rs']
+          paths = ['crates/noon/src/execution_session.rs', 'crates/noon/tests/callback_lifecycle_admission.rs', 'crates/noon-runtime/src/lib.rs', 'crates/noon-runtime/tests/display_channel_mutation.rs', '.github/workflows/playground-showcase-qualification.yml']
           blobs = []
           for path in paths:
               payload = json.dumps({'content': Path(path).read_text(), 'encoding': 'utf-8'}).encode()
