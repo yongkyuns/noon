@@ -17,7 +17,7 @@ function gallery({ playing = true, duration = 2.5999999999999996, controllable =
     dispatchEvent() {
       calls.push("seek");
       if (seekFailure) { patch.dataset.state = "error"; patch.value = "seek rejected"; }
-      else controls.dataset.elapsedSeconds = String(playing || staleSeek ? 0 : duration);
+      else controls.dataset.elapsedSeconds = String(playing || staleSeek ? 0 : Number(input.value));
     },
   };
   const document = { querySelector: (selector) => selector === "#patch-status" ? patch : controls };
@@ -43,7 +43,7 @@ function gallery({ playing = true, duration = 2.5999999999999996, controllable =
       assert.equal(selector, ".playback-scrubber");
       return {
         async getAttribute(name) { assert.equal(name, "max"); return input.max; },
-        async evaluate(fn) { return runInNewContext(`(${fn})(input)`, { input, Event: class {} }); },
+        async evaluate(fn, target) { return runInNewContext(`(${fn})(input, target)`, { input, target, Event: class {} }); },
       };
     },
   };
@@ -88,6 +88,25 @@ test("invalid requested durations never drive browser input", async () => {
   for (const duration of [NaN, Infinity, -1, 0]) {
     const { page, calls } = gallery();
     await assert.rejects(seekPausedGallery(page, duration));
+    assert.deepEqual(calls, []);
+  }
+});
+
+
+test("intermediate and zero checkpoints use ordinary paused UI seeks", async () => {
+  const { page, calls, controls } = gallery();
+  for (const time of [1.4, 0, 2.1, 0.5]) {
+    assert.equal(await seekPausedGallery(page, 2.6, time), time);
+    assert.equal(Number(controls.dataset.elapsedSeconds), time);
+  }
+  assert.equal(calls.filter(call => call === "pause").length, 1);
+  assert.equal(calls.filter(call => call === "seek").length, 4);
+});
+
+test("invalid checkpoints fail before any UI command", async () => {
+  for (const time of [NaN, Infinity, -1, 2.7, "1", false]) {
+    const { page, calls } = gallery();
+    await assert.rejects(seekPausedGallery(page, 2.6, time));
     assert.deepEqual(calls, []);
   }
 });
