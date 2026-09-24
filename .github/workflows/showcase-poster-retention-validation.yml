@@ -1,0 +1,116 @@
+name: Isolated showcase poster retention
+on:
+  push:
+    branches: [work/1718-poster-retention-validation]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: source
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: proposal
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ad6c4eb83be686d08c7d63adab4a22199db9025a
+          path: source
+          persist-credentials: false
+      - name: Prepare exact candidate and retrieve captured PNGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p evidence
+          python3 ../proposal/scripts/prepare-poster-candidate.py
+          gh api /repos/yongkyuns/noon/actions/artifacts/10802753620/zip > evidence/captures.zip
+          echo '45bbbdaf811786388c5de7e9e6d21f095e305fc56b6cd23e06260b2f591a9434  evidence/captures.zip' | sha256sum --check
+          unzip -q evidence/captures.zip -d captures
+          node --input-type=module - <<'JS'
+          import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
+          import { posterEvidence } from './scripts/showcase-posters.mjs';
+          const manifest = JSON.parse(await readFile('web/python/examples/noon_showcase_manifest.json'));
+          const report = JSON.parse(await readFile('captures/report.json'));
+          const receipt = posterEvidence(manifest, report);
+          await mkdir('web/thumbnails/showcase', { recursive: true });
+          for (const entry of manifest.entries) await copyFile(`captures/${entry.id}.png`, `web/${entry.thumbnail}`);
+          await writeFile('web/thumbnails/showcase/capture-evidence.json', JSON.stringify(receipt,null,2)+'\n');
+          JS
+      - name: Source, retained-image and playback-state regressions
+        run: |
+          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs | tee evidence/node.log
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py' 2>&1 | tee evidence/python.log
+          node --check scripts/showcase-capture.mjs
+          node --check scripts/showcase-live-review.mjs
+          git diff --check
+      - name: Check controls in actual Chromium
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps chromium
+          node --input-type=module - <<'JS' | tee evidence/browser.log
+          import assert from 'node:assert/strict';
+          import { chromium } from 'playwright';
+          import { serveRepository } from './scripts/browser-test-server.mjs';
+          import { qualifyPlayheadEndpoints } from './scripts/showcase-playback.mjs';
+          const server = await serveRepository(process.cwd(), 0);
+          const browser = await chromium.launch({ headless: true });
+          try {
+            const page = await browser.newPage();
+            await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
+            const endpoints = await qualifyPlayheadEndpoints(page);
+            assert.equal(endpoints.cases.length, 18);
+            const result = await page.evaluate(async () => {
+              const { PlaygroundPlaybackControls } = await import('./playground-playback-controls.js');
+              const pane = document.createElement('section'); document.body.append(pane);
+              let calls = 0;
+              const call = async () => { calls++; return { time: 0, playing: false }; };
+              const controls = new PlaygroundPlaybackControls({ pause: call, resume: call, seek: call, restartPlayback: call }, pane);
+              controls.setBusy(true); controls.setControllable(false);
+              controls.observe({ time: 9.2, playing: false }); controls.setUnavailable('UnsupportedDomain');
+              if (controls.element.dataset.busy !== 'true') throw new Error('pending operation lost');
+              controls.setBusy(false);
+              const blocked = [...pane.querySelectorAll('button,input')].every(el => el.disabled);
+              for (const el of pane.querySelectorAll('button,input')) el.dispatchEvent(new Event(el.tagName === 'INPUT' ? 'input' : 'click'));
+              await Promise.resolve();
+              const result = { blocked, calls, busy: controls.element.dataset.busy, ariaBusy: controls.element.getAttribute('aria-busy'), controllable: controls.element.dataset.controllable, elapsed: controls.element.dataset.elapsedSeconds };
+              controls.destroy(); pane.remove(); return result;
+            });
+            assert.deepEqual(result, { blocked: true, calls: 0, busy: 'false', ariaBusy: 'false', controllable: 'false', elapsed: '9.2' });
+            console.log(JSON.stringify({ browser: browser.version(), endpointCases: endpoints.cases.length, unavailable: result }));
+          } finally { await browser.close(); await server.close(); }
+          JS
+      - name: Store validated blobs without changing a branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,json,hashlib,base64,urllib.request
+          files = ['.github/workflows/playground-showcase-qualification.yml','scripts/showcase-capture.mjs','scripts/showcase-live-review.mjs','scripts/showcase-live-review.test.mjs','scripts/showcase-posters.mjs','scripts/showcase-posters.test.mjs','web/main.js','web/playground-playback-controls.js','web/playground-playback-controls.test.mjs']
+          files += [str(p) for p in sorted(Path('web/thumbnails/showcase').glob('*'))]
+          records=[]
+          for name in files:
+              data=Path(name).read_bytes()
+              body=json.dumps({'content':base64.b64encode(data).decode(),'encoding':'base64'}).encode()
+              req=urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs',data=body,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req,timeout=30) as r: sha=json.load(r)['sha']
+              expected=hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+              assert sha==expected,(name,sha,expected)
+              records.append({'path':name,'sha':sha,'sha256':hashlib.sha256(data).hexdigest()})
+              dest=Path('evidence/validated')/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+          Path('evidence/blobs.json').write_text(json.dumps(records,indent=2))
+          PY
+          rm evidence/captures.zip
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: showcase-poster-retention-candidate
+          path: source/evidence
+          include-hidden-files: true
+          retention-days: 7
