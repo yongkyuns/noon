@@ -94,12 +94,14 @@ class _TexBase(_compat.VGroup):
         substrings = kwargs.pop("substrings_to_isolate", ())
         if substrings is None:
             substrings = ()
-        if isinstance(substrings, str) or not all(isinstance(value, str) for value in substrings):
+        if isinstance(substrings, str):
             raise TypeError("substrings_to_isolate must be an iterable of strings")
-        if substrings:
-            raise NotImplementedError(
-                "substrings_to_isolate requires compiler-authored retained part publication"
-            )
+        try:
+            substrings = tuple(substrings)
+        except TypeError as error:
+            raise TypeError("substrings_to_isolate must be an iterable of strings") from error
+        if not all(isinstance(value, str) for value in substrings):
+            raise TypeError("substrings_to_isolate must be an iterable of strings")
         color_map = kwargs.pop("tex_to_color_map", None)
         if color_map is not None and not hasattr(color_map, "items"):
             raise TypeError("tex_to_color_map must be a mapping")
@@ -122,7 +124,7 @@ class _TexBase(_compat.VGroup):
         handle = engine_call(
             create, *arguments, self._math_mode, font_size,
             float(color.red), float(color.green), float(color.blue), float(color.alpha),
-            opacity, context,
+            opacity, list(substrings), context,
         )
         if context is not None:
             self._canonical_live_target_context = context

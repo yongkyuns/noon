@@ -86,6 +86,7 @@ impl LatexBackend for WasmLatexCompiler {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum AuthoredLatex {
     Text(Tex),
     Math(MathTex),
@@ -270,6 +271,22 @@ impl WasmLatexOptions {
             )
         };
         Ok(Self { text })
+    }
+
+    #[wasm_bindgen(js_name = isolateSubstrings)]
+    pub fn isolate_substrings(&mut self, substrings: Vec<String>) -> Result<(), JsValue> {
+        let refined = match self.text.clone() {
+            AuthoredLatex::Text(text) => AuthoredLatex::Text(
+                text.with_isolated_substrings(&substrings)
+                    .map_err(js_error)?,
+            ),
+            AuthoredLatex::Math(text) => AuthoredLatex::Math(
+                text.with_isolated_substrings(&substrings)
+                    .map_err(js_error)?,
+            ),
+        };
+        self.text = refined;
+        Ok(())
     }
 }
 

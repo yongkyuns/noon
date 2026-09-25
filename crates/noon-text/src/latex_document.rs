@@ -128,6 +128,59 @@ impl LatexDocument {
         &self.part_spans
     }
 
+    /// Refine the authored part plan so every non-overlapping occurrence of an
+    /// requested substring is independently addressable. The source itself is
+    /// unchanged: these ranges only control the semantic specials emitted by
+    /// [`render`](Self::render).
+    pub fn with_isolated_substrings<I, S>(
+        mut self,
+        substrings: I,
+    ) -> Result<Self, LatexDocumentError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let needles = substrings
+            .into_iter()
+            .map(|value| value.as_ref().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if needles.is_empty() {
+            return Ok(self);
+        }
+
+        let mut refined = Vec::new();
+        for part in self.part_spans.iter().copied() {
+            let start = part.start as usize;
+            let end = part.end as usize;
+            let value = &self.source[start..end];
+            let mut matches = needles
+                .iter()
+                .enumerate()
+                .flat_map(|(priority, needle)| {
+                    value
+                        .match_indices(needle)
+                        .map(move |(offset, found)| (offset, offset + found.len(), priority))
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|&(match_start, _, priority)| (match_start, priority));
+
+            let mut cursor = 0;
+            for (match_start, match_end, _) in matches {
+                if match_start < cursor {
+                    continue;
+                }
+                append_span(&mut refined, start + cursor, start + match_start)?;
+                append_span(&mut refined, start + match_start, start + match_end)?;
+                cursor = match_end;
+            }
+            append_span(&mut refined, start + cursor, end)?;
+        }
+        self.part_spans = refined.into();
+        self.validate()?;
+        Ok(self)
+    }
+
     fn validate(&self) -> Result<(), LatexDocumentError> {
         if self.environment.as_deref().is_some_and(|name| {
             name.is_empty()
@@ -192,6 +245,20 @@ impl LatexDocument {
         }
         Ok(document)
     }
+}
+
+fn append_span(
+    parts: &mut Vec<TextSourceSpan>,
+    start: usize,
+    end: usize,
+) -> Result<(), LatexDocumentError> {
+    if start < end {
+        parts.push(TextSourceSpan::new(
+            source_len_u32(start)?,
+            source_len_u32(end)?,
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_arguments<I, S>(
@@ -342,6 +409,21 @@ mod tests {
         }
         assert!(rendered.contains("x{{+}}y"));
         assert!(!rendered.contains("{{ a^{b^{c}} }}"));
+    }
+
+    #[test]
+    fn requested_substrings_refine_existing_parts_without_rewriting_source() {
+        let document = LatexDocument::from_arguments(["ababa", "zab"], TextSourceKind::MathTex)
+            .unwrap()
+            .with_isolated_substrings(["aba", "ab"])
+            .unwrap();
+        assert_eq!(document.source(), "ababa zab");
+        let values = document
+            .part_spans()
+            .iter()
+            .map(|span| &document.source()[span.start as usize..span.end as usize])
+            .collect::<Vec<_>>();
+        assert_eq!(values, ["aba", "ba", "z", "ab"]);
     }
 
     #[test]

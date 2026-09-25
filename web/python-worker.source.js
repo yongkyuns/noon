@@ -194,15 +194,17 @@ async function initializePyodide() {
     }
     await latexPreparation;
   };
-  self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, context) => {
+  self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
     const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
       : context.liveCreateLatex(options, latexCompiler);
   };
-  self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, context) => {
+  self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
     const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
       : context.liveCreateLatex(options, latexCompiler);
   };
