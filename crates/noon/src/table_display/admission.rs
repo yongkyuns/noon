@@ -430,12 +430,12 @@ fn stage(
     }
     tx.set_table_layout(
         root,
-        noon_core::SemanticTransactionTableLayout::new(noon_core::SemanticTableLayout::new(
+        noon_core::SemanticTableLayout::new(
             options.h_buff,
             options.v_buff,
             options.label_buff,
             options.include_outer_lines,
-        )),
+        ),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);
@@ -1053,6 +1053,53 @@ fn retained_cell_bounds(
         max_y: max_y + options.v_buff * 0.5,
     })
 }
+fn selected_cell_bounds(
+    publisher: &TablePublisher<'_, '_>,
+    family: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+) -> Result<Bounds2D64, TableAuthoringError> {
+    let values = rows(family)?;
+    let shape = TableShape {
+        rows: values.len(),
+        columns: shape_from_rows(&values)?,
+    };
+    if row >= shape.rows || column >= shape.columns {
+        return Err(TableAuthoringError::InvalidStructure);
+    }
+    let row_targets: Vec<_> = values[row].iter().map(TableEntry::as_target).collect();
+    let column_targets: Vec<_> = values
+        .iter()
+        .map(|entries| entries[column].as_target())
+        .collect();
+    let row_entries = publisher.composite_entries(&row_targets)?;
+    let column_entries = publisher.composite_entries(&column_targets)?;
+    let row_bounds = row_entries
+        .iter()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+        .collect::<Result<Vec<_>, _>>()?;
+    let column_bounds = column_entries
+        .iter()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (min_x, max_x) = column_bounds
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
+            (value.0.min(bound.min_x), value.1.max(bound.max_x))
+        });
+    let (min_y, max_y) = row_bounds
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
+            (value.0.min(bound.min_y), value.1.max(bound.max_y))
+        });
+    Ok(Bounds2D64 {
+        min_x: min_x - options.h_buff * 0.5,
+        max_x: max_x + options.h_buff * 0.5,
+        min_y: min_y - options.v_buff * 0.5,
+        max_y: max_y + options.v_buff * 0.5,
+    })
+}
 pub(super) fn cell(
     family: &MobjectFamily,
     options: TableOptions,
@@ -1074,18 +1121,7 @@ pub(super) fn cell_in_publisher(
     row: usize,
     column: usize,
 ) -> Result<Mobject, TableAuthoringError> {
-    let values = rows(family)?;
-    let shape = TableShape {
-        rows: values.len(),
-        columns: shape_from_rows(&values)?,
-    };
-    let targets: Vec<_> = values.iter().flatten().map(TableEntry::as_target).collect();
-    let entries = publisher.composite_entries(&targets)?;
-    let bounds = entries
-        .iter()
-        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
-        .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let bounds = retained_cell_bounds(&bounds, shape, options, row, column)?;
+    let bounds = selected_cell_bounds(&publisher, family, options, row, column)?;
     let store = publisher.store();
     let result = publisher.publish(move |semantic, publish| {
         let mut transaction = SemanticMutationTransaction::new();
@@ -1195,18 +1231,7 @@ fn highlight_with_membership(
             value: opacity,
         });
     }
-    let values = rows(family)?;
-    let shape = TableShape {
-        rows: values.len(),
-        columns: shape_from_rows(&values)?,
-    };
-    let targets: Vec<_> = values.iter().flatten().map(TableEntry::as_target).collect();
-    let entries = publisher.composite_entries(&targets)?;
-    let bounds = entries
-        .iter()
-        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
-        .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let bounds = retained_cell_bounds(&bounds, shape, options, row, column)?;
+    let bounds = selected_cell_bounds(&publisher, family, options, row, column)?;
     let mut style = SemanticStyle::default();
     style.fill = Some(noon_core::SemanticPaint::Solid(color));
     style.fill_opacity = opacity;

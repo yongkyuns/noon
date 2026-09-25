@@ -16,10 +16,10 @@ use crate::{
     SemanticObjectTrackValues, SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry,
     SemanticScalarSignalTrack, SemanticScalarSignalTrackError, SemanticSceneOperationError,
     SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
-    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
     SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
-    SemanticTransactionTableLayout, SemanticTransformInterpolation, SemanticUpdaterRegistration,
-    StoredGeometry, TextPresentationBaseline,
+    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
+    TextPresentationBaseline,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -154,7 +154,7 @@ pub enum SemanticMutation {
     },
     SetTableLayout {
         scope: SemanticTransactionNodeRef,
-        layout: SemanticTransactionTableLayout,
+        layout: SemanticTableLayout,
     },
     AddMember {
         family: SemanticTransactionNodeRef,
@@ -792,7 +792,7 @@ impl SemanticMutationTransaction {
     pub fn set_table_layout(
         &mut self,
         scope: impl Into<SemanticTransactionNodeRef>,
-        layout: SemanticTransactionTableLayout,
+        layout: SemanticTableLayout,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetTableLayout {
             scope: scope.into(),
@@ -2045,7 +2045,14 @@ impl SemanticMutationTransaction {
                         .or_insert_with(|| catalog.updater_registrations(*target));
                     insert_updater_registration(registrations, registration, *position)
                         .map_err(|error| updater_edit_error(index, *target, error))?;
-                    changed.push(true);
+                    changed.push(match scope {
+                        SemanticTransactionNodeRef::Existing(scope) => {
+                            store.semantic_table_layout(*scope).map_err(|error| {
+                                SemanticMutationTransactionError::Node { index, error }
+                            })? != Some(*layout)
+                        }
+                        SemanticTransactionNodeRef::Pending(_) => true,
+                    });
                 }
                 SemanticMutation::AddScalarSignalTrack {
                     signal,
@@ -2224,13 +2231,20 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetTableLayout { scope, layout } => {
                     catalog.ensure_family(*scope, index)?;
-                    if !layout.layout().is_valid() {
+                    if !layout.is_valid() {
                         return Err(SemanticMutationTransactionError::InvalidTableLayout {
                             index,
                             scope: *scope,
                         });
                     }
-                    changed.push(true);
+                    changed.push(match scope {
+                        SemanticTransactionNodeRef::Existing(scope) => {
+                            store.semantic_table_layout(*scope).map_err(|error| {
+                                SemanticMutationTransactionError::Node { index, error }
+                            })? != Some(*layout)
+                        }
+                        SemanticTransactionNodeRef::Pending(_) => true,
+                    });
                 }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);

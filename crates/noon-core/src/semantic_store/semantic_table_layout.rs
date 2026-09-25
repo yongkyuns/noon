@@ -37,18 +37,36 @@ impl SemanticTableLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SemanticTransactionTableLayout {
-    layout: SemanticTableLayout,
-}
-impl SemanticTransactionTableLayout {
-    pub const fn new(layout: SemanticTableLayout) -> Self {
-        Self { layout }
-    }
-    pub const fn layout(self) -> SemanticTableLayout {
-        self.layout
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SemanticMutationTransaction, SemanticNodeCreation, SemanticStore};
 
-pub type SemanticTableLayoutDeclarations =
-    std::collections::HashMap<SemanticNodeId, SemanticTableLayout>;
+    #[test]
+    fn invalid_owner_or_value_rolls_back_and_retirement_releases_layout() {
+        let mut store = SemanticStore::new();
+        let mut tx = SemanticMutationTransaction::new();
+        let object = tx.create_node(SemanticNodeCreation::object(
+            crate::SemanticObjectState::new(crate::StoredGeometry::Circle { radius: 1.0 }),
+        ));
+        tx.set_table_layout(object, SemanticTableLayout::new(1.0, 1.0, 0.5, false));
+        assert!(tx.apply(&mut store).is_err());
+
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        tx.set_table_layout(root, SemanticTableLayout::new(f64::NAN, 1.0, 0.5, false));
+        assert!(tx.apply(&mut store).is_err());
+
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        tx.set_table_layout(root, SemanticTableLayout::new(2.0, 1.0, 0.5, true));
+        let result = tx.apply(&mut store).unwrap();
+        let root = result.resolve(root).unwrap();
+        assert_eq!(
+            store.semantic_table_layout(root).unwrap().unwrap().h_buff(),
+            2.0
+        );
+        store.remove_node(root).unwrap();
+        assert!(store.semantic_table_layout(root).is_err());
+    }
+}

@@ -215,6 +215,16 @@ impl SemanticStore {
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
         Ok(self.semantic_family_checked(family)?.members())
     }
+    pub fn semantic_family_member_at_checked(
+        &self,
+        family: SemanticNodeId,
+        index: usize,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(self
+            .semantic_family_checked(family)?
+            .members
+            .member_at_rank(index))
+    }
 
     /// Append one target semantic object or family to a target family.
     ///

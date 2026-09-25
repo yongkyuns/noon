@@ -289,11 +289,16 @@ impl Table {
         self.columns()
     }
     pub fn get_entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
-        self.rows()?
-            .get(row)
-            .and_then(|items| items.get(column))
-            .cloned()
-            .ok_or(TableAuthoringError::InvalidStructure)
+        let store = self.entry_family.integration_store();
+        let row = store
+            .borrow()
+            .semantic_family_member_at_checked(self.entry_family.node_id(), row)?
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        let entry = store
+            .borrow()
+            .semantic_family_member_at_checked(row, column)?
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        CompositeEntryHandle::from_node(Rc::clone(store), entry).map_err(Into::into)
     }
     pub fn entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
         self.get_entry(row, column)
@@ -993,6 +998,17 @@ mod tests {
         .unwrap()
         .into_table();
         let authored = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        let restored = Table::from_family(table.family().clone()).unwrap();
+        assert_eq!(
+            restored.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
+            authored
+        );
+        let copied = table.family().copy_family().unwrap();
+        let copied = Table::from_family(copied.root().clone()).unwrap();
+        assert_eq!(
+            copied.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
+            authored
+        );
 
         table.entry_family().shift(3.0, -2.0).unwrap();
         let shifted = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();

@@ -606,7 +606,7 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
-    table_layouts: SemanticTableLayoutDeclarations,
+    table_layouts: HashMap<SemanticNodeId, SemanticTableLayout>,
     /// Derived index of authored inset display roles. The role on each ordinary
     /// display object remains authoritative; this bounds view discovery by active
     /// inset count rather than total semantic slots.

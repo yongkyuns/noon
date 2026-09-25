@@ -186,8 +186,10 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if let Some(graph) = graph_declaration {
             graph_declarations.push((id, graph));
         }
-        if let Some(layout) = store.borrow().semantic_table_layout(id)? {
-            table_layouts.push((id, layout));
+        if members.is_some() {
+            if let Some(layout) = store.borrow().semantic_table_layout(id)? {
+                table_layouts.push((id, layout));
+            }
         }
         let creation = if let Some(members) = members {
             queue.extend(members.iter().rev().copied());
@@ -250,10 +252,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         );
     }
     for (source_family, layout) in table_layouts {
-        transaction.set_table_layout(
-            copied[&source_family],
-            noon_core::SemanticTransactionTableLayout::new(layout),
-        );
+        transaction.set_table_layout(copied[&source_family], layout);
     }
     Ok((
         transaction,
