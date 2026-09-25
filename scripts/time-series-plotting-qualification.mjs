@@ -80,29 +80,8 @@ async function capture(context, language, backend) {
         const renderer = await wasm[factoryName](canvas.transferControlToOffscreen());
         window.timeSeriesRenderer = renderer;
         renderer.resize(960, 540);
-        window.sampleTimeSeries = async time => {
-          let wallTimeMs = time * 1000;
-          if (time > 0) renderer.advanceDirectRealtime(wallTimeMs);
-          for (let attempt = 0; attempt < 100; attempt++) {
-            const wake = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
-            if (!wake.presentNow) {
-              const actual = renderer.time();
-              // Seconds -> milliseconds -> reanchored seconds can round just
-              // below an interval boundary. Cross only that representational
-              // gap; a substantive clock mismatch still fails the assertions.
-              if (actual < time && time - actual <= 16 * Number.EPSILON * Math.max(1, time)) {
-                wallTimeMs += Number.EPSILON * Math.max(1, wallTimeMs);
-                renderer.advanceDirectRealtime(wallTimeMs);
-                continue;
-              }
-              return { time: actual, objectCount: renderer.objectCount(),
-                backend: renderer.rendererBackend(), drawCalls: renderer.lastDrawCalls(),
-                cadence: wake.cadence, delayMs: wake.delayMs };
-            }
-            if (!renderer.render()) await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new Error("direct time-series publication did not settle");
-        };
+        const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
+        window.sampleTimeSeries = time => sampleDirectProgram(renderer, time);
         return;
       }
       const { animatedPlottingCases, animatedPresentedTime } = await import("../scripts/animated-plotting-samples.mjs");

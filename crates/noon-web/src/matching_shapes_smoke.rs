@@ -24,6 +24,19 @@ pub async fn create_direct_transform_matching_shapes_breadth_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Native-equivalent foreground matching oracle; parameters select its three variants.
+#[wasm_bindgen(js_name = createDirectForegroundMatchingRenderer)]
+pub async fn create_direct_foreground_matching_renderer(
+    canvas: OffscreenCanvas,
+    source_is_foreground: bool,
+    target_layer: f64,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::foreground_matching::program(source_is_foreground, target_layer)
+            .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
-import { browserArgs } from "./manim-raster-support.mjs";
+import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
 
 export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,7 +19,8 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
     cases = cases.filter(fixture => selectedIds.includes(fixture.id));
   }
   const fixtures = await Promise.all(cases.map(async fixture => {
-    const source = await readFile(path.join(root, "web/python/examples", fixture.file), "utf8");
+    const rawSource = await readFile(path.join(root, fixture.sourcePath ?? `web/python/examples/${fixture.file}`), "utf8");
+    const source = fixture.scene ? rasterFixtureSource(rawSource, fixture.scene) : rawSource;
     return { ...fixture, source, sourceHash: createHash("sha256").update(source).digest("hex") };
   }));
   const server = await serveRepository(root, port);
@@ -35,7 +36,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
     try {
       await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
       await page.waitForFunction(() => window.noonHostRaster);
-      const metrics = await page.evaluate(async ({ label, source, factory, preparation, duration, sampleTime }) => {
+      const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries }) => {
         if (label === "python") {
           if (duration > 0) {
             await window.noonHostRaster.load(source, duration);
@@ -74,7 +75,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         const wasm = await import("./pkg/noon_web.js");
         await wasm.default();
         const canvas = document.querySelector("#scene");
-        const args = [];
+        const args = [...factoryArgs];
         if (preparation) {
           const module = await import(preparation.module);
           const prepared = await module[preparation.export]();
@@ -91,13 +92,19 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         };
         // Direct hosts must consume the initial publication before a seek.
         let presented = await present();
-        if (presented && sampleTime > 0) {
+        if (presented && playback === "live") {
+          const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
+          const times = [...new Set([0, ...boundaries.filter(time => time < sampleTime), sampleTime])]
+            .sort((a, b) => a - b);
+          for (const time of times) await sampleDirectProgram(renderer, time);
+        } else if (presented && sampleTime > 0) {
           renderer.seekDirect(sampleTime);
           presented = await present();
         }
         return { presented, time: renderer.time(), objectCount: renderer.objectCount(),
           drawCalls: renderer.lastDrawCalls(), rendererBackend: renderer.rendererBackend() };
-      }, { label, source: fixture.source, factory: fixture.factory, preparation: fixture.preparation,
+      }, { label, source: fixture.source, factory: fixture.factory, factoryArgs: fixture.factoryArgs ?? [],
+        preparation: fixture.preparation, playback: fixture.playback, boundaries: fixture.boundaries ?? [],
         duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0 });
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
