@@ -269,6 +269,39 @@ pub(crate) enum SemanticCompositionRequest {
     },
 }
 
+impl SemanticCompositionRequest {
+    /// Direct leaf target used to reject competing parallel introductions.
+    /// Compound requests are validated while staging their children.
+    const fn direct_leaf_target(&self) -> Option<SemanticNodeId> {
+        match self {
+            Self::TransformTo { source, .. }
+            | Self::FamilyTransformTo { source, .. }
+            | Self::MatchingFamilyTransformTo { source, .. } => Some(*source),
+            Self::Indicate { target, .. }
+            | Self::FamilyIndicate { target, .. }
+            | Self::DrawBorderThenFill { target, .. }
+            | Self::FamilyDrawBorderThenFill { target, .. }
+            | Self::FamilySubsetDisplay { target, .. }
+            | Self::FamilyFade { target, .. }
+            | Self::TextWrite { target, .. }
+            | Self::FamilyTextWrite { target, .. }
+            | Self::TextReveal { target, .. }
+            | Self::FamilyReveal { target, .. }
+            | Self::PassingFlash { target, .. }
+            | Self::Rotate { target, .. }
+            | Self::Add { target, .. }
+            | Self::Fade { target, .. }
+            | Self::Create { target, .. }
+            | Self::Uncreate { target, .. }
+            | Self::AffineLifecycle { target, .. } => Some(*target),
+            Self::FocusOn { .. }
+            | Self::ValueTracker { .. }
+            | Self::Wait { .. }
+            | Self::Composition { .. } => None,
+        }
+    }
+}
+
 impl PreparedAnimationLifecycle {
     const fn root(&self) -> SemanticNodeId {
         match self {
@@ -2449,7 +2482,7 @@ impl ExecutionSession {
                                 *occurrences.entry(*source).or_default() += 1;
                             }
                             _ => {
-                                if let Some(target) = child.existing_animation_mobject() {
+                                if let Some(target) = child.direct_leaf_target() {
                                     *occurrences.entry(target).or_default() += 1;
                                 }
                             }
@@ -2474,7 +2507,7 @@ impl ExecutionSession {
                     .iter()
                     .map(|child| {
                         let reuse_admission = child
-                            .existing_animation_mobject()
+                            .direct_leaf_target()
                             .is_some_and(|target| compatible.contains(&target));
                         self.stage_composition_request(
                             store,
