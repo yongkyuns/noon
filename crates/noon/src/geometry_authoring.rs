@@ -83,8 +83,23 @@ pub(crate) fn prepare_brace_geometry(
     buff: f64,
     sharpness: f64,
 ) -> Result<PreparedBraceGeometry, AuthoringError> {
+    prepare_brace_geometry_with_transform(target, direction, buff, sharpness, |_, state| {
+        Ok(state.transform)
+    })
+}
+
+pub(crate) fn prepare_brace_geometry_with_transform(
+    target: &LayoutAnchor,
+    direction: (f64, f64),
+    buff: f64,
+    sharpness: f64,
+    transform: impl FnMut(
+        noon_core::SemanticNodeId,
+        &noon_core::SemanticObjectState,
+    ) -> Result<SemanticTransform2_5D, AuthoringError>,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
     let angle = brace_angle(direction)?;
-    let projected = projected_layout_bounds(target, -angle)?;
+    let projected = projected_layout_bounds(target, -angle, transform)?;
     brace_options_with_tip(projected, angle, buff, sharpness)
 }
 
@@ -287,6 +302,10 @@ fn lower_brace_point(
 fn projected_layout_bounds(
     target: &LayoutAnchor,
     rotation: f64,
+    mut transform: impl FnMut(
+        noon_core::SemanticNodeId,
+        &noon_core::SemanticObjectState,
+    ) -> Result<SemanticTransform2_5D, AuthoringError>,
 ) -> Result<Bounds2D64, AuthoringError> {
     let node = target.resolve()?;
     let store_rc = target.integration_store();
@@ -310,7 +329,7 @@ fn projected_layout_bounds(
         let state = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        let transform = rotate_transform_about_origin(state.transform, rotation)?;
+        let transform = rotate_transform_about_origin(transform(leaf, state)?, rotation)?;
         union_bounds(
             &mut bounds,
             layout_for_content(&store, state.content, transform)?,

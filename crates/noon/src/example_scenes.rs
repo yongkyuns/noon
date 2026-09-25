@@ -6,6 +6,8 @@ pub mod analytic_profile;
 pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod brace_text;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;

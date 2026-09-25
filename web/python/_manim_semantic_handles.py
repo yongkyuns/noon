@@ -304,7 +304,7 @@ def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
         engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _live_constructor_context(kind: str = "primitive"):
+def _live_constructor_context(kind: str = "primitive", *, allow_unstarted: bool = False):
     """Return the one retained context that may publish a new Mobject.
 
     Before an ordinary segment starts there is no live session to protect, so
@@ -319,10 +319,13 @@ def _live_constructor_context(kind: str = "primitive"):
         return None
     scene = reactive._current_authoring_scene()
     context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None and allow_unstarted and scene is not None:
+        from _manim_scene import _context
+        context = _context(scene)
     if context is None:
         return None
     ownership = str(engine_call(context.liveExecutionOwnership))
-    if ownership in {"active", "returned"}:
+    if ownership in {"active", "returned"} or (allow_unstarted and ownership == "none"):
         return context
     if ownership == "transferred":
         raise RuntimeError(
@@ -1857,9 +1860,7 @@ def _group_target_context(value: object) -> object | None:
             for child in member.submobjects:
                 collect(child)
             return
-        context = getattr(member, "_canonical_live_target_context", None)
-        if context is None:
-            context = _live_mutation_context(member)
+        context = _live_mutation_context(member)
         if context is not None:
             contexts.append(context)
 
@@ -1883,7 +1884,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
-            "_sample_space_handle",
+            "_sample_space_handle", "_brace_label_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps
             # the authoritative family and every leaf below; there is no valid
@@ -1912,14 +1913,16 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
-            if context is not None:
-                target._canonical_live_target_context = context
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
         else:
             _initialize_shared_wrapper(target)
             target._semantic_handle = engine_call(copied.mobjectFor, source._semantic_handle)
             target._semantic_handle_fresh = True
-            if context is not None:
-                target._canonical_live_target_context = context
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
     for source, target in pairs:

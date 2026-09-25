@@ -116,11 +116,42 @@ impl BraceLabel {
         options: BraceOptions,
     ) -> Result<Self, LiveSessionError> {
         let store = Rc::clone(live.integration_store());
-        let prepared = PreparedComposite::new(&store, target, label.clone(), options)?;
+        let geometry = live.prepare_brace_geometry(target, &label, options)?;
+        let prepared = PreparedComposite::with_geometry(label.clone(), options, geometry)?;
         let (brace, family) = live.with_semantic_publication(|store, publish| {
             publish_composite(store, &prepared, None, publish)
         })?;
         Self::from_committed(store, brace, family, label, options).map_err(Into::into)
+    }
+
+    /// Rebind a copied composite using its ordinary family members.
+    pub fn from_family(
+        family: MobjectFamily,
+        options: BraceOptions,
+    ) -> Result<Self, AuthoringError> {
+        let store = Rc::clone(family.integration_store());
+        let members = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())?;
+        let [brace, label] = members.as_slice() else {
+            return Err(AuthoringError::NonFiniteGeometry);
+        };
+        let brace = Mobject::from_node(Rc::clone(&store), *brace)?;
+        // Verify the canonical tip query needed by subsequent label placement.
+        if brace.path_query()?.anchors().len() <= 7 {
+            return Err(AuthoringError::NonFiniteGeometry);
+        }
+        let label = LayoutAnchor::from_node(store, *label);
+        label.layout()?;
+        Ok(Self {
+            family,
+            brace: Brace {
+                object: brace,
+                options,
+            },
+            label,
+            options,
+        })
     }
 
     pub fn family(&self) -> &MobjectFamily {
@@ -215,7 +246,9 @@ impl BraceLabel {
         target: &LayoutAnchor,
     ) -> Result<(), LiveSessionError> {
         let store = Rc::clone(live.integration_store());
-        let prepared = PreparedComposite::new(&store, target, self.label.clone(), self.options)?;
+        let geometry = live.prepare_brace_geometry(target, &self.label, self.options)?;
+        let prepared =
+            PreparedComposite::with_geometry(self.label.clone(), self.options, geometry)?;
         let old_brace = self.brace.object.node_id();
         let (brace, _) = live.with_semantic_publication(|store, publish| {
             publish_composite(
@@ -237,6 +270,8 @@ impl BraceLabel {
         live: &mut LiveSession<'_>,
         label: LayoutAnchor,
     ) -> Result<(), LiveSessionError> {
+        live.require_brace_label_placement(&label)?;
+        live.require_brace_label_placement(&LayoutAnchor::from(self.brace.object()))?;
         let store = Rc::clone(live.integration_store());
         let prepared = PreparedLabelPlacement::for_existing_brace(
             &store,
@@ -259,7 +294,8 @@ impl BraceLabel {
         label: LayoutAnchor,
     ) -> Result<(), LiveSessionError> {
         let store = Rc::clone(live.integration_store());
-        let prepared = PreparedComposite::new(&store, target, label.clone(), self.options)?;
+        let geometry = live.prepare_brace_geometry(target, &label, self.options)?;
+        let prepared = PreparedComposite::with_geometry(label.clone(), self.options, geometry)?;
         let old_label = self.label.resolve()?;
         let old_brace = self.brace.object.node_id();
         let (brace, _) = live.with_semantic_publication(|store, publish| {
@@ -379,6 +415,14 @@ impl PreparedComposite {
         require_anchor_store(store, &label)?;
         let brace =
             prepare_brace_geometry(target, options.direction, options.buff, options.sharpness)?;
+        Self::with_geometry(label, options, brace)
+    }
+
+    fn with_geometry(
+        label: LayoutAnchor,
+        options: BraceOptions,
+        brace: PreparedBraceGeometry,
+    ) -> Result<Self, AuthoringError> {
         let label_node = label.resolve()?;
         let layout = label.layout()?;
         let direction = (brace.direction.0.round(), brace.direction.1.round());
@@ -564,5 +608,34 @@ mod tests {
             .unwrap();
         assert_eq!(members(composite.family()).len(), 2);
         assert_eq!(composite.label().resolve().unwrap(), label.node_id());
+    }
+    #[test]
+    fn live_brace_observes_reactive_target_without_rewriting_it() {
+        let mut scene = Scene::new();
+        let target = scene.square(2.0).unwrap();
+        let label = scene.square(0.4).unwrap();
+        let pointer = scene.pointer_position_signal().unwrap();
+        scene.bind_native_translation(&target, &pointer).unwrap();
+        scene.add(&target).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session
+            .set_native_state_input(
+                noon_core::NativeStateSource::PointerPosition,
+                noon_core::NativeInputValue::Vec2(noon_core::Vec2::new(3.0, 1.0)),
+            )
+            .unwrap();
+        let authored_target = target.state().unwrap();
+        let mut live = scene.live(&mut session);
+        let composite = BraceLabel::new_live(
+            &mut live,
+            &LayoutAnchor::from(&target),
+            LayoutAnchor::from(&label),
+            BraceOptions::default(),
+        )
+        .unwrap();
+        let bounds = composite.brace().object().layout_bounds().unwrap().unwrap();
+        assert!(((bounds.min_x + bounds.max_x) * 0.5 - 3.0).abs() < 0.001);
+        assert!((bounds.max_y + 0.2).abs() < 0.001);
+        assert_eq!(target.state().unwrap(), authored_target);
     }
 }

@@ -13,7 +13,8 @@ impl CanonicalAuthoringScene {
                 .active_live_player()?
                 .live_create_brace_label(target, label, options),
             PlayerOwnership::Unstarted => {
-                Err("live Brace construction requires an active canonical session".into())
+                noon::BraceLabel::new(&mut self.scene, target, label, options)
+                    .map_err(|error| AuthoringFailure::unclassified("brace.create", &error))
             }
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
@@ -29,9 +30,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_shift_brace_label(brace, target),
-            PlayerOwnership::Unstarted => {
-                Err("live Brace mutation requires an active canonical session".into())
-            }
+            PlayerOwnership::Unstarted => brace
+                .shift_brace(&mut self.scene, target)
+                .map_err(|error| AuthoringFailure::unclassified("brace.shift", &error)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -47,9 +48,26 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_change_brace_label(brace, target, label),
-            PlayerOwnership::Unstarted => {
-                Err("live Brace mutation requires an active canonical session".into())
+            PlayerOwnership::Unstarted => brace
+                .change_brace_label(&mut self.scene, target, label)
+                .map_err(|error| AuthoringFailure::unclassified("brace.replace", &error)),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
             }
+        }
+    }
+    pub(crate) fn live_replace_brace_label(
+        &mut self,
+        brace: &mut noon::BraceLabel,
+        label: noon::LayoutAnchor,
+    ) -> Result<(), AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_replace_brace_label(brace, label),
+            PlayerOwnership::Unstarted => brace
+                .change_label(&mut self.scene, label)
+                .map_err(|error| AuthoringFailure::unclassified("brace.label", &error)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -80,5 +98,12 @@ impl super::wasm::CanonicalAuthoringSceneContext {
         label: noon::LayoutAnchor,
     ) -> Result<(), AuthoringFailure> {
         self.inner.live_change_brace_label(brace, target, label)
+    }
+    pub(crate) fn replace_live_brace_label(
+        &mut self,
+        brace: &mut noon::BraceLabel,
+        label: noon::LayoutAnchor,
+    ) -> Result<(), AuthoringFailure> {
+        self.inner.live_replace_brace_label(brace, label)
     }
 }

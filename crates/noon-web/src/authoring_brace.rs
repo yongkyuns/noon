@@ -65,6 +65,16 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = liveReplaceBraceLabel)]
+    pub fn live_replace_brace_label(
+        &mut self,
+        brace: &mut WasmBraceLabelHandle,
+        label: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        self.replace_live_brace_label(&mut brace.inner, label.anchor.clone())
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = liveChangeBraceLabel)]
     pub fn live_change_brace_label(
         &mut self,
@@ -98,6 +108,28 @@ impl WasmAuthoringMobjectHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = asBraceLabel)]
+    pub fn as_brace_label(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> Result<WasmBraceLabelHandle, JsValue> {
+        noon::BraceLabel::from_family(
+            self.semantic_family()?,
+            noon::BraceOptions {
+                direction: (direction_x, direction_y),
+                buff,
+                sharpness,
+                label_buff,
+            },
+        )
+        .map(|inner| WasmBraceLabelHandle { inner })
+        .map_err(js_error)
+    }
+
     /// Observe this semantic family through shared Rust and return inert Brace geometry.
     #[wasm_bindgen(js_name = beginBrace)]
     pub fn begin_brace(
@@ -139,4 +171,13 @@ impl WasmManimGeometryOptions {
         .map(Self::from_options)
         .map_err(js_error)
     }
+}
+
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createBraceTextRenderer)]
+pub async fn create_brace_text_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::brace_text::session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
