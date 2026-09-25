@@ -738,7 +738,7 @@ mod tests {
             .clone();
         assert_eq!(after.content, before.content);
         assert_eq!(after.transform.scale, before.transform.scale);
-        assert_eq!(bar_role(&after).unwrap().value, 2.0);
+        assert_eq!(bar_metadata(&after).unwrap().value, 2.0);
     }
 
     #[test]

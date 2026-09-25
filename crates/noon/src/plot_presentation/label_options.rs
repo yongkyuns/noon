@@ -33,6 +33,7 @@ pub enum NumberLabelAuthoringError {
     Preparation(PlotPresentationError),
     Coordinate(crate::CoordinateAuthoringError),
     Text(crate::TextAuthoringError),
+    #[cfg(feature = "latex")]
     Numeric(crate::NumericAuthoringError),
     Authoring(crate::AuthoringError),
     Import(noon_core::SemanticTextImportError),
@@ -45,6 +46,7 @@ impl std::fmt::Display for NumberLabelAuthoringError {
             Self::Preparation(e) => e.fmt(f),
             Self::Coordinate(e) => e.fmt(f),
             Self::Text(e) => e.fmt(f),
+            #[cfg(feature = "latex")]
             Self::Numeric(e) => e.fmt(f),
             Self::Authoring(e) => e.fmt(f),
             Self::Import(e) => e.fmt(f),
@@ -58,6 +60,7 @@ impl std::error::Error for NumberLabelAuthoringError {
             Self::Preparation(e) => Some(e),
             Self::Coordinate(e) => Some(e),
             Self::Text(e) => Some(e),
+            #[cfg(feature = "latex")]
             Self::Numeric(e) => Some(e),
             Self::Authoring(e) => Some(e),
             Self::Import(e) => Some(e),
@@ -77,6 +80,7 @@ macro_rules! label_error_from {
 label_error_from!(PlotPresentationError, Preparation);
 label_error_from!(crate::CoordinateAuthoringError, Coordinate);
 label_error_from!(crate::TextAuthoringError, Text);
+#[cfg(feature = "latex")]
 label_error_from!(crate::NumericAuthoringError, Numeric);
 label_error_from!(crate::AuthoringError, Authoring);
 label_error_from!(noon_core::SemanticTextImportError, Import);
