@@ -93,6 +93,12 @@ jobs:
           cargo test -p noon --all-features --test selection_overlay_raster \
             -- --include-ignored --nocapture
 
+      - name: Present click effects, zoom and retrigger on a completed Rust source
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_click_effect_zoom_and_retrigger \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Present inspection zoom and view recovery without advancing native time
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

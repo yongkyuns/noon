@@ -311,3 +311,111 @@ fn different_bound_objects_run_independently_and_clone_retains_recognition_mode(
     started(&click(&scene, &mut cloned, 4, 0.0));
     assert!(cloned.pointer_selection_highlight().is_none());
 }
+
+#[test]
+fn click_elapsed_is_applied_after_admission_and_before_retrigger() {
+    let (scene, _, mut session) = fixture();
+    let first = started(&click(&scene, &mut session, 0, 0.0));
+    let before = session.publication_context();
+    let (token, down) = event(&session, 2, 0.0, true);
+    let press = scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, down, 1.0)
+        .unwrap();
+    assert!(!press.effect_time_sampled());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.property_animation_elapsed(first), Some(0.0));
+    // The still-current displayed token admits release before elapsed delivery
+    // changes publication. The old effect completes; the new one starts at zero.
+    let (token, up) = event(&session, 3, 0.0, false);
+    let release = scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, up, 1.0)
+        .unwrap();
+    assert!(release.effect_time_sampled());
+    let second = started(&release);
+    assert_ne!(first, second);
+    assert_eq!(session.property_animation_elapsed(first), None);
+    assert_eq!(session.property_animation_elapsed(second), Some(0.0));
+    assert_eq!(session.frame().time, 0.0);
+}
+
+#[test]
+fn click_elapsed_preserves_independent_activation_origins() {
+    let mut scene = Scene::new();
+    for x in [-2.0, 2.0] {
+        let mut object = scene.circle(0.5).unwrap();
+        object.set_translation(x, 0.0).unwrap();
+        object.set_fill(0.0, 0.5, 1.0, 1.0).unwrap();
+        object
+            .set_pointer_click_action(Some(SemanticPointerClickAction::default()))
+            .unwrap();
+        scene.add(&object).unwrap();
+    }
+    let mut session = scene.execution_session().unwrap();
+    session
+        .configure_native_pointer_input(
+            NativePointerId {
+                source: 8,
+                pointer: 3,
+            },
+            1,
+        )
+        .unwrap();
+    session.enable_pointer_fill_clicks(5.0).unwrap();
+    let first = started(&click(&scene, &mut session, 0, -2.0));
+    let (token, down) = event(&session, 2, 2.0, true);
+    let press = scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, down, 0.4)
+        .unwrap();
+    assert!(!press.effect_time_sampled());
+    let (token, up) = event(&session, 3, 2.0, false);
+    let release = scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, up, 0.4)
+        .unwrap();
+    let second = started(&release);
+    assert_eq!(session.property_animation_elapsed(first), Some(0.4));
+    assert_eq!(session.property_animation_elapsed(second), Some(0.0));
+    session.advance_property_animations_by(0.1).unwrap();
+    assert_eq!(session.property_animation_elapsed(first), Some(0.5));
+    assert_eq!(session.property_animation_elapsed(second), Some(0.1));
+    assert_eq!(session.frame().time, 0.0);
+}
+
+#[test]
+fn invalid_elapsed_rejects_before_input_and_remains_retryable() {
+    let (scene, _, mut session) = fixture();
+    let before = session.publication_context();
+    let (token, input) = event(&session, 0, 0.0, true);
+    for elapsed in [-1.0, f64::NAN, f64::INFINITY] {
+        assert!(scene
+            .live(&mut session)
+            .submit_pointer_input_with_actions_after_elapsed(&token, input, elapsed)
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(!session.has_property_animations());
+    }
+    let admitted = scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, input, 0.0)
+        .unwrap();
+    assert_eq!(admitted.input().input(), input);
+    assert!(!admitted.effect_time_sampled());
+}
+
+#[test]
+fn rejected_release_does_not_consume_effect_elapsed() {
+    let (scene, _, mut session) = fixture();
+    let first = started(&click(&scene, &mut session, 0, 0.0));
+    let (token, input) = event(&session, 2, 0.0, false);
+    session.advance_property_animations_by(0.1).unwrap();
+    let before = session.publication_context();
+    assert!(scene
+        .live(&mut session)
+        .submit_pointer_input_with_actions_after_elapsed(&token, input, 0.4)
+        .is_err());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.property_animation_elapsed(first), Some(0.1));
+}
