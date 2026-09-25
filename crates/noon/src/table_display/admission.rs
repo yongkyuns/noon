@@ -975,17 +975,50 @@ pub(super) fn cell(
     row: usize,
     column: usize,
 ) -> Result<Mobject, TableAuthoringError> {
-    let bounds = layout_for_family(family, options)?.cell_bounds(row, column)?;
-    let mut object = Mobject::from_geometry(
-        Rc::clone(family.integration_store()),
-        GeometryRef::rectangle(bounds.width() as f32, bounds.height() as f32),
-        line_style(),
-    )?;
-    object.set_translation(
-        (bounds.min_x + bounds.max_x) * 0.5,
-        (bounds.min_y + bounds.max_y) * 0.5,
-    )?;
-    Ok(object)
+    cell_in_publisher(
+        TablePublisher::Store(Rc::clone(family.integration_store())),
+        family,
+        options,
+        row,
+        column,
+    )
+}
+pub(super) fn cell_in_publisher(
+    publisher: TablePublisher<'_, '_>,
+    family: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+) -> Result<Mobject, TableAuthoringError> {
+    let values = rows(family)?;
+    let shape = TableShape {
+        rows: values.len(),
+        columns: shape_from_rows(&values)?,
+    };
+    let targets: Vec<_> = values.iter().flatten().map(TableEntry::as_target).collect();
+    let entries = publisher.composite_entries(&targets)?;
+    let bounds = entries
+        .iter()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+        .collect::<Result<Vec<_>, TableAuthoringError>>()?;
+    let layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let bounds = layout.cell_bounds(row, column)?;
+    let store = publisher.store();
+    let result = publisher.publish(move |semantic, publish| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: noon_core::Vec2::new(bounds.width() as f32, bounds.height() as f32),
+        });
+        state.style = line_style();
+        state.transform.translation.x = (bounds.min_x + bounds.max_x) * 0.5;
+        state.transform.translation.y = (bounds.min_y + bounds.max_y) * 0.5;
+        let object = transaction.create_node(SemanticNodeCreation::object(state));
+        let result = publish(semantic, transaction)?;
+        result
+            .resolve(object)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(object))
+    })?;
+    Mobject::from_node(store, result).map_err(Into::into)
 }
 pub(super) fn highlight(
     family: &MobjectFamily,

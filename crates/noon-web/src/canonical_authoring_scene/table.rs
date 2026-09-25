@@ -41,6 +41,28 @@ fn number_rows(rows: js_sys::Array) -> Result<Vec<Vec<f64>>, JsValue> {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveTableCell)]
+    pub fn live_table_cell(
+        &mut self,
+        table: &WasmTableHandle,
+        row: usize,
+        column: usize,
+    ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+        if self.inner.player_ownership.is_unstarted() {
+            table
+                .table()
+                .get_cell(row, column)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_table_cell(table.table(), row, column)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+    }
     #[wasm_bindgen(js_name = liveHighlightTableCell)]
     pub fn live_highlight_table_cell(
         &mut self,

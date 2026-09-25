@@ -17,9 +17,10 @@ try:
     from js import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
     from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
     from js import noonHighlightTableCell as _highlight_table
+    from js import noonTableCell as _table_cell
 except ImportError:
     _create_table = _create_math_table = _create_integer_table = None
-    _create_decimal_table = _create_mobject_table = _highlight_table = None
+    _create_decimal_table = _create_mobject_table = _highlight_table = _table_cell = None
 
 
 _OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines"}
@@ -92,7 +93,10 @@ class Table(_compat.VGroup):
     def get_cell(self, pos, **kwargs):
         if kwargs:
             raise NotImplementedError("cell styling is owned by the Rust table API")
-        return self._rectangle_wrapper(engine_call(self._table_handle.getCell, int(pos[0]), int(pos[1])))
+        if _table_cell is None:
+            raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
+        context = _live_constructor_context("Table.get_cell", allow_unstarted=True)
+        return self._rectangle_wrapper(engine_call(_table_cell, context, self._table_handle, int(pos[0]), int(pos[1])))
 
     def get_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
         opacity = float(kwargs.pop("fill_opacity", 1.0))

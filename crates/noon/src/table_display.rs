@@ -301,6 +301,20 @@ impl Table {
     pub fn get_cell(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
         admission::cell(&self.entry_family, self.options, row, column)
     }
+    pub fn get_cell_in_live_session(
+        &self,
+        live: &mut crate::LiveSession<'_>,
+        row: usize,
+        column: usize,
+    ) -> Result<Mobject, TableAuthoringError> {
+        admission::cell_in_publisher(
+            TablePublisher::Live(live),
+            &self.entry_family,
+            self.options,
+            row,
+            column,
+        )
+    }
     pub fn highlight_cell(
         &self,
         row: usize,
