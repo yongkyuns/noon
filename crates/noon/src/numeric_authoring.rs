@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn live_decimal_value_reads_bound_signal_without_mutating_authored_metadata() {
         let mut backend = RuleBackend;
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let tracker = scene.value_tracker(1.25).unwrap();
         let mut number = DecimalNumber::new(
             Rc::clone(scene.integration_store()),
