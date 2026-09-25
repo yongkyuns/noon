@@ -67,6 +67,7 @@ mod boolean_authoring;
 mod brace_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
+mod composite_entry;
 mod coordinate_authoring;
 /// Paired plotting scene shared by native and direct WASM qualification.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
