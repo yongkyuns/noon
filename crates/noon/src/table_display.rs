@@ -1109,35 +1109,39 @@ mod tests {
             .layout_bounds()
             .unwrap()
             .expect("table cells have concrete bounds");
-        assert_eq!(
+        // Retained Rectangle dimensions are f32; queries widen them to f64.
+        let assert_near = |actual: f64, expected: f64| {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        };
+        assert_near(
             cell.min_x,
             column
                 .iter()
                 .map(|bound| bound.min_x)
                 .fold(f64::INFINITY, f64::min)
-                - 0.875
+                - 0.875,
         );
-        assert_eq!(
+        assert_near(
             cell.max_x,
             column
                 .iter()
                 .map(|bound| bound.max_x)
                 .fold(f64::NEG_INFINITY, f64::max)
-                + 0.875
+                + 0.875,
         );
-        assert_eq!(
+        assert_near(
             cell.min_y,
             row.iter()
                 .map(|bound| bound.min_y)
                 .fold(f64::INFINITY, f64::min)
-                - 0.3
+                - 0.3,
         );
-        assert_eq!(
+        assert_near(
             cell.max_y,
             row.iter()
                 .map(|bound| bound.max_y)
                 .fold(f64::NEG_INFINITY, f64::max)
-                + 0.3
+                + 0.3,
         );
         assert_eq!(
             copy.get_cell(1, 0)
