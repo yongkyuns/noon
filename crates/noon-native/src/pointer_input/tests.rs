@@ -253,7 +253,7 @@ fn hidpi_changes_logical_units_not_scene_position_and_invalidates_old_binding() 
     assert!(f
         .app
         .execution
-        .submit_native_pointer_input(&old, stale)
+        .submit_native_pointer_input(&old, stale, 0.0)
         .is_err());
     model_presentation(&mut f.app, SIZE, 2.0);
     f.app

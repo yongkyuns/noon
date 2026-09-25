@@ -13,6 +13,13 @@ use crate::NativeHostError;
 #[cfg(test)]
 mod viewport_tests;
 
+/// An accepted occurrence stays accepted even if its bound action fails.
+/// This is delivery metadata, not a host-owned action or operation registry.
+pub(crate) struct NativePointerSubmission {
+    pub effect_time_sampled: bool,
+    pub action: Result<(), NativeHostError>,
+}
+
 /// The narrow execution surface consumed by the native platform loop.
 ///
 /// Both implementations retain their canonical runtime owner. This trait only
@@ -43,6 +50,8 @@ pub(crate) trait NativeExecutionSource {
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery;
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
+    fn property_animation_pending(&self) -> bool;
+    fn advance_property_animations_by(&mut self, elapsed: f64) -> Result<(), NativeHostError>;
     /// Advance canonical execution and report whether this call committed at
     /// least one opaque host callback phase.
     ///
@@ -64,7 +73,8 @@ pub(crate) trait NativeExecutionSource {
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError>;
+        elapsed: f64,
+    ) -> Result<NativePointerSubmission, NativeHostError>;
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -126,6 +136,17 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.wake_state().frame_pending()
     }
 
+    fn property_animation_pending(&self) -> bool {
+        self.session.wake_state().property_animation_pending()
+    }
+
+    fn advance_property_animations_by(&mut self, elapsed: f64) -> Result<(), NativeHostError> {
+        self.session
+            .advance_property_animations_by(elapsed)
+            .map(|_| ())
+            .map_err(NativeHostError::Effect)
+    }
+
     fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
         self.callbacks
             .advance_to(&mut self.session, requested_time)
@@ -155,11 +176,15 @@ impl NativeExecutionSource for StaticExecutionSource {
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError> {
-        self.session
-            .submit_native_pointer_input(token, input)
-            .map(|_| ())
-            .map_err(Into::into)
+        _elapsed: f64,
+    ) -> Result<NativePointerSubmission, NativeHostError> {
+        self.session.submit_native_pointer_input(token, input)?;
+        // A bare compiled session has no live semantic owner from which to read
+        // authored actions. LiveProgram is the native scene-owned action path.
+        Ok(NativePointerSubmission {
+            effect_time_sampled: false,
+            action: Ok(()),
+        })
     }
 
     fn set_native_state_input(
@@ -256,6 +281,16 @@ where
         self.program.session().wake_state().frame_pending()
     }
 
+    fn property_animation_pending(&self) -> bool {
+        self.program.wake_state().property_animation_pending()
+    }
+
+    fn advance_property_animations_by(&mut self, elapsed: f64) -> Result<(), NativeHostError> {
+        self.program
+            .advance_property_animations_by(elapsed)
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
         self.program
             .drive_to(&mut self.callbacks, requested_time)
@@ -291,11 +326,19 @@ where
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError> {
-        self.program
-            .submit_native_pointer_input(token, input)
-            .map(|_| ())
-            .map_err(|error| NativeHostError::Program(error.to_string()))
+        elapsed: f64,
+    ) -> Result<NativePointerSubmission, NativeHostError> {
+        let publication = self
+            .program
+            .submit_pointer_input_with_actions_after_elapsed(token, input, elapsed)
+            .map_err(|error| NativeHostError::Program(error.to_string()))?;
+        Ok(NativePointerSubmission {
+            effect_time_sampled: publication.effect_time_sampled(),
+            action: publication
+                .action()
+                .map(|_| ())
+                .map_err(|error| NativeHostError::Program(error.to_string())),
+        })
     }
 
     fn set_native_state_input(
