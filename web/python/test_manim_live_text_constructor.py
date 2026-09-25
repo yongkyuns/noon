@@ -7,6 +7,51 @@ from pathlib import Path
 
 
 class ManimLiveTextConstructorTests(unittest.TestCase):
+
+    def test_latex_routes_raw_source_and_presentation_in_one_constructor(self):
+        source = r"""
+from types import SimpleNamespace
+import _manim_latex as latex
+import noon
+assert noon.Tex is latex.Tex and noon.MathTex is latex.MathTex
+calls = []
+def latex_parts(args, source):
+    return SimpleNamespace(source=source, family=lambda: object(), members=lambda: ())
+latex._create = lambda *args: calls.append(args) or latex_parts(args, args[0])
+latex._create_strings = lambda *args: calls.append(args) or latex_parts(args, r"x{{+}}y  z ")
+latex._live_text_context = lambda: None
+cold = noon.MathTex(r"\frac{1}{2}", font_size=32, color=noon.BLUE, opacity=0.4)
+assert cold.source == r"\frac{1}{2}"
+assert calls[0][:3] == (r"\frac{1}{2}", True, 32.0)
+assert calls[0][-2:] == (0.4, None)
+parts = noon.MathTex(r"x{{+}}y", r"{{ z }}")
+assert parts.source == r"x{{+}}y  z "
+assert calls[-1][:3] == ([r"x{{+}}y", r"{{ z }}"], True, 48.0)
+context = object()
+latex._live_text_context = lambda: context
+live = noon.Tex("raw % source")
+assert live._canonical_live_target_context is context
+assert calls[-1][0:2] == ("raw % source", False)
+assert calls[-1][-1] is context
+before = len(calls)
+for kwargs in ({"font_size": 0}, {"opacity": 2}, {"unknown_option": 1}):
+    try: noon.Tex("invalid", **kwargs)
+    except (ValueError, NotImplementedError): pass
+    else: raise AssertionError("invalid options accepted")
+assert len(calls) == before
+failure = RuntimeError("compiler rejected input")
+def rejected(*args): raise failure
+latex._create = rejected
+try: noon.MathTex("bad")
+except RuntimeError as error: assert error is failure
+else: raise AssertionError("compiler error was swallowed")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_markup_text_selects_raw_source_cold_and_live_routes(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()

@@ -4,7 +4,7 @@
 //! generated-document identity and the normalized semantic text contract; it
 //! never substitutes another markup or math engine for TeX source.
 
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 pub use noon_text::{
     latex::DviFontResource,
@@ -12,7 +12,33 @@ pub use noon_text::{
 };
 
 use crate::TextAuthoringError;
-use noon_core::{Color, TextSourceKind, Transform2D, Vec2, WHITE};
+use noon_core::{
+    Color, SemanticMutationTransaction, SemanticNodeCreation, TextPart, TextSourceKind,
+    TextSourceSpan, Transform2D, Vec2, WHITE,
+};
+
+#[derive(Clone)]
+pub struct LatexParts {
+    family: crate::MobjectFamily,
+    members: Vec<crate::Mobject>,
+    source: Arc<str>,
+    parts: Vec<TextPart>,
+}
+
+impl LatexParts {
+    pub fn family(&self) -> &crate::MobjectFamily {
+        &self.family
+    }
+    pub fn members(&self) -> &[crate::Mobject] {
+        &self.members
+    }
+    pub fn source(&self) -> &Arc<str> {
+        &self.source
+    }
+    pub fn parts(&self) -> &[TextPart] {
+        &self.parts
+    }
+}
 
 /// Explicit host boundary for the pinned LaTeX engine.
 ///
@@ -137,6 +163,112 @@ impl LatexAdmission {
             publish,
         )
     }
+
+    pub(crate) fn publish_parts<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<
+        (
+            T,
+            noon_core::SemanticLocalNodeToken,
+            Vec<noon_core::SemanticLocalNodeToken>,
+            Arc<str>,
+            Vec<TextPart>,
+        ),
+        TextAuthoringError,
+    > {
+        let Self {
+            identity,
+            resource,
+            fonts,
+            geometry,
+            transform,
+            style,
+        } = self;
+        store.publish_compiled_text_resource(
+            identity,
+            resource,
+            fonts,
+            &geometry,
+            move |store, base| {
+                let resource = store
+                    .text_resources()
+                    .get(base)
+                    .expect("compiled text resource is live");
+                let source = Arc::clone(&resource.source);
+                let parts = if resource.parts.is_empty() {
+                    vec![resource.source_part(TextSourceSpan::new(
+                        0,
+                        u32::try_from(resource.source.len())
+                            .map_err(|_| noon_core::TextPartQueryError::InvalidSourceSpan)?,
+                    ))?]
+                } else {
+                    resource.parts.to_vec()
+                };
+                let projections = parts
+                    .iter()
+                    .map(|part| resource.projected_part(part))
+                    .collect::<Result<Vec<_>, _>>()?;
+                store.with_derived_text_resources(projections, |store, handles| {
+                    let mut transaction = SemanticMutationTransaction::new();
+                    let family = transaction.create_node(SemanticNodeCreation::family());
+                    let members = handles
+                        .iter()
+                        .map(|handle| {
+                            transaction.create_node(SemanticNodeCreation::object(
+                                semantic_text_state(*handle, transform, style.clone()),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    for member in &members {
+                        transaction.add_member(family, *member);
+                    }
+                    let result = publish(store, transaction)?;
+                    Ok((result, family, members, source, parts))
+                })
+            },
+        )
+    }
+}
+
+pub(crate) fn finish_latex_parts(
+    store: Rc<RefCell<noon_core::SemanticStore>>,
+    result: &noon_core::SemanticMutationTransactionResult,
+    family: noon_core::SemanticLocalNodeToken,
+    members: Vec<noon_core::SemanticLocalNodeToken>,
+    source: Arc<str>,
+    parts: Vec<TextPart>,
+) -> Result<LatexParts, TextAuthoringError> {
+    let resolve = |token| {
+        result
+            .resolve(token)
+            .ok_or(crate::AuthoringError::UnresolvedCreatedNode(token))
+    };
+    let family = crate::MobjectFamily::from_node(
+        Rc::clone(&store),
+        resolve(family).map_err(TextAuthoringError::Semantic)?,
+    )
+    .map_err(TextAuthoringError::Semantic)?;
+    let members = members
+        .into_iter()
+        .map(|token| {
+            crate::Mobject::from_node(
+                Rc::clone(&store),
+                resolve(token).map_err(TextAuthoringError::Semantic)?,
+            )
+            .map_err(TextAuthoringError::Semantic)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(LatexParts {
+        family,
+        members,
+        source,
+        parts,
+    })
 }
 
 pub(crate) fn prepare_tex(
@@ -358,6 +490,23 @@ impl crate::Mobject {
     }
 }
 
+impl LatexParts {
+    pub fn from_tex(
+        store: Rc<RefCell<noon_core::SemanticStore>>,
+        text: Tex,
+        backend: &mut impl LatexBackend,
+    ) -> Result<Self, TextAuthoringError> {
+        publish_detached_parts(store, prepare_tex(text, backend)?)
+    }
+    pub fn from_math_tex(
+        store: Rc<RefCell<noon_core::SemanticStore>>,
+        text: MathTex,
+        backend: &mut impl LatexBackend,
+    ) -> Result<Self, TextAuthoringError> {
+        publish_detached_parts(store, prepare_math_tex(text, backend)?)
+    }
+}
+
 fn publish_detached(
     store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     admission: LatexAdmission,
@@ -375,6 +524,22 @@ fn publish_detached(
         unreachable!("one LaTeX admission creates one detached semantic node")
     };
     crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
+}
+
+fn publish_detached_parts(
+    store: Rc<RefCell<noon_core::SemanticStore>>,
+    admission: LatexAdmission,
+) -> Result<LatexParts, TextAuthoringError> {
+    let (result, family, members, source, parts) = {
+        let mut store_ref = store.borrow_mut();
+        admission.publish_parts(&mut store_ref, |store, transaction| {
+            transaction
+                .apply(store)
+                .map_err(crate::AuthoringError::from)
+                .map_err(TextAuthoringError::Semantic)
+        })?
+    };
+    finish_latex_parts(store, &result, family, members, source, parts)
 }
 
 #[cfg(test)]

@@ -232,6 +232,10 @@ class TransformMatchingShapes:
         _store_animation_args(self, kwargs)
 
 
+class TransformMatchingTex(TransformMatchingShapes):
+    """Match retained TeX part families by compiler-authored source keys."""
+
+
 class Create:
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
         self.target = target

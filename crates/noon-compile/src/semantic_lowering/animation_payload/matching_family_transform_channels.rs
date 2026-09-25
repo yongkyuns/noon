@@ -175,27 +175,35 @@ fn lower_matched_occurrence(
             error,
         })?
         .clone();
-    let target = prepared.object_state(target_ref).map_err(|error| {
-        PreparedFamilyTransformChannelError::Target {
+    let mut target = prepared
+        .object_state(target_ref)
+        .map_err(|error| PreparedFamilyTransformChannelError::Target {
             animation: activation.animation,
             node: target_ref,
             error,
-        }
-    })?;
+        })?
+        .clone();
 
     // The authored source node can lag a completed earlier Succession child because
     // candidate-local preparation does not mutate SemanticStore. Use the content
     // endpoint captured by #1579 while retaining the source node's authored binding
     // topology and non-content semantic policy for canonical validation/completion.
     source.content = source_member.content;
+    // Equal authored-source keys use the same ordinary retained leaf during the
+    // interpolation interval. Fonts/vector artifacts remain immutable and the
+    // exact detached target family replaces the source at completion. This keeps
+    // correspondence generic without manufacturing a second text runtime.
+    if activation.mode == noon_core::SemanticFamilyTransformMode::MatchingSourceKeys {
+        target.content = source_member.content;
+    }
 
-    validate_affine_payload(&source, target, activation.options).map_err(|issue| {
+    validate_affine_payload(&source, &target, activation.options).map_err(|issue| {
         matching_payload_error(activation, source_member.node, target_node, issue)
     })?;
     let channels = lower_transform_channels(
         prepared.store(),
         &source,
-        target,
+        &target,
         source_member.effective,
         noon_core::SemanticTransformInterpolation::Affine,
         activation.options.path_arc,

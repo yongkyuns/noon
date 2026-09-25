@@ -757,11 +757,13 @@ impl SemanticExecutionPlayer {
         &mut self,
         text: crate::authoring_latex::AuthoredLatex,
         compiler: &mut crate::WasmLatexCompiler,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
+    ) -> Result<noon::LatexParts, AuthoringFailure> {
         self.with_live_session(|live| match text {
-            crate::authoring_latex::AuthoredLatex::Text(text) => live.create_tex(text, compiler),
+            crate::authoring_latex::AuthoredLatex::Text(text) => {
+                live.create_tex_parts(text, compiler)
+            }
             crate::authoring_latex::AuthoredLatex::Math(text) => {
-                live.create_math_tex(text, compiler)
+                live.create_math_tex_parts(text, compiler)
             }
         })
     }

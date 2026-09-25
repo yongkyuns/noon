@@ -773,6 +773,7 @@ _PUBLIC_EXPORTS = {
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",
+    "TransformMatchingTex": "_manim_animate",
     "ApplyMatrix": "_manim_animate",
     "CyclicReplace": "_manim_animate",
     "Swap": "_manim_animate",
@@ -861,6 +862,9 @@ _PUBLIC_EXPORTS = {
     "MarkupText": "_manim_typst",
     "Typst": "_manim_typst",
     "MathTypst": "_manim_typst",
+    "Tex": "_manim_latex",
+    "MathTex": "_manim_latex",
+    "prepare_latex": "_manim_latex",
 }
 
 

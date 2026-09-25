@@ -257,6 +257,8 @@ pub enum SemanticFamilyTransformMode {
     Structural,
     /// Match normalized vector-path shape keys at the activation boundary.
     MatchingShapes,
+    /// Match ordinary retained text leaves by compiler-authored source identity.
+    MatchingSourceKeys,
 }
 
 /// One authored animation operation before execution scheduling/lowering.
@@ -1039,7 +1041,12 @@ impl SemanticStore {
                     .text_resources()
                     .get(handle)
                     .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
-                if resource.kind != crate::TextSourceKind::Plain {
+                if !matches!(
+                    resource.kind,
+                    crate::TextSourceKind::Plain
+                        | crate::TextSourceKind::Tex
+                        | crate::TextSourceKind::MathTex
+                ) {
                     return Err(SemanticAnimationError::InvalidTextWriteTarget);
                 }
             }

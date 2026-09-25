@@ -15,6 +15,60 @@ use std::{
 type PreparedGlyphFonts = BTreeMap<FontResourceKey, (FontFaceIdentity, Arc<[u8]>)>;
 
 impl SemanticStore {
+    /// Publish several derived views of already-admitted text in one semantic
+    /// transaction. The derived resources are validated and installed together;
+    /// a rejected publication retires every provisional handle.
+    pub fn with_derived_text_resources<T, E>(
+        &mut self,
+        resources: Vec<TextResource>,
+        publish: impl FnOnce(&mut Self, &[TextResourceHandle]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError> + From<std::collections::TryReserveError>,
+    {
+        for resource in &resources {
+            resource
+                .validate()
+                .map_err(SemanticTextImportError::Validation)?;
+            for run in resource.runs.iter() {
+                if self.font_resources.get_for_face(&run.font).is_none() {
+                    return Err(SemanticTextImportError::MissingFont(
+                        crate::FontResourceKey::from_face(&run.font),
+                    )
+                    .into());
+                }
+            }
+            for vector in resource.vector_items.iter() {
+                let crate::GeometryResource::VectorPath(path) = self
+                    .geometry_resources
+                    .get(vector.geometry)
+                    .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+                if !path.is_finite() {
+                    return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
+                }
+            }
+        }
+
+        let mut handles = Vec::new();
+        handles.try_reserve_exact(resources.len())?;
+        for resource in resources {
+            handles.push(
+                self.text_resources
+                    .insert(resource)
+                    .map_err(SemanticTextImportError::Validation)?,
+            );
+        }
+        let result = publish(self, &handles);
+        if result.is_err() {
+            for handle in handles {
+                self.text_resources
+                    .remove(handle.id)
+                    .expect("fresh unpublished derived text is removable");
+            }
+        }
+        result
+    }
+
     /// Cold/live admission for a compiler-identified glyph resource. A live
     /// cached handle is reused only after its resource liveness has been checked;
     /// a failed first publication never installs the identity.
@@ -66,7 +120,7 @@ impl SemanticStore {
     pub fn publish_compiled_detached_text<T, E>(
         &mut self,
         identity: crate::TextCompilationIdentity,
-        mut resource: TextResource,
+        resource: TextResource,
         fonts: FontResourceArena,
         geometry: &GeometryResourceArena,
         build_state: impl FnOnce(TextResourceHandle) -> crate::SemanticObjectState,
@@ -77,49 +131,41 @@ impl SemanticStore {
             + From<std::collections::TryReserveError>
             + From<crate::GeometryResourceError>,
     {
+        self.publish_compiled_text_resource(identity, resource, fonts, geometry, |store, handle| {
+            let mut transaction = SemanticMutationTransaction::new();
+            transaction.add_node(crate::SemanticNodeCreation::object(build_state(handle)));
+            publish(store, transaction)
+        })
+    }
+
+    /// Admit or reuse one compiler-identified retained resource, then let the
+    /// caller publish any atomic semantic structure that references it.
+    pub fn publish_compiled_text_resource<T, E>(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        resource: TextResource,
+        fonts: FontResourceArena,
+        geometry: &GeometryResourceArena,
+        publish: impl FnOnce(&mut Self, TextResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<crate::GeometryResourceError>,
+    {
         if let Some(handle) = self.compiled_text_resources.get(&identity).copied() {
             if self.text_resources.get(handle).is_some() {
-                let mut transaction = SemanticMutationTransaction::new();
-                transaction.add_node(crate::SemanticNodeCreation::object(build_state(handle)));
-                return publish(self, transaction);
+                return publish(self, handle);
             }
             self.forget_compiled_text_resource(&identity);
         }
 
-        let staged_fonts = self.preflight_text_fonts(&[(resource.clone(), fonts.clone())])?;
-        let mut sources = Vec::new();
-        let mut indices = HashMap::new();
-        for vector in resource.vector_items.iter() {
-            if let std::collections::hash_map::Entry::Vacant(entry) = indices.entry(vector.geometry)
-            {
-                let GeometryResource::VectorPath(path) = geometry
-                    .get(vector.geometry)
-                    .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
-                if !path.is_finite() {
-                    return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
-                }
-                let index = sources.len();
-                sources.push(path.as_ref().clone());
-                entry.insert(index);
-            }
-        }
         let installed = std::cell::Cell::new(None);
-        let result = self.with_geometry_paths(sources, |store, handles| {
-            for vector in std::sync::Arc::make_mut(&mut resource.vector_items) {
-                vector.geometry = handles[indices[&vector.geometry]];
-            }
-            store.with_preflighted_text_resources(
-                vec![(resource, fonts)],
-                staged_fonts,
-                |store, text_handles| {
-                    let handle = text_handles[0];
-                    installed.set(Some(handle));
-                    let mut transaction = SemanticMutationTransaction::new();
-                    transaction.add_node(crate::SemanticNodeCreation::object(build_state(handle)));
-                    publish(store, transaction)
-                },
-            )
-        });
+        let result =
+            self.with_compiled_text_resource(resource, fonts, geometry, |store, handle| {
+                installed.set(Some(handle));
+                publish(store, handle)
+            });
         if result.is_ok() {
             self.remember_compiled_text_resource(
                 identity,
@@ -158,6 +204,71 @@ impl SemanticStore {
             let mut transaction = SemanticMutationTransaction::new();
             transaction.add_node(crate::SemanticNodeCreation::object(build_state(handles[0])));
             publish(store, transaction)
+        })
+    }
+
+    /// Admit one compiled text resource and publish through the caller's cold or
+    /// live transaction owner. Fonts, vector paths and the text resource share
+    /// one rollback scope; a rejected publication leaves no imported resources.
+    pub fn with_compiled_text_resource<E, T>(
+        &mut self,
+        resource: TextResource,
+        fonts: FontResourceArena,
+        geometry: &GeometryResourceArena,
+        publish: impl FnOnce(&mut Self, TextResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<crate::GeometryResourceError>,
+    {
+        let staged_fonts = self.preflight_text_fonts(&[(resource.clone(), fonts.clone())])?;
+        self.with_preflighted_compiled_text_resource(resource, geometry, staged_fonts, publish)
+    }
+
+    /// Import one preflighted compiled dependency while leaving its fonts staged
+    /// for the aggregate publication. This keeps every dependency rollback-safe
+    /// until the composed resource has been accepted.
+    fn with_preflighted_compiled_text_resource<E, T>(
+        &mut self,
+        mut resource: TextResource,
+        geometry: &GeometryResourceArena,
+        staged_fonts: PreparedGlyphFonts,
+        publish: impl FnOnce(&mut Self, TextResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<crate::GeometryResourceError>,
+    {
+        resource
+            .validate()
+            .map_err(SemanticTextImportError::Validation)?;
+        let mut sources = Vec::new();
+        let mut indices = HashMap::new();
+        for vector in resource.vector_items.iter() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = indices.entry(vector.geometry)
+            {
+                let GeometryResource::VectorPath(path) = geometry
+                    .get(vector.geometry)
+                    .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+                if !path.is_finite() {
+                    return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
+                }
+                let index = sources.len();
+                sources.push(path.as_ref().clone());
+                entry.insert(index);
+            }
+        }
+        self.with_geometry_paths(sources, |store, geometry_handles| {
+            for vector in std::sync::Arc::make_mut(&mut resource.vector_items) {
+                vector.geometry = geometry_handles[indices[&vector.geometry]];
+            }
+            store.with_preflighted_text_resources(
+                vec![(resource, FontResourceArena::new())],
+                staged_fonts,
+                |store, text_handles| publish(store, text_handles[0]),
+            )
         })
     }
 

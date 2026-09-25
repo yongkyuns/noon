@@ -121,6 +121,11 @@ enum OrdinaryCompositionChild {
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
     },
+    MatchingSourceFamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
     Indicate {
         target: noon::Mobject,
         indication: noon::IndicateOptions,
@@ -1222,6 +1227,15 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options,
                 } => noon::AnimationCompositionRequest::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
                     options: *options,
@@ -3687,6 +3701,29 @@ mod wasm {
             Ok(())
         }
 
+        #[wasm_bindgen(js_name = appendMatchingSourceFamilyTransformTo)]
+        pub fn append_matching_source_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
+                });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendIndicateMobject)]
         #[allow(clippy::too_many_arguments)]
         pub fn append_indicate_mobject(
@@ -4921,11 +4958,11 @@ mod wasm {
         pub fn create_camera_frame(
             &mut self,
             object_id: &str,
-        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+        ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
             let id = parse_object_id("camera frame object ID", object_id)?;
             self.inner
                 .create_camera_frame(id)
-                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map(crate::WasmLatexPartsHandle::new)
                 .map_err(typed_js_error)
         }
 

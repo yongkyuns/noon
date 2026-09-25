@@ -1,7 +1,7 @@
 use noon_core::{
-    matching_shape_correspondence, vector_path_matching_shape_key, GeometryRef,
-    MatchingShapeCorrespondence, MatchingShapeKey, MatchingShapeKeyError, ObjectId, SemanticNodeId,
-    SemanticObjectContent, SemanticStore, Transform2D,
+    matching_shape_correspondence, vector_path_matching_shape_key, GeometryRef, MatchingFamilyKey,
+    MatchingShapeCorrespondence, MatchingShapeKeyError, ObjectId, SemanticFamilyTransformMode,
+    SemanticNodeId, SemanticObjectContent, SemanticStore, Transform2D,
 };
 
 use super::super::{
@@ -22,7 +22,7 @@ pub struct PreparedMatchingShapeSourceMember {
     pub execution_object_id: ObjectId,
     pub content: SemanticObjectContent,
     pub effective: EffectiveAnimationProperties,
-    pub key: MatchingShapeKey,
+    pub key: MatchingFamilyKey,
 }
 
 /// One authored target leaf used by activation-time matching.
@@ -31,7 +31,7 @@ pub struct PreparedMatchingShapeTargetMember {
     pub node: SemanticNodeId,
     pub content: SemanticObjectContent,
     pub transform: Transform2D,
-    pub key: MatchingShapeKey,
+    pub key: MatchingFamilyKey,
 }
 
 /// Deterministic activation-time matching projection below any frontend adapter.
@@ -87,6 +87,9 @@ pub enum PreparedMatchingShapeActivationError {
         node: SemanticNodeId,
     },
     UnsupportedGeometry {
+        node: SemanticNodeId,
+    },
+    MissingSourceKey {
         node: SemanticNodeId,
     },
     ShapeKey {
@@ -157,6 +160,11 @@ impl std::fmt::Display for PreparedMatchingShapeActivationError {
                 node.slot(),
                 node.generation()
             ),
+            Self::MissingSourceKey { node } => write!(
+                formatter,
+                "matching-source leaf {}:{} has no single compiler-authored source key",
+                node.slot(), node.generation()
+            ),
             Self::ShapeKey { node, error } => write!(
                 formatter,
                 "matching-shape key failed for leaf {}:{}: {error}",
@@ -188,6 +196,31 @@ pub fn prepare_matching_shape_activation_correspondence<F>(
     index: &SemanticExecutionIndex,
     source_root: SemanticNodeId,
     target_root: SemanticNodeId,
+    activation_start: f64,
+    prior_tracks: &[PreparedSemanticAnimationTrack],
+    effective_properties: F,
+) -> Result<PreparedMatchingShapeActivationProjection, PreparedMatchingShapeActivationError>
+where
+    F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
+{
+    prepare_matching_family_activation_correspondence(
+        store,
+        index,
+        source_root,
+        target_root,
+        SemanticFamilyTransformMode::MatchingShapes,
+        activation_start,
+        prior_tracks,
+        effective_properties,
+    )
+}
+
+pub fn prepare_matching_family_activation_correspondence<F>(
+    store: &SemanticStore,
+    index: &SemanticExecutionIndex,
+    source_root: SemanticNodeId,
+    target_root: SemanticNodeId,
+    mode: SemanticFamilyTransformMode,
     activation_start: f64,
     prior_tracks: &[PreparedSemanticAnimationTrack],
     mut effective_properties: F,
@@ -241,7 +274,7 @@ where
                 execution_object_id,
             },
         )?;
-        let key = matching_key(store, node, content, effective.transform)?;
+        let key = matching_key(store, node, content, effective.transform, mode)?;
         source_keys.push(key.clone());
         source_members.push(PreparedMatchingShapeSourceMember {
             node,
@@ -260,7 +293,7 @@ where
             .map_err(|_| PreparedMatchingShapeActivationError::ObjectState { node })?;
         let transform = lower_semantic_transform_value(state)
             .map_err(|_| PreparedMatchingShapeActivationError::InvalidTargetTransform { node })?;
-        let key = matching_key(store, node, state.content, transform)?;
+        let key = matching_key(store, node, state.content, transform, mode)?;
         target_keys.push(key.clone());
         target_members.push(PreparedMatchingShapeTargetMember {
             node,
@@ -295,7 +328,25 @@ fn matching_key(
     node: SemanticNodeId,
     content: SemanticObjectContent,
     transform: Transform2D,
-) -> Result<MatchingShapeKey, PreparedMatchingShapeActivationError> {
+    mode: SemanticFamilyTransformMode,
+) -> Result<MatchingFamilyKey, PreparedMatchingShapeActivationError> {
+    if mode == SemanticFamilyTransformMode::MatchingSourceKeys {
+        let handle = content
+            .text()
+            .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
+        let resource = store
+            .text_resources()
+            .get(handle)
+            .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
+        let [part] = resource.parts.as_ref() else {
+            return Err(PreparedMatchingShapeActivationError::MissingSourceKey { node });
+        };
+        let key = part
+            .semantic_key
+            .as_ref()
+            .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
+        return Ok(MatchingFamilyKey::Source(key.clone()));
+    }
     let geometry = content
         .geometry()
         .ok_or(PreparedMatchingShapeActivationError::UnsupportedGeometry { node })?;
@@ -305,6 +356,7 @@ fn matching_key(
         return Err(PreparedMatchingShapeActivationError::UnsupportedGeometry { node });
     };
     vector_path_matching_shape_key(&path, transform)
+        .map(MatchingFamilyKey::Shape)
         .map_err(|error| PreparedMatchingShapeActivationError::ShapeKey { node, error })
 }
 

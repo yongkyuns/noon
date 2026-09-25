@@ -167,6 +167,11 @@ pub(crate) enum SemanticCompositionRequest {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     },
+    MatchingSourceFamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
     Indicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
@@ -276,7 +281,8 @@ impl SemanticCompositionRequest {
         match self {
             Self::TransformTo { source, .. }
             | Self::FamilyTransformTo { source, .. }
-            | Self::MatchingFamilyTransformTo { source, .. } => Some(*source),
+            | Self::MatchingFamilyTransformTo { source, .. }
+            | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
             Self::Indicate { target, .. }
             | Self::FamilyIndicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
@@ -1839,6 +1845,11 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
+            }
+            | SemanticCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
             } => {
                 if !self.callback_schedule.is_empty() {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
@@ -1882,9 +1893,18 @@ impl ExecutionSession {
                 // Matching presentation uses the same foreground-aware admission
                 // as ordinary targets, with stable source identity and topology.
                 admitted.insert((*source).into());
-                Ok(declaration.create_matching_family_transform_animation(
+                let mode = if matches!(
+                    request,
+                    SemanticCompositionRequest::MatchingSourceFamilyTransformTo { .. }
+                ) {
+                    noon_core::SemanticFamilyTransformMode::MatchingSourceKeys
+                } else {
+                    noon_core::SemanticFamilyTransformMode::MatchingShapes
+                };
+                Ok(declaration.create_family_transform_animation_with_mode(
                     *source,
                     *target_state,
+                    mode,
                     *options,
                 ))
             }
@@ -3381,7 +3401,8 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                     (channels.stable_tracks().to_vec(), plan, None)
                 }
-                SemanticFamilyTransformMode::MatchingShapes => {
+                SemanticFamilyTransformMode::MatchingShapes
+                | SemanticFamilyTransformMode::MatchingSourceKeys => {
                     if !schedule.scalar_leaves().is_empty() {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                             "matching family Transform does not yet compose with scalar leaves"

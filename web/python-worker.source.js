@@ -8,6 +8,8 @@ import initNoonWeb, {
   WasmImageMobjectOptions,
   WasmSceneMembershipBatch,
   WasmTextColorBatch,
+  WasmLatexCompiler,
+  WasmLatexOptions,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -177,6 +179,29 @@ async function initializePyodide() {
     authoringStore.createManimMarkupText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
+  let latexCompiler = null;
+  let latexPreparation = null;
+  self.noonPrepareLatex = async () => {
+    if (!latexPreparation) {
+      latexPreparation = import("./latex/backend.js")
+        .then(({ prepareLatexBackend }) => prepareLatexBackend())
+        .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
+        .catch(error => { latexPreparation = null; throw error; });
+    }
+    await latexPreparation;
+  };
+  self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
+  self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);

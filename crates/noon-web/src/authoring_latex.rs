@@ -92,6 +92,42 @@ pub(crate) enum AuthoredLatex {
 }
 
 #[wasm_bindgen]
+pub struct WasmLatexPartsHandle {
+    parts: noon::LatexParts,
+}
+
+impl WasmLatexPartsHandle {
+    pub(crate) fn new(parts: noon::LatexParts) -> Self {
+        Self { parts }
+    }
+}
+
+#[wasm_bindgen]
+impl WasmLatexPartsHandle {
+    #[wasm_bindgen(js_name = family)]
+    pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
+        crate::WasmAuthoringFamilyHandle::from_semantic_family(self.parts.family().clone())
+    }
+
+    #[wasm_bindgen(js_name = members)]
+    pub fn members(&self) -> js_sys::Array {
+        let members = js_sys::Array::new_with_length(self.parts.members().len() as u32);
+        for (index, member) in self.parts.members().iter().enumerate() {
+            members.set(
+                index as u32,
+                WasmAuthoringMobjectHandle::from_semantic_mobject(member.clone()).into(),
+            );
+        }
+        members
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn source(&self) -> String {
+        self.parts.source().to_string()
+    }
+}
+
+#[wasm_bindgen]
 pub struct WasmLatexOptions {
     pub(crate) text: AuthoredLatex,
 }
@@ -178,13 +214,13 @@ impl WasmAuthoringStore {
         &self,
         options: WasmLatexOptions,
         compiler: &mut WasmLatexCompiler,
-    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+    ) -> Result<WasmLatexPartsHandle, JsValue> {
         let store = Rc::clone(&self.semantics);
         match options.text {
-            AuthoredLatex::Text(text) => noon::Mobject::from_tex(store, text, compiler),
-            AuthoredLatex::Math(text) => noon::Mobject::from_math_tex(store, text, compiler),
+            AuthoredLatex::Text(text) => noon::LatexParts::from_tex(store, text, compiler),
+            AuthoredLatex::Math(text) => noon::LatexParts::from_math_tex(store, text, compiler),
         }
-        .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+        .map(WasmLatexPartsHandle::new)
         .map_err(js_error)
     }
 }

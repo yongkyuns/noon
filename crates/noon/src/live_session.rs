@@ -212,6 +212,11 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    MatchingSourceFamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     Indicate {
         target: &'a Mobject,
         indication: IndicateOptions,
@@ -911,6 +916,62 @@ impl<'a> LiveSession<'a> {
     }
 
     #[cfg(feature = "latex")]
+    pub fn create_math_tex_parts(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn create_tex_parts(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex_parts(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let (result, family, members, source, parts) = {
+            let mut store = self.store.borrow_mut();
+            admission.publish_parts(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        crate::latex_authoring::finish_latex_parts(
+            std::rc::Rc::clone(self.store),
+            &result,
+            family,
+            members,
+            source,
+            parts,
+        )
+        .map_err(LiveSessionError::Text)
+    }
+
+    #[cfg(feature = "latex")]
     fn create_latex(
         &mut self,
         admission: crate::latex_authoring::LatexAdmission,
@@ -1214,6 +1275,22 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    pub fn declare_and_activate_source_matching_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            },
+            AnimationOptions::new(),
+        )
     }
 
     /// Indicate one object and restore its activation-effective source state.
@@ -1692,6 +1769,19 @@ impl<'a> LiveSession<'a> {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
                 Request::MatchingFamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
                     options: *options,

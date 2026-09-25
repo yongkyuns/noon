@@ -1263,7 +1263,7 @@ def _canonical_family_transform_animation(
 ) -> tuple[_compat.Group, _compat.Group, object] | None:
     if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
         source, target = animation.source, animation.target
-    elif type(animation) is _animate.TransformMatchingShapes:
+    elif type(animation) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
         source, target = animation.source, animation.target
@@ -2036,7 +2036,8 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            matching = type(leaf) is _animate.TransformMatchingShapes
+            matching = type(leaf) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex)
+            source_matching = type(leaf) is _animate.TransformMatchingTex
             # Manim constructor options belong to the Transform/Fade children;
             # Scene.play options belong to their enclosing AnimationGroup.
             child = _canonical_transform_options(
@@ -2065,7 +2066,7 @@ def _build_canonical_composition_candidate(
                     _canonical_composition_rate_id(child_kwargs) or "linear"
                 )
             append_family_transform = (
-                destination.appendMatchingFamilyTransformTo
+                (destination.appendMatchingSourceFamilyTransformTo if source_matching else destination.appendMatchingFamilyTransformTo)
                 if matching else destination.appendFamilyTransformTo
             )
             append_family_transform(

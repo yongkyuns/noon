@@ -194,7 +194,7 @@ pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
 #[cfg(feature = "latex")]
 pub use latex_authoring::{
-    DviFontResource, LatexBackend, LatexDocument, LatexFormat, MathTex, Tex,
+    DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
     DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
 };
 pub use live_program::{

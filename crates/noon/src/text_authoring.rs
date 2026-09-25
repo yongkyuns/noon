@@ -624,6 +624,7 @@ pub enum TextAuthoringError {
     Geometry(noon_core::GeometryResourceError),
     Font(FontResourceError),
     Text(TextResourceValidationError),
+    TextPart(noon_core::TextPartQueryError),
     Compile(CompileError),
     Semantic(crate::AuthoringError),
     Import(noon_core::SemanticTextImportError),
@@ -693,6 +694,7 @@ impl std::fmt::Display for TextAuthoringError {
             Self::Geometry(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
+            Self::TextPart(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Import(error) => error.fmt(formatter),
@@ -720,6 +722,7 @@ impl std::error::Error for TextAuthoringError {
             Self::Geometry(error) => Some(error),
             Self::Font(error) => Some(error),
             Self::Text(error) => Some(error),
+            Self::TextPart(error) => Some(error),
             Self::Compile(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Import(error) => Some(error),
@@ -780,6 +783,12 @@ impl From<FontResourceError> for TextAuthoringError {
 impl From<TextResourceValidationError> for TextAuthoringError {
     fn from(value: TextResourceValidationError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<noon_core::TextPartQueryError> for TextAuthoringError {
+    fn from(value: noon_core::TextPartQueryError) -> Self {
+        Self::TextPart(value)
     }
 }
 

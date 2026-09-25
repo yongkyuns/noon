@@ -29,6 +29,15 @@ class TransformMatchingShapesAdapterTests(unittest.TestCase):
             animate.TransformMatchingShapes(source, target, key_map=[("a", "b")])
         animate.TransformMatchingShapes(source, target, key_map={})
 
+    def test_matching_tex_selects_the_source_key_mode(self) -> None:
+        source = object()
+        target = object()
+        request = animate.TransformMatchingTex(source, target, run_time=1.5)
+        self.assertIsInstance(request, animate.TransformMatchingShapes)
+        self.assertEqual(request.anim_args, {"run_time": 1.5})
+        scene_source = (Path(__file__).resolve().parent / "_manim_scene.py").read_text()
+        self.assertIn("appendMatchingSourceFamilyTransformTo", scene_source)
+
     def test_python_only_selects_the_shared_matching_family_request(self) -> None:
         python_dir = Path(__file__).resolve().parent
         scene_source = (python_dir / "_manim_scene.py").read_text()

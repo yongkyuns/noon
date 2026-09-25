@@ -848,6 +848,21 @@ impl SemanticMutationTransaction {
         )
     }
 
+    /// Stage activation-time authored-source correspondence for retained text families.
+    pub fn create_source_matching_family_transform_animation(
+        &mut self,
+        source: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::MatchingSourceKeys,
+            options,
+        )
+    }
+
     /// Stage a family Transform with an explicit semantic correspondence policy.
     pub fn create_family_transform_animation_with_mode(
         &mut self,

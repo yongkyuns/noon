@@ -252,12 +252,7 @@ class BraceBetweenPoints(Brace):
 
 
 class BraceLabel(_compat.VGroup):
-    """Brace plus label as an ordinary semantic family.
-
-    Noon's retained B4 layer does not yet expose ManimCE ``MathTex``. Therefore
-    the upstream default constructor is fail-closed until that dependency lands;
-    callers may already use an explicit retained label constructor such as ``Text``.
-    """
+    """Brace plus a retained ``MathTex`` label as an ordinary semantic family."""
 
     def __init__(
         self,

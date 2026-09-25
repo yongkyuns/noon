@@ -189,14 +189,6 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 (noon.Vec2(0.0, -2.0), noon.DOWN, {"buff": 0.4})
             ]
 
-            for method in (brace.get_text, brace.get_tex):
-                try:
-                    method("x")
-                except NotImplementedError as error:
-                    assert "retained text layer" in str(error)
-                else:
-                    raise AssertionError("Tex/MathTex dependency unexpectedly succeeded")
-
             class FakeBrace(noon.Mobject):
                 def __init__(self, obj, direction=noon.DOWN, buff=0.2, **kwargs):
                     self._scene = None
@@ -217,6 +209,8 @@ class ManimBraceFacadeTests(unittest.TestCase):
                     self.text = text
                     self.font_size = float(font_size)
                     self.kwargs = dict(kwargs)
+                def next_to(self, *args, **kwargs):
+                    return self
 
             family_calls = []
             brace_module.Brace = FakeBrace
@@ -226,6 +220,11 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 )
             )
             noon.Text = FakeLabel
+            noon.Tex = FakeLabel
+            noon.MathTex = FakeLabel
+
+            assert brace.get_text("plain").text == "plain"
+            assert brace.get_tex("x").text == "x"
 
             target = object.__new__(noon.Mobject)
             target._scene = None
@@ -252,12 +251,8 @@ class ManimBraceFacadeTests(unittest.TestCase):
             )
             assert explicit.label.text == "Plain"
 
-            try:
-                brace_module.BraceLabel(target, "math")
-            except NotImplementedError as error:
-                assert "MathTex" in str(error)
-            else:
-                raise AssertionError("BraceLabel default must wait for MathTex")
+            default_math = brace_module.BraceLabel(target, "math")
+            assert default_math.label.text == "math"
 
             # Replacement preparation must fail before family membership changes.
             membership = []

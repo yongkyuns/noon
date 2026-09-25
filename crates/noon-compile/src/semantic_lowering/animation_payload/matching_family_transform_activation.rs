@@ -6,8 +6,7 @@ use noon_core::{
 use super::super::{PreparedSemanticScheduledFamilyTransform, SemanticExecutionIndex};
 use super::affine::EffectiveAnimationProperties;
 use super::matching_shape_activation::{
-    prepare_matching_shape_activation_correspondence, PreparedMatchingShapeActivationError,
-    PreparedMatchingShapeActivationProjection,
+    PreparedMatchingShapeActivationError, PreparedMatchingShapeActivationProjection,
 };
 use super::prepared_composition::PreparedSemanticAnimationTrack;
 
@@ -26,6 +25,7 @@ pub struct PreparedMatchingFamilyTransformActivation {
     pub time_map: noon_core::CompositionTimeMap,
     pub finish_time_map: noon_core::CompositionTimeMap,
     pub options: noon_core::ResolvedAnimationOptions,
+    pub mode: SemanticFamilyTransformMode,
     matching: PreparedMatchingShapeActivationProjection,
 }
 
@@ -107,7 +107,11 @@ pub fn prepare_matching_family_transform_activation<F>(
 where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
 {
-    if family.mode != SemanticFamilyTransformMode::MatchingShapes {
+    if !matches!(
+        family.mode,
+        SemanticFamilyTransformMode::MatchingShapes
+            | SemanticFamilyTransformMode::MatchingSourceKeys
+    ) {
         return Err(
             PreparedMatchingFamilyTransformActivationError::UnsupportedMode {
                 animation: family.animation,
@@ -124,21 +128,23 @@ where
                 error,
             }
         })?;
-    let matching = prepare_matching_shape_activation_correspondence(
-        prepared.store(),
-        index,
-        source_root,
-        target_root,
-        activation_start,
-        prior_tracks,
-        effective_properties,
-    )
-    .map_err(
-        |error| PreparedMatchingFamilyTransformActivationError::Matching {
-            animation: family.animation,
-            error,
-        },
-    )?;
+    let matching =
+        super::matching_shape_activation::prepare_matching_family_activation_correspondence(
+            prepared.store(),
+            index,
+            source_root,
+            target_root,
+            family.mode,
+            activation_start,
+            prior_tracks,
+            effective_properties,
+        )
+        .map_err(
+            |error| PreparedMatchingFamilyTransformActivationError::Matching {
+                animation: family.animation,
+                error,
+            },
+        )?;
 
     Ok(PreparedMatchingFamilyTransformActivation {
         animation: family.animation,
@@ -148,6 +154,7 @@ where
         time_map: family.time_map.clone(),
         finish_time_map: family.finish_time_map.clone(),
         options: family.options,
+        mode: family.mode,
         matching,
     })
 }

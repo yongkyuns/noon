@@ -108,7 +108,12 @@ impl<'a> TransactionNodeCatalog<'a> {
                 let Some(resource) = self.store.text_resources().get(handle) else {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 };
-                if resource.kind != crate::TextSourceKind::Plain {
+                if !matches!(
+                    resource.kind,
+                    crate::TextSourceKind::Plain
+                        | crate::TextSourceKind::Tex
+                        | crate::TextSourceKind::MathTex
+                ) {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 }
             }
