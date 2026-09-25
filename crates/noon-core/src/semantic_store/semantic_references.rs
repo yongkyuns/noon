@@ -403,14 +403,18 @@ impl SemanticStore {
         target: SemanticNodeId,
         kind: SemanticReferenceKind,
     ) -> bool {
-        if kind == SemanticReferenceKind::ForegroundMember {
-            return self
-                .node(owner)
-                .is_some_and(|node| node.foreground_members().contains(&target));
+        let Some(node) = self.node(owner) else {
+            return false;
+        };
+        match kind {
+            SemanticReferenceKind::ForegroundMember => node.foreground_members().contains(&target),
+            SemanticReferenceKind::GraphDependency => node
+                .graph_declaration()
+                .is_some_and(|graph| graph.references_node(target)),
+            _ => outgoing_references(node)
+                .into_iter()
+                .any(|candidate| candidate == (target, kind)),
         }
-        self.semantic_outgoing_references(owner)
-            .into_iter()
-            .any(|candidate| candidate == (target, kind))
     }
 }
 

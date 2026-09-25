@@ -4,7 +4,7 @@
 //! declaration values are pointer-sized so their optional presence does not
 //! embed graph maps in every semantic node or inflate every mutation value.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     GraphEdge, GraphEdgeId, GraphTopology, GraphVertexId, SemanticNodeId,
@@ -58,6 +58,7 @@ struct GraphDeclarationData {
     vertices: HashMap<GraphVertexId, SemanticNodeId>,
     edges: HashMap<GraphEdgeId, SemanticGraphEdgeBinding>,
     edge_lines: HashMap<SemanticNodeId, GraphEdgeId>,
+    referenced_nodes: HashSet<SemanticNodeId>,
 }
 
 impl SemanticGraphDeclaration {
@@ -75,6 +76,15 @@ impl SemanticGraphDeclaration {
             .values()
             .map(|binding| (binding.line(), binding.id()))
             .collect::<HashMap<_, _>>();
+        let referenced_nodes = vertices
+            .values()
+            .copied()
+            .chain(
+                edges
+                    .values()
+                    .flat_map(|binding| [binding.family(), binding.line()]),
+            )
+            .collect::<HashSet<_>>();
         debug_assert_eq!(edge_lines.len(), edges.len());
         debug_assert_eq!(vertices.len(), topology.vertices().count());
         debug_assert_eq!(edges.len(), topology.edges().count());
@@ -88,6 +98,7 @@ impl SemanticGraphDeclaration {
                 vertices,
                 edges,
                 edge_lines,
+                referenced_nodes,
             }),
         }
     }
@@ -108,6 +119,15 @@ impl SemanticGraphDeclaration {
     /// This reverse index keeps local content validation O(1).
     pub(crate) fn edge_for_line_node(&self, node: SemanticNodeId) -> Option<GraphEdgeId> {
         self.data.edge_lines.get(&node).copied()
+    }
+
+    /// Whether `node` is an exact dependency binding of this declaration.
+    ///
+    /// This index is derived from the authoritative vertex and edge bindings at
+    /// construction, so membership covers vertex objects, edge families, and
+    /// designated edge Lines without enumerating the graph.
+    pub(crate) fn references_node(&self, node: SemanticNodeId) -> bool {
+        self.data.referenced_nodes.contains(&node)
     }
 
     /// Iterate semantic vertex bindings in topology insertion order.
