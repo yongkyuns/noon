@@ -1,3 +1,4 @@
+mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
@@ -2700,6 +2701,33 @@ mod wasm {
     use super::*;
     use crate::authoring_error::js_error as typed_js_error;
 
+    /// Opaque alias of one Rust-owned inset declaration. Both accessors return
+    /// ordinary semantic mobject handles; this wrapper owns no geometry state.
+    #[wasm_bindgen]
+    pub struct WasmAuthoringZoomedViewHandle {
+        view: noon::ZoomedView,
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringZoomedViewHandle {
+        #[wasm_bindgen(js_name = cameraFrame)]
+        pub fn camera_frame(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(
+                self.view.camera_frame().clone(),
+            )
+        }
+
+        #[wasm_bindgen(js_name = display)]
+        pub fn display(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(self.view.display().clone())
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(&self) -> Result<f64, JsValue> {
+            self.view.zoom_factor().map_err(typed_js_error)
+        }
+    }
+
     /// A rejected ownership return retains the consumed WASM player wrapper.
     /// Its projected JS Error retains `takePlayer()` to recover that exact player;
     /// returning it to its rightful context requires no lowering or cloning.
@@ -4972,6 +5000,80 @@ mod wasm {
             self.inner
                 .create_camera_frame(id)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
+        /// Create a detached inset declaration. Placement and frame geometry are
+        /// calculated by Rust from typed options, never mirrored in Python.
+        #[wasm_bindgen(js_name = createZoomedView)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_zoomed_view(
+            &mut self,
+            camera_frame_id: &str,
+            display_id: &str,
+            display_height: f64,
+            display_width: f64,
+            display_center_x: Option<f64>,
+            display_center_y: Option<f64>,
+            display_corner_x: f64,
+            display_corner_y: f64,
+            display_corner_buff: f64,
+            camera_frame_start_x: f64,
+            camera_frame_start_y: f64,
+            zoom_factor: f64,
+            camera_frame_stroke_width: f64,
+            image_frame_stroke_width: f64,
+            capture_own_display: bool,
+        ) -> Result<WasmAuthoringZoomedViewHandle, JsValue> {
+            let display_center = match (display_center_x, display_center_y) {
+                (None, None) => None,
+                (Some(x), Some(y)) => Some(Vec2::new(x as f32, y as f32)),
+                _ => {
+                    return Err(js_error(
+                        "zoomed display center requires both x and y coordinates",
+                    ));
+                }
+            };
+            let options = noon::ZoomedSceneOptions {
+                display_height,
+                display_width,
+                display_center,
+                display_corner: Vec2::new(display_corner_x as f32, display_corner_y as f32),
+                display_corner_buff,
+                camera_frame_start: Vec2::new(
+                    camera_frame_start_x as f32,
+                    camera_frame_start_y as f32,
+                ),
+                zoom_factor,
+                camera_frame_stroke_width,
+                image_frame_stroke_width,
+                capture_own_display,
+            };
+            self.inner
+                .create_zoomed_view(
+                    parse_object_id("zoomed camera-frame object ID", camera_frame_id)?,
+                    parse_object_id("zoomed display object ID", display_id)?,
+                    options,
+                )
+                .map(|view| WasmAuthoringZoomedViewHandle { view })
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner.zoom_factor(&view.view).map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = activateZooming)]
+        pub fn activate_zooming(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .activate_zooming(&view.view)
                 .map_err(typed_js_error)
         }
 

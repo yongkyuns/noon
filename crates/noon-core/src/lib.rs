@@ -174,6 +174,39 @@ pub struct Camera2DState {
     pub height: f32,
 }
 
+/// One effective retained inset view derived from two ordinary runtime rows in
+/// the same frame epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Inset2DViewState {
+    pub camera_frame: ObjectId,
+    pub display: ObjectId,
+    pub camera: Camera2DState,
+    pub display_center: Vec2,
+    pub display_size: Vec2,
+    pub display_stroke_width: f32,
+    pub capture_own_display: bool,
+}
+
+impl Inset2DViewState {
+    pub fn zoom_factor(self) -> f32 {
+        self.camera.height / self.display_size.y
+    }
+
+    /// World-space source bounds captured by this inset's effective camera.
+    pub fn camera_bounds(self) -> Option<Rect> {
+        let aspect = self.display_size.x / self.display_size.y;
+        let size = Vec2::new(self.camera.height * aspect, self.camera.height);
+        if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+            return None;
+        }
+        let half = size * 0.5;
+        Some(Rect::new(
+            self.camera.center - half,
+            self.camera.center + half,
+        ))
+    }
+}
+
 impl Default for Camera2DState {
     fn default() -> Self {
         Self {

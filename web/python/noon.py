@@ -813,6 +813,7 @@ _PUBLIC_EXPORTS = {
     "NativeBoolSignal": "_manim_reactive",
     "DashedLine": "_manim_dashed_line",
     "MovingCameraScene": "_manim_camera",
+    "ZoomedScene": "_manim_zoomed_scene",
     "Write": "_manim_family_creation",
     "Unwrite": "_manim_family_creation",
     "VMobject": "_manim_compat",

@@ -399,6 +399,12 @@ mod wasm {
                 ))
             })
             .map_err(js_error)?;
+            let inset_views = self.mirror.inset_2d_views().to_vec();
+            self.preparer
+                .set_inset_views_active(!inset_views.is_empty());
+            self.renderer
+                .set_inset_2d_views(&self.device, &self.queue, &mut self.text_gpu, &inset_views)
+                .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
             if self.pending_changes.is_all() {

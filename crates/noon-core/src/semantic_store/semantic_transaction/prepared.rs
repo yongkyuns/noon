@@ -645,6 +645,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let role = camera_frame.map_or(SemanticObjectRole::Ordinary, |camera| {
+                        SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(resolve_node_ref(
+                                camera,
+                                &committed_nodes,
+                            ))
+                            .capture_own_display(capture_own_display),
+                        )
+                    });
+                    store.replace_semantic_object_role(object, role);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
                     store
@@ -859,6 +878,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                                     object: *object,
                                     property: *property,
                                 });
+                            }
+                            SemanticRemoveNodeEffect::ObjectRoleReplaced(object) => {
+                                impacts
+                                    .push(SemanticMutationImpact::ObjectRole { object: *object });
                             }
                         }
                     }

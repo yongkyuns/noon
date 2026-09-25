@@ -4,8 +4,8 @@ use std::{
 };
 
 use noon_core::{
-    Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Rect, Style, TextResourceHandle,
-    Transform2D,
+    Camera2DState, GeometryRef, Inset2DViewState, ObjectContentRef, ObjectId, Rect, Style,
+    TextResourceHandle, Transform2D,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 6;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -109,6 +109,8 @@ pub struct RetainedExecutionDeltaEnvelope {
     pub time: f64,
     #[serde(default)]
     pub camera: Camera2DState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inset_2d_views: Vec<Inset2DViewState>,
     pub objects: Vec<RetainedTransportObjectState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_slots: Vec<TransportSlotId>,
@@ -148,6 +150,7 @@ pub enum RetainedExecutionTransportError {
     AmbiguousRenderGeometry(TransportSlotId),
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
+    InvalidInset2DView(ObjectId),
     UnknownTextResource(TransportTextResourceHandle),
 }
 
@@ -243,6 +246,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 formatter,
                 "retained slot {}:{} has an invalid render transform",
                 slot.slot, slot.generation
+            ),
+            Self::InvalidInset2DView(display) => write!(
+                formatter,
+                "retained inset view for display {} is invalid or references a missing object",
+                display.get()
             ),
             Self::UnknownTextResource(handle) => write!(
                 formatter,
@@ -398,6 +406,7 @@ impl RetainedExecutionDeltaEncoder {
             snapshot: true,
             time: frame.time,
             camera,
+            inset_2d_views: Vec::new(),
             objects,
             removed_slots: Vec::new(),
             painter_order: None,
@@ -586,6 +595,7 @@ impl RetainedExecutionDeltaEncoder {
             snapshot: false,
             time: frame.time,
             camera,
+            inset_2d_views: Vec::new(),
             objects,
             removed_slots,
             painter_order,
@@ -614,6 +624,7 @@ pub struct RetainedExecutionFrameMirror {
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     camera: Camera2DState,
+    inset_2d_views: Vec<Inset2DViewState>,
     frame: Option<FrameState>,
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
@@ -749,6 +760,10 @@ impl RetainedExecutionFrameMirror {
         self.camera
     }
 
+    pub fn inset_2d_views(&self) -> &[Inset2DViewState] {
+        &self.inset_2d_views
+    }
+
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
     }
@@ -792,6 +807,8 @@ impl RetainedExecutionFrameMirror {
             Some(_) => {}
         }
 
+        self.validate_inset_2d_views(&delta)?;
+
         let next_sequence = delta
             .sequence
             .checked_add(1)
@@ -805,10 +822,66 @@ impl RetainedExecutionFrameMirror {
         self.session = Some(delta.session);
         self.next_sequence = next_sequence;
         self.camera = delta.camera;
+        self.inset_2d_views = delta.inset_2d_views.clone();
         if let Some(frame) = &mut self.frame {
             frame.time = delta.time;
         }
         Ok((RetainedTransportApplyOutcome::Applied, changes))
+    }
+
+    fn validate_inset_2d_views(
+        &self,
+        delta: &RetainedExecutionDeltaEnvelope,
+    ) -> Result<(), RetainedExecutionTransportError> {
+        let mut live = if delta.snapshot {
+            HashSet::new()
+        } else {
+            self.object_indices.keys().copied().collect()
+        };
+        if !delta.snapshot {
+            for slot in &delta.removed_slots {
+                if let Some(index) = self.slot_indices.get(slot) {
+                    if let Some(object) = self
+                        .frame
+                        .as_ref()
+                        .and_then(|frame| frame.objects.get(*index))
+                    {
+                        live.remove(&object.id);
+                    }
+                }
+            }
+        }
+        live.extend(delta.objects.iter().map(|object| object.object));
+        let mut displays = HashSet::new();
+        for view in &delta.inset_2d_views {
+            let finite = [
+                view.camera.center.x,
+                view.camera.center.y,
+                view.camera.height,
+                view.display_center.x,
+                view.display_center.y,
+                view.display_size.x,
+                view.display_size.y,
+                view.display_stroke_width,
+            ]
+            .into_iter()
+            .all(f32::is_finite);
+            if !finite
+                || view.camera.height <= 0.0
+                || view.display_size.x <= 0.0
+                || view.display_size.y <= 0.0
+                || view.display_stroke_width < 0.0
+                || view.camera_bounds().is_none()
+                || !live.contains(&view.camera_frame)
+                || !live.contains(&view.display)
+                || !displays.insert(view.display)
+            {
+                return Err(RetainedExecutionTransportError::InvalidInset2DView(
+                    view.display,
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn apply_snapshot(
@@ -1388,6 +1461,56 @@ mod tests {
         assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         assert!(changes.is_all());
         assert_eq!(mirror.frame().unwrap(), &frame);
+    }
+
+    #[test]
+    fn inset_view_round_trips_and_invalid_reference_is_rejected_atomically() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(41);
+        let mut initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let view = Inset2DViewState {
+            camera_frame: ObjectId::new(11),
+            display: ObjectId::new(12),
+            camera: Camera2DState {
+                center: Vec2::new(0.25, -0.5),
+                height: 0.45,
+            },
+            display_center: Vec2::new(4.6, 2.0),
+            display_size: Vec2::new(3.0, 3.0),
+            display_stroke_width: 0.03,
+            capture_own_display: false,
+        };
+        initial.inset_2d_views.push(view);
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+        assert_eq!(mirror.inset_2d_views(), &[view]);
+
+        let mut next_frame = frame.clone();
+        next_frame.time = 0.25;
+        next_frame.objects[0].transform.translation.x = 0.5;
+        let mut invalid = encoder
+            .encode_incremental(
+                &next_frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        invalid.inset_2d_views.push(Inset2DViewState {
+            camera_frame: ObjectId::new(999),
+            ..view
+        });
+        let expected_sequence = mirror.next_sequence;
+        assert_eq!(
+            mirror.apply(invalid),
+            Err(RetainedExecutionTransportError::InvalidInset2DView(
+                view.display
+            ))
+        );
+        assert_eq!(mirror.next_sequence, expected_sequence);
+        assert_eq!(mirror.inset_2d_views(), &[view]);
     }
 
     #[test]

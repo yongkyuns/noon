@@ -539,6 +539,7 @@ impl ExecutionSession {
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
+        self.sync_inset_2d_view_bindings(store);
         self.last_structural_publication = StructuralPublicationStats {
             preparation: preparation_stats,
             entered_objects: entered.len(),

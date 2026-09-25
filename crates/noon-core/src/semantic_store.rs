@@ -604,6 +604,10 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
+    /// Derived index of authored inset display roles. The role on each ordinary
+    /// display object remains authoritative; this bounds view discovery by active
+    /// inset count rather than total semantic slots.
+    inset_2d_displays: BTreeSet<SemanticNodeId>,
     last_mutation: SemanticMutationStats,
     scene_revision: crate::SceneRevision,
 }
@@ -700,6 +704,7 @@ impl Clone for SemanticStore {
             next_insertion_order: self.next_insertion_order,
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
+            inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
         }
@@ -707,6 +712,41 @@ impl Clone for SemanticStore {
 }
 
 impl SemanticStore {
+    pub fn inset_2d_views(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, crate::SemanticInset2DViewRole)> + '_ {
+        self.inset_2d_displays.iter().filter_map(|display| {
+            let state = self.node(*display)?.semantic_object_state()?;
+            let crate::SemanticObjectRole::Inset2DView(role) = state.role() else {
+                return None;
+            };
+            Some((*display, role))
+        })
+    }
+
+    pub(crate) fn replace_semantic_object_role(
+        &mut self,
+        object: SemanticNodeId,
+        role: crate::SemanticObjectRole,
+    ) {
+        self.unregister_semantic_references_for_owner(object);
+        self.inset_2d_displays.remove(&object);
+        self.node_mut(object)
+            .expect("validated semantic object")
+            .semantic_object_state_mut()
+            .expect("validated semantic object state")
+            .set_role(role);
+        if matches!(
+            self.node(object)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(object);
+        }
+        self.register_semantic_references_for_owner(object);
+    }
+
     pub(crate) const fn next_insertion_order(&self) -> u64 {
         self.next_insertion_order
     }
@@ -795,6 +835,14 @@ impl SemanticStore {
         self.node_mut(id)
             .expect("newly inserted semantic node exists")
             .object_state = Some(state);
+        if matches!(
+            self.node(id)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(id);
+        }
         self.register_semantic_references_for_owner(id);
         id
     }
@@ -1467,6 +1515,7 @@ impl SemanticStore {
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
+        self.inset_2d_displays.remove(&id);
         self.incoming_references.remove(&id);
 
         let slot = &mut self.slots[id.slot as usize];

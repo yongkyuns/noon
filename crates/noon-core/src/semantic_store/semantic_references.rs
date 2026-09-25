@@ -17,6 +17,7 @@ pub(crate) enum SemanticReferenceKind {
     },
     ScopedSignal,
     ForegroundMember,
+    Inset2DCameraFrame,
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
@@ -46,6 +47,7 @@ pub(crate) enum SemanticRemoveNodeEffect {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    ObjectRoleReplaced(SemanticNodeId),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -65,6 +67,19 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Derived reverse references keep inset validation local to an edited frame.
+    pub(crate) fn inset_displays_for_camera(
+        &self,
+        camera: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.incoming_references
+            .get(&camera)
+            .into_iter()
+            .flatten()
+            .filter(|reference| reference.kind == SemanticReferenceKind::Inset2DCameraFrame)
+            .map(|reference| reference.owner)
+    }
+
     /// Whether this signal participates in any scene execution scope.
     ///
     /// Work is proportional to the signal's direct incoming references; scene
@@ -257,7 +272,8 @@ impl SemanticStore {
                 match reference.kind {
                     SemanticReferenceKind::SignalBinding { .. }
                     | SemanticReferenceKind::ScopedSignal
-                    | SemanticReferenceKind::ForegroundMember => {}
+                    | SemanticReferenceKind::ForegroundMember
+                    | SemanticReferenceKind::Inset2DCameraFrame => {}
                     SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
@@ -364,6 +380,29 @@ impl SemanticStore {
                             .push(SemanticRemoveNodeEffect::ForegroundMembersChanged { scope });
                     }
                 }
+                SemanticReferenceKind::Inset2DCameraFrame => {
+                    let owner = reference.owner;
+                    let matches = self
+                        .node(owner)
+                        .and_then(SemanticNode::semantic_object_state)
+                        .is_some_and(|state| {
+                            matches!(
+                                state.role(),
+                                crate::SemanticObjectRole::Inset2DView(role)
+                                    if role.camera_frame == id
+                            )
+                        });
+                    if matches {
+                        self.replace_semantic_object_role(
+                            owner,
+                            crate::SemanticObjectRole::Ordinary,
+                        );
+                        outcome.written_slots.insert(owner);
+                        outcome
+                            .effects
+                            .push(SemanticRemoveNodeEffect::ObjectRoleReplaced(owner));
+                    }
+                }
                 SemanticReferenceKind::ScopedSignal => {
                     let scope = reference.owner;
                     let removed = self
@@ -430,6 +469,9 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 },
             )
         }));
+        if let crate::SemanticObjectRole::Inset2DView(role) = state.role() {
+            references.push((role.camera_frame, SemanticReferenceKind::Inset2DCameraFrame));
+        }
     }
 
     references.extend(

@@ -147,6 +147,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
+    let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
     for target in references {
         queue.push(target.require_store(store)?);
@@ -185,7 +186,12 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             SemanticNodeCreation::family()
         } else {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
-            SemanticNodeCreation::object(capture(&mobject)?)
+            let mut state = capture(&mobject)?;
+            if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
+                inset_views.push((id, view));
+                state.set_role(noon_core::SemanticObjectRole::Ordinary);
+            }
+            SemanticNodeCreation::object(state)
         };
         let pending = transaction.create_node(creation);
         if let Some(z) = family_z {
@@ -197,6 +203,14 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         for member in members {
             transaction.add_member(copied[&parent], copied[&member]);
         }
+    }
+    for (display, view) in inset_views {
+        let camera = copied
+            .get(&view.camera_frame)
+            .copied()
+            .map(noon_core::SemanticTransactionNodeRef::from)
+            .unwrap_or_else(|| view.camera_frame.into());
+        transaction.set_inset_2d_view(copied[&display], camera, view.capture_own_display);
     }
     for (source_family, graph) in graph_declarations {
         let vertices = graph.vertices().map(|(id, source)| (id, copied[&source]));

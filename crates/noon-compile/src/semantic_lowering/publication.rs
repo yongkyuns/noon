@@ -312,6 +312,7 @@ fn validate_mutations(
             mutation,
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
+                | SemanticMutation::SetInset2DView { .. }
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
@@ -640,7 +641,8 @@ fn lower_semantic_publication(
             | SemanticMutation::SetScalarSignalAt { .. }
             | SemanticMutation::ScopeSignal { .. }
             | SemanticMutation::SetForegroundMembers { .. }
-            | SemanticMutation::SetGraphDeclaration { .. } => {}
+            | SemanticMutation::SetGraphDeclaration { .. }
+            | SemanticMutation::SetInset2DView { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }

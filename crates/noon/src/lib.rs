@@ -147,6 +147,7 @@ mod text_part_authoring;
 pub mod time_series_plotting_example;
 mod vector_field_authoring;
 mod z_index;
+mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
@@ -178,7 +179,7 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionInset2DError, ExecutionSessionPublicationError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -258,6 +259,7 @@ pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_part_authoring::TextPartAuthoringError;
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.

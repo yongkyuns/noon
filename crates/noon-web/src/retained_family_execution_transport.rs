@@ -880,6 +880,7 @@ mod tests {
             snapshot,
             time: 0.0,
             camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 slot: TransportSlotId {
                     slot: 0,
