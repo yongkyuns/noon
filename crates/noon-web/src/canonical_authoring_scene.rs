@@ -6632,6 +6632,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveLatexFontSize)]
+        pub fn live_latex_font_size(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_latex_font_size(handle.semantic_parts())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCreateManimTypst)]
         pub fn live_create_manim_typst(
             &mut self,

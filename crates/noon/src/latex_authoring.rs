@@ -23,6 +23,8 @@ pub struct LatexParts {
     members: Vec<crate::Mobject>,
     source: Arc<str>,
     parts: Vec<TextPart>,
+    initial_font_size: f64,
+    initial_height: f64,
 }
 
 impl LatexParts {
@@ -39,6 +41,8 @@ impl LatexParts {
             members: Vec::new(),
             source: Arc::clone(&self.source),
             parts: self.parts.clone(),
+            initial_font_size: self.initial_font_size,
+            initial_height: self.initial_height,
         })
     }
 
@@ -71,25 +75,20 @@ impl LatexParts {
 
     /// Manim-compatible current font size: authored point size scaled by the
     /// current vertical transform of the first authoritative leaf.
-    pub fn current_font_size(&self) -> Result<f64, crate::TextPartAuthoringError> {
-        let Some(member) = self.current_members()?.into_iter().next() else {
-            return Ok(0.0);
-        };
-        let state = member.state()?;
-        let handle = state
-            .content
-            .text()
-            .ok_or(crate::TextPartAuthoringError::NotText(member.node_id()))?;
-        let store = member.integration_store().borrow();
-        let resource = store
-            .text_resources()
-            .get(handle)
-            .ok_or(crate::AuthoringError::MissingTextResource(handle))?;
-        let authored = resource
-            .runs
-            .first()
-            .map_or(0.0, |run| run.font_size as f64);
-        Ok(authored * state.transform.scale.y.abs())
+    pub fn current_font_size(&self) -> Result<f64, crate::AuthoringError> {
+        let height = self
+            .family
+            .layout_bounds()?
+            .map_or(0.0, |bounds| bounds.height());
+        Ok(self.font_size_for_height(height))
+    }
+
+    pub fn font_size_for_height(&self, height: f64) -> f64 {
+        if self.initial_height > 0.0 {
+            self.initial_font_size * height / self.initial_height
+        } else {
+            self.initial_font_size
+        }
     }
 
     /// Select current family leaves whose compiler-authored part overlaps a
@@ -229,6 +228,7 @@ pub(crate) struct LatexAdmission {
     geometry: noon_core::GeometryResourceArena,
     transform: noon_core::SemanticTransform2_5D,
     style: noon_core::SemanticStyle,
+    font_size: f64,
 }
 
 impl LatexAdmission {
@@ -247,6 +247,7 @@ impl LatexAdmission {
             geometry,
             transform,
             style,
+            font_size: _,
         } = self;
         store.publish_compiled_detached_text(
             identity,
@@ -272,6 +273,7 @@ impl LatexAdmission {
             Vec<noon_core::SemanticLocalNodeToken>,
             Arc<str>,
             Vec<TextPart>,
+            f64,
         ),
         TextAuthoringError,
     > {
@@ -282,6 +284,7 @@ impl LatexAdmission {
             geometry,
             transform,
             style,
+            font_size,
         } = self;
         let part_fonts = fonts.clone();
         store.publish_compiled_text_resource(
@@ -323,7 +326,7 @@ impl LatexAdmission {
                         transaction.add_member(family, *member);
                     }
                     let result = publish(store, transaction)?;
-                    Ok((result, family, members, source, parts))
+                    Ok((result, family, members, source, parts, font_size))
                 })
             },
         )
@@ -337,6 +340,7 @@ pub(crate) fn finish_latex_parts(
     members: Vec<noon_core::SemanticLocalNodeToken>,
     source: Arc<str>,
     parts: Vec<TextPart>,
+    initial_font_size: f64,
 ) -> Result<LatexParts, TextAuthoringError> {
     let resolve = |token| {
         result
@@ -358,11 +362,17 @@ pub(crate) fn finish_latex_parts(
             .map_err(TextAuthoringError::Semantic)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let initial_height = family
+        .layout_bounds()
+        .map_err(TextAuthoringError::Semantic)?
+        .map_or(0.0, |bounds| bounds.height());
     Ok(LatexParts {
         family,
         members,
         source,
         parts,
+        initial_font_size,
+        initial_height,
     })
 }
 
@@ -411,6 +421,7 @@ fn prepare_latex(
         geometry: artifact.geometry.as_ref().clone(),
         transform,
         style,
+        font_size: text.font_size as f64,
     })
 }
 
@@ -625,7 +636,7 @@ fn publish_detached_parts(
     store: Rc<RefCell<noon_core::SemanticStore>>,
     admission: LatexAdmission,
 ) -> Result<LatexParts, TextAuthoringError> {
-    let (result, family, members, source, parts) = {
+    let (result, family, members, source, parts, font_size) = {
         let mut store_ref = store.borrow_mut();
         admission.publish_parts(&mut store_ref, |store, transaction| {
             transaction
@@ -634,7 +645,7 @@ fn publish_detached_parts(
                 .map_err(TextAuthoringError::Semantic)
         })?
     };
-    finish_latex_parts(store, &result, family, members, source, parts)
+    finish_latex_parts(store, &result, family, members, source, parts, font_size)
 }
 
 #[cfg(test)]

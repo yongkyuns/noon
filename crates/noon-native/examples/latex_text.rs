@@ -2,7 +2,6 @@
 
 #[cfg(feature = "latex")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use noon::{MathTex, Scene, Tex};
     use noon_native::{NativeLatexBackend, NativeLatexConfig};
 
     let font_directory = std::env::var_os("NOON_LATEX_FONT_DIR")
@@ -20,11 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource_identity,
     ))?;
 
-    let mut scene = Scene::new();
-    let mut title = scene.tex(Tex::new(r"System \LaTeX{} in Noon")?, &mut backend)?;
-    title.shift(0.0, 1.0)?;
-    scene.math_tex(MathTex::new(r"x^2+\frac{1}{2}")?, &mut backend)?;
-    noon_native::run(scene.execution_session()?)?;
+    noon_native::run(noon::example_scenes::latex_text::session(&mut backend)?)?;
     Ok(())
 }
 

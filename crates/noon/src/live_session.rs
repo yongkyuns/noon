@@ -965,7 +965,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<crate::LatexParts, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let (result, family, members, source, parts) = {
+        let (result, family, members, source, parts, font_size) = {
             let mut store = self.store.borrow_mut();
             admission.publish_parts(&mut store, |store, transaction| {
                 self.session
@@ -987,6 +987,7 @@ impl<'a> LiveSession<'a> {
             members,
             source,
             parts,
+            font_size,
         )
         .map_err(LiveSessionError::Text)
     }
@@ -2617,6 +2618,12 @@ impl<'a> LiveSession<'a> {
             Ok(())
         })?;
         self.apply(transaction)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, LiveSessionError> {
+        let layout = self.effective_family_layout(parts.family())?;
+        Ok(parts.font_size_for_height(layout.height))
     }
 
     fn edit_family_style(

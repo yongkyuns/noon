@@ -351,6 +351,21 @@ mod tests {
             "fraction rule was not retained"
         );
         resource.validate().unwrap();
+        drop(store);
+
+        let store = std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let parts = noon::LatexParts::from_math_tex(
+            std::rc::Rc::clone(&store),
+            noon::MathTex::new(r"x^2+\frac{1}{2}")
+                .unwrap()
+                .with_font_size(36.0),
+            &mut backend,
+        )
+        .unwrap();
+        assert!((parts.current_font_size().unwrap() - 36.0).abs() < 1e-6);
+        let mut first = parts.current_members().unwrap().remove(0);
+        first.scale(2.0, 2.0).unwrap();
+        assert!((parts.current_font_size().unwrap() - 72.0).abs() < 1e-5);
     }
 
     #[test]

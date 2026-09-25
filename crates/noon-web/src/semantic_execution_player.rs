@@ -871,6 +871,14 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_latex_font_size(
+        &mut self,
+        parts: &noon::LatexParts,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.latex_font_size(parts))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_fill(
         &mut self,
         family: &noon::MobjectFamily,

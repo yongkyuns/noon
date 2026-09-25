@@ -74,7 +74,10 @@ class _TexBase(_compat.VGroup):
 
     @property
     def font_size(self) -> float:
-        return float(engine_call(lambda: self._semantic_latex_handle.fontSize))
+        context = getattr(self, "_canonical_live_target_context", None)
+        if context is None:
+            return float(engine_call(lambda: self._semantic_latex_handle.fontSize))
+        return float(engine_call(context.liveLatexFontSize, self._semantic_latex_handle))
 
     @property
     def tex_string(self) -> str:
