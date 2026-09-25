@@ -17,10 +17,11 @@ try:
     from js import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
     from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
     from js import noonHighlightTableCell as _highlight_table
+    from js import noonGetHighlightedTableCell as _get_highlighted_table
     from js import noonTableCell as _table_cell
 except ImportError:
     _create_table = _create_math_table = _create_integer_table = None
-    _create_decimal_table = _create_mobject_table = _highlight_table = _table_cell = None
+    _create_decimal_table = _create_mobject_table = _highlight_table = _get_highlighted_table = _table_cell = None
 
 
 _OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines"}
@@ -39,6 +40,16 @@ def _rows(values, convert):
 
 def _handle_key(handle):
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _cell_position(pos):
+    try:
+        row, column = (int(pos[0]), int(pos[1]))
+    except (IndexError, TypeError, ValueError) as error:
+        raise ValueError("Table positions must be one-based (row, column) pairs") from error
+    if row < 1 or column < 1:
+        raise ValueError("Table positions must be one-based (row, column) pairs")
+    return row - 1, column - 1
 
 
 class Table(_compat.VGroup):
@@ -61,7 +72,7 @@ class Table(_compat.VGroup):
             for item in row.submobjects
         }
         if pos is not None:
-            row, column = (int(pos[0]), int(pos[1]))
+            row, column = _cell_position(pos)
             return known[_handle_key(engine_call(self._table_handle.entryAt, row, column))]
         return _compat.VGroup(*[known[_handle_key(item)] for item in entries])
 
@@ -96,25 +107,40 @@ class Table(_compat.VGroup):
         if _table_cell is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("Table.get_cell", allow_unstarted=True)
-        return self._rectangle_wrapper(engine_call(_table_cell, context, self._table_handle, int(pos[0]), int(pos[1])))
+        row, column = _cell_position(pos)
+        return self._rectangle_wrapper(engine_call(_table_cell, context, self._table_handle, row, column))
 
     def get_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
         opacity = float(kwargs.pop("fill_opacity", 1.0))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
         color = _compat._as_color("color", color)
-        if _highlight_table is None:
+        if _get_highlighted_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("Table.highlight_cell", allow_unstarted=True)
+        context = _live_constructor_context("Table.get_highlighted_cell", allow_unstarted=True)
+        row, column = _cell_position(pos)
         return self._rectangle_wrapper(engine_call(
-            _highlight_table,
+            _get_highlighted_table,
             context,
             self._table_handle,
-            int(pos[0]), int(pos[1]), color.red, color.green, color.blue, color.alpha, opacity,
+            row, column, color.red, color.green, color.blue, color.alpha, opacity,
         ))
 
     def add_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
-        self.get_highlighted_cell(pos, color, **kwargs)
+        opacity = float(kwargs.pop("fill_opacity", 1.0))
+        if kwargs:
+            raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
+        if _highlight_table is None:
+            raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
+        color = _compat._as_color("color", color)
+        context = _live_constructor_context("Table.add_highlighted_cell", allow_unstarted=True)
+        row, column = _cell_position(pos)
+        engine_call(
+            _highlight_table,
+            context,
+            self._table_handle,
+            row, column, color.red, color.green, color.blue, color.alpha, opacity,
+        )
         return self
 
 

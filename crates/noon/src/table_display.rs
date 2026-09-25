@@ -328,6 +328,42 @@ impl Table {
             opacity,
         )
     }
+    /// Return a detached colored cell rectangle. Use [`Self::highlight_cell`]
+    /// when the rectangle should become a retained table highlight.
+    pub fn get_highlighted_cell(
+        &self,
+        row: usize,
+        column: usize,
+        color: Color,
+        opacity: f64,
+    ) -> Result<Mobject, TableAuthoringError> {
+        admission::highlighted_cell(
+            &self.entry_family,
+            self.options,
+            row,
+            column,
+            color,
+            opacity,
+        )
+    }
+    pub fn get_highlighted_cell_in_live_session(
+        &self,
+        live: &mut crate::LiveSession<'_>,
+        row: usize,
+        column: usize,
+        color: Color,
+        opacity: f64,
+    ) -> Result<Mobject, TableAuthoringError> {
+        admission::highlighted_cell_in_publisher(
+            TablePublisher::Live(live),
+            &self.entry_family,
+            self.options,
+            row,
+            column,
+            color,
+            opacity,
+        )
+    }
     pub fn highlight_cell_in_live_session(
         &self,
         live: &mut crate::LiveSession<'_>,
@@ -846,6 +882,15 @@ mod tests {
             .semantic_family_members_checked(table.highlight_family().node_id())
             .unwrap();
         assert_eq!(highlight_nodes, vec![highlight.node_id()]);
+        let detached = table.get_highlighted_cell(0, 1, Color::BLUE, 0.5).unwrap();
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(table.highlight_family().node_id())
+                .unwrap(),
+            vec![highlight.node_id()]
+        );
+        assert!(detached.layout_bounds().unwrap().is_some());
     }
 
     #[test]
@@ -918,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn rehydrated_cell_queries_use_retained_entry_lattice_after_transform() {
+    fn cell_queries_keep_authored_spacing_after_entry_transform() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
         let mut scaled = circle(&store, 0.5);
@@ -937,21 +982,16 @@ mod tests {
         )
         .unwrap()
         .into_table();
-        let restored = Table::from_family(table.family().clone()).unwrap();
         let authored = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
-        assert_eq!(
-            restored.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
-            authored
-        );
 
         table.entry_family().shift(3.0, -2.0).unwrap();
-        let shifted = restored.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        let shifted = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
         assert_eq!(shifted.min_x, authored.min_x + 3.0);
         assert_eq!(shifted.max_x, authored.max_x + 3.0);
         assert_eq!(shifted.min_y, authored.min_y - 2.0);
         assert_eq!(shifted.max_y, authored.max_y - 2.0);
         assert_eq!(
-            restored
+            table
                 .highlight_cell(1, 1, Color::BLUE, 0.5)
                 .unwrap()
                 .layout_bounds()

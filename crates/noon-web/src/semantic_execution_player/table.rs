@@ -25,6 +25,19 @@ impl SemanticExecutionPlayer {
         })?
         .map_err(AuthoringFailure::from)
     }
+    pub(crate) fn live_get_highlighted_table_cell(
+        &mut self,
+        table: &noon::Table,
+        row: usize,
+        column: usize,
+        color: noon::Color,
+        opacity: f64,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(table.get_highlighted_cell_in_live_session(live, row, column, color, opacity))
+        })?
+        .map_err(AuthoringFailure::from)
+    }
     pub(crate) fn live_create_table(
         &mut self,
         rows: Vec<Vec<String>>,

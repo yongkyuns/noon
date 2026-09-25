@@ -24,7 +24,7 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
     let math = MathTable::from_rows_with_options(
         &mut scene,
         backend,
-        [["x^2", "y"], [r"\\alpha", r"\\frac{1}{2}"]],
+        [["x^2", "y"], [r"\alpha", r"\frac{1}{2}"]],
         options,
     )
     .map_err(|error| error.to_string())?

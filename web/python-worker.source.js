@@ -254,6 +254,8 @@ async function initializePyodide() {
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
     context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
+  self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
   self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
     return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer));

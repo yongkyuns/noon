@@ -1077,40 +1077,16 @@ fn layout_for_family(
     layout_from_retained_bounds(&bounds, shape, options)
 }
 
-/// Recover a table's physical cell lattice from its retained entries.
+/// Reconstruct the entry lattice under the Table's authored spacing contract.
 ///
-/// Table families may have been translated or scaled after admission, and a
-/// rehydrated `Table` intentionally has no frontend layout cache. Adjacent
-/// entry ink bounds carry the physical inter-cell gaps, so they are the
-/// durable authority for cell and highlight queries.  Construction options are
-/// retained only for a one-row/one-column axis where no adjacent pair exists.
+/// Cell bounds come from current retained entry ink, while Manim's `h_buff`
+/// and `v_buff` remain the original authored distances. In particular, buffers
+/// do not inherit a leaf's scale and cannot be inferred from uneven rows.
 fn layout_from_retained_bounds(
     bounds: &[Bounds2D64],
     shape: TableShape,
-    mut options: TableOptions,
+    options: TableOptions,
 ) -> Result<GridLayout, TableAuthoringError> {
-    let horizontal_gaps = (0..shape.rows).flat_map(|row| {
-        (0..shape.columns.saturating_sub(1)).filter_map(move |column| {
-            let left = bounds[row * shape.columns + column];
-            let right = bounds[row * shape.columns + column + 1];
-            let gap = right.min_x - left.max_x;
-            gap.is_finite().then_some(gap)
-        })
-    });
-    if let Some(gap) = horizontal_gaps.reduce(f64::min) {
-        options.h_buff = gap;
-    }
-    let vertical_gaps = (0..shape.rows.saturating_sub(1)).flat_map(|row| {
-        (0..shape.columns).filter_map(move |column| {
-            let upper = bounds[row * shape.columns + column];
-            let lower = bounds[(row + 1) * shape.columns + column];
-            let gap = upper.min_y - lower.max_y;
-            gap.is_finite().then_some(gap)
-        })
-    });
-    if let Some(gap) = vertical_gaps.reduce(f64::min) {
-        options.v_buff = gap;
-    }
     let mut layout = GridLayout::measure(&[], bounds, shape, None, None, None, None, options)?;
     let expected_x =
         GridLayout::centers(&layout.widths, layout.options.h_buff, false)[layout.column_offset];
@@ -1192,10 +1168,65 @@ pub(super) fn highlight(
     )
 }
 
+pub(super) fn highlighted_cell(
+    family: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+    color: Color,
+    opacity: f64,
+) -> Result<Mobject, TableAuthoringError> {
+    highlighted_cell_in_publisher(
+        TablePublisher::Store(Rc::clone(family.integration_store())),
+        family,
+        options,
+        row,
+        column,
+        color,
+        opacity,
+    )
+}
+
+pub(super) fn highlighted_cell_in_publisher(
+    publisher: TablePublisher<'_, '_>,
+    family: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+    color: Color,
+    opacity: f64,
+) -> Result<Mobject, TableAuthoringError> {
+    highlight_with_membership(
+        publisher, family, None, options, row, column, color, opacity,
+    )
+}
+
 pub(super) fn highlight_in_publisher(
     publisher: TablePublisher<'_, '_>,
     family: &MobjectFamily,
     highlights: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+    color: Color,
+    opacity: f64,
+) -> Result<Mobject, TableAuthoringError> {
+    highlight_with_membership(
+        publisher,
+        family,
+        Some(highlights),
+        options,
+        row,
+        column,
+        color,
+        opacity,
+    )
+}
+
+fn highlight_with_membership(
+    publisher: TablePublisher<'_, '_>,
+    family: &MobjectFamily,
+    highlights: Option<&MobjectFamily>,
     options: TableOptions,
     row: usize,
     column: usize,
@@ -1226,9 +1257,11 @@ pub(super) fn highlight_in_publisher(
     style.fill_opacity = opacity;
     style.stroke = None;
     style.stroke_width = 0.0;
-    highlights.validate()?;
-    if !Rc::ptr_eq(family.integration_store(), highlights.integration_store()) {
-        return Err(AuthoringError::ForeignStore.into());
+    if let Some(highlights) = highlights {
+        highlights.validate()?;
+        if !Rc::ptr_eq(family.integration_store(), highlights.integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
     }
     let store = publisher.store();
     let result = publisher.publish(move |semantic, publish| {
@@ -1241,7 +1274,9 @@ pub(super) fn highlight_in_publisher(
         state.transform.translation.y = (bounds.min_y + bounds.max_y) * 0.5;
         state.set_z_index(-1.0);
         let object = transaction.create_node(SemanticNodeCreation::object(state));
-        transaction.add_member(highlights.node_id(), object);
+        if let Some(highlights) = highlights {
+            transaction.add_member(highlights.node_id(), object);
+        }
         let publication = publish(semantic, transaction)?;
         publication
             .resolve(object)
