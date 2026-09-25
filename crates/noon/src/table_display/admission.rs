@@ -2,7 +2,7 @@ use super::*;
 use noon_core::{
     Bounds2D64, GeometryRef, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticObjectProperty, SemanticObjectState, SemanticStyle, SemanticTransform2_5D,
-    TextResource,
+    StoredGeometry, TextResource,
 };
 
 type TextDependency = (
@@ -1025,10 +1025,9 @@ pub(super) fn highlight_in_publisher(
     let store = publisher.store();
     let result = publisher.publish(move |semantic, publish| {
         let mut transaction = SemanticMutationTransaction::new();
-        let mut state = SemanticObjectState::new(GeometryRef::rectangle(
-            bounds.width() as f32,
-            bounds.height() as f32,
-        ));
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: noon_core::Vec2::new(bounds.width() as f32, bounds.height() as f32),
+        });
         state.style = style;
         state.transform.translation.x = (bounds.min_x + bounds.max_x) * 0.5;
         state.transform.translation.y = (bounds.min_y + bounds.max_y) * 0.5;
