@@ -854,12 +854,16 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
-    pub(crate) fn capture_mobject_state_for_composite(
+    pub(crate) fn composite_entry_state(
         &self,
         source: &Mobject,
-    ) -> Result<SemanticObjectState, LiveSessionError> {
-        self.require_target_capture()?;
-        self.capture_mobject_state(source)
+    ) -> Result<SemanticObjectState, crate::AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            self.store,
+            Some(self.session),
+            self.root,
+            source,
+        )
     }
 
     /// Capture conservative world-axis bounds from one coherent object state.

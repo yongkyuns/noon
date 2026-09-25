@@ -495,48 +495,24 @@ pub(super) fn publish_existing_mobject_matrix(
     options: MatrixOptions,
 ) -> Result<Matrix, MatrixAuthoringError> {
     let options = options.validate()?;
-    let presented: Vec<_> = match &publisher {
-        MatrixPublisher::Live(live) => entries
-            .iter()
-            .map(|entry| {
-                let bounds = live
-                    .capture_boundary_bounds(entry)
-                    .map_err(|error| {
-                        MatrixAuthoringError::Semantic(match error {
-                            crate::LiveSessionError::Authoring(error) => error,
-                            other => AuthoringError::InvalidRenderNumber {
-                                name: other.to_string(),
-                                value: f64::NAN,
-                            },
-                        })
-                    })?
-                    .ok_or(MatrixAuthoringError::InvalidStructure)?;
-                let state = live
-                    .capture_mobject_state_for_composite(entry)
-                    .map_err(|error| {
-                        MatrixAuthoringError::Semantic(match error {
-                            crate::LiveSessionError::Authoring(error) => error,
-                            other => AuthoringError::InvalidRenderNumber {
-                                name: other.to_string(),
-                                value: f64::NAN,
-                            },
-                        })
-                    })?;
-                Ok((bounds, state.transform.translation))
-            })
-            .collect::<Result<_, MatrixAuthoringError>>()?,
-        MatrixPublisher::Store(_) | MatrixPublisher::Scene(_) => entries
-            .iter()
-            .map(|entry| {
-                Ok((
-                    entry
-                        .layout_bounds()?
-                        .ok_or(MatrixAuthoringError::InvalidStructure)?,
-                    entry.state()?.transform.translation,
-                ))
-            })
-            .collect::<Result<_, MatrixAuthoringError>>()?,
-    };
+    let presented = entries
+        .iter()
+        .map(|entry| {
+            let state = match &publisher {
+                MatrixPublisher::Store(_) => entry.state()?,
+                MatrixPublisher::Scene(scene) => scene.composite_entry_state(entry)?,
+                MatrixPublisher::Live(live) => live.composite_entry_state(entry)?,
+            };
+            let store = entry.integration_store().borrow();
+            let bounds = crate::semantic_mobject::boundary_for_content(
+                &store,
+                state.content,
+                state.transform,
+            )?
+            .ok_or(MatrixAuthoringError::InvalidStructure)?;
+            Ok((bounds, state.transform.translation))
+        })
+        .collect::<Result<Vec<_>, MatrixAuthoringError>>()?;
     let mut bounds = None;
     let mut translations = Vec::new();
     for (index, (item, base_translation)) in presented.into_iter().enumerate() {

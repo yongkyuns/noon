@@ -1,6 +1,6 @@
 //! Thin WASM handles for shared retained Matrix families.
 
-use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, authoring_error::js_error};
+use crate::{authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -135,4 +135,14 @@ impl WasmMatrixHandle {
         }
         Ok(result)
     }
+}
+
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createMatrixRenderer)]
+pub async fn create_matrix_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::matrix::session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

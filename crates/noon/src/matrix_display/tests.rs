@@ -135,13 +135,11 @@ fn text_constructor_admits_baselines_and_centers_entries_with_brackets() {
     .unwrap();
     assert_eq!(matrix.shape().unwrap(), (2, 2));
     for entry in matrix.entries().unwrap() {
-        assert!(
-            entry
-                .state()
-                .unwrap()
-                .text_presentation_baseline()
-                .is_some()
-        );
+        assert!(entry
+            .state()
+            .unwrap()
+            .text_presentation_baseline()
+            .is_some());
     }
     let bounds = matrix.family().layout_bounds().unwrap().unwrap();
     assert!(((bounds.min_x + bounds.max_x) * 0.5).abs() < 1.0e-6);
@@ -189,15 +187,13 @@ fn stale_live_matrix_rolls_back_compiled_resources_and_topology() {
         )
     };
     let mut live = crate::LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-    assert!(
-        Matrix::from_rows_in_live_session(
-            &mut live,
-            &mut RuleBackend,
-            [["a", "b"]],
-            MatrixOptions::default(),
-        )
-        .is_err()
-    );
+    assert!(Matrix::from_rows_in_live_session(
+        &mut live,
+        &mut RuleBackend,
+        [["a", "b"]],
+        MatrixOptions::default(),
+    )
+    .is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(scene.integration_store().borrow().len(), count);
     let store = scene.integration_store().borrow();
@@ -208,4 +204,50 @@ fn stale_live_matrix_rolls_back_compiled_resources_and_topology() {
         ),
         resources
     );
+}
+
+#[test]
+fn driven_entries_reject_atomically_in_both_execution_ownership_modes() {
+    for scene_owned in [false, true] {
+        let mut scene = Scene::new();
+        let entry = scene.square(1.0).unwrap();
+        let pointer = scene.pointer_position_signal().unwrap();
+        scene.bind_native_translation(&entry, &pointer).unwrap();
+        scene.add(&entry).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        execution
+            .set_native_state_input(
+                noon_core::NativeStateSource::PointerPosition,
+                noon_core::NativeInputValue::Vec2(noon_core::Vec2::new(3.0, 1.0)),
+            )
+            .unwrap();
+        let authored = entry.state().unwrap();
+        let revision = scene.revision();
+        let count = scene.integration_store().borrow().len();
+        let resources = scene.integration_store().borrow().text_resources().len();
+        let result = if scene_owned {
+            scene.install_execution(execution);
+            MobjectMatrix::from_rows(&mut scene, &mut RuleBackend, [[entry.clone()]])
+        } else {
+            MobjectMatrix::from_rows_in_live_session(
+                &mut scene.live(&mut execution),
+                &mut RuleBackend,
+                [[entry.clone()]],
+                MatrixOptions::default(),
+            )
+        };
+        assert!(matches!(
+            result,
+            Err(MatrixAuthoringError::Semantic(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+            )))
+        ));
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(entry.state().unwrap(), authored);
+        assert_eq!(scene.integration_store().borrow().len(), count);
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().len(),
+            resources
+        );
+    }
 }

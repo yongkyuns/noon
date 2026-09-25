@@ -1,6 +1,8 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(target_arch = "wasm32")]
 mod brace;
+#[cfg(target_arch = "wasm32")]
+mod matrix;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(target_arch = "wasm32")]
@@ -1064,108 +1066,6 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         ))
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_matrix(
-        &mut self,
-        backend: &mut impl noon::LatexBackend,
-        rows: Vec<Vec<String>>,
-        options: noon::MatrixOptions,
-    ) -> Result<noon::Matrix, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::Matrix::from_rows_in_live_session(
-            &mut noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            ),
-            backend,
-            rows,
-            options,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_integer_matrix(
-        &mut self,
-        backend: &mut impl noon::LatexBackend,
-        rows: Vec<Vec<f64>>,
-        options: noon::MatrixOptions,
-    ) -> Result<noon::IntegerMatrix, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::IntegerMatrix::from_rows_in_live_session(
-            &mut noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            ),
-            backend,
-            rows,
-            options,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_decimal_matrix(
-        &mut self,
-        backend: &mut impl noon::LatexBackend,
-        rows: Vec<Vec<f64>>,
-        options: noon::MatrixOptions,
-    ) -> Result<noon::DecimalMatrix, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::DecimalMatrix::from_rows_in_live_session(
-            &mut noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            ),
-            backend,
-            rows,
-            noon::DecimalFormat {
-                decimal_places: 1,
-                ..Default::default()
-            },
-            options,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_mobject_matrix(
-        &mut self,
-        backend: &mut impl noon::LatexBackend,
-        rows: Vec<Vec<noon::Mobject>>,
-        options: noon::MatrixOptions,
-    ) -> Result<noon::MobjectMatrix, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::MobjectMatrix::from_rows_in_live_session(
-            &mut noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            ),
-            backend,
-            rows,
-            options,
-        )
         .map_err(AuthoringFailure::from)
     }
 

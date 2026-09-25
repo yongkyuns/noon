@@ -533,6 +533,25 @@ pub(crate) fn effective_anchor_layout_measure(
     }
 }
 
+/// Validate that persistent composite placement can safely use an entry's state.
+/// Existing affine/reactive drivers cannot be baked into a new authored position.
+pub(crate) fn composite_entry_state(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: Option<&ExecutionSession>,
+    root: SemanticNodeId,
+    object: &Mobject,
+) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    if let Some(execution) = execution {
+        execution.require_resource_creation_at_root(&store.borrow(), root)?;
+        placement_authored_transform(store, execution, object)?;
+        return crate::effective_capture::capture_mobject_state(store, execution, object);
+    }
+    object.state()
+}
+
 pub(crate) fn placement_authored_transform(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
