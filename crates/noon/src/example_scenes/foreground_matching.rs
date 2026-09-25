@@ -80,7 +80,7 @@ fn paint(mut object: Mobject, x: f64, rgb: [f64; 3], layer: f64) -> Result<Mobje
         .set_fill(rgb[0], rgb[1], rgb[2], 1.0)
         .map_err(|error| error.to_string())?;
     object
-        .set_stroke_opacity(0.0)
+        .set_stroke_width(0.0)
         .map_err(|error| error.to_string())?;
     object
         .set_z_index(layer)
