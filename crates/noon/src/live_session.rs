@@ -476,6 +476,10 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        self.store
+    }
+
     /// Associate an existing detached tracker while a continuation holds the
     /// only borrowed execution capability.
     ///

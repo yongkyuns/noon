@@ -64,11 +64,9 @@ mod tests {
 
         let rejected_revision = context.scene.integration_store().borrow().scene_revision();
         let rejected_len = context.scene.integration_store().borrow().len();
-        assert!(
-            context
-                .live_divide_sample_space(&mut space, &[0.7, 0.5], &[noon::BLUE], false)
-                .is_err()
-        );
+        assert!(context
+            .live_divide_sample_space(&mut space, &[0.7, 0.5], &[noon::BLUE], false)
+            .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             rejected_revision

@@ -5,6 +5,7 @@
 //! identities used by native geometry; no SVG-specific runtime or renderer state
 //! exists below this module.
 
+use crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE;
 use crate::{AuthoringError, MobjectFamily, Scene, StyleUpdate};
 use noon_core::{
     Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
@@ -14,7 +15,6 @@ use noon_core::{
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 const MANIM_DEFAULT_STROKE_WIDTH_SENTINEL: f32 = 0.000_001;
-const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 const SVG_SOURCE_IDENTITY_PREFIX: &str = "noon.svg.v1";
 
 /// Positioning applied after SVG parsing.

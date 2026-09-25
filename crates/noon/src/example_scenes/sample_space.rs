@@ -1,7 +1,7 @@
 //! Horizontal and vertical probability partitions paired with sample_space.py.
 
 use crate::{
-    BLUE_E, Color, ExecutionSession, GREEN_E, SampleSpace, SampleSpaceOptions, Scene, YELLOW,
+    Color, ExecutionSession, SampleSpace, SampleSpaceOptions, Scene, BLUE_E, GREEN_E, YELLOW,
 };
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
