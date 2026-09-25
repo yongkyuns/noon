@@ -75,34 +75,36 @@ impl Error for AuthoringFailure {
         self.cause.as_deref().map(|cause| cause as &dyn Error)
     }
 }
+impl From<noon::TableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TableAuthoringError) -> Self {
+        use noon::TableAuthoringError::*;
+        match error {
+            EmptyTable => Self::new("input", "table.empty", error),
+            RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
+            InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
+            InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("table.live_session", &error),
+        }
+    }
+}
 impl From<noon::MatrixAuthoringError> for AuthoringFailure {
     fn from(error: noon::MatrixAuthoringError) -> Self {
         use noon::MatrixAuthoringError::*;
         match error {
-            EmptyMatrix => Self::new("input", "matrix.empty", "a Matrix requires entries"),
-            RaggedRows { expected, actual } => Self::new(
-                "input",
-                "matrix.ragged_rows",
-                format!("matrix row has {actual} entries; expected {expected}"),
-            ),
-            DuplicateEntry => Self::new(
-                "input",
-                "matrix.duplicate_entry",
-                "a MobjectMatrix entry may occur only once",
-            ),
-            InvalidOption { name, value } => Self::new(
-                "input",
-                "matrix.invalid_option",
-                format!("invalid matrix {name}: {value}"),
-            ),
-            InvalidStructure => Self::new(
-                "semantic",
-                "matrix.invalid_structure",
-                "semantic family is not a valid Matrix",
-            ),
+            EmptyMatrix => Self::new("input", "matrix.empty", error),
+            RaggedRows { .. } => Self::new("input", "matrix.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "matrix.duplicate_entry", error),
+            InvalidOption { .. } => Self::new("input", "matrix.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "matrix.invalid_structure", error),
             Text(error) => error.into(),
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("matrix.live_session", &error),
         }
     }
 }

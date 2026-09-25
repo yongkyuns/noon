@@ -160,6 +160,8 @@ struct GridLayout {
     column_offset: usize,
     shape: TableShape,
     options: TableOptions,
+    offset_x: f64,
+    offset_y: f64,
 }
 impl GridLayout {
     fn measure(
@@ -214,6 +216,8 @@ impl GridLayout {
             column_offset,
             shape,
             options,
+            offset_x: 0.0,
+            offset_y: 0.0,
         })
     }
     fn centers(values: &[f64], gap: f64, inverted: bool) -> Vec<f64> {
@@ -246,10 +250,10 @@ impl GridLayout {
         let c = column + self.column_offset;
         let r = row + self.row_offset;
         Ok(Bounds2D64 {
-            min_x: xs[c] - self.widths[c] / 2.0 - self.options.h_buff / 2.0,
-            max_x: xs[c] + self.widths[c] / 2.0 + self.options.h_buff / 2.0,
-            min_y: ys[r] - self.heights[r] / 2.0 - self.options.v_buff / 2.0,
-            max_y: ys[r] + self.heights[r] / 2.0 + self.options.v_buff / 2.0,
+            min_x: xs[c] - self.widths[c] / 2.0 - self.options.h_buff / 2.0 + self.offset_x,
+            max_x: xs[c] + self.widths[c] / 2.0 + self.options.h_buff / 2.0 + self.offset_x,
+            min_y: ys[r] - self.heights[r] / 2.0 - self.options.v_buff / 2.0 + self.offset_y,
+            max_y: ys[r] + self.heights[r] / 2.0 + self.options.v_buff / 2.0 + self.offset_y,
         })
     }
     fn line_states(&self) -> Vec<SemanticObjectState> {
@@ -951,7 +955,19 @@ fn layout_for_family(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)
+    let mut options = options;
+    if let Some((_, state)) = entries.first().and_then(|entry| entry.leaves().first()) {
+        options.h_buff *= state.transform.scale.x.abs();
+        options.v_buff *= state.transform.scale.y.abs();
+    }
+    let mut layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let expected_x =
+        GridLayout::centers(&layout.widths, layout.options.h_buff, false)[layout.column_offset];
+    let expected_y =
+        GridLayout::centers(&layout.heights, layout.options.v_buff, true)[layout.row_offset];
+    layout.offset_x = (bounds[0].min_x + bounds[0].max_x) * 0.5 - expected_x;
+    layout.offset_y = (bounds[0].min_y + bounds[0].max_y) * 0.5 - expected_y;
+    Ok(layout)
 }
 pub(super) fn cell(
     family: &MobjectFamily,
