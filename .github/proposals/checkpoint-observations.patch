@@ -98,7 +98,7 @@
 +    // Disposable qualification trace: inspect the exact accepted transport bytes.
 +    if (applied) {
 +      const packet = JSON.parse(json);
-+      const retained = packet.retained;
++      const retained = packet;
 +      if (retained && [3.1, 9.6].some(time => Math.abs(retained.time - time) < 1e-12)) {
 +        console.log("NOON_CHECKPOINT_DELTA " + JSON.stringify(packet));
 +      }
@@ -113,7 +113,7 @@
 +    // Disposable qualification trace: inspect the exact accepted transport bytes.
 +    if (applied) {
 +      const packet = JSON.parse(json);
-+      const retained = packet.retained;
++      const retained = packet;
 +      if (retained && [3.1, 9.6].some(time => Math.abs(retained.time - time) < 1e-12)) {
 +        console.log("NOON_CHECKPOINT_DELTA " + JSON.stringify(packet));
 +      }
