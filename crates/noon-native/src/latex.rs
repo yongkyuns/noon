@@ -310,6 +310,7 @@ impl Drop for TempLatexDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon::{DecimalFormat, LatexBackend, LatexFormat};
 
     fn system_backend_from_environment() -> Option<NativeLatexBackend> {
         let font_directory = std::env::var_os("NOON_LATEX_FONT_DIR")?;
@@ -420,6 +421,136 @@ mod tests {
 
         let rebound = live_parts.rebind_family(target.root().clone()).unwrap();
         assert!(live.latex_font_size(&rebound).unwrap().is_finite());
+    }
+
+    struct FailingLatexBackend;
+
+    impl LatexBackend for FailingLatexBackend {
+        fn identity(&self) -> &str {
+            "numeric-live-failure-v1"
+        }
+
+        fn format(&self) -> LatexFormat {
+            LatexFormat::Preloaded
+        }
+
+        fn compile(&mut self, _: &str) -> Result<Vec<u8>, String> {
+            Err("intentional live DecimalNumber compiler failure".into())
+        }
+
+        fn font(&mut self, _: &str) -> Result<DviFontResource, String> {
+            Err("intentional live DecimalNumber font failure".into())
+        }
+    }
+
+    #[test]
+    fn live_decimal_replacement_keeps_existing_execution_object_ids() {
+        let Some(mut backend) = system_backend_from_environment() else {
+            eprintln!(
+                "native DecimalNumber lifecycle qualification unavailable: set NOON_LATEX_FONT_DIR and NOON_LATEX_RESOURCE_IDENTITY"
+            );
+            return;
+        };
+        let mut scene = noon::Scene::new();
+        let companion = scene.circle(1.0).unwrap();
+        scene.add(&companion).unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        let number = {
+            let mut live = scene.live(&mut session);
+            let number = live
+                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+                .unwrap();
+            live.add(number.mobject()).unwrap();
+            number
+        };
+        let number_id = session
+            .execution_object_id(number.mobject().node_id())
+            .unwrap();
+        let companion_id = session.execution_object_id(companion.node_id()).unwrap();
+
+        {
+            let mut live = scene.live(&mut session);
+            live.set_decimal_value(&number, &mut backend, 98.76)
+                .unwrap();
+        }
+
+        assert_eq!(number.value().unwrap(), 98.76);
+        assert_eq!(
+            session.execution_object_id(number.mobject().node_id()),
+            Some(number_id)
+        );
+        assert_eq!(
+            session.execution_object_id(companion.node_id()),
+            Some(companion_id)
+        );
+    }
+
+    #[test]
+    fn failed_live_decimal_replacement_preserves_value_resources_and_execution_mapping() {
+        let Some(mut backend) = system_backend_from_environment() else {
+            eprintln!(
+                "native DecimalNumber lifecycle qualification unavailable: set NOON_LATEX_FONT_DIR and NOON_LATEX_RESOURCE_IDENTITY"
+            );
+            return;
+        };
+        let mut scene = noon::Scene::new();
+        let companion = scene.circle(1.0).unwrap();
+        scene.add(&companion).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let number = {
+            let mut live = scene.live(&mut session);
+            let number = live
+                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+                .unwrap();
+            live.add(number.mobject()).unwrap();
+            number
+        };
+        let before_value = number.value().unwrap();
+        let before_state = number.mobject().state().unwrap();
+        let before_source = before_state.content.text().unwrap();
+        let (before_resource, before_resources) = {
+            let store = scene.integration_store().borrow();
+            (
+                store.text_resources().get(before_source).unwrap().clone(),
+                store.text_resources().stats(),
+            )
+        };
+        let number_id = session
+            .execution_object_id(number.mobject().node_id())
+            .unwrap();
+        let companion_id = session.execution_object_id(companion.node_id()).unwrap();
+
+        let mut failing_backend = FailingLatexBackend;
+        let error = {
+            let mut live = scene.live(&mut session);
+            live.set_decimal_value(&number, &mut failing_backend, 98.76)
+                .unwrap_err()
+        };
+        assert!(error
+            .to_string()
+            .contains("intentional live DecimalNumber compiler failure"));
+
+        assert_eq!(number.value().unwrap(), before_value);
+        assert_eq!(
+            number.mobject().state().unwrap().content,
+            before_state.content
+        );
+        let store = scene.integration_store().borrow();
+        assert_eq!(store.text_resources().stats(), before_resources);
+        assert_eq!(
+            store.text_resources().get(before_source),
+            Some(&before_resource)
+        );
+        drop(store);
+        assert_eq!(
+            session.execution_object_id(number.mobject().node_id()),
+            Some(number_id)
+        );
+        assert_eq!(
+            session.execution_object_id(companion.node_id()),
+            Some(companion_id)
+        );
     }
 
     #[test]
