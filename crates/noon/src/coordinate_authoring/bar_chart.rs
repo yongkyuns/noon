@@ -34,6 +34,7 @@ pub struct ManimBarChartOptions {
     pub y_length: f64,
     pub bar_width: f64,
     pub bar_fill_opacity: f64,
+    /// Manim stroke units, converted once to Noon's canonical width on admission.
     pub bar_stroke_width: f64,
     pub bar_colors: Vec<Color>,
     pub bar_names: Option<Vec<String>>,
@@ -512,11 +513,12 @@ fn prepare_chart(
     transaction.add_member(axes, x);
     transaction.add_member(axes, y);
     let bars = transaction.create_node(SemanticNodeCreation::family());
+    let stroke_width = options.bar_stroke_width * 0.01;
     for (index, &value) in options.values.iter().enumerate() {
         let (translation, scale, rotation_z) =
             bar_transform(frame, index, options.bar_width, value)?;
         let mut style = SemanticStyle::default();
-        style.stroke_width = options.bar_stroke_width;
+        style.stroke_width = stroke_width;
         style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
         style.fill_opacity = options.bar_fill_opacity;
         set_bar_color(&mut style, colors[index]);
@@ -532,7 +534,7 @@ fn prepare_chart(
             original_color: colors[index],
             width: options.bar_width,
             fill_opacity: options.bar_fill_opacity,
-            stroke_width: options.bar_stroke_width,
+            stroke_width,
         })));
         let bar = transaction.create_node(SemanticNodeCreation::object(state));
         transaction.add_member(bars, bar);

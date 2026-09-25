@@ -15,6 +15,13 @@ fn bars_share_one_axes_frame_and_support_signed_and_zero_values() {
         .map(|node| store.semantic_object_state_checked(*node).unwrap().clone())
         .collect();
     assert_eq!(states.len(), 3);
+    for state in &states {
+        assert_eq!(state.style.stroke_width, 0.03);
+        assert_eq!(
+            state.style.stroke_width_mode,
+            noon_core::StrokeWidthMode::ScreenSpace
+        );
+    }
     assert!(states[0].transform.translation.y < states[1].transform.translation.y);
     assert_eq!(states[1].transform.scale.y, 0.0);
     assert!(states[2].transform.translation.y > states[1].transform.translation.y);
@@ -56,6 +63,7 @@ fn updates_are_atomic_and_touch_only_requested_bars_when_color_is_unchanged() {
     assert_ne!(before[1].transform, after[1].transform);
     assert_eq!(before[2], after[2]);
     assert_eq!(before[0].style, after[0].style);
+    assert_eq!(before[1].style, after[1].style);
 
     let snapshot = after.clone();
     assert!(chart
