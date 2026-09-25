@@ -143,6 +143,8 @@ mod svg_authoring;
 pub mod synchronized_plot_presentation;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod synchronized_plotting_example;
+#[cfg(feature = "latex")]
+mod table_display;
 mod tangent_line_authoring;
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_authoring;
@@ -263,6 +265,11 @@ pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
+#[cfg(feature = "latex")]
+pub use table_display::{
+    DecimalTable, IntegerTable, MathTable, MobjectTable, Table, TableAuthoringError, TableOptions,
+    DEFAULT_TABLE_H_BUFF, DEFAULT_TABLE_LABEL_BUFF, DEFAULT_TABLE_V_BUFF,
+};
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
