@@ -2564,6 +2564,41 @@ impl<'a> LiveSession<'a> {
         self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
     }
 
+    pub fn set_family_member_colors(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Option<Color>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let expected = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(crate::AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(crate::AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            }
+            .into());
+        }
+        let transaction = family.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?;
+        self.apply(transaction)
+    }
+
     fn edit_family_style(
         &mut self,
         family: &MobjectFamily,

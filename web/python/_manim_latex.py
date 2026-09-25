@@ -34,12 +34,9 @@ def _source_slice(source: str, part: TextSourcePart) -> str:
 class MathTexPart(_RetainedTextMobject):
     """Ordinary retained text leaf for one compiler-authored source part."""
 
-    def __init__(self, owner: _TexBase, part: TextSourcePart, handle: object | None = None):
+    def __init__(self, owner: _TexBase, part: TextSourcePart, handle: object):
         self._owner = owner
         self._part = part
-        if handle is None:
-            handle = owner._semantic_handle
-            self._legacy_projection = True
         self._initialize_text(
             owner.source, getattr(owner, "_font_size", 48.0), handle,
             getattr(owner, "_initial_color", _base.WHITE),
@@ -58,11 +55,9 @@ class MathTexPart(_RetainedTextMobject):
         return self.tex_string
 
     def set_color(self, color: _base.Color, family: bool = True) -> MathTexPart:
-        if getattr(self, "_legacy_projection", False):
-            del family
-            self._owner._set_text_source_colors(((self._part, _as_color(color)),))
-            return self
-        return super().set_color(color, family=family)
+        del family
+        self._owner._set_part_view_colors(((self, _as_color(color)),))
+        return self
 
     def __repr__(self) -> str:
         return f"MathTexPart({self.tex_string!r})"
@@ -133,57 +128,62 @@ class _TexBase(_compat.VGroup):
         self._font_size = float(font_size)
         self._initial_color = color
         self._initial_opacity = opacity
+        self._semantic_latex_handle = handle
         self._semantic_family_handle = engine_call(handle.family)
-        member_handles = tuple(engine_call(handle.members))
-        members = []
-        for member_handle in member_handles:
-            raw_parts = _copy_text_parts(engine_call(member_handle.textParts))
-            if len(raw_parts) != 1:
-                raise RuntimeError("retained TeX part leaf must expose one source part")
-            members.append(MathTexPart(self, raw_parts[0], member_handle))
-        import _manim_semantic_handles as _semantic
-        self._semantic_member_wrappers = {
-            _semantic._family_wrapper_key(member): member for member in members
-        }
-        self._part_members = tuple(members)
+        self._semantic_member_wrappers = {}
         if color_map:
             self.set_color_by_tex_to_color_map(color_map)
 
     def text_parts(self) -> tuple[TextSourcePart, ...]:
-        if not hasattr(self, "_part_members"):
-            return _RetainedTextMobject.text_parts(self)
-        return tuple(member._part for member in self._part_members)
+        return tuple(member._part for member in self._part_views())
 
     def source_parts_for(self, needle: str) -> tuple[TextSourcePart, ...]:
-        if not hasattr(self, "_part_members"):
-            return _RetainedTextMobject.source_parts_for(self, needle)
         if not isinstance(needle, str):
             raise TypeError("text source-part needle must be a string")
-        if not needle:
-            return ()
-        encoded = self.source.encode("utf-8")
-        query = needle.encode("utf-8")
-        matches = []
-        start = 0
-        while True:
-            index = encoded.find(query, start)
-            if index < 0:
-                break
-            end = index + len(query)
-            matches.extend(
-                part for part in self.text_parts()
-                if part.source_start < end and index < part.source_end
-            )
-            start = end
-        return tuple(dict.fromkeys(matches))
+        indices = tuple(engine_call(self._semantic_latex_handle.sourceMemberIndicesFor, needle))
+        views = self._part_views()
+        return tuple(views[int(index)]._part for index in indices)
 
     def _part_views(self) -> tuple[MathTexPart, ...]:
-        if not hasattr(self, "_part_members"):
-            return tuple(MathTexPart(self, part) for part in self.text_parts())
-        return self._part_members
+        views = []
+        live = {}
+        for member_handle in tuple(engine_call(self._semantic_latex_handle.members)):
+            raw_parts = _copy_text_parts(engine_call(member_handle.textParts))
+            if len(raw_parts) != 1:
+                raise RuntimeError("retained TeX part leaf must expose one source part")
+            key = f"{int(member_handle.semanticSlot)}:{int(member_handle.semanticGeneration)}"
+            member = self._semantic_member_wrappers.get(key)
+            if member is None:
+                member = MathTexPart(self, raw_parts[0], member_handle)
+            else:
+                member._part = raw_parts[0]
+                member._semantic_handle = member_handle
+            live[key] = member
+            views.append(member)
+        self._semantic_member_wrappers = live
+        return tuple(views)
 
-    def _set_text_source_colors(self, colors):
-        return _RetainedTextMobject._set_text_source_colors(self, colors)
+    def _set_part_view_colors(self, selections):
+        views = self._part_views()
+        by_identity = {id(member): index for index, member in enumerate(views)}
+        colors = [None] * len(views)
+        for member, color in selections:
+            try:
+                colors[by_identity[id(member)]] = _as_color(color)
+            except KeyError as error:
+                raise ValueError("MathTex part is no longer a current family member") from error
+        values = []
+        for color in colors:
+            if color is None:
+                values.extend((float("nan"), 0.0, 0.0, 0.0))
+            else:
+                values.extend((color.red, color.green, color.blue, color.alpha))
+        context = getattr(self, "_canonical_live_target_context", None)
+        if context is None:
+            engine_call(self._semantic_latex_handle.setMemberColors, values)
+        else:
+            engine_call(context.liveSetLatexMemberColors, self._semantic_latex_handle, values)
+        return self
 
     def __len__(self) -> int:
         return len(self.text_parts())
@@ -207,16 +207,17 @@ class _TexBase(_compat.VGroup):
             raise NotImplementedError(
                 "unsupported get_parts_by_tex option(s): " + ", ".join(sorted(kwargs))
             )
-        selected = set(self.source_parts_for(tex))
-        return tuple(part for part in self._part_views() if part._part in selected)
+        indices = tuple(engine_call(self._semantic_latex_handle.sourceMemberIndicesFor, tex))
+        parts = self._part_views()
+        return tuple(parts[int(index)] for index in indices)
 
     def set_color_by_tex(self, tex: str, color: _base.Color, **kwargs):
         if kwargs:
             raise NotImplementedError(
                 "unsupported set_color_by_tex option(s): " + ", ".join(sorted(kwargs))
             )
-        for part in self.get_parts_by_tex(tex):
-            part.set_color(_as_color(color))
+        parts = self.get_parts_by_tex(tex)
+        self._set_part_view_colors(tuple((part, color) for part in parts))
         return self
 
     def set_color_by_tex_to_color_map(self, texs_to_color_map, **kwargs):
@@ -232,14 +233,13 @@ class _TexBase(_compat.VGroup):
                 raise TypeError("tex_to_color_map keys must be strings")
             value = _as_color(color)
             selections.extend((part, value) for part in self.get_parts_by_tex(tex))
-        for part, value in selections:
-            part.set_color(value)
+        self._set_part_view_colors(tuple(selections))
         return self
 
     def index_of_part(self, part: MathTexPart) -> int:
         if not isinstance(part, MathTexPart) or part._owner is not self:
             raise ValueError("Trying to get index of part not in MathTex")
-        for index, candidate in enumerate(self._part_members):
+        for index, candidate in enumerate(self._part_views()):
             if candidate is part:
                 return index
         raise ValueError("Trying to get index of part not in MathTex")

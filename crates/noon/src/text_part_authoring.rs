@@ -52,6 +52,21 @@ impl From<TextPartQueryError> for TextPartAuthoringError {
 }
 
 impl Mobject {
+    /// Compiler-authored retained partition for the current text resource.
+    pub fn text_parts(&self) -> Result<Vec<TextPart>, TextPartAuthoringError> {
+        let state = self.state()?;
+        let handle = state
+            .content
+            .text()
+            .ok_or(TextPartAuthoringError::NotText(self.node_id()))?;
+        let store = self.integration_store().borrow();
+        let resource = store
+            .text_resources()
+            .get(handle)
+            .ok_or(AuthoringError::MissingTextResource(handle))?;
+        Ok(resource.parts.to_vec())
+    }
+
     /// The canonical UTF-8 source addressed by this object's retained text parts.
     pub fn text_source(&self) -> Result<std::sync::Arc<str>, TextPartAuthoringError> {
         let handle = self

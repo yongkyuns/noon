@@ -243,3 +243,45 @@ else: raise AssertionError("compiler error was swallowed")
 
 if __name__ == "__main__":
     unittest.main()
+
+class ManimLatexPartTransportTests(unittest.TestCase):
+    def test_source_selection_and_colors_route_through_shared_family_handle(self):
+        source = r'''
+from types import SimpleNamespace
+import _manim_latex as latex
+import noon
+calls = []
+class Raw:
+    sourceStart=0; sourceEnd=1; firstCluster=0; clusterCount=1
+    firstVector=0; vectorCount=0; semanticKey="part:x"
+    def free(self): pass
+class RawList:
+    length=1
+    def item(self, index): return Raw()
+    def free(self): pass
+class Member:
+    semanticSlot=7; semanticGeneration=3
+    def textParts(self): return RawList()
+class Parts:
+    source="x"
+    def family(self): return object()
+    def members(self): return (Member(),)
+    def sourceMemberIndicesFor(self, needle):
+        calls.append(("select", needle)); return (0,) if needle == "x" else ()
+    def setMemberColors(self, values): calls.append(("colors", tuple(values)))
+latex._create = lambda *args: Parts()
+latex._live_text_context = lambda: None
+value = noon.MathTex("x")
+part = value.get_part_by_tex("x")
+assert part.get_tex_string() == "x"
+value.set_color_by_tex("x", noon.BLUE)
+assert calls[0] == ("select", "x")
+assert calls[1] == ("select", "x")
+kind, values = calls[2]
+assert kind == "colors" and values == (noon.BLUE.red, noon.BLUE.green, noon.BLUE.blue, noon.BLUE.alpha)
+'''
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -119,6 +119,14 @@ impl WasmTextPartList {
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
+    #[wasm_bindgen(js_name = textParts)]
+    pub fn text_parts(&self) -> Result<WasmTextPartList, JsValue> {
+        self.semantic_mobject()
+            .text_parts()
+            .map(WasmTextPartList::new)
+            .map_err(text_part_js_error)
+    }
+
     #[wasm_bindgen(js_name = textSource)]
     pub fn text_source(&self) -> Result<String, JsValue> {
         self.semantic_mobject()

@@ -100,6 +100,10 @@ impl WasmLatexPartsHandle {
     pub(crate) fn new(parts: noon::LatexParts) -> Self {
         Self { parts }
     }
+
+    pub(crate) fn semantic_parts(&self) -> &noon::LatexParts {
+        &self.parts
+    }
 }
 
 #[wasm_bindgen]
@@ -110,21 +114,67 @@ impl WasmLatexPartsHandle {
     }
 
     #[wasm_bindgen(js_name = members)]
-    pub fn members(&self) -> js_sys::Array {
-        let members = js_sys::Array::new_with_length(self.parts.members().len() as u32);
-        for (index, member) in self.parts.members().iter().enumerate() {
+    pub fn members(&self) -> Result<js_sys::Array, JsValue> {
+        let current = self.parts.current_members().map_err(js_error)?;
+        let members = js_sys::Array::new_with_length(current.len() as u32);
+        for (index, member) in current.iter().enumerate() {
             members.set(
                 index as u32,
                 WasmAuthoringMobjectHandle::from_semantic_mobject(member.clone()).into(),
             );
         }
-        members
+        Ok(members)
+    }
+
+    #[wasm_bindgen(js_name = sourceMemberIndicesFor)]
+    pub fn source_member_indices_for(&self, needle: &str) -> Result<Vec<u32>, JsValue> {
+        self.parts
+            .current_member_indices_for(needle)
+            .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+            .map_err(js_error)
+    }
+
+    /// One RGBA tuple per current member. NaN in the first channel preserves
+    /// that member. The complete vector is validated and published atomically.
+    #[wasm_bindgen(js_name = setMemberColors)]
+    pub fn set_member_colors(&self, values: &[f64]) -> Result<(), JsValue> {
+        let colors = member_colors(values)?;
+        self.parts
+            .set_current_member_colors(&colors)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(getter)]
     pub fn source(&self) -> String {
         self.parts.source().to_string()
     }
+}
+
+pub(crate) fn member_colors(values: &[f64]) -> Result<Vec<Option<noon::Color>>, JsValue> {
+    if values.len() % 4 != 0 {
+        return Err(JsValue::from_str(
+            "member colors require complete RGBA tuples",
+        ));
+    }
+    values
+        .chunks_exact(4)
+        .map(|rgba| {
+            if rgba[0].is_nan() {
+                Ok(None)
+            } else {
+                Ok(Some(noon::Color::rgba(
+                    crate::authoring_mobject::text_authoring_f32("member red", rgba[0])
+                        .map_err(js_error)?,
+                    crate::authoring_mobject::text_authoring_f32("member green", rgba[1])
+                        .map_err(js_error)?,
+                    crate::authoring_mobject::text_authoring_f32("member blue", rgba[2])
+                        .map_err(js_error)?,
+                    crate::authoring_mobject::text_authoring_f32("member alpha", rgba[3])
+                        .map_err(js_error)?,
+                )))
+            }
+        })
+        .collect()
 }
 
 #[wasm_bindgen]

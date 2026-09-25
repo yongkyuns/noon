@@ -38,6 +38,61 @@ impl LatexParts {
     pub fn parts(&self) -> &[TextPart] {
         &self.parts
     }
+
+    /// Current authoritative leaf members in family order.
+    pub fn current_members(&self) -> Result<Vec<crate::Mobject>, crate::AuthoringError> {
+        self.family.validate()?;
+        let store = self.family.integration_store();
+        let leaves = store
+            .borrow()
+            .ordered_leaf_nodes(self.family.node_id())
+            .map_err(crate::AuthoringError::from)?;
+        leaves
+            .into_iter()
+            .map(|node| crate::Mobject::from_node(Rc::clone(store), node))
+            .collect()
+    }
+
+    /// Select current family leaves whose compiler-authored part overlaps a
+    /// canonical substring match. Source matching stays in retained Rust text.
+    pub fn current_member_indices_for(
+        &self,
+        needle: &str,
+    ) -> Result<Vec<usize>, crate::TextPartAuthoringError> {
+        let members = self
+            .current_members()
+            .map_err(crate::TextPartAuthoringError::from)?;
+        let mut selected = Vec::new();
+        for (index, member) in members.iter().enumerate() {
+            let state = member.state()?;
+            let handle = state
+                .content
+                .text()
+                .ok_or(crate::TextPartAuthoringError::NotText(member.node_id()))?;
+            let store = member.integration_store().borrow();
+            let resource = store
+                .text_resources()
+                .get(handle)
+                .ok_or(crate::AuthoringError::MissingTextResource(handle))?;
+            let [member_part] = resource.parts.as_ref() else {
+                return Err(crate::TextPartQueryError::InvalidSourceSpan.into());
+            };
+            if resource.source_parts_for(needle)?.iter().any(|matched| {
+                matched.source_span.start < member_part.source_span.end
+                    && member_part.source_span.start < matched.source_span.end
+            }) {
+                selected.push(index);
+            }
+        }
+        Ok(selected)
+    }
+
+    pub fn set_current_member_colors(
+        &self,
+        colors: &[Option<Color>],
+    ) -> Result<(), crate::AuthoringError> {
+        self.family.set_member_colors(colors)
+    }
 }
 
 /// Explicit host boundary for the pinned LaTeX engine.

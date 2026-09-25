@@ -6513,6 +6513,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetLatexMemberColors)]
+        pub fn live_set_latex_member_colors(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors = crate::authoring_latex::member_colors(values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_member_colors(handle.semantic_parts().family(), &colors)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCreateManimTypst)]
         pub fn live_create_manim_typst(
             &mut self,
