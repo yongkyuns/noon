@@ -69,6 +69,29 @@ impl LatexParts {
             .collect()
     }
 
+    /// Manim-compatible current font size: authored point size scaled by the
+    /// current vertical transform of the first authoritative leaf.
+    pub fn current_font_size(&self) -> Result<f64, crate::TextPartAuthoringError> {
+        let Some(member) = self.current_members()?.into_iter().next() else {
+            return Ok(0.0);
+        };
+        let state = member.state()?;
+        let handle = state
+            .content
+            .text()
+            .ok_or(crate::TextPartAuthoringError::NotText(member.node_id()))?;
+        let store = member.integration_store().borrow();
+        let resource = store
+            .text_resources()
+            .get(handle)
+            .ok_or(crate::AuthoringError::MissingTextResource(handle))?;
+        let authored = resource
+            .runs
+            .first()
+            .map_or(0.0, |run| run.font_size as f64);
+        Ok(authored * state.transform.scale.y.abs())
+    }
+
     /// Select current family leaves whose compiler-authored part overlaps a
     /// canonical substring match. Source matching stays in retained Rust text.
     pub fn current_member_indices_for(
