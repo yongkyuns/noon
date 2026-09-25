@@ -19,7 +19,7 @@ impl CompositeEntry {
         &self.leaves
     }
     pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
-        let mut result = None;
+        let mut result: Option<noon_core::Bounds2D64> = None;
         for (object, state) in &self.leaves {
             if let Some(next) = crate::semantic_mobject::layout_for_content(
                 &object.integration_store().borrow(),
