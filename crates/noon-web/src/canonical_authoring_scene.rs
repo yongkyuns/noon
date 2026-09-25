@@ -2693,6 +2693,7 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod sample_space;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 
