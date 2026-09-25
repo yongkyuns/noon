@@ -5,8 +5,7 @@ use crate::{
     MobjectFamily, NumericAuthoringError, TextAuthoringError, ValueTracker,
 };
 use noon_core::{
-    Bounds2D64, DecimalFormat, SemanticMutationTransaction, SemanticNodeCreation, SemanticPaint,
-    SemanticStore, WHITE,
+    Bounds2D64, DecimalFormat, SemanticMutationTransaction, SemanticNodeCreation, SemanticStore,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -14,6 +13,7 @@ use std::{cell::RefCell, rc::Rc};
 pub struct Variable {
     family: MobjectFamily,
     label: LatexParts,
+    equals: Mobject,
     value: DecimalNumber,
     tracker: ValueTracker,
 }
@@ -26,12 +26,8 @@ impl Variable {
         &self.label
     }
     pub fn equals(&self) -> Result<Mobject, AuthoringError> {
-        self.label.current_members()?.get(1).cloned().ok_or(
-            AuthoringError::InvalidSubmobjectIndex {
-                family: self.label.family().node_id(),
-                index: 1,
-            },
-        )
+        self.equals.validate()?;
+        Ok(self.equals.clone())
     }
     pub fn value(&self) -> &DecimalNumber {
         &self.value
@@ -88,6 +84,7 @@ struct PublishedVariable {
     signal: noon_core::SemanticLocalNodeToken,
     label_family: noon_core::SemanticLocalNodeToken,
     label_members: Vec<noon_core::SemanticLocalNodeToken>,
+    equals: noon_core::SemanticLocalNodeToken,
     value: noon_core::SemanticLocalNodeToken,
     family: noon_core::SemanticLocalNodeToken,
 }
@@ -105,7 +102,7 @@ pub(crate) fn construct_variable(
     font_size: f32,
 ) -> Result<Variable, VariableAuthoringError> {
     let label = crate::latex_authoring::prepare_math_tex(
-        MathTex::from_strings([label_source, "=".to_owned()])?.with_font_size(font_size),
+        MathTex::new(label_source)?.with_font_size(font_size),
         backend,
     )?;
     let (
@@ -123,6 +120,25 @@ pub(crate) fn construct_variable(
         label_font_size,
     )?;
     let (label_source, label_parts) = crate::latex_authoring::text_resource_parts(&label_resource)?;
+    let equals = crate::latex_authoring::prepare_math_tex(
+        MathTex::new("=")?.with_font_size(font_size),
+        backend,
+    )?;
+    let (
+        equals_identity,
+        equals_resource,
+        equals_fonts,
+        equals_geometry,
+        equals_transform,
+        equals_style,
+        equals_font_size,
+    ) = equals.into_compiled_resource_parts_with_presentation();
+    let equals_baseline = crate::latex_authoring::latex_presentation_baseline(
+        &equals_resource,
+        equals_transform,
+        equals_font_size,
+    )?;
+    let (_, equals_parts) = crate::latex_authoring::text_resource_parts(&equals_resource)?;
     let number = crate::numeric_authoring::PreparedDecimalValue::prepare(
         backend,
         initial,
@@ -132,7 +148,15 @@ pub(crate) fn construct_variable(
     let binding =
         crate::numeric_authoring::PreparedNumericBinding::prepare(backend, &format, font_size)?;
 
-    let mut dependencies = vec![(label_identity, label_resource, label_fonts, label_geometry)];
+    let mut dependencies = vec![
+        (label_identity, label_resource, label_fonts, label_geometry),
+        (
+            equals_identity,
+            equals_resource,
+            equals_fonts,
+            equals_geometry,
+        ),
+    ];
     let number_range = dependencies.len()..dependencies.len() + number.dependencies().len();
     dependencies.extend(number.dependencies().iter().cloned());
     let binding_range = dependencies.len()..dependencies.len() + binding.dependencies().len();
@@ -159,6 +183,20 @@ pub(crate) fn construct_variable(
                             .map_err(TextAuthoringError::from)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let equals_resource = semantic
+                    .text_resources()
+                    .get(handles[1])
+                    .ok_or(TextAuthoringError::MissingGeometryResource)?;
+                derived.extend(
+                    equals_parts
+                        .iter()
+                        .map(|part| {
+                            equals_resource
+                                .projected_part(part, semantic.geometry_resources())
+                                .map_err(TextAuthoringError::from)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
                 derived.push(number.compose_resource(semantic, &handles[number_range.clone()])?);
                 Ok(derived)
             },
@@ -175,12 +213,30 @@ pub(crate) fn construct_variable(
                         )
                     })
                     .collect::<Vec<_>>();
+                let equals_end = label_count + equals_parts.len();
+                let mut equals_states = handles[label_count..equals_end]
+                    .iter()
+                    .map(|handle| {
+                        crate::latex_authoring::semantic_text_state(
+                            *handle,
+                            equals_transform,
+                            equals_style.clone(),
+                            Some(equals_baseline),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 let mut number_state = number.decimal_state(
                     semantic,
-                    handles[label_count],
+                    handles[equals_end],
                     noon_core::SemanticTransform2_5D::default(),
                 )?;
-                arrange_variable_states(semantic, &mut label_states, &mut number_state)?;
+                arrange_variable_states(
+                    semantic,
+                    &label_states,
+                    &mut equals_states,
+                    &mut number_state,
+                )?;
+                label_states.extend(equals_states);
 
                 let mut transaction = SemanticMutationTransaction::new();
                 let signal = transaction.create_node(
@@ -198,6 +254,7 @@ pub(crate) fn construct_variable(
                         member
                     })
                     .collect::<Vec<_>>();
+                let equals = label_members[label_count];
                 let value = transaction.create_node(SemanticNodeCreation::object(number_state));
                 let family = transaction.create_node(SemanticNodeCreation::family());
                 transaction.add_member(family, label_family);
@@ -235,6 +292,7 @@ pub(crate) fn construct_variable(
                     signal,
                     label_family,
                     label_members,
+                    equals,
                     value,
                     family,
                 })
@@ -255,6 +313,7 @@ pub(crate) fn construct_variable(
         label_source,
         label_parts,
     )?;
+    let equals = Mobject::from_node(Rc::clone(store), resolve(published.equals)?)?;
     let value = DecimalNumber::from_mobject(Mobject::from_node(
         Rc::clone(store),
         resolve(published.value)?,
@@ -262,6 +321,7 @@ pub(crate) fn construct_variable(
     Ok(Variable {
         family: MobjectFamily::from_node(Rc::clone(store), resolve(published.family)?)?,
         label,
+        equals,
         value,
         tracker: ValueTracker::from_semantic_node(Rc::clone(store), resolve(published.signal)?),
     })
@@ -269,46 +329,69 @@ pub(crate) fn construct_variable(
 
 fn arrange_variable_states(
     store: &SemanticStore,
-    label: &mut [noon_core::SemanticObjectState],
+    label: &[noon_core::SemanticObjectState],
+    equals: &mut [noon_core::SemanticObjectState],
     value: &mut noon_core::SemanticObjectState,
 ) -> Result<(), TextAuthoringError> {
-    let mut label_bounds = None;
-    for state in label.iter() {
-        union_bounds(
-            &mut label_bounds,
-            crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
-                .map_err(TextAuthoringError::Semantic)?,
-        );
-    }
-    let value_bounds =
-        crate::semantic_mobject::boundary_for_content(store, value.content, value.transform)
-            .map_err(TextAuthoringError::Semantic)?;
-    let label_bounds = label_bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
-    let value_bounds = value_bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
-    let shift_x = label_bounds.max_x + f64::from(crate::DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)
-        - value_bounds.min_x;
-    let shift_y =
-        (label_bounds.min_y + label_bounds.max_y - value_bounds.min_y - value_bounds.max_y) * 0.5;
-    value.transform.translation.x += shift_x;
-    value.transform.translation.y += shift_y;
-    let shifted_value = Bounds2D64 {
-        min_x: value_bounds.min_x + shift_x,
-        min_y: value_bounds.min_y + shift_y,
-        max_x: value_bounds.max_x + shift_x,
-        max_y: value_bounds.max_y + shift_y,
-    };
-    let center_x = (label_bounds.min_x.min(shifted_value.min_x)
-        + label_bounds.max_x.max(shifted_value.max_x))
-        * 0.5;
-    let center_y = (label_bounds.min_y.min(shifted_value.min_y)
-        + label_bounds.max_y.max(shifted_value.max_y))
-        * 0.5;
-    for state in label.iter_mut().chain(std::iter::once(value)) {
-        state.transform.translation.x -= center_x;
-        state.transform.translation.y -= center_y;
-        state.style.fill.get_or_insert(SemanticPaint::Solid(WHITE));
-    }
+    let label_bounds = states_bounds(store, label)?;
+    let equals_bounds = states_bounds(store, equals)?;
+    let shifted_equals_bounds = shift_next_to(label_bounds, equals_bounds, equals);
+
+    let mut complete_label_bounds = Some(label_bounds);
+    union_bounds(&mut complete_label_bounds, Some(shifted_equals_bounds));
+    let complete_label_bounds = complete_label_bounds.expect("label bounds were initialized");
+    let value_bounds = state_bounds(store, value)?;
+    shift_next_to(
+        complete_label_bounds,
+        value_bounds,
+        std::slice::from_mut(value),
+    );
     Ok(())
+}
+
+fn state_bounds(
+    store: &SemanticStore,
+    state: &noon_core::SemanticObjectState,
+) -> Result<Bounds2D64, TextAuthoringError> {
+    Ok(
+        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
+            .map_err(TextAuthoringError::Semantic)?
+            .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)),
+    )
+}
+
+fn states_bounds(
+    store: &SemanticStore,
+    states: &[noon_core::SemanticObjectState],
+) -> Result<Bounds2D64, TextAuthoringError> {
+    let mut bounds = None;
+    for state in states {
+        union_bounds(&mut bounds, Some(state_bounds(store, state)?));
+    }
+    Ok(bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)))
+}
+
+fn shift_next_to(
+    anchor: Bounds2D64,
+    moving: Bounds2D64,
+    states: &mut [noon_core::SemanticObjectState],
+) -> Bounds2D64 {
+    let shift_x = anchor.max_x + f64::from(crate::DEFAULT_MOBJECT_TO_MOBJECT_BUFFER) - moving.min_x;
+    let shift_y = (anchor.min_y + anchor.max_y - moving.min_y - moving.max_y) * 0.5;
+    for state in states {
+        state.transform.translation.x += shift_x;
+        state.transform.translation.y += shift_y;
+    }
+    translated_bounds(moving, shift_x, shift_y)
+}
+
+fn translated_bounds(bounds: Bounds2D64, x: f64, y: f64) -> Bounds2D64 {
+    Bounds2D64 {
+        min_x: bounds.min_x + x,
+        min_y: bounds.min_y + y,
+        max_x: bounds.max_x + x,
+        max_y: bounds.max_y + y,
+    }
 }
 
 fn union_bounds(target: &mut Option<Bounds2D64>, value: Option<Bounds2D64>) {
@@ -422,10 +505,29 @@ mod tests {
             .live(&mut session)
             .create_variable(&mut backend, "x", 1.25, DecimalFormat::default(), 48.0)
             .unwrap();
-        // The font-free DVI fixture has no source-specials, so it deliberately
-        // collapses the two source arguments into one fallback text part. Real
-        // compilers retain the label/equals part split through the same path.
-        assert!(!variable.label().current_members().unwrap().is_empty());
+        let label_members = variable.label().current_members().unwrap();
+        assert_eq!(label_members.len(), 2);
+        assert_eq!(
+            variable.equals().unwrap().node_id(),
+            label_members[1].node_id()
+        );
+        assert_eq!(
+            label_members[0].state().unwrap().transform.translation,
+            noon_core::SemanticVec3::default(),
+            "Variable preserves the independently centered label position"
+        );
+        let label_bounds = label_members[0].layout_bounds().unwrap().unwrap();
+        let equals_bounds = label_members[1].layout_bounds().unwrap().unwrap();
+        let value_bounds = variable.value().mobject().layout_bounds().unwrap().unwrap();
+        let buffer = f64::from(crate::DEFAULT_MOBJECT_TO_MOBJECT_BUFFER);
+        assert!((equals_bounds.min_x - label_bounds.max_x - buffer).abs() < 1.0e-9);
+        assert!((value_bounds.min_x - equals_bounds.max_x - buffer).abs() < 1.0e-9);
+        assert!(
+            ((label_bounds.min_y + label_bounds.max_y - equals_bounds.min_y - equals_bounds.max_y)
+                * 0.5)
+                .abs()
+                < 1.0e-9
+        );
         assert_eq!(
             session.publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
