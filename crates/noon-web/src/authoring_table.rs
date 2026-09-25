@@ -23,24 +23,10 @@ impl WasmTableOptions {
     }
 }
 
-#[derive(Clone)]
-enum TableEntryRoot {
-    Mobject(noon::Mobject),
-    Family(noon::MobjectFamily),
-}
-impl TableEntryRoot {
-    fn target(&self) -> noon::MobjectTarget<'_> {
-        match self {
-            Self::Mobject(object) => object.into(),
-            Self::Family(family) => family.into(),
-        }
-    }
-}
-
 /// Validated existing roots for one MobjectTable admission.
 #[wasm_bindgen]
 pub struct WasmMobjectTableRows {
-    rows: Vec<Vec<TableEntryRoot>>,
+    rows: Vec<Vec<noon::CompositeEntryHandle>>,
 }
 
 #[wasm_bindgen]
@@ -58,7 +44,9 @@ impl WasmMobjectTableRows {
         self.rows
             .last_mut()
             .ok_or_else(|| js_error("MobjectTable rows require beginRow before appendEntry"))?
-            .push(TableEntryRoot::Mobject(entry.semantic_mobject().clone()));
+            .push(noon::CompositeEntryHandle::Mobject(
+                entry.semantic_mobject().clone(),
+            ));
         Ok(())
     }
     #[wasm_bindgen(js_name = appendFamilyEntry)]
@@ -69,7 +57,7 @@ impl WasmMobjectTableRows {
         self.rows
             .last_mut()
             .ok_or_else(|| js_error("MobjectTable rows require beginRow before appendFamilyEntry"))?
-            .push(TableEntryRoot::Family(entry.semantic_family()?));
+            .push(noon::CompositeEntryHandle::Family(entry.semantic_family()?));
         Ok(())
     }
 }
@@ -77,7 +65,11 @@ impl WasmMobjectTableRows {
     pub(crate) fn targets(&self) -> Vec<Vec<noon::MobjectTarget<'_>>> {
         self.rows
             .iter()
-            .map(|row| row.iter().map(TableEntryRoot::target).collect())
+            .map(|row| {
+                row.iter()
+                    .map(noon::CompositeEntryHandle::as_target)
+                    .collect()
+            })
             .collect()
     }
 }
@@ -89,6 +81,9 @@ pub struct WasmTableHandle {
 impl WasmTableHandle {
     pub(crate) fn new(table: noon::Table) -> Self {
         Self { table }
+    }
+    pub(crate) fn table(&self) -> &noon::Table {
+        &self.table
     }
 }
 
@@ -138,6 +133,18 @@ impl WasmTableHandle {
             .map(entry_handle)
             .map_err(js_error)
     }
+    #[wasm_bindgen(js_name = columns)]
+    pub fn columns(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for column in self.table.columns().map_err(js_error)? {
+            let values = js_sys::Array::new();
+            for entry in column {
+                values.push(&entry_handle(entry));
+            }
+            result.push(&values);
+        }
+        Ok(result)
+    }
     #[wasm_bindgen(js_name = shape)]
     pub fn shape(&self) -> Result<js_sys::Array, JsValue> {
         let (rows, columns) = self.table.shape().map_err(js_error)?;
@@ -170,27 +177,6 @@ impl WasmTableHandle {
     ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.table
             .get_cell(row, column)
-            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-            .map_err(js_error)
-    }
-    #[wasm_bindgen(js_name = highlightCell)]
-    pub fn highlight_cell(
-        &self,
-        row: usize,
-        column: usize,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-        opacity: f64,
-    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-        self.table
-            .highlight_cell(
-                row,
-                column,
-                noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
-                opacity,
-            )
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
             .map_err(js_error)
     }

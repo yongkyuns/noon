@@ -41,6 +41,34 @@ fn number_rows(rows: js_sys::Array) -> Result<Vec<Vec<f64>>, JsValue> {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveHighlightTableCell)]
+    pub fn live_highlight_table_cell(
+        &mut self,
+        table: &WasmTableHandle,
+        row: usize,
+        column: usize,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: f64,
+    ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        if self.inner.player_ownership.is_unstarted() {
+            table
+                .table()
+                .highlight_cell(row, column, color, opacity)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_highlight_table_cell(table.table(), row, column, color, opacity)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+    }
     #[wasm_bindgen(js_name = liveCreateTable)]
     pub fn live_create_table(
         &mut self,

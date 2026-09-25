@@ -972,28 +972,73 @@ pub(super) fn highlight(
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {
+    highlight_in_publisher(
+        TablePublisher::Store(Rc::clone(family.integration_store())),
+        family,
+        highlights,
+        options,
+        row,
+        column,
+        color,
+        opacity,
+    )
+}
+
+pub(super) fn highlight_in_publisher(
+    publisher: TablePublisher<'_, '_>,
+    family: &MobjectFamily,
+    highlights: &MobjectFamily,
+    options: TableOptions,
+    row: usize,
+    column: usize,
+    color: Color,
+    opacity: f64,
+) -> Result<Mobject, TableAuthoringError> {
     if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
         return Err(TableAuthoringError::InvalidOption {
             name: "highlight opacity",
             value: opacity,
         });
     }
-    let bounds = layout_for_family(family, options)?.cell_bounds(row, column)?;
+    let values = rows(family)?;
+    let shape = TableShape {
+        rows: values.len(),
+        columns: shape_from_rows(&values)?,
+    };
+    let targets: Vec<_> = values.iter().flatten().map(TableEntry::as_target).collect();
+    let entries = publisher.composite_entries(&targets)?;
+    let bounds = entries
+        .iter()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+        .collect::<Result<Vec<_>, TableAuthoringError>>()?;
+    let layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let bounds = layout.cell_bounds(row, column)?;
     let mut style = SemanticStyle::default();
     style.fill = Some(noon_core::SemanticPaint::Solid(color));
     style.fill_opacity = opacity;
     style.stroke = None;
     style.stroke_width = 0.0;
-    let mut object = Mobject::from_geometry(
-        Rc::clone(family.integration_store()),
-        GeometryRef::rectangle(bounds.width() as f32, bounds.height() as f32),
-        style,
-    )?;
-    object.set_translation(
-        (bounds.min_x + bounds.max_x) * 0.5,
-        (bounds.min_y + bounds.max_y) * 0.5,
-    )?;
-    object.set_z_index(-1.0)?;
-    highlights.add(MobjectTarget::Object(&object))?;
-    Ok(object)
+    highlights.validate()?;
+    if !Rc::ptr_eq(family.integration_store(), highlights.integration_store()) {
+        return Err(AuthoringError::ForeignStore.into());
+    }
+    let store = publisher.store();
+    let result = publisher.publish(move |semantic, publish| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let mut state = SemanticObjectState::new(GeometryRef::rectangle(
+            bounds.width() as f32,
+            bounds.height() as f32,
+        ));
+        state.style = style;
+        state.transform.translation.x = (bounds.min_x + bounds.max_x) * 0.5;
+        state.transform.translation.y = (bounds.min_y + bounds.max_y) * 0.5;
+        state.set_z_index(-1.0);
+        let object = transaction.create_node(SemanticNodeCreation::object(state));
+        transaction.add_member(highlights.node_id(), object);
+        let publication = publish(semantic, transaction)?;
+        publication
+            .resolve(object)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(object))
+    })?;
+    Mobject::from_node(store, result).map_err(Into::into)
 }

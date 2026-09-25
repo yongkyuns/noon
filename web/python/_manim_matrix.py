@@ -37,6 +37,10 @@ def _matrix_rows(matrix, convert):
     return [[convert(value) for value in row] for row in matrix]
 
 
+def _handle_key(handle):
+    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
 class Matrix(_compat.VGroup):
     def __init__(self, matrix, **kwargs):
         if _create_matrix is None:
@@ -68,7 +72,7 @@ class Matrix(_compat.VGroup):
         }
         # The retained entry family is intentionally nested by rows.  This
         # public accessor follows Manim's flat entry order without changing it.
-        return _compat.VGroup(*[known[_family_wrapper_key(entry)] for entry in handles])
+        return _compat.VGroup(*[known[_handle_key(entry)] for entry in handles])
 
     def _entry_family(self):
         return self.submobjects[0]
@@ -77,10 +81,14 @@ class Matrix(_compat.VGroup):
         return _compat.VGroup(*self._entry_family().submobjects)
 
     def get_columns(self):
-        context = getattr(self, "_canonical_live_target_context", None)
+        known = {
+            _family_wrapper_key(entry): entry
+            for row in self._entry_family().submobjects
+            for entry in row.submobjects
+        }
         return _compat.VGroup(*[
-            _attach_shared_family(object.__new__(_compat.VGroup), family, context)
-            for family in engine_call(self._matrix_handle.columnFamilies)
+            _compat.VGroup(*[known[_handle_key(entry)] for entry in column])
+            for column in engine_call(self._matrix_handle.columns)
         ])
 
     def get_brackets(self):

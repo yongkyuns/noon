@@ -60,7 +60,7 @@ impl MatrixOptions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum MatrixAuthoringError {
     EmptyMatrix,
     RaggedRows { expected: usize, actual: usize },

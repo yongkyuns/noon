@@ -277,6 +277,8 @@ async function initializePyodide() {
   self.noonTableOptions = WasmTableOptions;
   self.noonMobjectTableRows = WasmMobjectTableRows;
   self.noonTableFromFamily = (family) => family.asTable();
+  self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Table");
     return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);

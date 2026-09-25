@@ -3,6 +3,19 @@ use super::SemanticExecutionPlayer;
 use crate::authoring_error::AuthoringFailure;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_highlight_table_cell(
+        &mut self,
+        table: &noon::Table,
+        row: usize,
+        column: usize,
+        color: noon::Color,
+        opacity: f64,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(table.highlight_cell_in_live_session(live, row, column, color, opacity))
+        })?
+        .map_err(AuthoringFailure::from)
+    }
     pub(crate) fn live_create_table(
         &mut self,
         backend: &mut impl noon::LatexBackend,

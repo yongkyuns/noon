@@ -318,6 +318,25 @@ impl Table {
             opacity,
         )
     }
+    pub fn highlight_cell_in_live_session(
+        &self,
+        live: &mut crate::LiveSession<'_>,
+        row: usize,
+        column: usize,
+        color: Color,
+        opacity: f64,
+    ) -> Result<Mobject, TableAuthoringError> {
+        admission::highlight_in_publisher(
+            TablePublisher::Live(live),
+            &self.entry_family,
+            &self.highlight_family,
+            self.options,
+            row,
+            column,
+            color,
+            opacity,
+        )
+    }
 }
 
 impl MathTable {
