@@ -1,5 +1,5 @@
 use super::*;
-use noon_core::{SemanticMutationTransaction, StoredGeometry};
+use noon_core::{SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED};
 
 fn graph(scene: &mut Scene) -> Graph<&'static str> {
     scene
@@ -247,6 +247,74 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
         assert_eq!(scene.revision(), revision);
         assert_eq!(scene.integration_store().borrow().len(), nodes);
     }
+}
+
+fn styled_graph_options() -> GraphOptions {
+    GraphOptions {
+        vertex_radius: 0.21,
+        vertex_fill: RED,
+        vertex_fill_opacity: 0.35,
+        vertex_stroke: BLUE,
+        vertex_stroke_width: 0.07,
+        edge_color: GREEN,
+        edge_stroke_width: 0.09,
+        ..GraphOptions::default()
+    }
+}
+
+fn assert_vertex_style(vertex: &Mobject) {
+    let state = vertex.state().unwrap();
+    assert!(matches!(
+        state.content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.21).abs() < f32::EPSILON
+    ));
+    assert_eq!(state.style.fill, Some(SemanticPaint::Solid(RED)));
+    assert_eq!(state.style.fill_opacity, 0.35);
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(BLUE)));
+    assert_eq!(state.style.stroke_width, 0.07);
+}
+
+fn assert_edge_style(edge: &GraphEdgeMobject) {
+    let state = edge.line().state().unwrap();
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(GREEN)));
+    assert_eq!(state.style.stroke_width, 0.09);
+}
+
+#[test]
+fn global_options_preserve_graph_and_digraph_style_through_copy_and_mutation() {
+    let mut scene = Scene::new();
+    let mut graph = Graph::with_options(
+        &mut scene,
+        [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
+        [("a", "b")],
+        styled_graph_options(),
+    )
+    .unwrap();
+    assert_vertex_style(graph.vertex(&"a").unwrap());
+    assert_edge_style(graph.edge(&"a", &"b").unwrap());
+    let copied = graph.copy().unwrap();
+    assert_vertex_style(copied.vertex(&"a").unwrap());
+    assert_edge_style(copied.edge(&"a", &"b").unwrap());
+    graph.add_vertices(&mut scene, [("c", (0.0, 1.0))]).unwrap();
+    graph.add_edges(&mut scene, [("b", "c")]).unwrap();
+    assert_vertex_style(graph.vertex(&"c").unwrap());
+    assert_edge_style(graph.edge(&"b", &"c").unwrap());
+
+    let mut digraph = DiGraph::with_options(
+        &mut scene,
+        [("a", (-1.0, 0.0)), ("b", (1.0, 0.0))],
+        [("a", "b")],
+        styled_graph_options(),
+    )
+    .unwrap();
+    assert_vertex_style(digraph.vertex(&"a").unwrap());
+    assert_edge_style(digraph.edge(&"a", &"b").unwrap());
+    digraph
+        .add_vertices(&mut scene, [("c", (0.0, 1.0))])
+        .unwrap();
+    digraph.add_edges(&mut scene, [("b", "c")]).unwrap();
+    assert_vertex_style(digraph.vertex(&"c").unwrap());
+    assert_edge_style(digraph.edge(&"b", &"c").unwrap());
 }
 
 #[test]

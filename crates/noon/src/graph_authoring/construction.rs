@@ -374,6 +374,7 @@ pub(super) fn vertex_options(
         f64::from(fill.blue),
         f64::from(fill.alpha),
     )?;
+    vertex.set_fill_opacity(options.vertex_fill_opacity)?;
     let stroke = options.vertex_stroke;
     vertex.set_stroke(
         f64::from(stroke.red),

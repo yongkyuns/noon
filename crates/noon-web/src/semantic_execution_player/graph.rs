@@ -9,6 +9,7 @@ impl SemanticExecutionPlayer {
         directed: bool,
         vertices: Vec<(u32, (f64, f64))>,
         edges: Vec<(u32, u32)>,
+        options: noon::GraphOptions,
     ) -> Result<NativeGraph, AuthoringFailure> {
         let semantics = self
             .semantics
@@ -22,12 +23,12 @@ impl SemanticExecutionPlayer {
         );
         let graph = if directed {
             NativeGraph::Directed(
-                noon::DiGraph::new_live(&mut live, vertices, edges)
+                noon::DiGraph::with_options_live(&mut live, vertices, edges, options)
                     .map_err(|error| AuthoringFailure::unclassified("graph.create", &error))?,
             )
         } else {
             NativeGraph::Undirected(
-                noon::Graph::new_live(&mut live, vertices, edges)
+                noon::Graph::with_options_live(&mut live, vertices, edges, options)
                     .map_err(|error| AuthoringFailure::unclassified("graph.create", &error))?,
             )
         };

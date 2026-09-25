@@ -267,7 +267,12 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         .unwrap();
 
     let mut graph = player
-        .live_create_graph(true, vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))], vec![(1, 2)])
+        .live_create_graph(
+            true,
+            vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))],
+            vec![(1, 2)],
+            noon::GraphOptions::default(),
+        )
         .unwrap();
     player
         .live_mutate_graph(

@@ -9,16 +9,19 @@ impl CanonicalAuthoringScene {
         directed: bool,
         vertices: Vec<(u32, (f64, f64))>,
         edges: Vec<(u32, u32)>,
+        options: noon::GraphOptions,
     ) -> Result<NativeGraph, AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_create_graph(directed, vertices, edges),
+                .live_create_graph(directed, vertices, edges, options),
             PlayerOwnership::Unstarted => {
                 let graph = if directed {
-                    noon::DiGraph::new(&mut self.scene, vertices, edges).map(NativeGraph::Directed)
+                    noon::DiGraph::with_options(&mut self.scene, vertices, edges, options)
+                        .map(NativeGraph::Directed)
                 } else {
-                    noon::Graph::new(&mut self.scene, vertices, edges).map(NativeGraph::Undirected)
+                    noon::Graph::with_options(&mut self.scene, vertices, edges, options)
+                        .map(NativeGraph::Undirected)
                 };
                 graph.map_err(|error| AuthoringFailure::unclassified("graph.create", &error))
             }
@@ -70,8 +73,10 @@ impl super::wasm::CanonicalAuthoringSceneContext {
         directed: bool,
         vertices: Vec<(u32, (f64, f64))>,
         edges: Vec<(u32, u32)>,
+        options: noon::GraphOptions,
     ) -> Result<NativeGraph, AuthoringFailure> {
-        self.inner.live_create_graph(directed, vertices, edges)
+        self.inner
+            .live_create_graph(directed, vertices, edges, options)
     }
 
     pub(crate) fn mutate_live_graph(

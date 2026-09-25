@@ -202,6 +202,101 @@ fn vertices(ids: &[u32], positions: &[f64]) -> Result<Vec<(u32, (f64, f64))>, Js
 }
 
 #[cfg(target_arch = "wasm32")]
+fn manim_stroke_width(name: &str, width: f64) -> Result<f64, JsValue> {
+    if !width.is_finite() || width < 0.0 {
+        return Err(js_error(format!(
+            "{name} must be a finite non-negative number"
+        )));
+    }
+    Ok(width * noon::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE)
+}
+
+/// Typed global Graph/DiGraph appearance. Python converts public colors and
+/// names; this boundary validates components and converts Manim stroke widths
+/// before shared GraphOptions builds the retained graph.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct WasmGraphOptions {
+    options: noon::GraphOptions,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmGraphOptions {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            options: noon::GraphOptions::default(),
+        }
+    }
+
+    #[wasm_bindgen(js_name = setVertexRadius)]
+    pub fn set_vertex_radius(&mut self, radius: f64) {
+        self.options.vertex_radius = radius;
+    }
+
+    #[wasm_bindgen(js_name = setVertexFill)]
+    pub fn set_vertex_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options.vertex_fill = graph_color(red, green, blue, alpha)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setVertexFillOpacity)]
+    pub fn set_vertex_fill_opacity(&mut self, opacity: f64) {
+        self.options.vertex_fill_opacity = opacity;
+    }
+
+    #[wasm_bindgen(js_name = setVertexStroke)]
+    pub fn set_vertex_stroke(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options.vertex_stroke = graph_color(red, green, blue, alpha)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setVertexStrokeWidth)]
+    pub fn set_vertex_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
+        self.options.vertex_stroke_width = manim_stroke_width("vertex stroke width", width)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setEdgeColor)]
+    pub fn set_edge_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options.edge_color = graph_color(red, green, blue, alpha)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setEdgeStrokeWidth)]
+    pub fn set_edge_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
+        self.options.edge_stroke_width = manim_stroke_width("edge stroke width", width)?;
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn graph_color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Color, JsValue> {
+    crate::authoring_mobject::family_color(true, red, green, blue, alpha)
+        .map_err(js_error)
+        .map(|color| color.expect("enabled graph color"))
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct WasmGraphHandle {
     inner: NativeGraph,
@@ -239,10 +334,11 @@ impl CanonicalAuthoringSceneContext {
         vertex_ids: &[u32],
         positions: &[f64],
         edge_pairs: &[u32],
+        options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
         let vertices = vertices(vertex_ids, positions)?;
         let edges = pairs(edge_pairs, "Graph edges")?;
-        self.create_live_graph(directed, vertices, edges)
+        self.create_live_graph(directed, vertices, edges, options.options)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }
@@ -257,6 +353,7 @@ impl CanonicalAuthoringSceneContext {
         scale: f64,
         center_x: f64,
         center_y: f64,
+        options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
         let edges = pairs(edge_pairs, "Graph edges")?;
         let positions = noon::GraphLayoutOptions {
@@ -273,7 +370,7 @@ impl CanonicalAuthoringSceneContext {
             ))
         })?;
         let vertices = vertex_ids.iter().copied().zip(positions).collect();
-        self.create_live_graph(directed, vertices, edges)
+        self.create_live_graph(directed, vertices, edges, options.options)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }

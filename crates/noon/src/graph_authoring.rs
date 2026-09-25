@@ -34,6 +34,8 @@ pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 pub struct GraphOptions {
     pub vertex_radius: f64,
     pub vertex_fill: Color,
+    /// Opacity applied to every vertex fill independently from its color alpha.
+    pub vertex_fill_opacity: f64,
     pub vertex_stroke: Color,
     pub vertex_stroke_width: f64,
     pub edge_color: Color,
@@ -46,6 +48,7 @@ impl Default for GraphOptions {
         Self {
             vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
             vertex_fill: WHITE,
+            vertex_fill_opacity: 1.0,
             vertex_stroke: WHITE,
             vertex_stroke_width: DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
             edge_color: WHITE,

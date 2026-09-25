@@ -14,8 +14,10 @@ import noon as _base
 from _noon_errors import engine_call
 
 try:
+    from js import noonAuthoringGraphOptions as _graph_options
     from pyodide.ffi import to_js as _to_js
 except ImportError:  # pragma: no cover - native import smoke only
+    _graph_options = None
     _to_js = None
 
 
@@ -30,11 +32,73 @@ def _point(value):
     return float(point.x), float(point.y)
 
 
+_VERTEX_CONFIG_KEYS = frozenset(
+    {"color", "fill_color", "stroke_color", "stroke_width", "radius", "fill_opacity"}
+)
+_EDGE_CONFIG_KEYS = frozenset({"color", "stroke_color", "stroke_width"})
+
+
+def _global_style_config(name, value, supported):
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping of global style options")
+    values = dict(value)
+    unknown = [key for key in values if key not in supported]
+    if unknown:
+        if (any(not isinstance(key, str) for key in unknown)
+                or any(isinstance(candidate, Mapping) for candidate in values.values())):
+            raise NotImplementedError(f"per-key {name} is not supported")
+        raise TypeError(
+            f"unsupported {name} option(s): " + ", ".join(sorted(map(str, unknown)))
+        )
+    return values
+
+
+def _set_color(method, name, value):
+    color = _compat._as_color(name, value)
+    engine_call(method, color.red, color.green, color.blue, color.alpha,
+                operation="Graph.style")
+
+
+def _graph_style_options(vertex_config, edge_config):
+    if _graph_options is None:
+        raise RuntimeError("Graph requires the shared Rust authoring host")
+    vertices = _global_style_config("vertex_config", vertex_config, _VERTEX_CONFIG_KEYS)
+    edges = _global_style_config("edge_config", edge_config, _EDGE_CONFIG_KEYS)
+    options = engine_call(_graph_options, operation="Graph.style")
+    try:
+        if "color" in vertices:
+            _set_color(options.setVertexFill, "vertex_config.color", vertices["color"])
+            _set_color(options.setVertexStroke, "vertex_config.color", vertices["color"])
+        if "fill_color" in vertices:
+            _set_color(options.setVertexFill, "vertex_config.fill_color", vertices["fill_color"])
+        if "stroke_color" in vertices:
+            _set_color(options.setVertexStroke, "vertex_config.stroke_color", vertices["stroke_color"])
+        if "radius" in vertices:
+            engine_call(options.setVertexRadius, float(vertices["radius"]), operation="Graph.style")
+        if "fill_opacity" in vertices:
+            engine_call(options.setVertexFillOpacity, float(vertices["fill_opacity"]), operation="Graph.style")
+        if "stroke_width" in vertices:
+            engine_call(options.setVertexStrokeWidth, float(vertices["stroke_width"]), operation="Graph.style")
+        color = edges.get("stroke_color", edges.get("color"))
+        if color is not None:
+            _set_color(options.setEdgeColor, "edge_config.color", color)
+        if "stroke_width" in edges:
+            engine_call(options.setEdgeStrokeWidth, float(edges["stroke_width"]), operation="Graph.style")
+    except BaseException:
+        options.free()
+        raise
+    return options
+
+
 class _GraphBase(_compat.Group):
     _directed = False
 
     def __init__(self, vertices, edges, layout="circular", *, layout_scale=2.0,
                  layout_center=(0.0, 0.0), **kwargs):
+        vertex_config = kwargs.pop("vertex_config", None)
+        edge_config = kwargs.pop("edge_config", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
         explicit = layout if isinstance(layout, Mapping) else (
@@ -66,17 +130,22 @@ class _GraphBase(_compat.Group):
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
+        options = _graph_style_options(vertex_config, edge_config)
         ids = _array(self._graph_key_ids.values())
-        if circular:
-            self._graph_handle = engine_call(
-                context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
-                scale, *center, operation="Graph.create",
-            )
-        else:
-            self._graph_handle = engine_call(
-                context.liveCreateGraph, bool(self._directed), ids, _array(positions),
-                _array(edge_ids), operation="Graph.create",
-            )
+        try:
+            if circular:
+                self._graph_handle = engine_call(
+                    context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
+                    scale, *center, options, operation="Graph.create",
+                )
+            else:
+                self._graph_handle = engine_call(
+                    context.liveCreateGraph, bool(self._directed), ids, _array(positions),
+                    _array(edge_ids), options, operation="Graph.create",
+                )
+        except BaseException:
+            options.free()
+            raise
         _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
         self._canonical_live_target_context = context
 
