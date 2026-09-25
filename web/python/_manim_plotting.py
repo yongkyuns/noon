@@ -565,8 +565,7 @@ class BarChart(Axes):
         from _manim_number_labels import _family as _numeric_family, _remember
         names = engine_call(self._bar_chart_handle.xLabels)
         if names is not None and names is not _jsnull:
-            from _manim_latex import Tex
-            self.x_axis.labels = _chart_text_family(names, Tex, name_size, context)
+            self.x_axis.labels = _chart_text_family(names, name_size, context)
             self.x_axis._semantic_member_wrappers[_shared._family_wrapper_key(self.x_axis.labels)] = self.x_axis.labels
         labels = engine_call(self._bar_chart_handle.yLabels)
         _remember(self.y_axis, _numeric_family(labels, size, color))
@@ -608,7 +607,7 @@ class BarChart(Axes):
             rgba = [c.red, c.green, c.blue, c.alpha]
         handle = engine_call(_bar_labels, self._bar_chart_handle, float(font_size), float(buff),
                              constructor is MathTex, _array(rgba), context)
-        return _chart_text_family(handle, constructor, float(font_size), context)
+        return _chart_text_family(handle, float(font_size), context)
 
     def change_bar_values(self, values, update_colors=True):
         values = tuple(float(value) for value in values)
@@ -637,10 +636,12 @@ class BarChart(Axes):
         return self
 
 
-def _chart_text_family(handle, constructor, font_size, context=None):
+def _chart_text_family(handle, font_size, context=None):
+    from _manim_latex import _CompiledTexLeaf
+
     members = []
     for object_handle, source in engine_call(handle.numberLabelMembers):
-        label = object.__new__(constructor)
+        label = object.__new__(_CompiledTexLeaf)
         label._initialize_text(str(source), font_size, object_handle, _base.WHITE, 1.0,
                                presentation_applied=True)
         if context is not None:

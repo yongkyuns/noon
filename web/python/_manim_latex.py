@@ -31,7 +31,18 @@ def _source_slice(source: str, part: TextSourcePart) -> str:
     return encoded[part.source_start:part.source_end].decode("utf-8")
 
 
-class MathTexPart(_RetainedTextMobject):
+class _CompiledTexLeaf(_RetainedTextMobject):
+    """View of an existing Rust-compiled TeX leaf, without recompilation."""
+
+    @property
+    def tex_string(self) -> str:
+        return self.source
+
+    def get_tex_string(self) -> str:
+        return self.tex_string
+
+
+class MathTexPart(_CompiledTexLeaf):
     """Ordinary retained text leaf for one compiler-authored source part."""
 
     def __init__(self, owner: _TexBase, part: TextSourcePart, handle: object):
@@ -50,9 +61,6 @@ class MathTexPart(_RetainedTextMobject):
     @property
     def tex_string(self) -> str:
         return _source_slice(self._owner.source, self._part)
-
-    def get_tex_string(self) -> str:
-        return self.tex_string
 
     def set_color(self, color: _base.Color, family: bool = True) -> MathTexPart:
         del family

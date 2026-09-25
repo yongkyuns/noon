@@ -27,6 +27,27 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
+        from _manim_latex import _CompiledTexLeaf
+
+        leaf = SimpleNamespace(semanticSlot=2, semanticGeneration=1)
+        family = SimpleNamespace(
+            semanticSlot=1, semanticGeneration=1,
+            numberLabelMembers=Mock(return_value=[(leaf, "-2")]),
+            memberKeys=Mock(return_value=["2:1"]),
+        )
+        context = object()
+        with patch("_manim_latex._create") as compile_tex:
+            labels = plotting._chart_text_family(family, 24, context)
+
+        label, = labels.submobjects
+        self.assertIsInstance(label, _CompiledTexLeaf)
+        self.assertIs(label._semantic_handle, leaf)
+        self.assertEqual(label.get_tex_string(), "-2")
+        self.assertEqual(label.font_size, 24)
+        self.assertIs(label._canonical_live_target_context, context)
+        compile_tex.assert_not_called()
+
     def test_unit_interval_adapts_only_constructor_defaults(self):
         with patch.object(plotting.NumberLine, "__init__", return_value=None) as create:
             plotting.UnitInterval()
