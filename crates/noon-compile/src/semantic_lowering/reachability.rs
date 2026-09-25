@@ -758,22 +758,18 @@ mod tests {
         let mut add_alias = SemanticMutationTransaction::new();
         add_alias.add_member(second, shared);
         let result = add_alias.apply(&mut store).unwrap();
-        assert!(
-            reachability
-                .apply_transaction_result(&store, &result)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(reachability
+            .apply_transaction_result(&store, &result)
+            .unwrap()
+            .is_empty());
 
         let mut remove_first = SemanticMutationTransaction::new();
         remove_first.remove_member(first, shared);
         let result = remove_first.apply(&mut store).unwrap();
-        assert!(
-            reachability
-                .apply_transaction_result(&store, &result)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(reachability
+            .apply_transaction_result(&store, &result)
+            .unwrap()
+            .is_empty());
         assert!(reachability.is_object_reachable(shared));
 
         let mut remove_last = SemanticMutationTransaction::new();
@@ -823,12 +819,10 @@ mod tests {
         let mut reachability = SemanticExecutionReachability::from_store(&store).unwrap();
 
         store.detach_from_scene(object).unwrap();
-        assert!(
-            reachability
-                .sync_scene_root(&store, object)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(reachability
+            .sync_scene_root(&store, object)
+            .unwrap()
+            .is_empty());
         assert!(reachability.is_object_reachable(object));
 
         store.detach_from_scene(family).unwrap();
