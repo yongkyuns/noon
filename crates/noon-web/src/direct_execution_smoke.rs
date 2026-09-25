@@ -854,6 +854,14 @@ pub async fn create_direct_canonical_curve_layout_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+#[wasm_bindgen(js_name = createDirectGraphSmokeRenderer)]
+pub async fn create_direct_graph_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::graph::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 #[wasm_bindgen(js_name = createDirectPointMatchingSmokeRenderer)]
 pub async fn create_direct_point_matching_smoke_renderer(
     canvas: OffscreenCanvas,

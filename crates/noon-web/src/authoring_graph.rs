@@ -14,11 +14,20 @@ pub(crate) enum NativeGraph {
 pub(crate) enum GraphOperation {
     AddVertices(Vec<(u32, (f64, f64))>),
     AddEdges(Vec<(u32, u32)>),
+    RemoveVertices(Vec<u32>),
+    RemoveEdges(Vec<(u32, u32)>),
     Circular { scale: f64, center: (f64, f64) },
     Explicit(Vec<(f64, f64)>),
 }
 
 impl NativeGraph {
+    fn family(&self) -> &noon::MobjectFamily {
+        match self {
+            Self::Undirected(graph) => graph.family(),
+            Self::Directed(graph) => graph.family(),
+        }
+    }
+
     pub(crate) fn apply_live(
         &mut self,
         live: &mut noon::LiveSession<'_>,
@@ -36,6 +45,18 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges_live(live, edges)?;
+            }
+            (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
+                graph.remove_vertices_live(live, vertices)?;
+            }
+            (Self::Directed(graph), GraphOperation::RemoveVertices(vertices)) => {
+                graph.remove_vertices_live(live, vertices)?;
+            }
+            (Self::Undirected(graph), GraphOperation::RemoveEdges(edges)) => {
+                graph.remove_edges_live(live, edges)?;
+            }
+            (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
+                graph.remove_edges_live(live, edges)?;
             }
             (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
                 graph.change_layout_live(
@@ -99,6 +120,14 @@ fn vertices(ids: &[u32], positions: &[f64]) -> Result<Vec<(u32, (f64, f64))>, Js
 #[wasm_bindgen]
 pub struct WasmGraphHandle {
     inner: NativeGraph,
+}
+
+#[wasm_bindgen]
+impl WasmGraphHandle {
+    #[wasm_bindgen(js_name = family)]
+    pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
+        crate::WasmAuthoringFamilyHandle::from_semantic_family(self.inner.family().clone())
+    }
 }
 
 #[wasm_bindgen]
@@ -183,5 +212,31 @@ impl CanonicalAuthoringSceneContext {
             .collect();
         self.mutate_live_graph(&mut graph.inner, GraphOperation::Explicit(positions))
             .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphRemoveVertices)]
+    pub fn live_graph_remove_vertices(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        vertex_ids: &[u32],
+    ) -> Result<(), JsValue> {
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::RemoveVertices(vertex_ids.to_vec()),
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphRemoveEdges)]
+    pub fn live_graph_remove_edges(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        edge_pairs: &[u32],
+    ) -> Result<(), JsValue> {
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::RemoveEdges(pairs(edge_pairs, "Graph edges")?),
+        )
+        .map_err(js_error)
     }
 }

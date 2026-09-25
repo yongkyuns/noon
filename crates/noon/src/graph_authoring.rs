@@ -123,7 +123,10 @@ impl std::fmt::Display for GraphAuthoringError {
                 formatter,
                 "graph vertex at input index {vertex_index} repeats an existing user key"
             ),
-            Self::UnknownEdgeEndpoint { edge_index, endpoint } => write!(
+            Self::UnknownEdgeEndpoint {
+                edge_index,
+                endpoint,
+            } => write!(
                 formatter,
                 "graph edge at input index {edge_index} references an unknown {} vertex key",
                 match endpoint {
@@ -137,8 +140,12 @@ impl std::fmt::Display for GraphAuthoringError {
             ),
             Self::UnknownVertexKey => formatter.write_str("unknown graph vertex key"),
             Self::UnknownEdgeKey => formatter.write_str("unknown graph edge key"),
-            Self::DuplicateMutationVertexKey => formatter.write_str("duplicate graph vertex key in mutation"),
-            Self::DuplicateMutationEdgeKey => formatter.write_str("duplicate graph edge key in mutation"),
+            Self::DuplicateMutationVertexKey => {
+                formatter.write_str("duplicate graph vertex key in mutation")
+            }
+            Self::DuplicateMutationEdgeKey => {
+                formatter.write_str("duplicate graph edge key in mutation")
+            }
             Self::InvalidLayout(reason) => write!(formatter, "invalid graph layout: {reason}"),
         }
     }
@@ -472,6 +479,28 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         mutation::add_edges(live, &mut self.inner, edges)
     }
 
+    pub fn remove_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(live, &mut self.inner, edges)
+    }
+
     pub fn change_layout_live(
         &mut self,
         live: &mut crate::LiveSession<'_>,
@@ -673,6 +702,28 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         E: IntoIterator<Item = (K, K)>,
     {
         mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(live, &mut self.inner, edges)
     }
 
     pub fn change_layout_live(

@@ -768,6 +768,8 @@ _PUBLIC_EXPORTS = {
     "ComplexPlane": "_manim_complex_plane",
     "Axes": "_manim_plotting",
     "FunctionGraph": "_manim_plotting",
+    "Graph": "_manim_graph",
+    "DiGraph": "_manim_graph",
     "ImplicitFunction": "_manim_implicit",
     "ParametricFunction": "_manim_plotting",
     "Transform": "_manim_animate",
