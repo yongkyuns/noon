@@ -17,6 +17,10 @@ mod authoring_geometry;
 mod authoring_image;
 #[cfg(target_arch = "wasm32")]
 mod authoring_implicit_plotting;
+#[cfg(target_arch = "wasm32")]
+mod authoring_latex;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_latex::*;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;

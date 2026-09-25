@@ -370,7 +370,7 @@ pub enum LiveSessionError {
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
     Callback(crate::ExecutionSessionCallbackError),
-    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
     Activation(ExecutionSessionAnimationError),
@@ -389,7 +389,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
@@ -406,7 +406,7 @@ impl std::error::Error for LiveSessionError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Callback(error) => Some(error),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
             Self::Segment(error) => Some(error),
@@ -881,6 +881,60 @@ impl<'a> LiveSession<'a> {
         })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one detached native text admission creates one semantic node")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
+    }
+
+    /// Compile and publish one detached TeX object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    /// Compile and publish one detached display-math object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
         };
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }

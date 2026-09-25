@@ -109,6 +109,8 @@ mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
 pub mod integration;
+#[cfg(feature = "latex")]
+mod latex_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod live_coordinate_plotting_example;
 mod live_program;
@@ -136,9 +138,9 @@ pub mod synchronized_plot_presentation;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod synchronized_plotting_example;
 mod tangent_line_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_part_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod time_series_plotting_example;
@@ -190,6 +192,11 @@ pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHos
 pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+#[cfg(feature = "latex")]
+pub use latex_authoring::{
+    DviFontResource, LatexBackend, LatexDocument, LatexFormat, MathTex, Tex,
+    DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
+};
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
@@ -235,9 +242,9 @@ pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
@@ -246,7 +253,7 @@ pub use text_authoring::{
 };
 #[cfg(feature = "typst")]
 pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_part_authoring::TextPartAuthoringError;
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
 

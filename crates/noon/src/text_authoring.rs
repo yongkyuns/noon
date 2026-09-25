@@ -20,13 +20,14 @@ pub(crate) use semantic::{math_typst_state, typst_state};
 use std::sync::Arc;
 
 use noon_compile::{CompileError, CompiledObject, CompiledScene};
-#[cfg(feature = "typst")]
-use noon_core::GeometryResource;
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResourceArena, ObjectId, Rect, Style,
-    TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind, Transform2D,
-    Vec2, WHITE,
+    Color, FontResourceArena, FontResourceError, GeometryResourceArena, ObjectId, Style,
+    TextResource, TextResourceArena, TextResourceValidationError, Transform2D, WHITE,
 };
+#[cfg(feature = "typst")]
+use noon_core::{GeometryResource, TextSourceKind};
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::{Rect, Vec2};
 #[cfg(feature = "native-text")]
 use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
 #[cfg(feature = "native-text")]
@@ -613,6 +614,14 @@ pub enum TextAuthoringError {
     TextColorUnsupportedSourceKind(TextSourceKind),
     #[cfg(feature = "typst")]
     Typst(TypstBackendError),
+    #[cfg(feature = "latex")]
+    LatexDocument(noon_text::latex_document::LatexDocumentError),
+    #[cfg(feature = "latex")]
+    LatexDvi(noon_text::latex::LatexDviError),
+    #[cfg(feature = "latex")]
+    LatexBackend(Arc<str>),
+    #[cfg(feature = "latex")]
+    Geometry(noon_core::GeometryResourceError),
     Font(FontResourceError),
     Text(TextResourceValidationError),
     Compile(CompileError),
@@ -674,6 +683,14 @@ impl std::fmt::Display for TextAuthoringError {
             ),
             #[cfg(feature = "typst")]
             Self::Typst(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexDocument(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexDvi(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexBackend(error) => write!(formatter, "LaTeX backend failure: {error}"),
+            #[cfg(feature = "latex")]
+            Self::Geometry(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
@@ -695,6 +712,12 @@ impl std::error::Error for TextAuthoringError {
             Self::TextSourceStyle(error) => Some(error),
             #[cfg(feature = "typst")]
             Self::Typst(error) => Some(error),
+            #[cfg(feature = "latex")]
+            Self::LatexDocument(error) => Some(error),
+            #[cfg(feature = "latex")]
+            Self::LatexDvi(error) => Some(error),
+            #[cfg(feature = "latex")]
+            Self::Geometry(error) => Some(error),
             Self::Font(error) => Some(error),
             Self::Text(error) => Some(error),
             Self::Compile(error) => Some(error),
@@ -724,6 +747,27 @@ impl From<TextSourceStyleError> for TextAuthoringError {
 impl From<TypstBackendError> for TextAuthoringError {
     fn from(value: TypstBackendError) -> Self {
         Self::Typst(value)
+    }
+}
+
+#[cfg(feature = "latex")]
+impl From<noon_text::latex_document::LatexDocumentError> for TextAuthoringError {
+    fn from(value: noon_text::latex_document::LatexDocumentError) -> Self {
+        Self::LatexDocument(value)
+    }
+}
+
+#[cfg(feature = "latex")]
+impl From<noon_text::latex::LatexDviError> for TextAuthoringError {
+    fn from(value: noon_text::latex::LatexDviError) -> Self {
+        Self::LatexDvi(value)
+    }
+}
+
+#[cfg(feature = "latex")]
+impl From<noon_core::GeometryResourceError> for TextAuthoringError {
+    fn from(value: noon_core::GeometryResourceError) -> Self {
+        Self::Geometry(value)
     }
 }
 

@@ -6456,6 +6456,20 @@ mod wasm {
 
         /// Compile and publish one detached Typst or MathTypst object through
         /// the current retained session.
+        #[wasm_bindgen(js_name = liveCreateLatex)]
+        pub fn live_create_latex(
+            &mut self,
+            options: crate::WasmLatexOptions,
+            compiler: &mut crate::WasmLatexCompiler,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_create_latex(options.text, compiler)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCreateManimTypst)]
         pub fn live_create_manim_typst(
             &mut self,

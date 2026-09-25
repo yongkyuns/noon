@@ -915,3 +915,68 @@ mod arrow_atomicity_tests;
 mod geometry_atomicity_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "latex")]
+impl Scene {
+    /// Compile real TeX and atomically publish one detached text Mobject.
+    ///
+    /// The backend is an explicit host boundary; compiled vectors, fonts, and
+    /// the semantic node enter together through the same cold/live transaction.
+    pub fn tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    /// Compile real display math and atomically publish one detached text Mobject.
+    pub fn math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_math_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    fn publish_latex_admission(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let result = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    transaction
+                        .apply(store)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+        };
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
+        };
+        Mobject::from_node(store_rc, *node).map_err(crate::TextAuthoringError::Semantic)
+    }
+}

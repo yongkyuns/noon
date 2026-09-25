@@ -116,6 +116,14 @@ impl WasmTextPartList {
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
+    #[wasm_bindgen(js_name = textSource)]
+    pub fn text_source(&self) -> Result<String, JsValue> {
+        self.semantic_mobject()
+            .text_source()
+            .map(|source| source.to_string())
+            .map_err(text_part_js_error)
+    }
+
     /// Select authored substring occurrences through the shared retained text resource.
     #[wasm_bindgen(js_name = textSourcePartsFor)]
     pub fn text_source_parts_for(&self, needle: &str) -> Result<WasmTextPartList, JsValue> {

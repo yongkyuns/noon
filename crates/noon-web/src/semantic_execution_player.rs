@@ -753,6 +753,20 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_latex(
+        &mut self,
+        text: crate::authoring_latex::AuthoredLatex,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| match text {
+            crate::authoring_latex::AuthoredLatex::Text(text) => live.create_tex(text, compiler),
+            crate::authoring_latex::AuthoredLatex::Math(text) => {
+                live.create_math_tex(text, compiler)
+            }
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_color_gradient(
         &mut self,
         target: &noon::Mobject,

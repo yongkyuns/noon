@@ -11,6 +11,11 @@ mod execution_source;
 mod pointer_input;
 mod selection_overlay;
 
+#[cfg(feature = "latex")]
+mod latex;
+#[cfg(feature = "latex")]
+pub use latex::NativeLatexBackend;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

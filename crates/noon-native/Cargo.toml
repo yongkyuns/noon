@@ -5,7 +5,11 @@ edition = "2021"
 license = "MIT"
 description = "Native window host for typed Noon execution sessions"
 
+[features]
+latex = ["noon/latex", "dep:serde_json"]
+
 [dependencies]
+serde_json = { version = "1", optional = true }
 noon = { path = "../noon" }
 noon-core = { path = "../noon-core" }
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }

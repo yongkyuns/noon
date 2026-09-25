@@ -68,61 +68,61 @@ struct TextCompilerRegistry {
 }
 
 impl TextCompilerRegistry {
-    fn compile(
+    fn lookup(&mut self, key: &TextCompileKey) -> Option<CompiledTextArtifact> {
+        if let Some(artifact) = self.entries.get(key).map(|entry| entry.artifact.clone()) {
+            self.diagnostics.cache_hits += 1;
+            self.touch(key);
+            Some(artifact)
+        } else {
+            self.diagnostics.cache_misses += 1;
+            None
+        }
+    }
+
+    fn finish(
         &mut self,
         key: TextCompileKey,
-        compile: impl FnOnce() -> Result<CompiledTextArtifact, TextAuthoringError>,
+        result: Result<CompiledTextArtifact, TextAuthoringError>,
+        #[cfg(not(target_arch = "wasm32"))] elapsed_nanos: u128,
     ) -> Result<CompiledTextArtifact, TextAuthoringError> {
-        if let Some(artifact) = self.entries.get(&key).map(|entry| entry.artifact.clone()) {
-            self.diagnostics.cache_hits += 1;
-            self.touch(&key);
-            return Ok(artifact);
-        }
-        self.diagnostics.cache_misses += 1;
-        #[cfg(not(target_arch = "wasm32"))]
-        let started = Instant::now();
-        let artifact = match compile() {
-            Ok(artifact) => artifact,
-            Err(error) => {
-                self.diagnostics.failed_compiles += 1;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.diagnostics.compile_nanos = Some(
-                        self.diagnostics
-                            .compile_nanos
-                            .unwrap_or(0)
-                            .saturating_add(started.elapsed().as_nanos()),
-                    );
-                }
-                return Err(error);
-            }
-        };
-        self.diagnostics.successful_compiles += 1;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.diagnostics.compile_nanos = Some(
                 self.diagnostics
                     .compile_nanos
                     .unwrap_or(0)
-                    .saturating_add(started.elapsed().as_nanos()),
+                    .saturating_add(elapsed_nanos),
             );
         }
+        let artifact = match result {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                self.diagnostics.failed_compiles += 1;
+                return Err(error);
+            }
+        };
+        self.diagnostics.successful_compiles += 1;
         let retained_bytes = artifact
             .retained_bytes()
             .saturating_add(key.0.len())
             .saturating_add(key.1.iter().map(|font| font.len()).sum::<usize>());
-        self.diagnostics.retained_bytes = self
-            .diagnostics
-            .retained_bytes
-            .saturating_add(retained_bytes);
-        self.entries.insert(
+        if let Some(previous) = self.entries.insert(
             key.clone(),
             CacheEntry {
                 artifact: artifact.clone(),
                 retained_bytes,
             },
-        );
-        self.lru.push_back(key);
+        ) {
+            self.diagnostics.retained_bytes = self
+                .diagnostics
+                .retained_bytes
+                .saturating_sub(previous.retained_bytes);
+        }
+        self.diagnostics.retained_bytes = self
+            .diagnostics
+            .retained_bytes
+            .saturating_add(retained_bytes);
+        self.touch(&key);
         self.evict();
         self.diagnostics.entries = self.entries.len();
         Ok(artifact)
@@ -153,6 +153,26 @@ impl TextCompilerRegistry {
     }
 }
 
+fn compile_cached(
+    key: TextCompileKey,
+    compile: impl FnOnce() -> Result<CompiledTextArtifact, TextAuthoringError>,
+) -> Result<CompiledTextArtifact, TextAuthoringError> {
+    if let Some(artifact) = REGISTRY.with(|registry| registry.borrow_mut().lookup(&key)) {
+        return Ok(artifact);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let started = Instant::now();
+    let result = compile();
+    REGISTRY.with(|registry| {
+        registry.borrow_mut().finish(
+            key,
+            result,
+            #[cfg(not(target_arch = "wasm32"))]
+            started.elapsed().as_nanos(),
+        )
+    })
+}
+
 thread_local! { static REGISTRY: RefCell<TextCompilerRegistry> = RefCell::new(TextCompilerRegistry::default()); }
 
 pub fn text_compiler_diagnostics() -> TextCompilerDiagnostics {
@@ -168,28 +188,26 @@ pub(crate) fn clear_text_compiler_cache() {
 pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, TextAuthoringError> {
     text.validate()?;
     let key = native_key(text)?;
-    let artifact = REGISTRY.with(|registry| {
-        registry.borrow_mut().compile(key, || {
-            let font = match &text.font_face {
-                Some(font) => font.clone(),
-                None => bundled_native_font(text.font_family.as_ref())?,
-            };
-            let mut options = NativeTextOptions::new(text.font_size);
-            options.line_spacing = text.line_spacing;
-            // Object color is semantic presentation. It must not affect shaping or cache identity.
-            options.fill = None;
-            let mut compiler = NativeTextCompiler::new();
-            let mut artifact = if text.markup {
-                markup::compile(text, &font, &options, &mut compiler)?
-            } else {
-                compiler.compile_plain(text.source.as_ref(), &font, &options)?
-            };
-            text.apply_source_fills(&mut artifact.resource)?;
-            Ok(CompiledTextArtifact {
-                resource: Arc::new(artifact.resource),
-                fonts: Arc::new(artifact.fonts),
-                geometry: Arc::new(GeometryResourceArena::new()),
-            })
+    let artifact = compile_cached(key, || {
+        let font = match &text.font_face {
+            Some(font) => font.clone(),
+            None => bundled_native_font(text.font_family.as_ref())?,
+        };
+        let mut options = NativeTextOptions::new(text.font_size);
+        options.line_spacing = text.line_spacing;
+        // Object color is semantic presentation. It must not affect shaping or cache identity.
+        options.fill = None;
+        let mut compiler = NativeTextCompiler::new();
+        let mut artifact = if text.markup {
+            markup::compile(text, &font, &options, &mut compiler)?
+        } else {
+            compiler.compile_plain(text.source.as_ref(), &font, &options)?
+        };
+        text.apply_source_fills(&mut artifact.resource)?;
+        Ok(CompiledTextArtifact {
+            resource: Arc::new(artifact.resource),
+            fonts: Arc::new(artifact.fonts),
+            geometry: Arc::new(GeometryResourceArena::new()),
         })
     })?;
     Ok(Arc::new(artifact))
@@ -201,19 +219,17 @@ pub(super) fn compile_typst(
     mode: TypstMode,
 ) -> Result<Arc<CompiledTextArtifact>, TextAuthoringError> {
     let key = typst_key(text, mode);
-    let artifact = REGISTRY.with(|registry| {
-        registry.borrow_mut().compile(key, || {
-            let artifact = match &text.fonts {
-                Some(fonts) => {
-                    compile_typst_resource_with_fonts(text.source.as_ref(), mode, fonts.iter())?
-                }
-                None => compile_typst_resource(text.source.as_ref(), mode)?,
-            };
-            Ok(CompiledTextArtifact {
-                resource: Arc::new(artifact.resource),
-                fonts: Arc::new(artifact.fonts),
-                geometry: Arc::new(artifact.geometry),
-            })
+    let artifact = compile_cached(key, || {
+        let artifact = match &text.fonts {
+            Some(fonts) => {
+                compile_typst_resource_with_fonts(text.source.as_ref(), mode, fonts.iter())?
+            }
+            None => compile_typst_resource(text.source.as_ref(), mode)?,
+        };
+        Ok(CompiledTextArtifact {
+            resource: Arc::new(artifact.resource),
+            fonts: Arc::new(artifact.fonts),
+            geometry: Arc::new(artifact.geometry),
         })
     })?;
     Ok(Arc::new(artifact))
@@ -373,6 +389,29 @@ mod tests {
     }
 
     #[test]
+    fn compiler_callbacks_reenter_without_borrowing_the_registry() {
+        clear_text_compiler_cache();
+        let template = (*Text::new("template").compile_artifact().unwrap()).clone();
+        let key = TextCompileKey(Arc::from(&b"reentrant"[..]), Arc::from([]));
+        let result = compile_cached(key.clone(), || {
+            let diagnostics = text_compiler_diagnostics();
+            assert_eq!(diagnostics.entries, 1);
+            Text::new("nested compiler work").compile_artifact()?;
+            let nested = compile_cached(key.clone(), || Ok(template.clone()))?;
+            assert_eq!(nested.resource.source.as_ref(), "template");
+            Ok(template)
+        })
+        .unwrap();
+        assert_eq!(result.resource.source.as_ref(), "template");
+        let diagnostics = text_compiler_diagnostics();
+        assert_eq!(
+            diagnostics.entries, 3,
+            "same-key reentry replaces one entry"
+        );
+        assert_eq!(diagnostics.successful_compiles, 4);
+    }
+
+    #[test]
     fn cache_eviction_is_bounded() {
         clear_text_compiler_cache();
         for index in 0..=MAX_ENTRIES {
@@ -385,4 +424,102 @@ mod tests {
         assert!(diagnostics.evictions >= 1);
         assert!(diagnostics.retained_bytes <= MAX_RETAINED_BYTES);
     }
+}
+
+#[cfg(feature = "latex")]
+pub(crate) fn compile_latex(
+    text: &crate::latex_authoring::LatexSpec,
+    document: &str,
+    backend_identity: Arc<str>,
+    backend: &mut impl crate::LatexBackend,
+) -> Result<Arc<CompiledTextArtifact>, TextAuthoringError> {
+    let key = latex_key(document, &backend_identity, text.document.kind());
+    let artifact = compile_cached(key, || {
+        let dvi = backend
+            .compile(document)
+            .map_err(|error| TextAuthoringError::LatexBackend(Arc::from(error)))?;
+        let names =
+            noon_text::latex::required_dvi_fonts(&dvi, noon_text::latex::DviLimits::default())?;
+        let mut fonts = Vec::new();
+        fonts.try_reserve_exact(names.len())?;
+        for name in names {
+            fonts.push(
+                backend
+                    .font(&name)
+                    .map_err(|error| TextAuthoringError::LatexBackend(Arc::from(error)))?,
+            );
+        }
+        let backend_identity = noon_core::TextLayoutArtifact {
+            backend: noon_core::TextLayoutBackend {
+                kind: noon_core::TextLayoutBackendKind::Latex,
+                version: backend_identity,
+            },
+            template_fingerprint: Arc::from(noon_text::latex_document::LATEX_TEMPLATE_VERSION),
+            artifact_fingerprint: Arc::from(document),
+            backend_payload_key: None,
+        };
+        let mut artifact = noon_text::latex::normalize_dvi(
+            text.document.source(),
+            text.document.kind(),
+            backend_identity,
+            &dvi,
+            &fonts,
+            noon_text::latex::DviLimits::default(),
+        )?;
+        recenter_latex_artifact(&mut artifact);
+        Ok(CompiledTextArtifact {
+            resource: Arc::new(artifact.resource),
+            fonts: Arc::new(artifact.fonts),
+            geometry: Arc::new(artifact.geometries),
+        })
+    })?;
+    Ok(Arc::new(artifact))
+}
+
+#[cfg(feature = "latex")]
+pub(crate) fn latex_identity(
+    document: &str,
+    backend_identity: &str,
+    kind: noon_core::TextSourceKind,
+) -> noon_core::TextCompilationIdentity {
+    let key = latex_key(document, backend_identity, kind);
+    noon_core::TextCompilationIdentity {
+        descriptor: key.0,
+        font_contents: key.1,
+    }
+}
+
+#[cfg(feature = "latex")]
+fn latex_key(
+    document: &str,
+    backend_identity: &str,
+    kind: noon_core::TextSourceKind,
+) -> TextCompileKey {
+    let mut bytes = Vec::new();
+    push_text(&mut bytes, "latex");
+    push_text(&mut bytes, noon_text::latex::LATEX_DVI_BACKEND_VERSION);
+    push_text(
+        &mut bytes,
+        noon_text::latex_document::LATEX_TEMPLATE_VERSION,
+    );
+    push_text(&mut bytes, backend_identity);
+    push_text(&mut bytes, &format!("{kind:?}"));
+    push_text(&mut bytes, document);
+    TextCompileKey(bytes.into(), Arc::from([]))
+}
+
+#[cfg(feature = "latex")]
+fn recenter_latex_artifact(artifact: &mut noon_text::latex::LatexDviArtifact) {
+    let center = artifact.resource.bounds.center();
+    let recenter = noon_core::TextAffineTransform::translation(-center.x, -center.y);
+    for run in Arc::make_mut(&mut artifact.resource.runs) {
+        run.transform = run.transform.then(recenter);
+    }
+    for vector in Arc::make_mut(&mut artifact.resource.vector_items) {
+        vector.transform = vector.transform.then(recenter);
+    }
+    artifact.resource.bounds = noon_core::Rect::new(
+        artifact.resource.bounds.min - center,
+        artifact.resource.bounds.max - center,
+    );
 }
