@@ -26,6 +26,20 @@ impl FamilyAffine {
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
     ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+        self.prepare_for_scope(store, leaves, bounds, None)
+    }
+
+    /// Prepare one affine edit for an addressed root.  A Table's spacing is an
+    /// authored declaration on its own family root, so only a direct scale of
+    /// that root changes its buffers.  Scaling an enclosing family still uses
+    /// ordinary leaf affine behavior.
+    pub(crate) fn prepare_for_scope(
+        self,
+        store: &SemanticStore,
+        leaves: &[SemanticNodeId],
+        bounds: Option<Bounds2D64>,
+        scope: Option<SemanticNodeId>,
+    ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
         let mut affine_leaves = Vec::new();
         let mut replacements = Vec::new();
         for &leaf in leaves {
@@ -45,7 +59,7 @@ impl FamilyAffine {
             }
             affine_leaves.push(leaf);
         }
-        let transaction = self.transaction(store, &affine_leaves, bounds)?;
+        let transaction = self.transaction(store, &affine_leaves, bounds, scope)?;
         Ok(
             crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
                 .with_transaction(transaction),
@@ -57,6 +71,7 @@ impl FamilyAffine {
         store: &SemanticStore,
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
+        scope: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let center = bounds_critical_point(bounds, 0.0, 0.0);
         if let Self::Flip(axis, _) = self {
@@ -145,6 +160,19 @@ impl FamilyAffine {
                 }
             }
             stage_state_changes(&mut transaction, leaf, previous, &next);
+        }
+        if let (Self::Scale(x, y, _), Some(scope)) = (self, scope) {
+            if matches!(
+                store.node(scope).map(|node| node.kind()),
+                Some(noon_core::SemanticNodeKind::Family(_))
+            ) {
+                if let Some(layout) = store
+                    .semantic_table_layout(scope)
+                    .map_err(AuthoringError::from)?
+                {
+                    transaction.set_table_layout(scope, layout.scaled_buffers(x, y));
+                }
+            }
         }
         Ok(transaction)
     }
@@ -250,11 +278,13 @@ impl LayoutAnchor {
     }
 
     fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
+        let scope = self.resolve()?;
         let layout = self.layout()?;
-        let prepared = operation.prepare(
+        let prepared = operation.prepare_for_scope(
             &self.integration_store().borrow(),
             layout.leaves(),
             layout.boundary_bounds(),
+            Some(scope),
         )?;
         prepared.publish(
             &mut self.integration_store().borrow_mut(),

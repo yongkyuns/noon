@@ -282,6 +282,7 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         operation: crate::family_affine::FamilyAffine,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let scope = anchor.resolve().map_err(LiveSessionError::from)?;
         let (leaves, bounds) = self.anchor_layout_measure(anchor, true)?;
         // As with placement, resolve an active affine driver at its logical
         // completion barrier before a persistent edit; never overwrite it midway.
@@ -290,7 +291,8 @@ impl LiveSession<'_> {
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
-        let prepared = operation.prepare(&self.store.borrow(), &leaves, bounds)?;
+        let prepared =
+            operation.prepare_for_scope(&self.store.borrow(), &leaves, bounds, Some(scope))?;
         self.publish_path_edits(prepared)
     }
 

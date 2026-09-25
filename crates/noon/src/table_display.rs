@@ -130,7 +130,6 @@ pub struct Table {
     highlight_family: MobjectFamily,
     row_label_family: Option<MobjectFamily>,
     column_label_family: Option<MobjectFamily>,
-    options: TableOptions,
 }
 /// One retained Table entry root. This common display handle preserves family
 /// identity while layout operates on ordered descendant leaves.
@@ -156,24 +155,13 @@ impl Table {
             .borrow()
             .semantic_family_members_checked(family.node_id())
             .map_err(AuthoringError::from)?;
-        let [entries, lines, highlights, labels @ ..] = members.as_slice() else {
+        let [highlights, entries, lines, labels @ ..] = members.as_slice() else {
             return Err(TableAuthoringError::InvalidStructure);
         };
         if labels.len() > 2 {
             return Err(TableAuthoringError::InvalidStructure);
         }
         let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
-        let options = store
-            .borrow()
-            .semantic_table_layout(family.node_id())
-            .map_err(AuthoringError::from)?
-            .map(|layout| TableOptions {
-                h_buff: layout.h_buff(),
-                v_buff: layout.v_buff(),
-                label_buff: layout.label_buff(),
-                include_outer_lines: layout.include_outer_lines(),
-            })
-            .unwrap_or_default();
         let table = Self {
             family,
             line_family: MobjectFamily::from_node(Rc::clone(&store), *lines)?,
@@ -187,10 +175,29 @@ impl Table {
                 .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
                 .transpose()?,
             entry_family,
-            options,
         };
+        table.options()?;
         table.shape()?;
         Ok(table)
+    }
+    /// Read the table-owned buffers from the sparse semantic declaration.
+    ///
+    /// Handles can rehydrate or alias the same root, and direct family scaling
+    /// updates this declaration atomically with its leaves.  Queries must never
+    /// retain a stale wrapper-side copy.
+    fn options(&self) -> Result<TableOptions, TableAuthoringError> {
+        self.family
+            .integration_store()
+            .borrow()
+            .semantic_table_layout(self.family.node_id())
+            .map_err(AuthoringError::from)?
+            .map(|layout| TableOptions {
+                h_buff: layout.h_buff(),
+                v_buff: layout.v_buff(),
+                label_buff: layout.label_buff(),
+                include_outer_lines: layout.include_outer_lines(),
+            })
+            .ok_or(TableAuthoringError::InvalidStructure)
     }
     #[cfg(feature = "native-text")]
     pub fn from_rows<I, J, S>(scene: &mut Scene, rows: I) -> Result<Self, TableAuthoringError>
@@ -330,7 +337,7 @@ impl Table {
         admission::column_families(&self.entry_family)
     }
     pub fn get_cell(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
-        admission::cell(&self.entry_family, self.options, row, column)
+        admission::cell(&self.entry_family, self.options()?, row, column)
     }
     pub fn get_cell_in_live_session(
         &self,
@@ -341,7 +348,7 @@ impl Table {
         admission::cell_in_publisher(
             TablePublisher::Live(live),
             &self.entry_family,
-            self.options,
+            self.options()?,
             row,
             column,
         )
@@ -356,7 +363,7 @@ impl Table {
         admission::highlight(
             &self.entry_family,
             &self.highlight_family,
-            self.options,
+            self.options()?,
             row,
             column,
             color,
@@ -374,7 +381,7 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         admission::highlighted_cell(
             &self.entry_family,
-            self.options,
+            self.options()?,
             row,
             column,
             color,
@@ -392,7 +399,7 @@ impl Table {
         admission::highlighted_cell_in_publisher(
             TablePublisher::Live(live),
             &self.entry_family,
-            self.options,
+            self.options()?,
             row,
             column,
             color,
@@ -411,7 +418,7 @@ impl Table {
             TablePublisher::Live(live),
             &self.entry_family,
             &self.highlight_family,
-            self.options,
+            self.options()?,
             row,
             column,
             color,
@@ -913,6 +920,17 @@ mod tests {
                 .len(),
             6
         );
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(table.family().node_id())
+                .unwrap(),
+            vec![
+                table.highlight_family().node_id(),
+                table.entry_family().node_id(),
+                table.line_family().node_id(),
+            ]
+        );
         let cell = table.get_cell(0, 0).unwrap();
         let highlight = table.highlight_cell(0, 0, Color::YELLOW, 0.4).unwrap();
         assert_eq!(
@@ -924,15 +942,41 @@ mod tests {
             .semantic_family_members_checked(table.highlight_family().node_id())
             .unwrap();
         assert_eq!(highlight_nodes, vec![highlight.node_id()]);
+        let newest_highlight = table.highlight_cell(1, 1, Color::BLUE, 0.5).unwrap();
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(table.highlight_family().node_id())
+                .unwrap(),
+            vec![newest_highlight.node_id(), highlight.node_id()]
+        );
+        assert_eq!(newest_highlight.state().unwrap().z_index(), 0.0);
         let detached = table.get_highlighted_cell(0, 1, Color::BLUE, 0.5).unwrap();
         assert_eq!(
             store
                 .borrow()
                 .semantic_family_members_checked(table.highlight_family().node_id())
                 .unwrap(),
-            vec![highlight.node_id()]
+            vec![newest_highlight.node_id(), highlight.node_id()]
         );
         assert!(detached.layout_bounds().unwrap().is_some());
+
+        let unrelated = scene.circle(0.25).unwrap();
+        scene.add(&unrelated).unwrap();
+        scene
+            .add_many(&[MobjectTarget::Family(table.family())])
+            .unwrap();
+        let table_leaves = store
+            .borrow()
+            .ordered_leaf_nodes(table.family().node_id())
+            .unwrap();
+        let scene_leaves = store.borrow().ordered_leaf_nodes(scene.root()).unwrap();
+        assert_eq!(
+            scene_leaves,
+            std::iter::once(unrelated.node_id())
+                .chain(table_leaves)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1151,6 +1195,73 @@ mod tests {
                 .expect("copied table cells have concrete bounds"),
             cell
         );
+    }
+
+    #[test]
+    fn direct_table_scale_updates_root_buffers_but_entry_family_scale_does_not() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let table = MobjectTable::from_rows_with_options(
+            &mut scene,
+            vec![vec![circle(&store, 0.5), circle(&store, 1.0)]],
+            TableOptions {
+                h_buff: 1.75,
+                v_buff: 0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_table();
+        let alias = Table::from_family(table.family().clone()).unwrap();
+        let copied =
+            Table::from_family(table.family().copy_family().unwrap().root().clone()).unwrap();
+        let assert_near = |actual: f64, expected: f64| {
+            assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+        };
+
+        table.entry_family().scale(0.8, 0.8).unwrap();
+        assert_near(table.options().unwrap().h_buff, 1.75);
+        assert_near(table.options().unwrap().v_buff, 0.6);
+
+        table.family().scale(0.8, 0.8).unwrap();
+        assert_near(table.options().unwrap().h_buff, 1.4);
+        assert_near(table.options().unwrap().v_buff, 0.48);
+        assert_eq!(alias.options().unwrap(), table.options().unwrap());
+
+        copied.family().scale(0.5, 0.5).unwrap();
+        assert_near(copied.options().unwrap().h_buff, 0.875);
+        assert_near(copied.options().unwrap().v_buff, 0.3);
+        assert_near(table.options().unwrap().h_buff, 1.4);
+        assert_near(table.options().unwrap().v_buff, 0.48);
+    }
+
+    #[test]
+    fn live_table_scale_updates_the_same_root_layout_declaration() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let first = circle(&store, 0.5);
+        let second = circle(&store, 1.0);
+        let mut execution = scene.execution_session().unwrap();
+        let table = {
+            let mut live = scene.live(&mut execution);
+            let table = MobjectTable::from_rows_in_live_session(
+                &mut live,
+                vec![vec![first, second]],
+                TableOptions {
+                    h_buff: 1.25,
+                    v_buff: 0.75,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .into_table();
+            live.scale_family(table.family(), 0.8, 0.8).unwrap();
+            table
+        };
+        let alias = Table::from_family(table.family().clone()).unwrap();
+        assert!((table.options().unwrap().h_buff - 1.0).abs() < 1e-12);
+        assert!((table.options().unwrap().v_buff - 0.6).abs() < 1e-12);
+        assert_eq!(alias.options().unwrap(), table.options().unwrap());
     }
 
     #[test]

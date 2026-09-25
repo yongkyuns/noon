@@ -97,7 +97,7 @@ class Table(_compat.VGroup):
         return _compat.VGroup(*[known[_handle_key(item)] for item in entries])
 
     def _entry_family(self):
-        return self.submobjects[0]
+        return self.submobjects[1]
 
     def get_rows(self):
         return _compat.VGroup(*self._entry_family().submobjects)
@@ -162,7 +162,7 @@ class Table(_compat.VGroup):
             row, column, color.red, color.green, color.blue, color.alpha, opacity,
         )
         highlight = self._rectangle_wrapper(handle)
-        self.submobjects[2]._semantic_member_wrappers[_family_wrapper_key(highlight)] = highlight
+        self.submobjects[0]._semantic_member_wrappers[_family_wrapper_key(highlight)] = highlight
         return self
 
 

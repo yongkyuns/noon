@@ -28,6 +28,18 @@ impl SemanticTableLayout {
     pub const fn include_outer_lines(self) -> bool {
         self.include_outer_lines
     }
+    /// Apply the world-axis factors from a direct Table family scale.
+    ///
+    /// This declaration follows Manim's `Table.scale`: horizontal and vertical
+    /// cell buffers remain table-owned spacing and scale with the table itself.
+    /// `label_buff` is not part of that override.
+    pub const fn scaled_buffers(self, x: f64, y: f64) -> Self {
+        Self {
+            h_buff: self.h_buff * x,
+            v_buff: self.v_buff * y,
+            ..self
+        }
+    }
     pub fn is_valid(self) -> bool {
         [self.h_buff, self.v_buff, self.label_buff]
             .into_iter()

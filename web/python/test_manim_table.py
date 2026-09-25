@@ -92,7 +92,7 @@ class TableFacadeTests(unittest.TestCase):
         table._highlight_table.assert_not_called()
         highlights = types.SimpleNamespace(_semantic_member_wrappers={})
         with patch.object(table.Table, "submobjects", new_callable=PropertyMock,
-                          return_value=[None, None, highlights]):
+                          return_value=[highlights, None, None]):
             self.assertIs(value.add_highlighted_cell((2, 2)), value)
         self.assertEqual(highlights._semantic_member_wrappers["10:1"]._semantic_handle.semanticSlot, 10)
         for invalid in ((0, 1), (1.5, 1), (1, "2"), (1, 2, 3)):

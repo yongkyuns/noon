@@ -361,7 +361,6 @@ impl StagedTable {
 fn make_table(
     store: Rc<RefCell<noon_core::SemanticStore>>,
     value: Publication,
-    options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
     let resolve = |token| {
         value
@@ -388,7 +387,6 @@ fn make_table(
             )?),
             None => None,
         },
-        options,
     })
 }
 fn stage(
@@ -429,7 +427,9 @@ fn stage(
         family
     });
     let root = tx.create_node(SemanticNodeCreation::family());
-    for member in [entries_root, lines_root, highlights] {
+    // Highlights paint behind table cells and lines by authoritative family
+    // order. Individual highlight rectangles retain ordinary z-index zero.
+    for member in [highlights, entries_root, lines_root] {
         tx.add_member(root, member);
     }
     tx.set_table_layout(
@@ -647,7 +647,7 @@ fn commit_composite(
         );
         Ok(value.published(publish(semantic, tx)?))
     })?;
-    make_table(store, published, options)
+    make_table(store, published)
 }
 pub(super) fn publish_existing_table(
     publisher: TablePublisher<'_, '_>,
@@ -756,7 +756,7 @@ fn publish_prepared_text_table(
             },
         )
     })?;
-    make_table(store, published, options)
+    make_table(store, published)
 }
 
 #[cfg(feature = "latex")]
@@ -884,7 +884,7 @@ pub(super) fn publish_numeric_table(
             },
         )
     })?;
-    make_table(store, published, options)
+    make_table(store, published)
 }
 
 pub(super) fn shape_from_family(
@@ -1186,10 +1186,15 @@ fn highlight_with_membership(
         state.style = style;
         state.transform.translation.x = (bounds.min_x + bounds.max_x) * 0.5;
         state.transform.translation.y = (bounds.min_y + bounds.max_y) * 0.5;
-        state.set_z_index(-1.0);
         let object = transaction.create_node(SemanticNodeCreation::object(state));
         if let Some(highlights) = highlights {
             transaction.add_member(highlights.node_id(), object);
+            if let Some(first) = semantic
+                .semantic_family_member_at_checked(highlights.node_id(), 0)
+                .map_err(AuthoringError::from)?
+            {
+                transaction.reorder_member(highlights.node_id(), object, Some(first));
+            }
         }
         let publication = publish(semantic, transaction)?;
         publication
