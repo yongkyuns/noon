@@ -21,3 +21,15 @@ class MobjectTableExample(Scene):
         table.shift(RIGHT * 0.5)
         self.add(table)
         self.wait(0.2)
+
+
+class TableHighlightOrder(Scene):
+    def construct(self):
+        backdrop = Rectangle(width=4, height=3, fill_color=RED,
+                             fill_opacity=0.5, stroke_width=0)
+        table = MobjectTable([[Square(side_length=0.8, color=BLUE, fill_opacity=1)]],
+                             h_buff=0.4, v_buff=0.4, include_outer_lines=True)
+        table.add_highlighted_cell((1, 1), color=GREEN)
+        table.add_highlighted_cell((1, 1), color=YELLOW, fill_opacity=0.5)
+        self.add(backdrop, table)
+        self.wait(0.2)

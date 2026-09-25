@@ -26,6 +26,13 @@
       "qualification_status": "candidate"
     },
     {
+      "id": "table-highlights",
+      "scene": "TableHighlightOrder",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate"
+    },
+    {
       "id": "matrix",
       "scene": "OrdinaryMatrix",
       "source": "parity/manim-v0.21/core-examples/matrix.py",
