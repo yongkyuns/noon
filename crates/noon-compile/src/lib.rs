@@ -13,7 +13,10 @@ mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
@@ -22,7 +25,7 @@ use noon_core::{
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
@@ -411,6 +414,137 @@ pub struct CompiledTransactionPreflightStats {
     pub staged_compiled_scene_clones: usize,
 }
 
+/// Renderer-neutral endpoint policy for one graph-owned Arrow dependency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphArrowPolicy {
+    buff: f32,
+    tip_length: f32,
+    max_tip_length_to_length_ratio: f32,
+    initial_stroke_width: f32,
+    max_stroke_width_to_length_ratio: f32,
+}
+
+impl CompiledGraphArrowPolicy {
+    pub const fn new(
+        buff: f32,
+        tip_length: f32,
+        max_tip_length_to_length_ratio: f32,
+        initial_stroke_width: f32,
+        max_stroke_width_to_length_ratio: f32,
+    ) -> Self {
+        Self {
+            buff,
+            tip_length,
+            max_tip_length_to_length_ratio,
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio,
+        }
+    }
+
+    pub const fn buff(self) -> f32 {
+        self.buff
+    }
+
+    pub const fn tip_length(self) -> f32 {
+        self.tip_length
+    }
+
+    pub const fn max_tip_length_to_length_ratio(self) -> f32 {
+        self.max_tip_length_to_length_ratio
+    }
+
+    pub const fn initial_stroke_width(self) -> f32 {
+        self.initial_stroke_width
+    }
+
+    pub const fn max_stroke_width_to_length_ratio(self) -> f32 {
+        self.max_stroke_width_to_length_ratio
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompiledGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip_index: u32,
+        start_tip_index: Option<u32>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+/// One graph endpoint dependency lowered into stable compiled object rows.
+///
+/// The rows still contain ordinary geometry/style. This declaration only tells
+/// runtime which effective rows must be recomputed when either vertex moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphEdgeDependency {
+    start_vertex_index: u32,
+    end_vertex_index: u32,
+    line_index: u32,
+    kind: CompiledGraphEdgeKind,
+}
+
+impl CompiledGraphEdgeDependency {
+    pub const fn new(
+        start_vertex_index: u32,
+        end_vertex_index: u32,
+        line_index: u32,
+        kind: CompiledGraphEdgeKind,
+    ) -> Self {
+        Self {
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+        }
+    }
+
+    pub const fn start_vertex_index(self) -> u32 {
+        self.start_vertex_index
+    }
+
+    pub const fn end_vertex_index(self) -> u32 {
+        self.end_vertex_index
+    }
+
+    pub const fn line_index(self) -> u32 {
+        self.line_index
+    }
+
+    pub const fn kind(self) -> CompiledGraphEdgeKind {
+        self.kind
+    }
+}
+
+/// Stable nondegenerate local geometry used by Graph endpoint dependencies.
+///
+/// Semantic rows keep their authored world-space content. The execution plan is
+/// free to specialize those rows, and a fixed local basis lets runtime publish
+/// endpoint motion as transforms even when the authored edge was initially
+/// collapsed. Worker transport consequently retains the ordinary object resource
+/// instead of minting a new effective geometry resource on every frame.
+pub(crate) fn graph_line_execution_content() -> ObjectContentRef {
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .into()
+}
+
+pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
+    let [apex, first, second] = noon_geometry::arrow_tip_vertices((1.0, 0.0), (1.0, 0.0), 1.0)
+        .map(|(x, y)| Vec2::new(x as f32, y as f32));
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close(),
+    )
+    .into()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
@@ -434,6 +568,13 @@ pub struct CompiledScene {
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
     family_animations: Vec<CompiledFamilyAnimationChannel>,
+    /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
+    graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
+    /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
+    graph_incident_dependencies: HashMap<u32, Vec<u32>>,
+    /// Any graph-owned row -> dependency indices that must be re-derived when
+    /// that effective row changes. Includes vertices, designated Lines and tips.
+    graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
     resources: CompiledResources,
 }
 
@@ -702,6 +843,26 @@ impl std::error::Error for CompilePatchError {
 }
 
 impl CompiledScene {
+    fn graph_execution_content_for_row(&self, object_index: u32) -> Option<ObjectContentRef> {
+        for &dependency_index in self.graph_dependencies_for_changed_row(object_index) {
+            let dependency = self.graph_edge_dependencies[dependency_index as usize];
+            if dependency.line_index() == object_index {
+                return Some(graph_line_execution_content());
+            }
+            if let CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } = dependency.kind()
+            {
+                if end_tip_index == object_index || start_tip_index == Some(object_index) {
+                    return Some(graph_tip_execution_content());
+                }
+            }
+        }
+        None
+    }
+
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
     /// Mapped composition leaves retain the root interval for completion, while
@@ -853,6 +1014,9 @@ impl CompiledScene {
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
+            graph_edge_dependencies: Vec::new(),
+            graph_incident_dependencies: HashMap::new(),
+            graph_dirty_dependencies: HashMap::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -931,6 +1095,29 @@ impl CompiledScene {
 
     pub fn family_animations(&self) -> &[CompiledFamilyAnimationChannel] {
         &self.family_animations
+    }
+
+    pub fn graph_edge_dependencies(&self) -> &[CompiledGraphEdgeDependency] {
+        &self.graph_edge_dependencies
+    }
+
+    /// Return only the graph dependencies touching one compiled vertex row.
+    pub fn incident_graph_dependencies(&self, vertex_index: u32) -> &[u32] {
+        self.graph_incident_dependencies
+            .get(&vertex_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Return graph dependencies invalidated by one changed effective row.
+    ///
+    /// Ordinary rows use the shared empty slice. Graph vertices remain O(degree);
+    /// a designated Line or tip normally maps to exactly one dependency.
+    pub fn graph_dependencies_for_changed_row(&self, object_index: u32) -> &[u32] {
+        self.graph_dirty_dependencies
+            .get(&object_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn raster_image_resources(&self) -> &impl RasterImageResourceLookup {
@@ -1091,7 +1278,10 @@ impl CompiledScene {
                 text_bounds,
             } => self.object_index(*object).is_none_or(|index| {
                 let existing = &self.objects[index as usize];
-                &existing.content != content || existing.text_bounds != *text_bounds
+                let content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
+                existing.content != content || existing.text_bounds != *text_bounds
             }),
             ExecutionPatch::SetTransform { object, transform } => self
                 .object_index(*object)
@@ -1280,7 +1470,9 @@ impl CompiledScene {
                         });
                     }
                 }
-                self.objects[index as usize].content = content.clone();
+                self.objects[index as usize].content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
                 self.objects[index as usize].text_bounds = *text_bounds;
             }
             ExecutionPatch::SetTransform { object, transform } => {

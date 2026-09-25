@@ -620,7 +620,7 @@ impl FrameChanges {
         self.painter_order_range = None;
     }
 
-    pub(super) fn insert(&mut self, object_index: usize) {
+    pub(crate) fn insert(&mut self, object_index: usize) {
         insert_sorted_unique(&mut self.object_indices, object_index);
     }
 

@@ -385,6 +385,8 @@ impl SceneInstance {
             }
         }
 
+        self.refresh_prepared_graph_dependencies(&mut rows);
+
         Ok(PreparedFrameEvaluation {
             runtime: self.identity,
             expected: self.publication,

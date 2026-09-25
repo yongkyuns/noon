@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+mod arrow;
+pub use arrow::{arrow_tip_vertices, ArrowGeometry};
 mod boolean;
 mod coordinates;
 mod flatten;
