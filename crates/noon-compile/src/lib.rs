@@ -25,7 +25,7 @@ use noon_core::{
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
@@ -516,6 +516,35 @@ impl CompiledGraphEdgeDependency {
     }
 }
 
+/// Stable nondegenerate local geometry used by Graph endpoint dependencies.
+///
+/// Semantic rows keep their authored world-space content. The execution plan is
+/// free to specialize those rows, and a fixed local basis lets runtime publish
+/// endpoint motion as transforms even when the authored edge was initially
+/// collapsed. Worker transport consequently retains the ordinary object resource
+/// instead of minting a new effective geometry resource on every frame.
+pub(crate) fn graph_line_execution_content() -> ObjectContentRef {
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .into()
+}
+
+pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
+    let [apex, first, second] = noon_geometry::arrow_tip_vertices((1.0, 0.0), (1.0, 0.0), 1.0)
+        .map(|(x, y)| Vec2::new(x as f32, y as f32));
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close(),
+    )
+    .into()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
@@ -814,6 +843,26 @@ impl std::error::Error for CompilePatchError {
 }
 
 impl CompiledScene {
+    fn graph_execution_content_for_row(&self, object_index: u32) -> Option<ObjectContentRef> {
+        for &dependency_index in self.graph_dependencies_for_changed_row(object_index) {
+            let dependency = self.graph_edge_dependencies[dependency_index as usize];
+            if dependency.line_index() == object_index {
+                return Some(graph_line_execution_content());
+            }
+            if let CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } = dependency.kind()
+            {
+                if end_tip_index == object_index || start_tip_index == Some(object_index) {
+                    return Some(graph_tip_execution_content());
+                }
+            }
+        }
+        None
+    }
+
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
     /// Mapped composition leaves retain the root interval for completion, while
@@ -1229,7 +1278,10 @@ impl CompiledScene {
                 text_bounds,
             } => self.object_index(*object).is_none_or(|index| {
                 let existing = &self.objects[index as usize];
-                &existing.content != content || existing.text_bounds != *text_bounds
+                let content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
+                existing.content != content || existing.text_bounds != *text_bounds
             }),
             ExecutionPatch::SetTransform { object, transform } => self
                 .object_index(*object)
@@ -1418,7 +1470,9 @@ impl CompiledScene {
                         });
                     }
                 }
-                self.objects[index as usize].content = content.clone();
+                self.objects[index as usize].content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
                 self.objects[index as usize].text_bounds = *text_bounds;
             }
             ExecutionPatch::SetTransform { object, transform } => {

@@ -2,9 +2,12 @@
 //!
 //! Graph semantics lower to ordinary compiled object rows plus sparse dependency
 //! metadata. This module derives only effective render geometry/style; it never
-//! mutates Semantic Scene geometry and never introduces a renderer graph path.
+//! mutates Semantic Scene geometry or introduces a renderer Graph primitive.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use noon_compile::{CompiledGraphEdgeDependency, CompiledGraphEdgeKind};
 use noon_core::{GeometryRef, PathCommand, Transform2D, Vec2};
@@ -193,17 +196,18 @@ fn set_prepared_segment_transform(
     start: Vec2,
     end: Vec2,
 ) {
-    let Some(GeometryRef::Line {
-        start: source_start,
-        end: source_end,
-    }) = frame.objects[object_index].geometry()
-    else {
+    let Some(geometry) = frame.objects[object_index].geometry() else {
+        return;
+    };
+    let Some((source_start, source_end)) = segment_axis(geometry) else {
         return;
     };
     let row = rows
         .entry(object_index)
         .or_insert_with(|| FrameRowState::from_frame(frame, object_index));
-    row.render_geometry = None;
+    row.render_geometry = frame.render_geometries[object_index]
+        .clone()
+        .or_else(|| Some(Arc::new(geometry.clone())));
     row.render_transform = Some(similarity_transform(*source_start, *source_end, start, end));
 }
 
@@ -224,7 +228,9 @@ fn set_prepared_tip_transform(
     let row = rows
         .entry(object_index)
         .or_insert_with(|| FrameRowState::from_frame(frame, object_index));
-    row.render_geometry = None;
+    row.render_geometry = frame.render_geometries[object_index]
+        .clone()
+        .or_else(|| Some(Arc::new(GeometryRef::VectorPath(path.clone()))));
     row.render_transform = Some(similarity_transform(
         source_base,
         source_apex,
@@ -326,24 +332,23 @@ fn apply_graph_dependency(
 }
 
 /// Install world-space effective geometry through the existing renderer-neutral
-/// override lane. A matching authored/effective row needs no allocation.
-/// Reuse the authored compiled geometry and move it through the ordinary render
-/// transform lane. This keeps worker resource identity stable across endpoint
-/// updates; graph dependencies must never mint a world-space path per frame.
+/// override lane. The first evaluation retains the compiler-owned local basis;
+/// later evaluations move that same resource through the ordinary render transform
+/// lane. Graph dependencies never mint a world-space path per frame.
 fn set_effective_segment_transform(
     frame: &mut crate::FrameState,
     object_index: usize,
     target_start: Vec2,
     target_end: Vec2,
 ) -> bool {
-    let Some(GeometryRef::Line { start, end }) = frame.objects[object_index].geometry() else {
+    let Some(geometry) = frame.objects[object_index].geometry().cloned() else {
         return false;
     };
-    set_effective_render_transform(
-        frame,
-        object_index,
-        similarity_transform(*start, *end, target_start, target_end),
-    )
+    let Some((start, end)) = segment_axis(&geometry) else {
+        return false;
+    };
+    let transform = similarity_transform(*start, *end, target_start, target_end);
+    set_effective_render_transform(frame, object_index, geometry, transform)
 }
 
 fn set_effective_tip_transform(
@@ -353,7 +358,10 @@ fn set_effective_tip_transform(
     direction: Vec2,
     length: f32,
 ) -> bool {
-    let Some(GeometryRef::VectorPath(path)) = frame.objects[object_index].geometry() else {
+    let Some(geometry) = frame.objects[object_index].geometry().cloned() else {
+        return false;
+    };
+    let GeometryRef::VectorPath(path) = &geometry else {
         return false;
     };
     let Some((source_apex, source_base)) = tip_axis(path) else {
@@ -363,6 +371,7 @@ fn set_effective_tip_transform(
     set_effective_render_transform(
         frame,
         object_index,
+        geometry,
         similarity_transform(source_base, source_apex, target_base, apex),
     )
 }
@@ -370,14 +379,17 @@ fn set_effective_tip_transform(
 fn set_effective_render_transform(
     frame: &mut crate::FrameState,
     object_index: usize,
+    geometry: GeometryRef,
     transform: Transform2D,
 ) -> bool {
-    if frame.render_geometries[object_index].is_none()
+    if frame.render_geometries[object_index].is_some()
         && frame.render_transforms[object_index] == Some(transform)
     {
         return false;
     }
-    frame.render_geometries[object_index] = None;
+    if frame.render_geometries[object_index].is_none() {
+        frame.render_geometries[object_index] = Some(Arc::new(geometry));
+    }
     frame.render_transforms[object_index] = Some(transform);
     true
 }
@@ -389,6 +401,23 @@ fn tip_axis(path: &noon_core::VectorPath) -> Option<(Vec2, Vec2)> {
         return None;
     };
     Some((*apex, (*first + *second) * 0.5))
+}
+
+fn segment_axis(geometry: &GeometryRef) -> Option<(&Vec2, &Vec2)> {
+    match geometry {
+        GeometryRef::Line { start, end } => Some((start, end)),
+        GeometryRef::VectorPath(path) => {
+            let [PathCommand::MoveTo { to: start }, PathCommand::LineTo { to: end }, ..] =
+                path.commands()
+            else {
+                return None;
+            };
+            Some((start, end))
+        }
+        GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. } | GeometryRef::External(_) => {
+            None
+        }
+    }
 }
 
 fn similarity_transform(
@@ -481,7 +510,7 @@ mod tests {
         SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
         SemanticObjectRole, SemanticObjectState, SemanticStore,
         SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeBinding, SemanticVec3,
-        StoredGeometry,
+        StoredGeometry, VectorPath,
     };
 
     fn circle_at(x: f64, y: f64) -> SemanticObjectState {
@@ -491,15 +520,54 @@ mod tests {
     }
 
     fn rendered_line(instance: &SceneInstance, index: usize) -> (Vec2, Vec2) {
-        let GeometryRef::Line { start, end } = instance.frame().render_geometry(index).unwrap()
-        else {
-            panic!("graph shaft keeps an ordinary compiled Line resource");
-        };
+        let geometry = instance.frame().render_geometry(index).unwrap();
+        let (start, end) =
+            segment_axis(geometry).expect("graph shaft keeps an ordinary segment resource");
         let transform = instance.frame().render_transform(index);
         (
             transform.transform_point(*start),
             transform.transform_point(*end),
         )
+    }
+
+    fn triangle_tip_path(apex: Vec2, direction: Vec2, length: f32) -> VectorPath {
+        let [apex, first, second] = noon_geometry::arrow_tip_vertices(
+            (f64::from(apex.x), f64::from(apex.y)),
+            (f64::from(direction.x), f64::from(direction.y)),
+            f64::from(length),
+        )
+        .map(|(x, y)| Vec2::new(x as f32, y as f32));
+        VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close()
+    }
+
+    fn rendered_tip(instance: &SceneInstance, index: usize) -> [Vec2; 3] {
+        let GeometryRef::VectorPath(path) = instance.frame().render_geometry(index).unwrap() else {
+            panic!("graph tip keeps an ordinary compiled path resource");
+        };
+        let [PathCommand::MoveTo { to: apex }, PathCommand::LineTo { to: first }, PathCommand::LineTo { to: second }, ..] =
+            path.commands()
+        else {
+            panic!("graph tip keeps the shared triangular command order");
+        };
+        let transform = instance.frame().render_transform(index);
+        [*apex, *first, *second].map(|point| transform.transform_point(point))
+    }
+
+    fn assert_vec2_close(actual: Vec2, expected: Vec2) {
+        assert!(
+            (actual.x - expected.x).abs() <= 1.0e-6 && (actual.y - expected.y).abs() <= 1.0e-6,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    fn assert_points_close<const N: usize>(actual: [Vec2; N], expected: [Vec2; N]) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_vec2_close(actual, expected);
+        }
     }
 
     struct LineGraphFixture {
@@ -508,6 +576,105 @@ mod tests {
         b: noon_core::SemanticNodeId,
         line: noon_core::SemanticNodeId,
         position: Option<noon_core::SemanticNodeId>,
+    }
+
+    struct ArrowGraphFixture {
+        store: SemanticStore,
+        start: noon_core::SemanticNodeId,
+        shaft: noon_core::SemanticNodeId,
+        tip: noon_core::SemanticNodeId,
+        position: noon_core::SemanticNodeId,
+    }
+
+    fn arrow_graph_fixture(start: Vec2, end: Vec2) -> ArrowGraphFixture {
+        let mut store = SemanticStore::new();
+        let mut topology = GraphTopology::new();
+        let start_id = topology.add_vertex();
+        let end_id = topology.add_vertex();
+        let edge_id = topology.add_edge(start_id, end_id, true).unwrap();
+        let policy = noon_compile::CompiledGraphArrowPolicy::new(0.25, 0.35, 0.25, 0.06, 0.05);
+        let geometry = arrow_geometry(start, end, false, policy);
+
+        let mut shaft_state = SemanticObjectState::new(StoredGeometry::Line {
+            start: geometry.shaft_start,
+            end: geometry.shaft_end,
+        });
+        shaft_state.style.stroke_width = f64::from(geometry.stroke_width);
+        shaft_state.set_role(SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(
+            f64::from(policy.initial_stroke_width()),
+            f64::from(policy.max_stroke_width_to_length_ratio()),
+        )));
+        let tip_resource = store
+            .insert_geometry_path(triangle_tip_path(
+                geometry.visible_end,
+                geometry.direction,
+                geometry.tip_length,
+            ))
+            .unwrap();
+        let mut tip_state = SemanticObjectState::new(StoredGeometry::Resource(tip_resource));
+        tip_state.set_role(SemanticObjectRole::ArrowEndTip);
+
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        let family = tx.create_node(SemanticNodeCreation::family());
+        let shaft = tx.create_node(SemanticNodeCreation::object(shaft_state));
+        let tip = tx.create_node(SemanticNodeCreation::object(tip_state));
+        let start_node = tx.create_node(SemanticNodeCreation::object(circle_at(
+            f64::from(start.x),
+            f64::from(start.y),
+        )));
+        let end_node = tx.create_node(SemanticNodeCreation::object(circle_at(
+            f64::from(end.x),
+            f64::from(end.y),
+        )));
+        tx.add_member(family, shaft)
+            .add_member(family, tip)
+            .add_member(root, family)
+            .add_member(root, start_node)
+            .add_member(root, end_node)
+            .set_graph_declaration(
+                root,
+                SemanticTransactionGraphDeclaration::new(
+                    topology,
+                    [(start_id, start_node), (end_id, end_node)],
+                    [SemanticTransactionGraphEdgeBinding::new_arrow(
+                        edge_id,
+                        family.into(),
+                        shaft.into(),
+                        tip.into(),
+                        None,
+                        SemanticGraphArrowPolicy::new(
+                            f64::from(policy.buff()),
+                            f64::from(policy.tip_length()),
+                            f64::from(policy.max_tip_length_to_length_ratio()),
+                        ),
+                    )],
+                ),
+            );
+        let result = tx.apply(&mut store).unwrap();
+        let root = result.resolve(root).unwrap();
+        let start_node = result.resolve(start_node).unwrap();
+        let shaft = result.resolve(shaft).unwrap();
+        let tip = result.resolve(tip).unwrap();
+        store.attach_to_scene(root).unwrap();
+        let position = store
+            .insert_semantic_input_signal(SemanticVec3::new(
+                f64::from(start.x),
+                f64::from(start.y),
+                0.0,
+            ))
+            .unwrap();
+        store
+            .bind_semantic_signal(position, start_node, SemanticObjectProperty::Translation)
+            .unwrap();
+
+        ArrowGraphFixture {
+            store,
+            start: start_node,
+            shaft,
+            tip,
+            position,
+        }
     }
 
     fn line_graph_fixture(unrelated: usize, reactive: bool) -> LineGraphFixture {
@@ -619,68 +786,16 @@ mod tests {
 
     #[test]
     fn graph_arrow_dependency_rebuilds_shaft_tip_and_stroke_cap_from_effective_centers() {
-        let mut store = SemanticStore::new();
-        let mut topology = GraphTopology::new();
-        let start_id = topology.add_vertex();
-        let end_id = topology.add_vertex();
-        let edge_id = topology.add_edge(start_id, end_id, true).unwrap();
-
-        let mut shaft_state = SemanticObjectState::new(StoredGeometry::Line {
-            start: Vec2::new(-1.75, 0.0),
-            end: Vec2::new(1.65, 0.0),
-        });
-        shaft_state.style.stroke_width = 0.06;
-        shaft_state.set_role(SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(
-            0.06, 0.05,
-        )));
-        let mut tip_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.01 });
-        tip_state.set_role(SemanticObjectRole::ArrowEndTip);
-
-        let mut tx = SemanticMutationTransaction::new();
-        let root = tx.create_node(SemanticNodeCreation::family());
-        let family = tx.create_node(SemanticNodeCreation::family());
-        let shaft = tx.create_node(SemanticNodeCreation::object(shaft_state));
-        let tip = tx.create_node(SemanticNodeCreation::object(tip_state));
-        let start = tx.create_node(SemanticNodeCreation::object(circle_at(-2.0, 0.0)));
-        let end = tx.create_node(SemanticNodeCreation::object(circle_at(2.0, 0.0)));
-        tx.add_member(family, shaft)
-            .add_member(family, tip)
-            .add_member(root, family)
-            .add_member(root, start)
-            .add_member(root, end)
-            .set_graph_declaration(
-                root,
-                SemanticTransactionGraphDeclaration::new(
-                    topology,
-                    [(start_id, start), (end_id, end)],
-                    [SemanticTransactionGraphEdgeBinding::new_arrow(
-                        edge_id,
-                        family.into(),
-                        shaft.into(),
-                        tip.into(),
-                        None,
-                        SemanticGraphArrowPolicy::new(0.25, 0.35, 0.25),
-                    )],
-                ),
-            );
-        let result = tx.apply(&mut store).unwrap();
-        let root = result.resolve(root).unwrap();
-        let start = result.resolve(start).unwrap();
-        let shaft = result.resolve(shaft).unwrap();
-        let tip = result.resolve(tip).unwrap();
-        store.attach_to_scene(root).unwrap();
-        let position = store
-            .insert_semantic_input_signal(SemanticVec3::new(-2.0, 0.0, 0.0))
-            .unwrap();
-        store
-            .bind_semantic_signal(position, start, SemanticObjectProperty::Translation)
-            .unwrap();
+        let fixture = arrow_graph_fixture(Vec2::new(-2.0, 0.0), Vec2::new(2.0, 0.0));
 
         let mut index = SemanticExecutionIndex::new();
-        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
-        let signal = lowered.reactive().execution_signal_id(position).unwrap();
-        let shaft_object = index.execution_object_id(shaft).unwrap();
-        let tip_object = index.execution_object_id(tip).unwrap();
+        let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
+        let signal = lowered
+            .reactive()
+            .execution_signal_id(fixture.position)
+            .unwrap();
+        let shaft_object = index.execution_object_id(fixture.shaft).unwrap();
+        let tip_object = index.execution_object_id(fixture.tip).unwrap();
         let mut instance = SceneInstance::from_semantic_execution(lowered);
         instance.take_frame_changes();
 
@@ -690,30 +805,93 @@ mod tests {
 
         let shaft_index = instance.frame_index_for_object(shaft_object).unwrap();
         let tip_index = instance.frame_index_for_object(tip_object).unwrap();
-        assert_eq!(
-            instance.frame().render_geometry(shaft_index),
-            Some(&GeometryRef::line(
-                Vec2::new(-3.75, 0.0),
-                Vec2::new(1.4, 0.0),
-            ))
+        let (shaft_start, shaft_end) = rendered_line(&instance, shaft_index);
+        assert_vec2_close(shaft_start, Vec2::new(-3.75, 0.0));
+        assert_vec2_close(shaft_end, Vec2::new(1.4, 0.0));
+        assert_points_close(
+            rendered_tip(&instance, tip_index),
+            [
+                Vec2::new(1.75, 0.0),
+                Vec2::new(1.4, 0.175),
+                Vec2::new(1.4, -0.175),
+            ],
         );
-        let GeometryRef::VectorPath(path) = instance.frame().render_geometry(tip_index).unwrap()
-        else {
-            panic!("Arrow tip effective dependency remains ordinary path geometry");
-        };
-        assert_eq!(path.commands().len(), 4);
-        assert_eq!(
-            instance.frame().render_transform(shaft_index),
-            Transform2D::IDENTITY
-        );
-        assert_eq!(
-            instance.frame().render_transform(tip_index),
-            Transform2D::IDENTITY
-        );
+        assert!(instance.frame().render_geometries[shaft_index].is_some());
+        assert!(instance.frame().render_geometries[tip_index].is_some());
         assert_eq!(
             instance.frame().objects[shaft_index].style.stroke_width,
             0.06
         );
+    }
+
+    #[test]
+    fn initially_collapsed_arrow_expands_to_short_geometry_without_resource_replacement() {
+        let fixture = arrow_graph_fixture(Vec2::ZERO, Vec2::ZERO);
+        let revision = fixture.store.scene_revision();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&fixture.store, &mut index).unwrap();
+        let signal = lowered
+            .reactive()
+            .execution_signal_id(fixture.position)
+            .unwrap();
+        let start_object = index.execution_object_id(fixture.start).unwrap();
+        let shaft_object = index.execution_object_id(fixture.shaft).unwrap();
+        let tip_object = index.execution_object_id(fixture.tip).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        instance.take_frame_changes();
+        let start_index = instance.frame_index_for_object(start_object).unwrap();
+        let shaft_index = instance.frame_index_for_object(shaft_object).unwrap();
+        let tip_index = instance.frame_index_for_object(tip_object).unwrap();
+        let shaft_resource = instance.frame().render_geometries[shaft_index]
+            .as_ref()
+            .unwrap()
+            .clone();
+        let tip_resource = instance.frame().render_geometries[tip_index]
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        instance
+            .set_reactive_input(signal, noon_core::ReactiveValue::Vec2(Vec2::new(-0.2, 0.0)))
+            .unwrap();
+
+        assert_eq!(fixture.store.scene_revision(), revision);
+        let mut expected = vec![start_index, shaft_index, tip_index];
+        expected.sort_unstable();
+        assert_eq!(instance.take_frame_changes().object_indices(), expected);
+        let (shaft_start, shaft_end) = rendered_line(&instance, shaft_index);
+        assert_vec2_close(shaft_start, Vec2::new(-0.2, 0.0));
+        assert_vec2_close(shaft_end, Vec2::new(-0.05, 0.0));
+        assert_points_close(
+            rendered_tip(&instance, tip_index),
+            [
+                Vec2::ZERO,
+                Vec2::new(-0.05, 0.025),
+                Vec2::new(-0.05, -0.025),
+            ],
+        );
+        assert!(Arc::ptr_eq(
+            instance.frame().render_geometries[shaft_index]
+                .as_ref()
+                .unwrap(),
+            &shaft_resource
+        ));
+        assert!(Arc::ptr_eq(
+            instance.frame().render_geometries[tip_index]
+                .as_ref()
+                .unwrap(),
+            &tip_resource
+        ));
+        for transform in [
+            instance.frame().render_transform(shaft_index),
+            instance.frame().render_transform(tip_index),
+        ] {
+            assert!(transform.translation.x.is_finite());
+            assert!(transform.translation.y.is_finite());
+            assert!(transform.scale.x.is_finite());
+            assert!(transform.scale.y.is_finite());
+            assert!(transform.rotation.is_finite());
+        }
     }
 
     #[test]

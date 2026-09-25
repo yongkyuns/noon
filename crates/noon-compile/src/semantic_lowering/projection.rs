@@ -807,7 +807,7 @@ fn compatibility_object_id(id: SemanticNodeId) -> ObjectId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Color, GraphTopology, SemanticMutationImpact, SemanticMutationTransaction,
+        Color, GeometryRef, GraphTopology, SemanticMutationImpact, SemanticMutationTransaction,
         SemanticNodeCreation, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
         SemanticPaint, SemanticStore, SemanticTransactionGraphDeclaration,
         SemanticTransactionGraphEdgeBinding, SemanticVec3, StoredGeometry, TextResourceHandle,
@@ -1202,6 +1202,16 @@ mod tests {
         assert_eq!(dependency.line, index.execution_object_id(line).unwrap());
         assert_eq!(dependency.kind, SemanticExecutionGraphEdgeKind::Line);
         assert_eq!(index.execution_object_id(detached_vertex), None);
+        let semantic_line = lowered
+            .objects()
+            .iter()
+            .find(|object| object.semantic_id == line)
+            .unwrap();
+        assert!(matches!(
+            semantic_line.content.geometry(),
+            Some(StoredGeometry::Line { start, end })
+                if start == Vec2::new(-1.0, 0.0) && end == Vec2::new(1.0, 0.0)
+        ));
 
         let compiled = crate::CompiledScene::from_semantic_projection(&lowered).unwrap();
         let a_index = compiled.object_index(dependency.start_vertex).unwrap();
@@ -1213,6 +1223,21 @@ mod tests {
         assert_eq!(
             compiled.graph_dependencies_for_changed_row(line_index),
             &[0]
+        );
+        let Some(GeometryRef::VectorPath(compiled_line)) =
+            compiled.objects()[line_index as usize].geometry()
+        else {
+            panic!("compiled Graph line uses the retained path resource lane");
+        };
+        assert_eq!(
+            compiled_line.commands(),
+            &[
+                noon_core::PathCommand::MoveTo { to: Vec2::ZERO },
+                noon_core::PathCommand::LineTo {
+                    to: Vec2::new(1.0, 0.0),
+                },
+            ],
+            "compiled Graph rows use a recoverable local basis without replacing semantic truth"
         );
     }
 }

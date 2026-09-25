@@ -783,13 +783,12 @@ impl SceneInstance {
         self.compiled.apply_execution_patch(patch)?;
 
         match patch {
-            ExecutionPatch::SetContent {
-                content,
-                text_bounds,
-                ..
-            } => {
-                self.frame.objects[index].content = content.clone();
-                self.frame.objects[index].text_bounds = *text_bounds;
+            ExecutionPatch::SetContent { .. } => {
+                // Compiler-owned Graph rows may specialize authored world-space
+                // geometry into a stable nondegenerate local basis. Publish the
+                // committed compiled value so prepared/runtime state cannot split.
+                self.frame.objects[index].content = self.compiled.objects()[index].content.clone();
+                self.frame.objects[index].text_bounds = self.compiled.objects()[index].text_bounds;
                 // Host callbacks run after ordinary timeline/reactive evaluation for the frame.
                 // Clearing a transient render override makes authored content authoritative for
                 // this phase without rebuilding unrelated runtime slots.

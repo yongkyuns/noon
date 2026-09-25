@@ -202,6 +202,18 @@ fn materialize_semantic_projection(
                 policy,
             },
         };
+        objects[line_index as usize].content = crate::graph_line_execution_content();
+        if let CompiledGraphEdgeKind::Arrow {
+            end_tip_index,
+            start_tip_index,
+            ..
+        } = kind
+        {
+            objects[end_tip_index as usize].content = crate::graph_tip_execution_content();
+            if let Some(start_tip_index) = start_tip_index {
+                objects[start_tip_index as usize].content = crate::graph_tip_execution_content();
+            }
+        }
         graph_edge_dependencies.push(CompiledGraphEdgeDependency::new(
             start_vertex_index,
             end_vertex_index,

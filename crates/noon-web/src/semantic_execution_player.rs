@@ -4505,3 +4505,5 @@ mod tests {
 
 #[cfg(test)]
 mod callback_error_tests;
+#[cfg(test)]
+mod graph_transport_tests;
