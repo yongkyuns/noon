@@ -224,7 +224,7 @@ impl DecimalNumber {
             return Ok(metadata.value());
         };
         match execution.effective_signal_value(binding.signal()) {
-            Some(ReactiveValue::Scalar(value)) => Ok(f64::from(*value)),
+            Some(noon_core::ReactiveValue::Scalar(value)) => Ok(f64::from(*value)),
             Some(_) => Err(NumericAuthoringError::NonScalarEffectiveNumericSignal {
                 signal: binding.signal(),
             }),
