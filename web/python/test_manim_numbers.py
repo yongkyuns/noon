@@ -29,7 +29,9 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 def value(self, context=None):
                     return context.queryMobjectDecimalValue(self.semantic) if context is not None else self._value
                 def text(self): return f"{self._value:.2f}"
-                def fontSize(self, context): return 96.0 if context is not None else 48.0
+                def fontSize(self, context):
+                    calls.append(("font-size", context))
+                    return 96.0 if context is not None else 48.0
                 def integerValue(self, context=None):
                     return context.queryMobjectIntegerValue(self.semantic) if context is not None else round(self._value)
                 def setValue(self, value): calls.append(("set", value)); self._value = value
@@ -93,6 +95,16 @@ class ManimNumberWrapperTests(unittest.TestCase):
             assert [entry[0] for entry in calls if entry[0] in {"live-set", "live-increment"}] == [
                 "live-set", "live-increment",
             ]
+
+            class ColdContext:
+                def liveExecutionOwnership(self): return "unstarted"
+
+            cold_context = ColdContext()
+            wrapped = numbers.DecimalNumber._from_numeric_handle(Number(4), cold_context)
+            assert wrapped._canonical_live_target_context is cold_context
+            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is None
+            wrapped_live = numbers.DecimalNumber._from_numeric_handle(Number(4), context)
+            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is context
             """
         )
         completed = subprocess.run(

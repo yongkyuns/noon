@@ -26,7 +26,7 @@ class DecimalNumber(_RetainedTextMobject):
         semantic = engine_call(handle.mobject)
         number._initialize_text(
             str(engine_call(handle.text)),
-            float(engine_call(handle.fontSize, context)),
+            float(engine_call(handle.fontSize, _semantic._live_mutation_context(number))),
             semantic,
             _base.WHITE,
             1.0,
