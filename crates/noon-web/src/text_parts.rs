@@ -7,37 +7,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{AuthoringFailure, WasmAuthoringMobjectHandle};
-
-pub(crate) fn text_part_js_error(error: noon::TextPartAuthoringError) -> JsValue {
-    let failure = match error {
-        noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
-        noon::TextPartAuthoringError::NotText(_) => {
-            AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
-        }
-        noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
-            AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
-        }
-        noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
-            AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
-        }
-        noon::TextPartAuthoringError::Query(noon::TextPartQueryError::NonContiguousClusters) => {
-            AuthoringFailure::new(
-                "unsupported_operation",
-                "text_parts.non_contiguous_clusters",
-                error,
-            )
-        }
-        noon::TextPartAuthoringError::Query(noon::TextPartQueryError::NonContiguousVectors) => {
-            AuthoringFailure::new(
-                "unsupported_operation",
-                "text_parts.non_contiguous_vectors",
-                error,
-            )
-        }
-    };
-    crate::authoring_error::js_error(failure)
-}
+use crate::{authoring_error::js_error, WasmAuthoringMobjectHandle};
 
 /// One stable source part selected from a semantic text object.
 #[wasm_bindgen]
@@ -124,7 +94,7 @@ impl WasmAuthoringMobjectHandle {
         self.semantic_mobject()
             .text_parts()
             .map(WasmTextPartList::new)
-            .map_err(text_part_js_error)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = textSource)]
@@ -132,7 +102,7 @@ impl WasmAuthoringMobjectHandle {
         self.semantic_mobject()
             .text_source()
             .map(|source| source.to_string())
-            .map_err(text_part_js_error)
+            .map_err(js_error)
     }
 
     /// Select authored substring occurrences through the shared retained text resource.
@@ -141,6 +111,6 @@ impl WasmAuthoringMobjectHandle {
         self.semantic_mobject()
             .text_source_parts_for(needle)
             .map(WasmTextPartList::new)
-            .map_err(text_part_js_error)
+            .map_err(js_error)
     }
 }
