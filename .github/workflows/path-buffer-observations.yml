@@ -1,0 +1,68 @@
+name: Isolated path buffer observations
+on:
+  push:
+    branches: [work/1718-path-buffer-observations]
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: webgpu
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Preserve disposable observation recipes
+        run: cp .github/proposals/checkpoint-observations.patch .github/proposals/renderer-preparation.patch .github/proposals/path-upload-probe.js "$RUNNER_TEMP/"
+      - uses: actions/checkout@v7
+        with:
+          ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
+          persist-credentials: false
+      - name: Build a clean read-only diagnostic source
+        run: |
+          git apply --check "$RUNNER_TEMP/renderer-preparation.patch"
+          git apply "$RUNNER_TEMP/renderer-preparation.patch"
+          git add crates/noon-web/src/retained_execution_canvas.rs
+          git -c user.name=Noon-Diagnostic -c user.email=diagnostic@localhost commit -m 'diagnostic: inspect prepared renderer records'
+          git rev-parse HEAD > "$RUNNER_TEMP/diagnostic-checkout.txt"
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Build using the normal entrypoint
+        run: bash scripts/build-web-demo.sh
+      - name: Install pinned browser tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Add disposable observation scripts
+        run: |
+          git apply --check "$RUNNER_TEMP/checkpoint-observations.patch"
+          git apply "$RUNNER_TEMP/checkpoint-observations.patch"
+          cat "$RUNNER_TEMP/path-upload-probe.js" >> web/execution-render-worker.js
+          node --check web/execution-render-worker.js
+      - name: Capture actual forward frames
+        id: capture
+        run: node scripts/showcase-capture.mjs
+      - name: Capture actual retained replay
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-live-review.mjs
+      - name: Retain exact diagnostic changes
+        if: always()
+        run: |
+          out=browser-smoke-artifacts/showcase/webgpu/diagnostic-source
+          mkdir -p "$out"
+          git diff a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9 --binary > "$out/instrumentation.patch"
+          cp "$RUNNER_TEMP/path-upload-probe.js" "$out/"
+          cp "$RUNNER_TEMP/diagnostic-checkout.txt" "$out/"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: path-buffer-observations
+          path: browser-smoke-artifacts/showcase/webgpu
+          retention-days: 7
