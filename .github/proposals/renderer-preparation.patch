@@ -1,0 +1,60 @@
+--- a/crates/noon-web/src/retained_execution_canvas.rs
++++ b/crates/noon-web/src/retained_execution_canvas.rs
+@@ -17,6 +17,13 @@
+         RendererObservationOutcome, RendererObservationRequest,
+         RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
+     };
++
++    // Disposable diagnostic, never used as a semantic or rendering input.
++    #[wasm_bindgen]
++    extern "C" {
++        #[wasm_bindgen(js_namespace = console, js_name = log)]
++        fn checkpoint_log(message: &str);
++    }
+ 
+     const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+         r: 0.0,
+@@ -458,6 +465,43 @@
+                     )
+                     .map_err(js_error)?
+             };
++            // Compare derived CPU records for the two known mismatching frames.
++            if [3.1_f64, 9.6_f64].iter().any(|t| (prepared.time() - t).abs() < 1e-12) {
++                let frame = self.mirror.frame().expect("prepared frame is installed");
++                let target = |id: u64| id == 19 || id == 21 || (603..=626).contains(&id);
++                let objects = frame.objects.iter().enumerate()
++                    .filter(|(_, object)| target(object.id.get()))
++                    .map(|(index, object)| serde_json::json!({
++                        "object": object.id.get(), "slot": index,
++                        "observation": format!("{:?}", prepared.observe_object(index, object.id)),
++                    })).collect::<Vec<_>>();
++                let glyphs = prepared.text.items.iter().filter_map(|item| {
++                    let noon_render_wgpu::text::PreparedTextItem::GlyphBatch {
++                        object_index, instance_range, plane, page, ..
++                    } = item else { return None; };
++                    let object = frame.objects.get(*object_index as usize)?;
++                    if !target(object.id.get()) { return None; }
++                    let quads = match plane {
++                        noon_render_wgpu::text::atlas::GlyphAtlasPlane::Mask => prepared.text.mask_quads,
++                        noon_render_wgpu::text::atlas::GlyphAtlasPlane::Color => prepared.text.color_quads,
++                    };
++                    let rows = quads[instance_range.start as usize..instance_range.end as usize]
++                        .iter().map(|q| serde_json::json!({
++                            "origin": q.origin, "axis_x": q.axis_x, "axis_y": q.axis_y,
++                            "uv_min": q.uv_min, "uv_max": q.uv_max, "color": q.color,
++                        })).collect::<Vec<_>>();
++                    Some(serde_json::json!({"object": object.id.get(), "page": page,
++                        "plane": format!("{plane:?}"), "glyphs": rows}))
++                }).collect::<Vec<_>>();
++                checkpoint_log(&format!("NOON_CHECKPOINT_DELTA {}", serde_json::json!({
++                    "kind": "prepared", "time": prepared.time(), "objects": objects, "glyphs": glyphs,
++                    "geometry_stats": format!("{:?}", prepared.geometry_stats()),
++                    "text_stats": format!("{:?}", prepared.text.stats),
++                    "changes": format!("{:?}", self.pending_changes),
++                    "items": format!("{:?}", prepared.render_items.iter()
++                        .filter(|item| target(item.object_id().get())).collect::<Vec<_>>()),
++                })));
++            }
+             self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
+             self.last_outline_cache_misses = prepared.stats.outline_cache_misses;
+             let prepared_observation = resolved_observation_target.as_ref().map(|target| {

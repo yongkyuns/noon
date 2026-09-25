@@ -18,33 +18,39 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Preserve disposable observation recipe
-        run: cp .github/proposals/checkpoint-observations.patch "$RUNNER_TEMP/checkpoint-observations.patch"
+      - name: Preserve disposable observation recipes
+        run: |
+          cp .github/proposals/checkpoint-observations.patch "$RUNNER_TEMP/checkpoint-observations.patch"
+          cp .github/proposals/renderer-preparation.patch "$RUNNER_TEMP/renderer-preparation.patch"
       - name: Checkout exact PR source without diagnostic workflow files
         uses: actions/checkout@v7
         with:
           ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
           persist-credentials: false
-      - name: Record actual source and separate diagnostic trigger outside the checkout
+      - name: Build a local diagnostic commit without modifying any remote ref
         run: |
-          git rev-parse HEAD > "$RUNNER_TEMP/checkpoint-checkout.txt"
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/checkpoint-trigger.txt"
+          git apply --check "$RUNNER_TEMP/renderer-preparation.patch"
+          git apply "$RUNNER_TEMP/renderer-preparation.patch"
+          git add crates/noon-web/src/retained_execution_canvas.rs
+          git -c user.name=Noon-Diagnostic -c user.email=diagnostic@localhost commit -m 'diagnostic: inspect prepared renderer state'
+          git rev-parse HEAD > "$RUNNER_TEMP/checkpoint-checkout.txt"
           rustup install
           rustup target add wasm32-unknown-unknown
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
-      - name: Build and preflight the clean pinned source with the normal entrypoint
+      - name: Build and preflight the clean diagnostic source with the normal entrypoint
         run: |
           test -z "$(git status --porcelain --untracked-files=all)"
           bash scripts/build-web-demo.sh
-          node --input-type=module -e 'import fs from "node:fs"; import assert from "node:assert/strict"; const identity=JSON.parse(fs.readFileSync("web/runtime-build-identity.json")); assert.equal(identity.sourceRevision,"a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9");'
+          node --input-type=module -e 'import fs from "node:fs"; import assert from "node:assert/strict"; import {execFileSync} from "node:child_process"; const identity=JSON.parse(fs.readFileSync("web/runtime-build-identity.json")); assert.equal(identity.sourceRevision,execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim());'
       - name: Install repository-pinned capture tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-      - name: Add read-only observations in this disposable checkout
+      - name: Add read-only JS observations in this disposable checkout
         run: |
           git apply --check "$RUNNER_TEMP/checkpoint-observations.patch"
           git apply "$RUNNER_TEMP/checkpoint-observations.patch"
@@ -61,11 +67,11 @@ jobs:
         if: always()
         run: |
           mkdir -p browser-smoke-artifacts/showcase/webgpu/diagnostic-source
-          git diff --binary > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/instrumentation.patch
-          cp "$RUNNER_TEMP/checkpoint-observations.patch" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+          git diff a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9 --binary > browser-smoke-artifacts/showcase/webgpu/diagnostic-source/instrumentation.patch
+          cp "$RUNNER_TEMP/checkpoint-observations.patch" "$RUNNER_TEMP/renderer-preparation.patch" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
           cp "$RUNNER_TEMP/checkpoint-checkout.txt" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/checkout.txt
           cp "$RUNNER_TEMP/checkpoint-trigger.txt" browser-smoke-artifacts/showcase/webgpu/diagnostic-source/trigger.txt
-          cp web/main.js scripts/showcase-capture.mjs scripts/showcase-live-review.mjs browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
+          cp web/main.js scripts/showcase-capture.mjs scripts/showcase-live-review.mjs crates/noon-web/src/retained_execution_canvas.rs browser-smoke-artifacts/showcase/webgpu/diagnostic-source/
       - uses: actions/upload-artifact@v7
         if: always()
         with:
