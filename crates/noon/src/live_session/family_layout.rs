@@ -16,7 +16,11 @@ impl LiveSession<'_> {
             crate::LayoutDimension::Width => (factor, 1.0),
             crate::LayoutDimension::Height => (1.0, factor),
         };
-        self.scale_layout(source, x, y, pivot)
+        self.affine_layout(
+            source,
+            crate::family_affine::FamilyAffine::Scale(x, y, pivot),
+            None,
+        )
     }
 
     /// Fit from the current coherent layout and publish one local affine edit.
@@ -58,11 +62,16 @@ impl LiveSession<'_> {
         let Some((x, y)) = scale else {
             return Ok(());
         };
+        let table_layout_scope = (!stretch)
+            .then(|| source.resolve())
+            .transpose()
+            .map_err(LiveSessionError::from)?;
         let (_, boundary) = self.anchor_layout_measure(source, true)?;
-        let prepared = crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare(
+        let prepared = crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare_for_scope(
             &self.store.borrow(),
             &leaves,
             boundary,
+            table_layout_scope,
         )?;
         self.publish_path_edits(prepared).map(|_| ())
     }
@@ -152,9 +161,10 @@ impl LiveSession<'_> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_family(
+        self.affine_family_with_table_layout(
             family,
             crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center),
+            Some(family.node_id()),
         )
     }
 
@@ -224,9 +234,11 @@ impl LiveSession<'_> {
         y: f64,
         pivot: crate::ManimRotationPivot,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let table_layout_scope = anchor.resolve().map_err(LiveSessionError::from)?;
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Scale(x, y, pivot),
+            Some(table_layout_scope),
         )
     }
 
@@ -248,7 +260,20 @@ impl LiveSession<'_> {
         family: &MobjectFamily,
         operation: crate::family_affine::FamilyAffine,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_layout(&crate::LayoutAnchor::from(family), operation)
+        self.affine_family_with_table_layout(family, operation, None)
+    }
+
+    fn affine_family_with_table_layout(
+        &mut self,
+        family: &MobjectFamily,
+        operation: crate::family_affine::FamilyAffine,
+        table_layout_scope: Option<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            &crate::LayoutAnchor::from(family),
+            operation,
+            table_layout_scope,
+        )
     }
 
     /// Rotate a selected object or family using coherent live pivot bounds.
@@ -261,6 +286,7 @@ impl LiveSession<'_> {
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Rotate(angle, pivot),
+            None,
         )
     }
 
@@ -274,6 +300,7 @@ impl LiveSession<'_> {
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Flip(axis, pivot),
+            None,
         )
     }
 
@@ -281,8 +308,8 @@ impl LiveSession<'_> {
         &mut self,
         anchor: &crate::LayoutAnchor,
         operation: crate::family_affine::FamilyAffine,
+        table_layout_scope: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let scope = anchor.resolve().map_err(LiveSessionError::from)?;
         let (leaves, bounds) = self.anchor_layout_measure(anchor, true)?;
         // As with placement, resolve an active affine driver at its logical
         // completion barrier before a persistent edit; never overwrite it midway.
@@ -291,8 +318,12 @@ impl LiveSession<'_> {
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
-        let prepared =
-            operation.prepare_for_scope(&self.store.borrow(), &leaves, bounds, Some(scope))?;
+        let prepared = operation.prepare_for_scope(
+            &self.store.borrow(),
+            &leaves,
+            bounds,
+            table_layout_scope,
+        )?;
         self.publish_path_edits(prepared)
     }
 

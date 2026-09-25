@@ -30,8 +30,8 @@ impl FamilyAffine {
     }
 
     /// Prepare one affine edit for an addressed root.  A Table's spacing is an
-    /// authored declaration on its own family root, so only a direct scale of
-    /// that root changes its buffers.  Scaling an enclosing family still uses
+    /// authored declaration on its own family root, so only a scale addressed
+    /// at that root changes its buffers. Scaling an enclosing family still uses
     /// ordinary leaf affine behavior.
     pub(crate) fn prepare_for_scope(
         self,
@@ -234,7 +234,10 @@ fn resolve_pivot(
 impl MobjectFamily {
     /// Scale each unique semantic leaf about the family center in one transaction.
     pub fn scale(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        self.apply_affine(FamilyAffine::Scale(x, y, ManimRotationPivot::Center))
+        LayoutAnchor::from(self).apply_affine_with_table_layout(
+            FamilyAffine::Scale(x, y, ManimRotationPivot::Center),
+            Some(self.node_id()),
+        )
     }
 
     /// Rotate each unique leaf about a shared center, edge or explicit point.
@@ -279,12 +282,30 @@ impl LayoutAnchor {
 
     fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
         let scope = self.resolve()?;
+        self.apply_affine_with_table_layout(operation, Some(scope))
+    }
+
+    pub(crate) fn apply_affine_without_table_layout(
+        &self,
+        operation: FamilyAffine,
+    ) -> Result<(), AuthoringError> {
+        self.apply_affine_with_table_layout(operation, None)
+    }
+
+    /// The direct `MobjectFamily::scale` entry point is the only generic affine
+    /// operation with Table's buffer-scaling override. Anchor scales keep that
+    /// override even when they supply a pivot; stretch explicitly opts out.
+    pub(crate) fn apply_affine_with_table_layout(
+        &self,
+        operation: FamilyAffine,
+        table_layout_scope: Option<SemanticNodeId>,
+    ) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
         let prepared = operation.prepare_for_scope(
             &self.integration_store().borrow(),
             layout.leaves(),
             layout.boundary_bounds(),
-            Some(scope),
+            table_layout_scope,
         )?;
         prepared.publish(
             &mut self.integration_store().borrow_mut(),

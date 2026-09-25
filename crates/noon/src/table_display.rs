@@ -1233,6 +1233,39 @@ mod tests {
         assert_near(copied.options().unwrap().v_buff, 0.3);
         assert_near(table.options().unwrap().h_buff, 1.4);
         assert_near(table.options().unwrap().v_buff, 0.48);
+
+        crate::LayoutAnchor::from(table.family())
+            .scale(0.5, 0.5, crate::ManimRotationPivot::Point(0.0, 0.0))
+            .unwrap();
+        assert_near(table.options().unwrap().h_buff, 0.7);
+        assert_near(table.options().unwrap().v_buff, 0.24);
+        crate::LayoutAnchor::from(table.family())
+            .stretch(
+                1.5,
+                crate::LayoutDimension::Width,
+                crate::ManimRotationPivot::Center,
+            )
+            .unwrap();
+        assert_near(table.options().unwrap().h_buff, 0.7);
+        assert_near(table.options().unwrap().v_buff, 0.24);
+
+        // Table cell buffers have a non-negative durable declaration.  A
+        // reflected direct family scale therefore fails atomically rather than
+        // committing transformed entries with an unusable cell layout.
+        let before_negative_scale = table.options().unwrap();
+        let entry_before = match table.get_entry(0, 0).unwrap() {
+            TableEntry::Mobject(entry) => entry.state().unwrap(),
+            TableEntry::Family(_) => panic!("this fixture has leaf entries"),
+        };
+        assert!(table.family().scale(-1.0, 1.0).is_err());
+        assert_eq!(table.options().unwrap(), before_negative_scale);
+        assert_eq!(
+            match table.get_entry(0, 0).unwrap() {
+                TableEntry::Mobject(entry) => entry.state().unwrap(),
+                TableEntry::Family(_) => panic!("this fixture has leaf entries"),
+            },
+            entry_before
+        );
     }
 
     #[test]
