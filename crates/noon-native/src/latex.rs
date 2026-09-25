@@ -96,15 +96,25 @@ impl NativeLatexBackend {
             &mut probe,
             config.timeout,
             &probe_directory.join("version.log"),
+            64 * 1024,
         )?;
-        drop(probe_cleanup);
         if !version.success() {
             return Err(format!(
                 "native LaTeX compiler version probe failed with {}",
                 version
             ));
         }
-        let identity = format!("native-latex-v1:{}", config.resource_identity);
+        let version_line = bounded_file_tail(&probe_directory.join("version.log"), 64 * 1024)
+            .lines()
+            .next()
+            .unwrap_or("unknown")
+            .trim()
+            .to_owned();
+        drop(probe_cleanup);
+        let identity = format!(
+            "native-latex-v1:{}:{}",
+            config.resource_identity, version_line
+        );
         Ok(Self {
             config,
             identity,
@@ -155,6 +165,7 @@ impl LatexBackend for NativeLatexBackend {
             &mut command,
             self.config.timeout,
             &directory.join("console.log"),
+            64 * 1024,
         )?;
         if !output.success() {
             let diagnostic = bounded_file_tail(&directory.join("noon.log"), 64 * 1024);
@@ -187,7 +198,7 @@ impl LatexBackend for NativeLatexBackend {
         let output_path = directory.join("path.txt");
         let mut command = Command::new(&self.config.kpsewhich);
         command.arg(format!("{name}.tfm"));
-        let status = run_bounded(&mut command, self.config.timeout, &output_path)?;
+        let status = run_bounded(&mut command, self.config.timeout, &output_path, 4096)?;
         if !status.success() {
             return Err(format!("kpsewhich failed for {name}.tfm with {status}"));
         }
@@ -242,6 +253,7 @@ fn run_bounded(
     command: &mut Command,
     timeout: Duration,
     output: &Path,
+    max_output: u64,
 ) -> Result<ExitStatus, String> {
     let stdout = fs::File::create(output)
         .map_err(|error| format!("cannot create native LaTeX diagnostic file: {error}"))?;
@@ -251,10 +263,25 @@ fn run_bounded(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot start native LaTeX process: {error}"))?;
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or("native LaTeX deadline is too large")?;
     loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            return Ok(status);
+        if fs::metadata(output).map(|value| value.len()).unwrap_or(0) > max_output {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "native LaTeX process output exceeded {max_output} bytes and was terminated"
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot poll native LaTeX process: {error}"));
+            }
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
@@ -585,11 +612,30 @@ mod tests {
             &mut command,
             Duration::from_millis(40),
             &directory.join("output.log"),
+            4096,
         )
         .unwrap_err();
         drop(cleanup);
         assert!(error.contains("deadline"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_process_output_limit_kills_and_reaps_child() {
+        let directory = unique_latex_directory("output-test").unwrap();
+        let cleanup = TempLatexDirectory(directory.clone());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "while :; do printf 0123456789; done"]);
+        let error = run_bounded(
+            &mut command,
+            Duration::from_secs(2),
+            &directory.join("output.log"),
+            1024,
+        )
+        .unwrap_err();
+        drop(cleanup);
+        assert!(error.contains("output exceeded"), "{error}");
     }
 
     #[test]
