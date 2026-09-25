@@ -119,43 +119,45 @@ impl TablePublisher<'_, '_> {
     }
 }
 
-#[cfg(feature = "latex")]
-struct PreparedText {
+/// A shaped text cell ready for the common resource batch and table publication.
+///
+/// Native text has no presentation baseline.  Math text retains the baseline
+/// established at compilation, so later table placement cannot change its
+/// receiver-owned font-size reference.
+#[cfg(any(feature = "latex", feature = "native-text"))]
+struct PreparedTextCell {
     dependency: TextDependency,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
-    font_size: f64,
-}
-#[cfg(feature = "native-text")]
-struct PreparedNativeText {
-    dependency: TextDependency,
-    transform: SemanticTransform2_5D,
-    style: SemanticStyle,
+    presentation_baseline: Option<noon_core::TextPresentationBaseline>,
 }
 #[cfg(feature = "latex")]
 fn prepare_text(
     backend: &mut impl LatexBackend,
     source: String,
-) -> Result<PreparedText, TableAuthoringError> {
+) -> Result<PreparedTextCell, TableAuthoringError> {
     let (identity, resource, fonts, geometry, transform, style, font_size) =
         crate::latex_authoring::prepare_math_tex(crate::MathTex::from_strings([source])?, backend)?
             .into_compiled_resource_parts_with_presentation();
-    Ok(PreparedText {
+    let presentation_baseline =
+        crate::latex_authoring::latex_presentation_baseline(&resource, transform, font_size)?;
+    Ok(PreparedTextCell {
         dependency: (identity, resource, fonts, geometry),
         transform,
         style,
-        font_size,
+        presentation_baseline: Some(presentation_baseline),
     })
 }
 #[cfg(feature = "native-text")]
-fn prepare_native_text(source: String) -> Result<PreparedNativeText, TableAuthoringError> {
+fn prepare_native_text(source: String) -> Result<PreparedTextCell, TableAuthoringError> {
     let (identity, resource, fonts, geometry, transform, style) =
         crate::text_authoring::prepare_native_text(crate::Text::new(source))?
             .into_compiled_resource_parts_with_presentation();
-    Ok(PreparedNativeText {
+    Ok(PreparedTextCell {
         dependency: (identity, resource, fonts, geometry),
         transform,
         style,
+        presentation_baseline: None,
     })
 }
 fn text_bounds(resource: &TextResource, transform: SemanticTransform2_5D) -> Bounds2D64 {
@@ -668,124 +670,16 @@ pub(super) fn publish_target_table(
 ) -> Result<Table, TableAuthoringError> {
     commit_composite(publisher, entries, shape, rows, columns, options)
 }
-#[cfg(feature = "latex")]
-pub(super) fn publish_text_table(
+#[cfg(any(feature = "latex", feature = "native-text"))]
+fn publish_prepared_text_table(
     publisher: TablePublisher<'_, '_>,
-    backend: &mut impl LatexBackend,
-    values: Vec<String>,
+    prepared: Vec<PreparedTextCell>,
     shape: TableShape,
     rows: Option<Vec<Mobject>>,
     columns: Option<Vec<Mobject>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
     let options = options.validate()?;
-    let prepared = values
-        .into_iter()
-        .map(|value| prepare_text(backend, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut transforms: Vec<_> = prepared.iter().map(|item| item.transform).collect();
-    let resources: Vec<_> = prepared.iter().map(|item| &item.dependency.1).collect();
-    let entry_bounds: Vec<_> = resources
-        .iter()
-        .zip(&transforms)
-        .map(|(r, t)| text_bounds(r, *t))
-        .collect();
-    let store = publisher.store();
-    preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
-    let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
-    let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
-    let layout = GridLayout::measure(
-        &entry_bounds,
-        shape,
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        columns.as_deref(),
-        column_bounds.as_deref(),
-        options,
-    )?;
-    let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
-    let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
-    for (index, (bound, transform)) in entry_bounds.iter().zip(&mut transforms).enumerate() {
-        transform.translation.x +=
-            xs[index % shape.columns + layout.column_offset] - (bound.min_x + bound.max_x) * 0.5;
-        transform.translation.y +=
-            ys[index / shape.columns + layout.row_offset] - (bound.min_y + bound.max_y) * 0.5;
-    }
-    let dependencies = prepared
-        .iter()
-        .map(|item| item.dependency.clone())
-        .collect();
-    let lines = layout.line_states();
-    let published = publisher.publish_text(move |semantic, publish| {
-        semantic.with_compiled_text_dependency_batch::<TextAuthoringError, _>(
-            dependencies,
-            |semantic, handles| {
-                handles
-                    .iter()
-                    .map(|handle| {
-                        semantic
-                            .text_resources()
-                            .get(*handle)
-                            .cloned()
-                            .ok_or(TextAuthoringError::MissingGeometryResource)
-                    })
-                    .collect()
-            },
-            |semantic, handles| {
-                let mut tx = SemanticMutationTransaction::new();
-                let leaves = prepared
-                    .iter()
-                    .zip(handles)
-                    .zip(transforms)
-                    .map(|((item, handle), transform)| {
-                        let mut state = SemanticObjectState::new(*handle);
-                        state.transform = transform;
-                        state.style = item.style.clone();
-                        state.set_text_presentation_baseline(
-                            crate::latex_authoring::latex_presentation_baseline(
-                                &item.dependency.1,
-                                transform,
-                                item.font_size,
-                            )?,
-                        );
-                        Ok(tx.create_node(SemanticNodeCreation::object(state)).into())
-                    })
-                    .collect::<Result<Vec<_>, TextAuthoringError>>()?;
-                let value = stage(
-                    &mut tx,
-                    leaves,
-                    shape,
-                    lines,
-                    rows.as_deref(),
-                    columns.as_deref(),
-                    options,
-                );
-                Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
-            },
-        )
-    })?;
-    make_table(store, published, options)
-}
-
-/// Publish ordinary `Table` strings through the native shaped-text pipeline.
-///
-/// A plain table deliberately has no LaTeX backend dependency: its cells keep
-/// native text resources and all resource imports plus table topology commit
-/// as one publication.
-#[cfg(feature = "native-text")]
-pub(super) fn publish_native_text_table(
-    publisher: TablePublisher<'_, '_>,
-    values: Vec<String>,
-    shape: TableShape,
-    rows: Option<Vec<Mobject>>,
-    columns: Option<Vec<Mobject>>,
-    options: TableOptions,
-) -> Result<Table, TableAuthoringError> {
-    let options = options.validate()?;
-    let prepared = values
-        .into_iter()
-        .map(prepare_native_text)
-        .collect::<Result<Vec<_>, _>>()?;
     let mut transforms: Vec<_> = prepared.iter().map(|item| item.transform).collect();
     let entry_bounds: Vec<_> = prepared
         .iter()
@@ -840,16 +734,15 @@ pub(super) fn publish_native_text_table(
                     .zip(handles)
                     .zip(transforms)
                     .map(|((item, handle), transform)| {
-                        tx.create_node(SemanticNodeCreation::object(
-                            crate::text_authoring::semantic_text_state(
-                                *handle,
-                                transform,
-                                item.style.clone(),
-                            ),
-                        ))
+                        let mut state = SemanticObjectState::new(*handle);
+                        state.transform = transform;
+                        state.style = item.style.clone();
+                        if let Some(baseline) = item.presentation_baseline {
+                            state.set_text_presentation_baseline(baseline);
+                        }
+                        Ok(tx.create_node(SemanticNodeCreation::object(state)).into())
                     })
-                    .map(Into::into)
-                    .collect();
+                    .collect::<Result<Vec<_>, TextAuthoringError>>()?;
                 let value = stage(
                     &mut tx,
                     leaves,
@@ -864,6 +757,46 @@ pub(super) fn publish_native_text_table(
         )
     })?;
     make_table(store, published, options)
+}
+
+#[cfg(feature = "latex")]
+pub(super) fn publish_text_table(
+    publisher: TablePublisher<'_, '_>,
+    backend: &mut impl LatexBackend,
+    values: Vec<String>,
+    shape: TableShape,
+    rows: Option<Vec<Mobject>>,
+    columns: Option<Vec<Mobject>>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    let options = options.validate()?;
+    let prepared = values
+        .into_iter()
+        .map(|value| prepare_text(backend, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    publish_prepared_text_table(publisher, prepared, shape, rows, columns, options)
+}
+
+/// Publish ordinary `Table` strings through the native shaped-text pipeline.
+///
+/// A plain table deliberately has no LaTeX backend dependency: its cells keep
+/// native text resources and all resource imports plus table topology commit
+/// as one publication.
+#[cfg(feature = "native-text")]
+pub(super) fn publish_native_text_table(
+    publisher: TablePublisher<'_, '_>,
+    values: Vec<String>,
+    shape: TableShape,
+    rows: Option<Vec<Mobject>>,
+    columns: Option<Vec<Mobject>>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    let options = options.validate()?;
+    let prepared = values
+        .into_iter()
+        .map(prepare_native_text)
+        .collect::<Result<Vec<_>, _>>()?;
+    publish_prepared_text_table(publisher, prepared, shape, rows, columns, options)
 }
 #[cfg(feature = "latex")]
 pub(super) fn publish_numeric_table(
