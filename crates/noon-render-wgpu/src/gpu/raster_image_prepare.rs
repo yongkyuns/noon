@@ -21,6 +21,21 @@ pub(super) struct ImageUniform {
     padding2: [f32; 2],
 }
 
+impl ImageUniform {
+    pub(super) fn inset(center: noon_core::Vec2, size: noon_core::Vec2, pixels: [u32; 2]) -> Self {
+        Self {
+            translation: [center.x, center.y],
+            scale: [size.x / pixels[0] as f32, size.y / pixels[1] as f32],
+            rotation: 0.0,
+            opacity: 1.0,
+            sampling: 2,
+            padding: 0,
+            dimensions: [pixels[0] as f32, pixels[1] as f32],
+            padding2: [0.0; 2],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PreparedImageObject {
     pub object: ObjectId,

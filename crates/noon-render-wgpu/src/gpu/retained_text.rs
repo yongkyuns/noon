@@ -32,7 +32,7 @@ use swash::{
 use super::raster_image_gpu::{
     RasterImageDrawError, RasterImageGpuRenderer, RasterImageResidencyStats, RasterImageUploadStats,
 };
-use super::raster_image_prepare::{ImagePreparation, RasterImageFramePreparer};
+use super::raster_image_prepare::{ImagePreparation, ImageUniform, RasterImageFramePreparer};
 use super::{
     path_batch_uses_polygon_coverage, push_upload_write, Camera2D, CameraUniform, DrawStats,
     GpuRenderer, Inset2DGpuView, RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
@@ -3214,17 +3214,6 @@ fn text_upload_needed(last_uploaded_generation: Option<u64>, generation: u64) ->
     last_uploaded_generation != Some(generation)
 }
 
-// Round the final interior edges once. Rounding placement and border separately
-// discards an extra pixel between the display outline and its captured contents.
-fn inset_interior_scissor(bounds: [f32; 4], half_stroke: f32) -> [u32; 4] {
-    let [left, top, right, bottom] = bounds;
-    let x = (left + half_stroke).ceil().max(0.0) as u32;
-    let y = (top + half_stroke).ceil().max(0.0) as u32;
-    let right = (right - half_stroke).floor().max(0.0) as u32;
-    let bottom = (bottom - half_stroke).floor().max(0.0) as u32;
-    [x, y, right.saturating_sub(x), bottom.saturating_sub(y)]
-}
-
 impl GpuRenderer {
     pub fn create_retained_text_state(
         &self,
@@ -3273,18 +3262,9 @@ impl GpuRenderer {
                 Vec2::new(state.camera.height * aspect, state.camera.height),
             )
             .map_err(|_| Inset2DRenderError::InvalidCamera(state.camera_frame))?;
-            let stroke_pixels = 0.5
-                * (state.display_stroke_width / self.camera.world_size.x * surface.x)
-                    .max(state.display_stroke_width / self.camera.world_size.y * surface.y);
-            let [x, y, width, height] =
-                inset_interior_scissor([left, top, right, bottom], stroke_pixels);
-            if width == 0 || height == 0 {
-                return Err(Inset2DRenderError::DisplayOutsideViewport(state.display));
-            }
             views.push(Inset2DGpuView {
                 state,
                 viewport: [left, top, pixel_width, pixel_height],
-                scissor: [x, y, width, height],
             });
             cameras.push(camera);
         }
@@ -3307,13 +3287,46 @@ impl GpuRenderer {
             self.inset_camera_buffers.push(buffer);
             self.inset_camera_bind_groups.push(bind_group);
         }
+        if !views.is_empty() {
+            let images = self
+                .images
+                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format));
+            for (index, view) in views.iter().enumerate() {
+                // Match the captured image's integer raster before fractional placement.
+                let size = [
+                    view.viewport[2].floor().max(1.0) as u32,
+                    view.viewport[3].floor().max(1.0) as u32,
+                ];
+                let uniform =
+                    ImageUniform::inset(view.state.display_center, view.state.display_size, size);
+                if let Some(target) = self.inset_targets.get_mut(index) {
+                    if target.size == size {
+                        target.image.update(queue, uniform);
+                        continue;
+                    }
+                }
+                let target = super::inset_capture::InsetCaptureTarget::new(
+                    device,
+                    self.target_format,
+                    size,
+                    images,
+                    uniform,
+                );
+                if index == self.inset_targets.len() {
+                    self.inset_targets.push(target);
+                } else {
+                    self.inset_targets[index] = target;
+                }
+            }
+        }
+        self.inset_targets.truncate(views.len());
         self.inset_camera_buffers.truncate(views.len());
         self.inset_camera_bind_groups.truncate(views.len());
         for (index, (view, camera)) in views.iter().zip(cameras.iter()).enumerate() {
             if self.inset_views.get(index).copied() != Some(*view) {
                 let viewport = [
-                    view.viewport[2].round().max(1.0) as u32,
-                    view.viewport[3].round().max(1.0) as u32,
+                    view.viewport[2].floor().max(1.0) as u32,
+                    view.viewport[3].floor().max(1.0) as u32,
                 ];
                 queue.write_buffer(
                     &self.inset_camera_buffers[index],
@@ -3597,6 +3610,8 @@ impl GpuRenderer {
         } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = retained_sample_count(prepared.render_items);
+        let inset_stats =
+            self.encode_inset_captures(encoder, prepared, text_state, sample_count)?;
         let color_attachments = if sample_count == 1 {
             [Some(wgpu::RenderPassColorAttachment {
                 view: scene_view,
@@ -3643,6 +3658,7 @@ impl GpuRenderer {
             &mut rendered_insets,
         )?;
         drop(pass);
+        stats += inset_stats;
         if finalize {
             stats.geometry += self.finalize_frame(encoder, view, overlay);
         }
@@ -3650,7 +3666,7 @@ impl GpuRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_retained_items<'a>(
+    pub(super) fn draw_retained_items<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &'a PreparedRetainedGpuFrame<'_>,
@@ -3697,6 +3713,16 @@ impl GpuRenderer {
             if excluded.contains(&item.object_id()) {
                 continue;
             }
+            if render_insets {
+                stats += self.draw_inset_for_display(
+                    pass,
+                    prepared,
+                    text_state,
+                    sample_count,
+                    item.object_id(),
+                    rendered_insets,
+                )?;
+            }
             match item {
                 RetainedRenderItem::Image { .. } => {
                     if self.draw_retained_image_with_camera(pass, item, sample_count, camera)? {
@@ -3730,16 +3756,6 @@ impl GpuRenderer {
                     };
                 }
             }
-            if render_insets {
-                stats += self.draw_inset_for_display(
-                    pass,
-                    prepared,
-                    text_state,
-                    sample_count,
-                    item.object_id(),
-                    rendered_insets,
-                )?;
-            }
         }
         for (_, image) in images {
             if !excluded.contains(&image.object_id())
@@ -3764,8 +3780,8 @@ impl GpuRenderer {
     fn draw_inset_for_display<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
-        prepared: &'a PreparedRetainedGpuFrame<'_>,
-        text_state: &'a RetainedTextGpuState,
+        _prepared: &'a PreparedRetainedGpuFrame<'_>,
+        _text_state: &'a RetainedTextGpuState,
         sample_count: u32,
         display: ObjectId,
         rendered_insets: &mut HashSet<ObjectId>,
@@ -3773,49 +3789,22 @@ impl GpuRenderer {
         let Some(&camera_index) = self.inset_camera_by_display.get(&display) else {
             return Ok(RetainedDrawStats::default());
         };
-        let inset = &self.inset_views[camera_index];
         if !rendered_insets.insert(display) {
             return Ok(RetainedDrawStats::default());
         }
-        let mut excluded = HashSet::new();
-        if !inset.state.capture_own_display {
-            excluded.insert(display);
-        }
-        pass.set_viewport(
-            inset.viewport[0],
-            inset.viewport[1],
-            inset.viewport[2],
-            inset.viewport[3],
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(
-            inset.scissor[0],
-            inset.scissor[1],
-            inset.scissor[2],
-            inset.scissor[3],
-        );
-        let result = self.draw_retained_items(
-            pass,
-            prepared,
-            text_state,
-            sample_count,
-            &self.inset_camera_bind_groups[camera_index],
-            Some(camera_index),
-            &excluded,
-            false,
-            rendered_insets,
-        );
-        pass.set_viewport(
-            0.0,
-            0.0,
-            self.viewport_size[0] as f32,
-            self.viewport_size[1] as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(0, 0, self.viewport_size[0], self.viewport_size[1]);
-        result
+        self.images
+            .as_ref()
+            .expect("active insets own image sampling pipeline")
+            .draw_external(
+                pass,
+                &self.camera_bind_group,
+                &self.inset_targets[camera_index].image,
+                sample_count,
+            );
+        Ok(RetainedDrawStats {
+            images: 1,
+            ..RetainedDrawStats::default()
+        })
     }
 
     fn draw_retained_image_with_camera<'a>(
@@ -4000,19 +3989,6 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn inset_border_rounding_preserves_fractional_pixel_coverage() {
-        let interior = super::inset_interior_scissor([723.75, 33.75, 926.25, 236.25], 1.0125);
-        assert_eq!(interior, [725, 35, 200, 200]);
-        // Moving a display by one pixel moves its interior without changing its size.
-        let translated = super::inset_interior_scissor([724.75, 34.75, 927.25, 237.25], 1.0125);
-        assert_eq!(translated, [726, 36, 200, 200]);
-        assert_eq!(
-            super::inset_interior_scissor([0.0, 0.0, 2.0, 2.0], 2.0)[2..],
-            [0, 0]
-        );
-    }
-
     use noon_compile::{CompiledObject, CompiledScene};
     use noon_core::FontResourceId;
     use noon_runtime::{FrameObjectState, SceneInstance};

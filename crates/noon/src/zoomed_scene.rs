@@ -187,7 +187,7 @@ impl Scene {
         });
         display.transform.translation = SemanticVec3::from_vec2(options.display_position());
         display.style = SemanticStyle {
-            fill: Some(SemanticPaint::Solid(Color::BLACK)),
+            fill: None,
             fill_opacity: 1.0,
             stroke: Some(SemanticPaint::Solid(Color::WHITE)),
             stroke_width: options.image_frame_stroke_width * MANIM_CAIRO_LINE_WIDTH_MULTIPLE,

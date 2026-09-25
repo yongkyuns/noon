@@ -8,6 +8,7 @@ mod derived_display;
 mod overlay;
 mod presentation;
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
+mod inset_capture;
 mod raster_image_gpu;
 mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
@@ -248,7 +249,6 @@ pub struct Camera2D {
 struct Inset2DGpuView {
     state: Inset2DViewState,
     viewport: [f32; 4],
-    scissor: [u32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -479,6 +479,7 @@ pub struct GpuRenderer {
     inset_camera_buffers: Vec<wgpu::Buffer>,
     inset_camera_bind_groups: Vec<wgpu::BindGroup>,
     inset_views: Vec<Inset2DGpuView>,
+    inset_targets: Vec<inset_capture::InsetCaptureTarget>,
     inset_camera_by_display: std::collections::HashMap<noon_core::ObjectId, usize>,
     camera: Camera2D,
     viewport_size: [u32; 2],
@@ -744,6 +745,7 @@ impl GpuRenderer {
             inset_camera_buffers: Vec::new(),
             inset_camera_bind_groups: Vec::new(),
             inset_views: Vec::new(),
+            inset_targets: Vec::new(),
             inset_camera_by_display: std::collections::HashMap::new(),
             camera,
             viewport_size,
