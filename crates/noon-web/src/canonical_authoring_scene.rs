@@ -3160,6 +3160,49 @@ mod wasm {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
+    /// Opaque shared Variable composite. Label/equals/value layout and tracker
+    /// binding were authored in Rust; language wrappers only rebind its parts.
+    #[wasm_bindgen]
+    pub struct WasmVariableHandle {
+        variable: noon::Variable,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    impl WasmVariableHandle {
+        pub(crate) fn new(
+            variable: noon::Variable,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Self {
+            Self { variable, store }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmVariableHandle {
+        #[wasm_bindgen(js_name = family)]
+        pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
+            crate::WasmAuthoringFamilyHandle::from_semantic_family(self.variable.family().clone())
+        }
+
+        #[wasm_bindgen(js_name = label)]
+        pub fn label(&self) -> crate::WasmLatexPartsHandle {
+            crate::WasmLatexPartsHandle::new(self.variable.label().clone())
+        }
+
+        #[wasm_bindgen(js_name = value)]
+        pub fn value(&self) -> crate::WasmDecimalNumberHandle {
+            crate::WasmDecimalNumberHandle::from_number(self.variable.value().clone())
+        }
+
+        #[wasm_bindgen(js_name = tracker)]
+        pub fn tracker(&self) -> WasmValueTrackerHandle {
+            WasmValueTrackerHandle::from_tracker(
+                self.variable.tracker().clone(),
+                std::rc::Rc::clone(&self.store),
+            )
+        }
+    }
+
     /// Opaque JS/Python identity for one canonical native vector source.
     #[wasm_bindgen]
     pub struct WasmNativeVectorSignalHandle {

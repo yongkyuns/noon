@@ -100,6 +100,11 @@ pub(crate) struct PreparedDecimalValue {
     font_size: f32,
 }
 
+pub(crate) struct PreparedNumericBinding {
+    token_sources: Vec<Arc<str>>,
+    dependencies: Vec<NumericCompiledDependency>,
+}
+
 pub(crate) type NumericCompiledDependency = (
     noon_core::TextCompilationIdentity,
     TextResource,
@@ -295,17 +300,7 @@ impl DecimalNumber {
         let metadata = self.metadata()?;
         let format = self.format()?;
         let font_size = metadata.font_size();
-        let token_sources = numeric_template_sources(&format);
-        let mut dependencies = Vec::with_capacity(token_sources.len());
-        for source in &token_sources {
-            dependencies.push(
-                crate::latex_authoring::prepare_math_tex(
-                    numeric_math_tex(source.as_ref(), font_size)?,
-                    backend,
-                )?
-                .into_compiled_resource_parts(),
-            );
-        }
+        let prepared_binding = PreparedNumericBinding::prepare(backend, &format, font_size)?;
 
         let node = self.object.node_id();
         let signal = tracker.node_id();
@@ -314,7 +309,7 @@ impl DecimalNumber {
         store
             .borrow_mut()
             .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
-                dependencies,
+                prepared_binding.dependencies.clone(),
                 |_store, handles| {
                     *captured.borrow_mut() = Some(handles.to_vec());
                     Ok(Vec::new())
@@ -324,13 +319,7 @@ impl DecimalNumber {
                         .borrow_mut()
                         .take()
                         .expect("numeric template composition captures dependency handles");
-                    let token_resources =
-                        token_sources.into_iter().zip(handles).collect::<Vec<_>>();
-                    let binding = SemanticNumericTextBinding::new(
-                        signal,
-                        token_resources.into(),
-                        crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE,
-                    );
+                    let binding = prepared_binding.binding(signal, &handles);
                     let number = metadata.clone().with_binding(binding);
                     // The current authored value remains the DecimalNumber base value.
                     debug_assert_eq!(number.value(), metadata.value());
@@ -397,6 +386,52 @@ impl DecimalNumber {
     }
 }
 
+impl PreparedNumericBinding {
+    pub(crate) fn prepare(
+        backend: &mut impl LatexBackend,
+        format: &DecimalFormat,
+        font_size: f32,
+    ) -> Result<Self, NumericAuthoringError> {
+        let token_sources = numeric_template_sources(format);
+        let mut dependencies = Vec::with_capacity(token_sources.len());
+        for source in &token_sources {
+            dependencies.push(
+                crate::latex_authoring::prepare_math_tex(
+                    numeric_math_tex(source.as_ref(), font_size)?,
+                    backend,
+                )?
+                .into_compiled_resource_parts(),
+            );
+        }
+        Ok(Self {
+            token_sources,
+            dependencies,
+        })
+    }
+
+    pub(crate) fn dependencies(&self) -> &[NumericCompiledDependency] {
+        &self.dependencies
+    }
+
+    pub(crate) fn binding(
+        &self,
+        signal: noon_core::SemanticNodeId,
+        handles: &[noon_core::TextResourceHandle],
+    ) -> SemanticNumericTextBinding {
+        debug_assert_eq!(self.token_sources.len(), handles.len());
+        SemanticNumericTextBinding::new(
+            signal,
+            self.token_sources
+                .iter()
+                .cloned()
+                .zip(handles.iter().copied())
+                .collect::<Vec<_>>()
+                .into(),
+            crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE,
+        )
+    }
+}
+
 impl PreparedDecimalValue {
     /// Prepare a DecimalNumber resource without mutating semantic state.  Composite
     /// authors use [`publish_batch`] to admit a complete set through one
@@ -412,6 +447,10 @@ impl PreparedDecimalValue {
 
     pub(crate) fn dependencies(&self) -> &[NumericCompiledDependency] {
         &self.dependencies
+    }
+
+    pub(crate) fn decimal_number(&self) -> SemanticDecimalNumber {
+        decimal_metadata(self.value, &self.format, self.font_size)
     }
 
     pub(crate) fn compose_resource(

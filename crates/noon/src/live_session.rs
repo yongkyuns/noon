@@ -717,6 +717,29 @@ impl<'a> LiveSession<'a> {
             .map_err(crate::numeric_authoring::numeric_live_error)
     }
 
+    /// Construct an atomic shared Variable with a fresh scoped tracker.
+    #[cfg(feature = "latex")]
+    pub fn create_variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, LiveSessionError> {
+        crate::variable_authoring::construct_variable(
+            self.store,
+            self.root,
+            Some(self.session),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+        .map_err(crate::variable_authoring::variable_live_error)
+    }
+
     /// Read DecimalNumber font size from the current effective publication.
     #[cfg(feature = "latex")]
     pub fn decimal_font_size(

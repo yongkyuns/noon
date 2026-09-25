@@ -878,6 +878,7 @@ _PUBLIC_EXPORTS = {
     "MobjectMatrix": "_manim_matrix",
     "DecimalNumber": "_manim_numbers",
     "Integer": "_manim_numbers",
+    "Variable": "_manim_numbers",
     "Tex": "_manim_latex",
     "MathTex": "_manim_latex",
     "SingleStringMathTex": "_manim_latex",

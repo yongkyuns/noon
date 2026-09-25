@@ -283,6 +283,11 @@ async function initializePyodide() {
     }
     return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
   };
+  self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
+    if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
+    return context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+  };
   self.noonMatrixOptions = WasmMatrixOptions;
   self.noonMobjectMatrixRows = WasmMobjectMatrixRows;
   self.noonMatrixFromFamily = (family) => family.asMatrix();

@@ -339,16 +339,7 @@ impl LatexAdmission {
                     .text_resources()
                     .get(base)
                     .expect("compiled text resource is live");
-                let source = Arc::clone(&resource.source);
-                let parts = if resource.parts.is_empty() {
-                    vec![resource.source_part(TextSourceSpan::new(
-                        0,
-                        u32::try_from(resource.source.len())
-                            .map_err(|_| noon_core::TextPartQueryError::InvalidSourceSpan)?,
-                    ))?]
-                } else {
-                    resource.parts.to_vec()
-                };
+                let (source, parts) = text_resource_parts(resource)?;
                 let initial_height = transformed_rect_height(resource.bounds, transform);
                 let baseline = noon_core::TextPresentationBaseline::new(font_size, initial_height)
                     .ok_or(TextAuthoringError::Semantic(
@@ -532,7 +523,23 @@ fn latex_presentation(
     Ok((transform, style))
 }
 
-fn semantic_text_state(
+pub(crate) fn text_resource_parts(
+    resource: &noon_core::TextResource,
+) -> Result<(Arc<str>, Vec<TextPart>), TextAuthoringError> {
+    let source = Arc::clone(&resource.source);
+    let parts = if resource.parts.is_empty() {
+        vec![resource.source_part(TextSourceSpan::new(
+            0,
+            u32::try_from(resource.source.len())
+                .map_err(|_| noon_core::TextPartQueryError::InvalidSourceSpan)?,
+        ))?]
+    } else {
+        resource.parts.to_vec()
+    };
+    Ok((source, parts))
+}
+
+pub(crate) fn semantic_text_state(
     handle: noon_core::TextResourceHandle,
     transform: noon_core::SemanticTransform2_5D,
     style: noon_core::SemanticStyle,

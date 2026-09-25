@@ -977,6 +977,29 @@ impl Scene {
         self.publish_latex_admission(admission)
     }
 
+    /// Construct one detached, tracker-driven `label = value` composite through
+    /// a single resource and semantic publication boundary.
+    #[cfg(feature = "latex")]
+    pub fn variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, crate::VariableAuthoringError> {
+        crate::variable_authoring::construct_variable(
+            &self.store,
+            self.root,
+            self.execution.as_mut(),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+    }
+
     fn publish_latex_admission(
         &mut self,
         admission: crate::latex_authoring::LatexAdmission,

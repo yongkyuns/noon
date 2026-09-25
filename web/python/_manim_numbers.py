@@ -4,14 +4,34 @@ import math
 from _noon_errors import engine_call
 from _manim_typst import _RetainedTextMobject, _live_text_context
 import _manim_semantic_handles as _semantic
+import _manim_compat as _compat
 import noon as _base
 
 try:
     from js import noonCreateAuthoringDecimalNumberHandle as _create_decimal, noonNumericFromMobject as _from_mobject
 except ImportError:
     _create_decimal = _from_mobject = None
+try:
+    from js import noonCreateAuthoringVariableHandle as _create_variable
+except ImportError:
+    _create_variable = None
 
 class DecimalNumber(_RetainedTextMobject):
+    @classmethod
+    def _from_numeric_handle(cls, handle, context):
+        number = object.__new__(cls)
+        if context is not None:
+            number._canonical_live_target_context = context
+        number._numeric_handle = handle
+        semantic = engine_call(handle.mobject)
+        number._initialize_text(
+            str(engine_call(handle.text)),
+            float(engine_call(handle.fontSize, context)),
+            semantic,
+            _base.WHITE,
+            1.0,
+        )
+        return number
     def _rebind_copied_semantic_handle(self):
         if _from_mobject is None: raise RuntimeError("DecimalNumber requires Noon's shared Rust authoring runtime")
         self._numeric_handle = engine_call(_from_mobject, self._semantic_handle)
@@ -51,3 +71,54 @@ class DecimalNumber(_RetainedTextMobject):
 class Integer(DecimalNumber):
     def __init__(self, number: float = 0, **kwargs): kwargs["num_decimal_places"] = 0; super().__init__(number, **kwargs)
     def get_value(self) -> int: return int(engine_call(self._numeric_handle.integerValue))
+
+
+class Variable(_compat.VGroup):
+    """Shared Rust `label = value` composite driven by one ValueTracker."""
+
+    def __init__(self, var, label, var_type=DecimalNumber, **kwargs):
+        from _manim_latex import MathTex
+        from _manim_reactive import ValueTracker, _current_authoring_scene
+        from _manim_semantic_handles import (
+            _attach_shared_family,
+            _family_wrapper_key,
+            _live_constructor_context,
+        )
+
+        if _create_variable is None:
+            raise RuntimeError("Variable requires Noon's shared Rust authoring runtime")
+        if var_type not in (DecimalNumber, Integer):
+            raise NotImplementedError("Variable var_type must be DecimalNumber or Integer")
+        if not isinstance(label, str):
+            raise TypeError("Variable label must be a string")
+        places = kwargs.pop("num_decimal_places", 0 if var_type is Integer else 2)
+        include_sign = bool(kwargs.pop("include_sign", False))
+        commas = bool(kwargs.pop("group_with_commas", True))
+        ellipsis = bool(kwargs.pop("show_ellipsis", False))
+        unit = kwargs.pop("unit", None)
+        font_size = float(kwargs.pop("font_size", 48.0))
+        if kwargs:
+            raise NotImplementedError(
+                "unsupported Variable option(s): " + ", ".join(sorted(kwargs))
+            )
+        context = _live_constructor_context("Variable", allow_unstarted=True)
+        if context is None:
+            raise RuntimeError("Variable requires a canonical Scene authoring context")
+        handle = engine_call(
+            _create_variable, label, float(var), int(places), include_sign,
+            commas, ellipsis, unit, font_size, context,
+        )
+        self._variable_handle = handle
+        self.label = MathTex._from_semantic_handle(engine_call(handle.label), context)
+        numeric_type = Integer if var_type is Integer else DecimalNumber
+        self.value = numeric_type._from_numeric_handle(engine_call(handle.value), context)
+        scene = _current_authoring_scene()
+        self.tracker = ValueTracker._from_canonical(
+            scene, context, engine_call(handle.tracker)
+        )
+        self.equals = self.label[1]
+        _attach_shared_family(self, engine_call(handle.family), context)
+        self._semantic_member_wrappers = {
+            _family_wrapper_key(self.label): self.label,
+            _family_wrapper_key(self.value): self.value,
+        }

@@ -74,6 +74,21 @@ class MathTexPart(_CompiledTexLeaf):
 class _TexBase(_compat.VGroup):
     _math_mode = False
 
+    @classmethod
+    def _from_semantic_handle(cls, handle: object, context: object | None):
+        owner = object.__new__(cls)
+        owner._source = str(handle.source)
+        owner._font_size = float(handle.fontSize)
+        owner._initial_color = _base.WHITE
+        owner._initial_opacity = 1.0
+        owner._semantic_latex_handle = handle
+        owner._semantic_family_handle = engine_call(handle.family)
+        owner._semantic_member_wrappers = {}
+        if context is not None:
+            owner._canonical_live_target_context = context
+        owner._part_views()
+        return owner
+
     @property
     def source(self) -> str:
         if hasattr(self, "_source"):

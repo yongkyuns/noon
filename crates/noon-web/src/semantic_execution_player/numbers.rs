@@ -2,6 +2,19 @@
 use super::*;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_create_variable(
+        &mut self,
+        backend: &mut impl noon::LatexBackend,
+        label: String,
+        value: f64,
+        format: noon::DecimalFormat,
+        font_size: f32,
+    ) -> Result<noon::Variable, AuthoringFailure> {
+        self.with_live_session(move |live| {
+            live.create_variable(backend, label, value, format, font_size)
+        })
+    }
+
     pub(crate) fn live_create_decimal_number(
         &mut self,
         backend: &mut impl noon::LatexBackend,

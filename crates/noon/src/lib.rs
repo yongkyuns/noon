@@ -153,6 +153,8 @@ mod text_authoring;
 mod text_part_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod time_series_plotting_example;
+#[cfg(feature = "latex")]
+mod variable_authoring;
 mod vector_field_authoring;
 mod z_index;
 mod zoomed_scene;
@@ -287,6 +289,8 @@ pub use text_authoring::{
 pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_part_authoring::TextPartAuthoringError;
+#[cfg(feature = "latex")]
+pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
 pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
