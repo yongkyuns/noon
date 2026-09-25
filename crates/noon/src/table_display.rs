@@ -339,6 +339,30 @@ impl IntegerTable {
         )
         .map(Self)
     }
+    pub fn from_rows_in_live_session<I, J>(
+        live: &mut crate::LiveSession<'_>,
+        backend: &mut impl LatexBackend,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = f64>,
+    {
+        let rows = collect_number_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_numeric_table(
+            TablePublisher::Live(live),
+            backend,
+            rows.into_iter().flatten().collect(),
+            shape,
+            integer_format(),
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
     pub fn table(&self) -> &Table {
         &self.0
     }
@@ -374,6 +398,31 @@ impl DecimalTable {
         let shape = table_shape(&rows)?;
         publish_numeric_table(
             TablePublisher::Scene(scene),
+            backend,
+            rows.into_iter().flatten().collect(),
+            shape,
+            format,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
+    pub fn from_rows_in_live_session<I, J>(
+        live: &mut crate::LiveSession<'_>,
+        backend: &mut impl LatexBackend,
+        rows: I,
+        format: DecimalFormat,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = f64>,
+    {
+        let rows = collect_number_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_numeric_table(
+            TablePublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,
