@@ -260,6 +260,7 @@ impl LatexAdmission {
         noon_core::GeometryResourceArena,
         noon_core::SemanticTransform2_5D,
         noon_core::SemanticStyle,
+        f64,
     ) {
         (
             self.identity,
@@ -268,6 +269,7 @@ impl LatexAdmission {
             self.geometry,
             self.transform,
             self.style,
+            self.font_size,
         )
     }
 
@@ -545,7 +547,7 @@ fn semantic_text_state(
     state
 }
 
-fn latex_presentation_baseline(
+pub(crate) fn latex_presentation_baseline(
     resource: &noon_core::TextResource,
     transform: noon_core::SemanticTransform2_5D,
     font_size: f64,

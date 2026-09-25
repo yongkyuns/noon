@@ -854,6 +854,14 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
+    pub(crate) fn capture_mobject_state_for_composite(
+        &self,
+        source: &Mobject,
+    ) -> Result<SemanticObjectState, LiveSessionError> {
+        self.require_target_capture()?;
+        self.capture_mobject_state(source)
+    }
+
     /// Capture conservative world-axis bounds from one coherent object state.
     /// Reachable objects use the live effective transform; detached objects use
     /// their validated authored state. Publication and callback gates are shared

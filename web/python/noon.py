@@ -761,6 +761,9 @@ Object = Mobject
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "SampleSpace": "_manim_sample_space",
+    "Matrix": "_manim_matrix",
+    "IntegerMatrix": "_manim_matrix",
+    "DecimalMatrix": "_manim_matrix",
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",

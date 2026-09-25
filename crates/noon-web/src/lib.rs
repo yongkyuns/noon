@@ -23,6 +23,8 @@ mod authoring_implicit_plotting;
 mod authoring_latex;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_latex::*;
+#[cfg(target_arch = "wasm32")]
+mod authoring_matrix;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
@@ -126,6 +128,8 @@ pub use authoring_geometry::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_image::*;
 pub use authoring_mobject::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_matrix::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_number_labels::*;
 pub use authoring_options::*;

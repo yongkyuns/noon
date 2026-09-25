@@ -101,19 +101,36 @@ struct PreparedText {
     dependency: Dependency,
     transform: SemanticTransform2_5D,
     style: noon_core::SemanticStyle,
+    font_size: f64,
 }
 fn prepare_text(
     backend: &mut impl LatexBackend,
     source: String,
 ) -> Result<PreparedText, MatrixAuthoringError> {
-    let (identity, resource, fonts, geometry, transform, style) =
+    let (identity, resource, fonts, geometry, transform, style, font_size) =
         crate::latex_authoring::prepare_math_tex(crate::MathTex::from_strings([source])?, backend)?
             .into_compiled_resource_parts_with_presentation();
     Ok(PreparedText {
         dependency: (identity, resource, fonts, geometry),
         transform,
         style,
+        font_size,
     })
+}
+
+fn text_state(
+    handle: noon_core::TextResourceHandle,
+    item: &PreparedText,
+) -> Result<SemanticObjectState, TextAuthoringError> {
+    let mut state = SemanticObjectState::new(handle);
+    state.transform = item.transform;
+    state.style = item.style.clone();
+    state.set_text_presentation_baseline(crate::latex_authoring::latex_presentation_baseline(
+        &item.dependency.1,
+        item.transform,
+        item.font_size,
+    )?);
+    Ok(state)
 }
 fn brackets(
     backend: &mut impl LatexBackend,
@@ -322,23 +339,21 @@ pub(super) fn publish_text_matrix(
                     .iter()
                     .zip(&handles[..count])
                     .map(|(item, handle)| {
-                        let mut state = SemanticObjectState::new(*handle);
-                        state.transform = item.transform;
-                        state.style = item.style.clone();
-                        transaction.create_node(SemanticNodeCreation::object(state))
+                        text_state(*handle, item).map(|state| {
+                            transaction.create_node(SemanticNodeCreation::object(state))
+                        })
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, _>>()?;
                 let mut states = brackets
                     .iter()
                     .zip(&handles[count..])
                     .map(|(item, handle)| {
-                        let mut state = SemanticObjectState::new(*handle);
-                        state.transform = item.transform;
-                        state.style = item.style.clone();
-                        transaction.create_node(SemanticNodeCreation::object(state))
+                        text_state(*handle, item).map(|state| {
+                            transaction.create_node(SemanticNodeCreation::object(state))
+                        })
                     });
-                let left = states.next().expect("two brackets");
-                let right = states.next().expect("two brackets");
+                let left = states.next().expect("two brackets")?;
+                let right = states.next().expect("two brackets")?;
                 let (root, entries) = stage_matrix(&mut transaction, leaves, shape, left, right);
                 let result =
                     publish(semantic, transaction).map_err(TextAuthoringError::Semantic)?;
@@ -450,13 +465,12 @@ pub(super) fn publish_numeric_matrix(
                         .iter()
                         .zip(&handles[count..])
                         .map(|(item, handle)| {
-                            let mut state = SemanticObjectState::new(*handle);
-                            state.transform = item.transform;
-                            state.style = item.style.clone();
-                            transaction.create_node(SemanticNodeCreation::object(state))
+                            text_state(*handle, item).map(|state| {
+                                transaction.create_node(SemanticNodeCreation::object(state))
+                            })
                         });
-                let left = bracket_nodes.next().expect("two brackets");
-                let right = bracket_nodes.next().expect("two brackets");
+                let left = bracket_nodes.next().expect("two brackets")?;
+                let right = bracket_nodes.next().expect("two brackets")?;
                 let (root, entries) = stage_matrix(&mut transaction, leaves, shape, left, right);
                 let result =
                     publish(semantic, transaction).map_err(TextAuthoringError::Semantic)?;
@@ -481,12 +495,51 @@ pub(super) fn publish_existing_mobject_matrix(
     options: MatrixOptions,
 ) -> Result<Matrix, MatrixAuthoringError> {
     let options = options.validate()?;
+    let presented: Vec<_> = match &publisher {
+        MatrixPublisher::Live(live) => entries
+            .iter()
+            .map(|entry| {
+                let bounds = live
+                    .capture_boundary_bounds(entry)
+                    .map_err(|error| {
+                        MatrixAuthoringError::Semantic(match error {
+                            crate::LiveSessionError::Authoring(error) => error,
+                            other => AuthoringError::InvalidRenderNumber {
+                                name: other.to_string(),
+                                value: f64::NAN,
+                            },
+                        })
+                    })?
+                    .ok_or(MatrixAuthoringError::InvalidStructure)?;
+                let state = live
+                    .capture_mobject_state_for_composite(entry)
+                    .map_err(|error| {
+                        MatrixAuthoringError::Semantic(match error {
+                            crate::LiveSessionError::Authoring(error) => error,
+                            other => AuthoringError::InvalidRenderNumber {
+                                name: other.to_string(),
+                                value: f64::NAN,
+                            },
+                        })
+                    })?;
+                Ok((bounds, state.transform.translation))
+            })
+            .collect::<Result<_, MatrixAuthoringError>>()?,
+        MatrixPublisher::Store(_) | MatrixPublisher::Scene(_) => entries
+            .iter()
+            .map(|entry| {
+                Ok((
+                    entry
+                        .layout_bounds()?
+                        .ok_or(MatrixAuthoringError::InvalidStructure)?,
+                    entry.state()?.transform.translation,
+                ))
+            })
+            .collect::<Result<_, MatrixAuthoringError>>()?,
+    };
     let mut bounds = None;
     let mut translations = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let item = entry
-            .layout_bounds()?
-            .ok_or(MatrixAuthoringError::InvalidStructure)?;
+    for (index, (item, base_translation)) in presented.into_iter().enumerate() {
         let dx = (index % shape.columns) as f64 * options.h_buff - item.max_x;
         let dy = -((index / shape.columns) as f64) * options.v_buff - item.min_y;
         let mut moved = item;
@@ -495,7 +548,7 @@ pub(super) fn publish_existing_mobject_matrix(
         moved.min_y += dy;
         moved.max_y += dy;
         include(&mut bounds, moved);
-        let mut translation = entry.state()?.transform.translation;
+        let mut translation = base_translation;
         translation.x += dx;
         translation.y += dy;
         translations.push(translation);
@@ -505,9 +558,35 @@ pub(super) fn publish_existing_mobject_matrix(
         backend,
         (bounds.height() / BRACKET_HEIGHT).floor() as usize + 1,
     )?;
-    let empty: [&TextResource; 0] = [];
-    let mut none: [SemanticTransform2_5D; 0] = [];
-    place_brackets(&empty, &mut none, &mut bracket, bounds, options);
+    let target_height = bounds.height() + 2.0 * options.bracket_v_buff;
+    for (index, item) in bracket.iter_mut().enumerate() {
+        let natural = text_bounds(&item.dependency.1, item.transform);
+        if options.stretch_brackets && natural.height() > 0.0 {
+            item.transform.scale.y *= target_height / natural.height();
+        }
+        let placed = text_bounds(&item.dependency.1, item.transform);
+        item.transform.translation.y +=
+            (bounds.min_y + bounds.max_y - placed.min_y - placed.max_y) * 0.5;
+        item.transform.translation.x += if index == 0 {
+            bounds.min_x - options.bracket_h_buff - placed.max_x
+        } else {
+            bounds.max_x + options.bracket_h_buff - placed.min_x
+        };
+    }
+    let mut all = Some(bounds);
+    for item in &bracket {
+        include(&mut all, text_bounds(&item.dependency.1, item.transform));
+    }
+    let all = all.expect("existing Matrix has bounds");
+    let center = ((all.min_x + all.max_x) * 0.5, (all.min_y + all.max_y) * 0.5);
+    for translation in &mut translations {
+        translation.x -= center.0;
+        translation.y -= center.1;
+    }
+    for item in &mut bracket {
+        item.transform.translation.x -= center.0;
+        item.transform.translation.y -= center.1;
+    }
     let store = match &publisher {
         MatrixPublisher::Store(store) => Rc::clone(store),
         MatrixPublisher::Scene(scene) => Rc::clone(scene.integration_store()),
@@ -539,13 +618,11 @@ pub(super) fn publish_existing_mobject_matrix(
                     );
                 }
                 let mut nodes = bracket.iter().zip(handles).map(|(item, handle)| {
-                    let mut state = SemanticObjectState::new(*handle);
-                    state.transform = item.transform;
-                    state.style = item.style.clone();
-                    transaction.create_node(SemanticNodeCreation::object(state))
+                    text_state(*handle, item)
+                        .map(|state| transaction.create_node(SemanticNodeCreation::object(state)))
                 });
-                let left = nodes.next().expect("two brackets");
-                let right = nodes.next().expect("two brackets");
+                let left = nodes.next().expect("two brackets")?;
+                let right = nodes.next().expect("two brackets")?;
                 let entry_family = transaction.create_node(SemanticNodeCreation::family());
                 for row in entries.chunks(shape.columns) {
                     let row_family = transaction.create_node(SemanticNodeCreation::family());

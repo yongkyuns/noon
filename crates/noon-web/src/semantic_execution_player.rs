@@ -1067,6 +1067,52 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_matrix(
+        &mut self,
+        backend: &mut impl noon::LatexBackend,
+        rows: Vec<Vec<String>>,
+        options: noon::MatrixOptions,
+    ) -> Result<noon::Matrix, AuthoringFailure> {
+        self.with_live_session(|live| {
+            noon::Matrix::from_rows_in_live_session(live, backend, rows, options)
+        })
+        .map_err(AuthoringFailure::from)
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_integer_matrix(
+        &mut self,
+        backend: &mut impl noon::LatexBackend,
+        rows: Vec<Vec<f64>>,
+        options: noon::MatrixOptions,
+    ) -> Result<noon::IntegerMatrix, AuthoringFailure> {
+        self.with_live_session(|live| {
+            noon::IntegerMatrix::from_rows_in_live_session(live, backend, rows, options)
+        })
+        .map_err(AuthoringFailure::from)
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_decimal_matrix(
+        &mut self,
+        backend: &mut impl noon::LatexBackend,
+        rows: Vec<Vec<f64>>,
+        options: noon::MatrixOptions,
+    ) -> Result<noon::DecimalMatrix, AuthoringFailure> {
+        self.with_live_session(|live| {
+            noon::DecimalMatrix::from_rows_in_live_session(
+                live,
+                backend,
+                rows,
+                noon::DecimalFormat {
+                    decimal_places: 1,
+                    ..Default::default()
+                },
+                options,
+            )
+        })
+        .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_replace_content(
         &mut self,

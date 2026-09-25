@@ -228,6 +228,20 @@ async function initializePyodide() {
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
       : context.liveCreateDecimalNumber(...args));
   };
+  self.noonMatrixOptions = WasmMatrixOptions;
+  self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
+    const options = new WasmMatrixOptions(v, h, bh, bv, stretch);
+    return context.liveCreateMatrix(rows, options, latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
+    return context.liveCreateIntegerMatrix(rows, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
+    return context.liveCreateDecimalMatrix(rows, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
