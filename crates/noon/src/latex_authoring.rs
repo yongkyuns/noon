@@ -211,7 +211,7 @@ impl LatexAdmission {
                 };
                 let projections = parts
                     .iter()
-                    .map(|part| resource.projected_part(part))
+                    .map(|part| resource.projected_part(part, store.geometry_resources()))
                     .collect::<Result<Vec<_>, _>>()?;
                 store.with_derived_text_resources(projections, |store, handles| {
                     let mut transaction = SemanticMutationTransaction::new();

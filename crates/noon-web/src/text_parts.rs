@@ -15,6 +15,9 @@ fn text_part_js_error(error: noon::TextPartAuthoringError) -> JsValue {
         noon::TextPartAuthoringError::NotText(_) => {
             AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
         }
+        noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
+            AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
+        }
         noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
             AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
         }

@@ -22,6 +22,8 @@ pub enum TextPartQueryError {
     NonContiguousClusters,
     /// The normalized vector items selected by the source span are not contiguous.
     NonContiguousVectors,
+    /// A selected vector refers to missing or retired geometry.
+    MissingGeometry(crate::GeometryResourceHandle),
 }
 
 impl fmt::Display for TextPartQueryError {
@@ -33,6 +35,9 @@ impl fmt::Display for TextPartQueryError {
                     formatter,
                     "text source span maps to non-contiguous clusters"
                 )
+            }
+            Self::MissingGeometry(handle) => {
+                write!(formatter, "text part geometry is unavailable: {handle:?}")
             }
             Self::NonContiguousVectors => {
                 write!(
@@ -54,7 +59,11 @@ impl TextResource {
     /// resource. Only the small run/item index vectors and selected glyph records
     /// are projected once at authoring time. No outline extraction or geometry
     /// compilation is performed here or during ordinary frame evaluation.
-    pub fn projected_part(&self, part: &TextPart) -> Result<Self, TextPartQueryError> {
+    pub fn projected_part(
+        &self,
+        part: &TextPart,
+        geometry: &impl crate::GeometryResourceLookup,
+    ) -> Result<Self, TextPartQueryError> {
         let cluster_end = part
             .first_cluster
             .checked_add(part.cluster_count)
@@ -71,25 +80,25 @@ impl TextResource {
 
         let mut projected_runs = Vec::new();
         let mut run_map = vec![None; self.runs.len()];
-        let mut cluster_cursor = 0_u32;
         let mut bounds = None;
         for (old_index, run) in self.runs.iter().enumerate() {
-            let run_start = cluster_cursor;
-            let run_end = run_start
-                .checked_add(u32::try_from(run.glyphs.len()).unwrap_or(u32::MAX))
-                .ok_or(TextPartQueryError::NonContiguousClusters)?;
-            cluster_cursor = run_end;
-            let start = part.first_cluster.max(run_start);
-            let end = cluster_end.min(run_end);
-            if start >= end {
+            let glyphs = run
+                .glyphs
+                .iter()
+                .filter(|glyph| {
+                    (part.first_cluster..cluster_end).contains(&glyph.cluster.cluster_ordinal)
+                })
+                .cloned()
+                .map(|mut glyph| {
+                    glyph.cluster.cluster_ordinal -= part.first_cluster;
+                    glyph
+                })
+                .collect::<Vec<_>>();
+            if glyphs.is_empty() {
                 continue;
             }
-            let local_start = usize::try_from(start - run_start)
-                .map_err(|_| TextPartQueryError::NonContiguousClusters)?;
-            let local_end = usize::try_from(end - run_start)
-                .map_err(|_| TextPartQueryError::NonContiguousClusters)?;
             let mut projected: GlyphRun = run.clone();
-            projected.glyphs = run.glyphs[local_start..local_end].to_vec().into();
+            projected.glyphs = glyphs.into();
             for glyph in projected.glyphs.iter() {
                 let glyph_bounds = transform_rect(glyph.bounds, run.transform);
                 bounds =
@@ -106,11 +115,24 @@ impl TextResource {
         let vector_end_usize =
             usize::try_from(vector_end).map_err(|_| TextPartQueryError::NonContiguousVectors)?;
         let projected_vectors = self.vector_items[vector_start..vector_end_usize].to_vec();
-        // Geometry bounds are owned by the shared geometry arena. Until a vector
-        // item is selected, glyph bounds are exact; a vector selection conservatively
-        // retains the compiler's complete text bounds rather than inventing geometry.
-        if !projected_vectors.is_empty() {
-            bounds = Some(bounds.map_or(self.bounds, |current: Rect| current.union(self.bounds)));
+        // An indexed fraction/radical part owns only its selected rules. Using
+        // the complete formula's bounds would corrupt part layout and matching.
+        for vector in &projected_vectors {
+            let crate::GeometryResource::VectorPath(path) = geometry
+                .get(vector.geometry)
+                .ok_or(TextPartQueryError::MissingGeometry(vector.geometry))?;
+            if let Some(local) =
+                crate::semantic_path_bounds(path, f64::from(vector.style.stroke_width)).layout
+            {
+                let local = Rect::new(
+                    Vec2::new(local.min_x as f32, local.min_y as f32),
+                    Vec2::new(local.max_x as f32, local.max_y as f32),
+                );
+                let vector_bounds = transform_rect(local, vector.transform);
+                bounds = Some(
+                    bounds.map_or(vector_bounds, |current: Rect| current.union(vector_bounds)),
+                );
+            }
         }
 
         let mut render_items = Vec::new();
@@ -452,7 +474,9 @@ mod tests {
         let resource = sample_text("ab cd");
         let part = resource.source_parts_for("cd").unwrap().remove(0);
 
-        let projected = resource.projected_part(&part).unwrap();
+        let projected = resource
+            .projected_part(&part, &crate::GeometryResourceArena::new())
+            .unwrap();
 
         assert_eq!(projected.source.as_ref(), "ab cd");
         assert_eq!(projected.cluster_count(), 2);
@@ -467,7 +491,83 @@ mod tests {
         assert_eq!(projected.parts[0].semantic_key, part.semantic_key);
         assert_eq!(projected.parts[0].first_cluster, 0);
         assert_eq!(projected.parts[0].cluster_count, 2);
+        let queried = projected.source_parts_for("cd").unwrap();
+        assert_eq!(queried[0].first_cluster, 0);
+        assert_eq!(queried[0].cluster_count, 2);
+        let selected_again = projected
+            .projected_part(&queried[0], &crate::GeometryResourceArena::new())
+            .unwrap();
+        assert_eq!(selected_again.runs, projected.runs);
         projected.validate().unwrap();
+    }
+
+    #[test]
+    fn projected_part_keeps_all_glyphs_of_one_cluster() {
+        let mut resource = sample_text("ab");
+        let runs = Arc::make_mut(&mut resource.runs);
+        let mut glyphs = runs[0].glyphs.to_vec();
+        glyphs.insert(1, glyphs[0].clone());
+        runs[0].glyphs = glyphs.into();
+        let geometry = crate::GeometryResourceArena::new();
+        for (needle, count) in [("a", 2), ("b", 1)] {
+            let part = resource.source_parts_for(needle).unwrap().remove(0);
+            let projected = resource.projected_part(&part, &geometry).unwrap();
+            assert_eq!(projected.glyph_count(), count);
+            assert!(projected.runs[0]
+                .glyphs
+                .iter()
+                .all(|glyph| glyph.cluster.cluster_ordinal == 0));
+            assert_eq!(
+                projected.source_parts_for(needle).unwrap()[0].first_cluster,
+                0
+            );
+            assert_eq!(
+                projected.runs[0].glyphs[0].glyph_id,
+                needle.as_bytes()[0] as u32
+            );
+        }
+    }
+
+    #[test]
+    fn projected_part_bounds_include_only_selected_vector_resources() {
+        let mut geometry = crate::GeometryResourceArena::new();
+        let rule = geometry.insert_path(
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0))
+                .line_to(Vec2::new(1.0, 0.1))
+                .line_to(Vec2::new(0.0, 0.1))
+                .close(),
+        );
+        let mut resource = sample_text("ab");
+        resource.vector_items = Arc::from(
+            [4.0, 100.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| crate::TextVectorItem {
+                    geometry: rule,
+                    transform: TextAffineTransform::translation(x, 2.0),
+                    style: crate::TextVectorStyle::default(),
+                    source_span: Some(TextSourceSpan::new(i as u32, i as u32 + 1)),
+                    semantic_key: None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        resource.render_items = Arc::from([
+            TextRenderItem::GlyphRun(0),
+            TextRenderItem::Vector(0),
+            TextRenderItem::Vector(1),
+        ]);
+        resource.bounds = Rect::new(Vec2::ZERO, Vec2::new(101.0, 2.1));
+        let part = resource.source_parts_for("a").unwrap().remove(0);
+        let projected = resource.projected_part(&part, &geometry).unwrap();
+        assert_eq!(projected.bounds.max, Vec2::new(5.0, 2.1));
+        assert_eq!(projected.vector_items.len(), 1);
+        assert_eq!(projected.vector_items[0].geometry, rule);
+        assert_eq!(
+            resource.projected_part(&part, &crate::GeometryResourceArena::new()),
+            Err(TextPartQueryError::MissingGeometry(rule))
+        );
     }
 
     #[test]
