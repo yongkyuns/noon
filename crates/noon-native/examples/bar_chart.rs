@@ -1,5 +1,6 @@
 //! Native host for the shared BarChart gallery scene.
 
+#[cfg(feature = "latex")]
 mod support;
 
 #[cfg(feature = "latex")]

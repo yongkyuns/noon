@@ -250,15 +250,15 @@ async function initializePyodide() {
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
     const options = new WasmMatrixOptions(v, h, bh, bv, stretch);
-    return context.liveCreateMatrix(rows, options, latexCompiler);
+    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), options, latexCompiler);
   };
   self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
-    return context.liveCreateIntegerMatrix(rows, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
-    return context.liveCreateDecimalMatrix(rows, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");

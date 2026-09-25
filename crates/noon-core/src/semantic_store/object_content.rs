@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{GeometryRef, SemanticImageContent, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
