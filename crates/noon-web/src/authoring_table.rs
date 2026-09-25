@@ -87,6 +87,19 @@ impl WasmTableHandle {
     }
 }
 
+/// Direct WASM renderer counterpart of the native and Python retained Table
+/// example. It exercises native text, LaTeX math, and a family-valued entry
+/// through the same Rust scene builder.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createTableRenderer)]
+pub async fn create_table_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 fn entry_handle(entry: noon::CompositeEntryHandle) -> JsValue {
     match entry {
         noon::CompositeEntryHandle::Mobject(object) => {

@@ -112,6 +112,12 @@ struct PreparedText {
     style: SemanticStyle,
     font_size: f64,
 }
+#[cfg(feature = "native-text")]
+struct PreparedNativeText {
+    dependency: TextDependency,
+    transform: SemanticTransform2_5D,
+    style: SemanticStyle,
+}
 fn prepare_text(
     backend: &mut impl LatexBackend,
     source: String,
@@ -124,6 +130,17 @@ fn prepare_text(
         transform,
         style,
         font_size,
+    })
+}
+#[cfg(feature = "native-text")]
+fn prepare_native_text(source: String) -> Result<PreparedNativeText, TableAuthoringError> {
+    let (identity, resource, fonts, geometry, transform, style) =
+        crate::text_authoring::prepare_native_text(crate::Text::new(source))?
+            .into_compiled_resource_parts_with_presentation();
+    Ok(PreparedNativeText {
+        dependency: (identity, resource, fonts, geometry),
+        transform,
+        style,
     })
 }
 fn text_bounds(resource: &TextResource, transform: SemanticTransform2_5D) -> Bounds2D64 {
@@ -749,6 +766,108 @@ pub(super) fn publish_text_table(
     })?;
     make_table(store, published, options)
 }
+
+/// Publish ordinary `Table` strings through the native shaped-text pipeline.
+///
+/// A plain table deliberately has no LaTeX backend dependency: its cells keep
+/// native text resources and all resource imports plus table topology commit
+/// as one publication.
+#[cfg(feature = "native-text")]
+pub(super) fn publish_native_text_table(
+    publisher: TablePublisher<'_, '_>,
+    values: Vec<String>,
+    shape: TableShape,
+    rows: Option<Vec<Mobject>>,
+    columns: Option<Vec<Mobject>>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    let options = options.validate()?;
+    let prepared = values
+        .into_iter()
+        .map(prepare_native_text)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut transforms: Vec<_> = prepared.iter().map(|item| item.transform).collect();
+    let entry_bounds: Vec<_> = prepared
+        .iter()
+        .zip(&transforms)
+        .map(|(item, transform)| text_bounds(&item.dependency.1, *transform))
+        .collect();
+    let store = publisher.store();
+    preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
+    let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
+    let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
+    let layout = GridLayout::measure(
+        &[],
+        &entry_bounds,
+        shape,
+        rows.as_deref(),
+        row_bounds.as_deref(),
+        columns.as_deref(),
+        column_bounds.as_deref(),
+        options,
+    )?;
+    let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
+    let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
+    for (index, (bound, transform)) in entry_bounds.iter().zip(&mut transforms).enumerate() {
+        transform.translation.x +=
+            xs[index % shape.columns + layout.column_offset] - (bound.min_x + bound.max_x) * 0.5;
+        transform.translation.y +=
+            ys[index / shape.columns + layout.row_offset] - (bound.min_y + bound.max_y) * 0.5;
+    }
+    let dependencies = prepared
+        .iter()
+        .map(|item| item.dependency.clone())
+        .collect();
+    let lines = layout.line_states();
+    let published = publisher.publish(move |semantic, publish| {
+        semantic
+            .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
+                dependencies,
+                |semantic, handles| {
+                    handles
+                        .iter()
+                        .map(|handle| {
+                            semantic
+                                .text_resources()
+                                .get(*handle)
+                                .cloned()
+                                .ok_or(TextAuthoringError::MissingGeometryResource)
+                        })
+                        .collect()
+                },
+                |semantic, handles| {
+                    let mut tx = SemanticMutationTransaction::new();
+                    let leaves = prepared
+                        .iter()
+                        .zip(handles)
+                        .zip(transforms)
+                        .map(|((item, handle), transform)| {
+                            tx.create_node(SemanticNodeCreation::object(
+                                crate::text_authoring::semantic_text_state(
+                                    *handle,
+                                    transform,
+                                    item.style.clone(),
+                                ),
+                            ))
+                        })
+                        .map(Into::into)
+                        .collect();
+                    let value = stage(
+                        &mut tx,
+                        leaves,
+                        shape,
+                        lines,
+                        rows.as_deref(),
+                        columns.as_deref(),
+                    );
+                    Ok(value
+                        .published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
+                },
+            )
+            .map_err(text_error)
+    })?;
+    make_table(store, published, options)
+}
 pub(super) fn publish_numeric_table(
     publisher: TablePublisher<'_, '_>,
     backend: &mut impl LatexBackend,
@@ -955,12 +1074,44 @@ fn layout_for_family(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let mut options = options;
-    if let Some((_, state)) = entries.first().and_then(|entry| entry.leaves().first()) {
-        options.h_buff *= state.transform.scale.x.abs();
-        options.v_buff *= state.transform.scale.y.abs();
+    layout_from_retained_bounds(&bounds, shape, options)
+}
+
+/// Recover a table's physical cell lattice from its retained entries.
+///
+/// Table families may have been translated or scaled after admission, and a
+/// rehydrated `Table` intentionally has no frontend layout cache. Adjacent
+/// entry ink bounds carry the physical inter-cell gaps, so they are the
+/// durable authority for cell and highlight queries.  Construction options are
+/// retained only for a one-row/one-column axis where no adjacent pair exists.
+fn layout_from_retained_bounds(
+    bounds: &[Bounds2D64],
+    shape: TableShape,
+    mut options: TableOptions,
+) -> Result<GridLayout, TableAuthoringError> {
+    let horizontal_gaps = (0..shape.rows).flat_map(|row| {
+        (0..shape.columns.saturating_sub(1)).filter_map(move |column| {
+            let left = bounds[row * shape.columns + column];
+            let right = bounds[row * shape.columns + column + 1];
+            let gap = right.min_x - left.max_x;
+            gap.is_finite().then_some(gap)
+        })
+    });
+    if let Some(gap) = horizontal_gaps.reduce(f64::min) {
+        options.h_buff = gap;
     }
-    let mut layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let vertical_gaps = (0..shape.rows.saturating_sub(1)).flat_map(|row| {
+        (0..shape.columns).filter_map(move |column| {
+            let upper = bounds[row * shape.columns + column];
+            let lower = bounds[(row + 1) * shape.columns + column];
+            let gap = upper.min_y - lower.max_y;
+            gap.is_finite().then_some(gap)
+        })
+    });
+    if let Some(gap) = vertical_gaps.reduce(f64::min) {
+        options.v_buff = gap;
+    }
+    let mut layout = GridLayout::measure(&[], bounds, shape, None, None, None, None, options)?;
     let expected_x =
         GridLayout::centers(&layout.widths, layout.options.h_buff, false)[layout.column_offset];
     let expected_y =
@@ -1001,7 +1152,7 @@ pub(super) fn cell_in_publisher(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let layout = layout_from_retained_bounds(&bounds, shape, options)?;
     let bounds = layout.cell_bounds(row, column)?;
     let store = publisher.store();
     let result = publisher.publish(move |semantic, publish| {
@@ -1068,7 +1219,7 @@ pub(super) fn highlight_in_publisher(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let layout = GridLayout::measure(&[], &bounds, shape, None, None, None, None, options)?;
+    let layout = layout_from_retained_bounds(&bounds, shape, options)?;
     let bounds = layout.cell_bounds(row, column)?;
     let mut style = SemanticStyle::default();
     style.fill = Some(noon_core::SemanticPaint::Solid(color));

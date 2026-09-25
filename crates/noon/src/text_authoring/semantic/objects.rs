@@ -70,6 +70,31 @@ pub(crate) struct NativeTextAdmission {
 
 #[cfg(feature = "native-text")]
 impl NativeTextAdmission {
+    /// Split a native-text admission for a larger atomic publication.
+    ///
+    /// Containers such as `Table` import all shaped resources as one batch and
+    /// create their topology in the same semantic transaction.  Keeping this
+    /// at the text boundary prevents a container from recreating native text
+    /// state (and accidentally losing its presentation contract).
+    pub(crate) fn into_compiled_resource_parts_with_presentation(
+        self,
+    ) -> (
+        noon_core::TextCompilationIdentity,
+        noon_core::TextResource,
+        noon_core::FontResourceArena,
+        noon_core::GeometryResourceArena,
+        noon_core::SemanticTransform2_5D,
+        noon_core::SemanticStyle,
+    ) {
+        (
+            self.identity,
+            self.resource,
+            self.fonts,
+            noon_core::GeometryResourceArena::new(),
+            self.transform,
+            self.style,
+        )
+    }
     pub(crate) fn publish<T>(
         self,
         store: &mut noon_core::SemanticStore,
@@ -351,7 +376,7 @@ fn text_artifact_presentation(
     Ok((semantic_transform, style))
 }
 
-fn semantic_text_state(
+pub(crate) fn semantic_text_state(
     handle: noon_core::TextResourceHandle,
     transform: noon_core::SemanticTransform2_5D,
     style: noon_core::SemanticStyle,

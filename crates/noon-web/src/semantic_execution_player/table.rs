@@ -27,14 +27,11 @@ impl SemanticExecutionPlayer {
     }
     pub(crate) fn live_create_table(
         &mut self,
-        backend: &mut impl noon::LatexBackend,
         rows: Vec<Vec<String>>,
         options: noon::TableOptions,
     ) -> Result<noon::Table, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(noon::Table::from_rows_in_live_session(
-                live, backend, rows, options,
-            ))
+            Ok(noon::Table::from_rows_in_live_session(live, rows, options))
         })?
         .map_err(AuthoringFailure::from)
     }
@@ -45,9 +42,10 @@ impl SemanticExecutionPlayer {
         options: noon::TableOptions,
     ) -> Result<noon::Table, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(noon::Table::from_rows_in_live_session(
-                live, backend, rows, options,
-            ))
+            Ok(
+                noon::MathTable::from_rows_in_live_session(live, backend, rows, options)
+                    .map(noon::MathTable::into_table),
+            )
         })?
         .map_err(AuthoringFailure::from)
     }

@@ -96,23 +96,17 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         rows: js_sys::Array,
         options: WasmTableOptions,
-        compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_options(
-                &mut self.inner.scene,
-                compiler,
-                rows,
-                options.options,
-            )
-            .map(WasmTableHandle::new)
-            .map_err(js_error)
+            noon::Table::from_rows_with_options(&mut self.inner.scene, rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         } else {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_create_table(compiler, rows, options.options)
+                .live_create_table(rows, options.options)
                 .map(WasmTableHandle::new)
                 .map_err(js_error)
         }
@@ -126,13 +120,13 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_options(
+            noon::MathTable::from_rows_with_options(
                 &mut self.inner.scene,
                 compiler,
                 rows,
                 options.options,
             )
-            .map(WasmTableHandle::new)
+            .map(|value| WasmTableHandle::new(value.into_table()))
             .map_err(js_error)
         } else {
             self.inner

@@ -46,6 +46,8 @@ pub mod renderer_recovery;
 pub mod sample_space;
 pub mod specialized_geometry;
 pub mod svg_morph;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]
+pub mod table;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]

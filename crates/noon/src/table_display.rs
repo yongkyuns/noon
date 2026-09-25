@@ -12,6 +12,8 @@ use crate::{
 };
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
+#[cfg(feature = "native-text")]
+use admission::publish_native_text_table;
 use admission::{
     publish_existing_table, publish_numeric_table, publish_target_table, publish_text_table,
     table_shape, TablePublisher,
@@ -162,21 +164,18 @@ impl Table {
         table.shape()?;
         Ok(table)
     }
-    pub fn from_rows<I, J, S>(
-        scene: &mut Scene,
-        backend: &mut impl LatexBackend,
-        rows: I,
-    ) -> Result<Self, TableAuthoringError>
+    #[cfg(feature = "native-text")]
+    pub fn from_rows<I, J, S>(scene: &mut Scene, rows: I) -> Result<Self, TableAuthoringError>
     where
         I: IntoIterator<Item = J>,
         J: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        Self::from_rows_with_options(scene, backend, rows, TableOptions::default())
+        Self::from_rows_with_options(scene, rows, TableOptions::default())
     }
+    #[cfg(feature = "native-text")]
     pub fn from_rows_with_options<I, J, S>(
         scene: &mut Scene,
-        backend: &mut impl LatexBackend,
         rows: I,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError>
@@ -187,9 +186,8 @@ impl Table {
     {
         let rows = collect_text_rows(rows);
         let shape = table_shape(&rows)?;
-        publish_text_table(
+        publish_native_text_table(
             TablePublisher::Scene(scene),
-            backend,
             rows.into_iter().flatten().collect(),
             shape,
             None,
@@ -197,9 +195,9 @@ impl Table {
             options,
         )
     }
+    #[cfg(feature = "native-text")]
     pub fn from_rows_in_store<I, J, S>(
         store: Rc<RefCell<noon_core::SemanticStore>>,
-        backend: &mut impl LatexBackend,
         rows: I,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError>
@@ -210,9 +208,8 @@ impl Table {
     {
         let rows = collect_text_rows(rows);
         let shape = table_shape(&rows)?;
-        publish_text_table(
+        publish_native_text_table(
             TablePublisher::Store(store),
-            backend,
             rows.into_iter().flatten().collect(),
             shape,
             None,
@@ -220,9 +217,9 @@ impl Table {
             options,
         )
     }
+    #[cfg(feature = "native-text")]
     pub fn from_rows_in_live_session<I, J, S>(
         live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
         rows: I,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError>
@@ -233,9 +230,8 @@ impl Table {
     {
         let rows = collect_text_rows(rows);
         let shape = table_shape(&rows)?;
-        publish_text_table(
+        publish_native_text_table(
             TablePublisher::Live(live),
-            backend,
             rows.into_iter().flatten().collect(),
             shape,
             None,
@@ -364,7 +360,55 @@ impl MathTable {
         J: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        Table::from_rows(scene, backend, rows).map(Self)
+        Self::from_rows_with_options(scene, backend, rows, TableOptions::default())
+    }
+    pub fn from_rows_with_options<I, J, S>(
+        scene: &mut Scene,
+        backend: &mut impl LatexBackend,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let rows = collect_text_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_text_table(
+            TablePublisher::Scene(scene),
+            backend,
+            rows.into_iter().flatten().collect(),
+            shape,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
+    pub fn from_rows_in_live_session<I, J, S>(
+        live: &mut crate::LiveSession<'_>,
+        backend: &mut impl LatexBackend,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let rows = collect_text_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_text_table(
+            TablePublisher::Live(live),
+            backend,
+            rows.into_iter().flatten().collect(),
+            shape,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
     }
     pub fn table(&self) -> &Table {
         &self.0
@@ -871,5 +915,60 @@ mod tests {
             )))
         ));
         assert_eq!(first.state().unwrap(), before);
+    }
+
+    #[test]
+    fn rehydrated_cell_queries_use_retained_entry_lattice_after_transform() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let mut scaled = circle(&store, 0.5);
+        scaled.set_scale(2.0, 1.5).unwrap();
+        let table = MobjectTable::from_rows_with_options(
+            &mut scene,
+            vec![
+                vec![scaled, circle(&store, 0.25)],
+                vec![circle(&store, 0.75), circle(&store, 0.4)],
+            ],
+            TableOptions {
+                h_buff: 2.25,
+                v_buff: 1.4,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_table();
+        let restored = Table::from_family(table.family().clone()).unwrap();
+        let authored = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        assert_eq!(
+            restored.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
+            authored
+        );
+
+        table.entry_family().shift(3.0, -2.0).unwrap();
+        let shifted = restored.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        assert_eq!(shifted.min_x, authored.min_x + 3.0);
+        assert_eq!(shifted.max_x, authored.max_x + 3.0);
+        assert_eq!(shifted.min_y, authored.min_y - 2.0);
+        assert_eq!(shifted.max_y, authored.max_y - 2.0);
+        assert_eq!(
+            restored
+                .highlight_cell(1, 1, Color::BLUE, 0.5)
+                .unwrap()
+                .layout_bounds()
+                .unwrap(),
+            shifted
+        );
+    }
+
+    #[cfg(feature = "native-text")]
+    #[test]
+    fn plain_table_admits_native_text_without_a_latex_backend() {
+        let mut scene = Scene::new();
+        let table = Table::from_rows(&mut scene, [["plain", "text"]]).unwrap();
+        let entries = table.entries().unwrap();
+        assert!(entries
+            .iter()
+            .all(|entry| matches!(entry, TableEntry::Mobject(object)
+            if object.state().unwrap().content.text().is_some())));
     }
 }
