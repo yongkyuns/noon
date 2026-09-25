@@ -298,10 +298,11 @@ where
         vertex_lookup,
         edges,
         edge_lookup,
+        options,
     })
 }
 
-fn vertex_options(
+pub(super) fn vertex_options(
     position: (f64, f64),
     options: &GraphOptions,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
@@ -325,7 +326,7 @@ fn vertex_options(
     Ok(vertex)
 }
 
-fn line_options(
+pub(super) fn line_options(
     start: (f64, f64),
     end: (f64, f64),
     options: &GraphOptions,
@@ -343,7 +344,7 @@ fn line_options(
     Ok(line)
 }
 
-fn arrow_options(
+pub(super) fn arrow_options(
     start: (f64, f64),
     end: (f64, f64),
     options: &GraphOptions,

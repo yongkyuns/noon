@@ -417,3 +417,143 @@ fn generic_family_edits_cannot_silently_stale_public_graph_semantics() {
     assert_eq!(binding.family(), edge.family().node_id());
     assert_eq!(binding.line(), edge.line().node_id());
 }
+
+#[test]
+fn topology_mutations_replace_the_declaration_without_churning_unrelated_bindings() {
+    let mut scene = Scene::new();
+    let mut graph = graph(&mut scene);
+    let a = graph.vertex_id(&"a").unwrap();
+    let b = graph.vertex_id(&"b").unwrap();
+    let ab = graph.edge_id(&"a", &"b").unwrap();
+    let a_node = graph.vertex(&"a").unwrap().node_id();
+    let ab_line = graph.edge(&"a", &"b").unwrap().line().node_id();
+    let before = scene.revision();
+
+    let added = graph.add_vertices(&mut scene, [("d", (3.0, 1.0))]).unwrap();
+    assert_eq!(added.added_vertices.len(), 1);
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    let d = graph.vertex_id(&"d").unwrap();
+    assert!(d > b);
+    let declaration = graph.semantic_declaration().unwrap();
+    assert_eq!(declaration.vertex_node(a), Some(a_node));
+    assert_eq!(declaration.edge_binding(ab).unwrap().line(), ab_line);
+    drop(declaration);
+
+    let added = graph.add_edges(&mut scene, [("b", "d")]).unwrap();
+    assert_eq!(added.added_edges.len(), 1);
+    let bd = graph.edge_id(&"b", &"d").unwrap();
+    assert!(bd > ab);
+    assert_eq!(
+        graph
+            .semantic_declaration()
+            .unwrap()
+            .incident_edges(b)
+            .unwrap()
+            .len(),
+        3
+    );
+
+    let removed = graph.remove_vertices(&mut scene, ["b"]).unwrap();
+    assert_eq!(removed.removed_vertices.len(), 1);
+    assert_eq!(removed.removed_edges.len(), 3);
+    assert_eq!(graph.vertex_id(&"b"), None);
+    assert_eq!(graph.edge_id(&"a", &"b"), None);
+    let declaration = graph.semantic_declaration().unwrap();
+    assert!(declaration.topology().contains_vertex(a));
+    assert!(declaration.topology().contains_vertex(d));
+    assert!(!declaration.topology().contains_edge(ab));
+    assert!(!declaration.topology().contains_edge(bd));
+}
+
+#[test]
+fn topology_mutation_validation_rolls_back_before_publication() {
+    let mut scene = Scene::new();
+    let mut graph = graph(&mut scene);
+    let revision = scene.revision();
+    let vertices = graph.topology().unwrap().vertices().collect::<Vec<_>>();
+    let edges = graph.topology().unwrap().edges().collect::<Vec<_>>();
+
+    assert!(matches!(
+        graph.add_edges(&mut scene, [("a", "missing")]),
+        Err(GraphAuthoringError::UnknownVertexKey)
+    ));
+    assert!(matches!(
+        graph.add_edges(&mut scene, [("a", "b"), ("b", "a")]),
+        Err(GraphAuthoringError::Topology(
+            GraphTopologyError::DuplicateEdge { .. }
+        )) | Err(GraphAuthoringError::DuplicateMutationEdgeKey)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        graph.topology().unwrap().vertices().collect::<Vec<_>>(),
+        vertices
+    );
+    assert_eq!(graph.topology().unwrap().edges().collect::<Vec<_>>(), edges);
+}
+
+#[test]
+fn directed_topology_mutations_use_shared_arrow_bindings() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .digraph([("a", (-1.0, 0.0)), ("b", (1.0, 0.0))], [("a", "b")])
+        .unwrap();
+    graph.add_vertices(&mut scene, [("c", (0.0, 2.0))]).unwrap();
+    let added = graph
+        .add_edges(&mut scene, [("b", "c"), ("c", "b")])
+        .unwrap();
+    assert!(added.added_edges.iter().all(|edge| edge.arrow().is_some()));
+    assert_ne!(graph.edge_id(&"b", &"c"), graph.edge_id(&"c", &"b"));
+    let removed = graph.remove_edges(&mut scene, [("b", "c")]).unwrap();
+    assert_eq!(removed.removed_edges.len(), 1);
+    assert!(graph.edge_id(&"c", &"b").is_some());
+}
+
+#[test]
+fn author_time_layouts_are_seeded_deterministic_and_persistent() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 3.0,
+        center: (1.0, -2.0),
+        seed: 42,
+        iterations: 24,
+        threshold: 0.0,
+    };
+    let mut first_scene = Scene::new();
+    let mut first = graph(&mut first_scene);
+    let before = first_scene.revision();
+    first
+        .change_layout(&mut first_scene, options.clone())
+        .unwrap();
+    assert_eq!(first_scene.revision(), before.checked_next().unwrap());
+    let first_positions = first
+        .vertex_keys()
+        .map(|key| {
+            let translation = first
+                .vertex(key)
+                .unwrap()
+                .state()
+                .unwrap()
+                .transform
+                .translation;
+            (translation.x, translation.y)
+        })
+        .collect::<Vec<_>>();
+
+    let mut second_scene = Scene::new();
+    let mut second = graph(&mut second_scene);
+    second.change_layout(&mut second_scene, options).unwrap();
+    let second_positions = second
+        .vertex_keys()
+        .map(|key| {
+            let translation = second
+                .vertex(key)
+                .unwrap()
+                .state()
+                .unwrap()
+                .transform
+                .translation;
+            (translation.x, translation.y)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(first_positions, second_positions);
+}

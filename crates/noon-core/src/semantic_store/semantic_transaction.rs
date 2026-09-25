@@ -2247,9 +2247,10 @@ impl SemanticMutationTransaction {
             removed_pending,
         };
         inset_view::validate(self, &preflight, store)?;
-        // New graph declarations validate their complete final construction
-        // overlay. Existing graphs use only dependency-local checks below: a
-        // one-edge edit must never clone or scan the whole graph.
+        // A graph declaration describes the complete final topology/binding
+        // overlay.  Replacing an existing declaration is the only supported
+        // way for a transaction to change graph-owned membership; this keeps
+        // the invariant explicit while still allowing bounded graph edits.
         let mut staged_graph_scopes = HashSet::new();
         for (index, mutation) in self.mutations.iter().enumerate() {
             if let SemanticMutation::SetGraphDeclaration { scope, graph } = mutation {
@@ -2265,6 +2266,18 @@ impl SemanticMutationTransaction {
             }
         }
 
+        let replaced_graph_scopes = self
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                SemanticMutation::SetGraphDeclaration {
+                    scope: SemanticTransactionNodeRef::Existing(scope),
+                    ..
+                } => Some(*scope),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+
         for (index, mutation) in self.mutations.iter().enumerate() {
             if !preflight.changed[index] {
                 continue;
@@ -2277,6 +2290,9 @@ impl SemanticMutationTransaction {
                     };
                     for scope in store.semantic_graph_owners_for_invariant_target(*family) {
                         if preflight.removed_existing.contains(&scope) {
+                            continue;
+                        }
+                        if replaced_graph_scopes.contains(&scope) {
                             continue;
                         }
                         return Err(SemanticMutationTransactionError::InvalidGraphDeclaration {
@@ -2346,18 +2362,6 @@ fn validate_graph_declaration(
     if !staged_scopes.insert(scope) {
         return Err(SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope });
     }
-    if let SemanticTransactionNodeRef::Existing(scope_id) = scope {
-        if store
-            .node(scope_id)
-            .and_then(|node| node.graph_declaration())
-            .is_some()
-        {
-            return Err(
-                SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope },
-            );
-        }
-    }
-
     let removed = |node: SemanticTransactionNodeRef| match node {
         SemanticTransactionNodeRef::Existing(node) => preflight.removed_existing.contains(&node),
         SemanticTransactionNodeRef::Pending(token) => preflight.removed_pending.contains(&token),

@@ -811,7 +811,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     let previous = store
                         .replace_semantic_graph_declaration(scope, Some(graph))
                         .expect("preflighted graph scope remains a family");
-                    debug_assert!(previous.is_none());
+                    // Replacements are explicitly validated against the final
+                    // transaction overlay. Dropping the prior declaration here
+                    // only changes graph authority; unrelated semantic nodes
+                    // retain their identities and resources.
+                    drop(previous);
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::GraphDeclaration { scope });
                 }

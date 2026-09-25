@@ -3,10 +3,11 @@
 //! Topology and semantic bindings live on the semantic family root. These
 //! wrappers retain only user-key lookup and ordinary object/family handles.
 //! Construction publishes one transaction; reads borrow the authoritative
-//! declaration instead of cloning it. Endpoint following and topology editing
-//! remain separate #697 work.
+//! declaration instead of cloning it. Persistent topology edits replace that
+//! declaration atomically alongside their ordinary membership changes.
 
 mod construction;
+mod mutation;
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +16,7 @@ use crate::{
     ManimArrow, Mobject, MobjectFamily, Scene,
 };
 use construction::build_graph;
+pub use mutation::{GraphLayout, GraphLayoutOptions, GraphMutationResult};
 use noon_core::{Color, SemanticGraphDeclaration, SemanticNodeId, SemanticStoreError, BLUE, WHITE};
 use std::{cell::Ref, collections::HashMap, hash::Hash};
 
@@ -78,6 +80,11 @@ pub enum GraphAuthoringError {
     SelfEdgeUnsupported {
         edge_index: usize,
     },
+    UnknownVertexKey,
+    UnknownEdgeKey,
+    DuplicateMutationVertexKey,
+    DuplicateMutationEdgeKey,
+    InvalidLayout(&'static str),
 }
 
 impl From<AuthoringError> for GraphAuthoringError {
@@ -119,6 +126,11 @@ impl std::fmt::Display for GraphAuthoringError {
                 formatter,
                 "graph edge at input index {edge_index} is a self-edge; public Graph self-loop geometry is not implemented yet"
             ),
+            Self::UnknownVertexKey => formatter.write_str("unknown graph vertex key"),
+            Self::UnknownEdgeKey => formatter.write_str("unknown graph edge key"),
+            Self::DuplicateMutationVertexKey => formatter.write_str("duplicate graph vertex key in mutation"),
+            Self::DuplicateMutationEdgeKey => formatter.write_str("duplicate graph edge key in mutation"),
+            Self::InvalidLayout(reason) => write!(formatter, "invalid graph layout: {reason}"),
         }
     }
 }
@@ -169,24 +181,25 @@ impl GraphEdgeMobject {
     }
 }
 
-struct GraphVertexEntry<K> {
-    key: K,
-    id: GraphVertexId,
-    object: Mobject,
+pub(super) struct GraphVertexEntry<K> {
+    pub(super) key: K,
+    pub(super) id: GraphVertexId,
+    pub(super) object: Mobject,
 }
 
-struct GraphEdgeEntry {
-    edge: GraphEdge,
-    object: GraphEdgeMobject,
+pub(super) struct GraphEdgeEntry {
+    pub(super) edge: GraphEdge,
+    pub(super) object: GraphEdgeMobject,
 }
 
-struct RetainedGraph<K> {
-    directed: bool,
-    family: MobjectFamily,
-    vertices: Vec<GraphVertexEntry<K>>,
-    vertex_lookup: HashMap<K, usize>,
-    edges: Vec<GraphEdgeEntry>,
-    edge_lookup: HashMap<GraphEdgeId, usize>,
+pub(super) struct RetainedGraph<K> {
+    pub(super) directed: bool,
+    pub(super) family: MobjectFamily,
+    pub(super) vertices: Vec<GraphVertexEntry<K>>,
+    pub(super) vertex_lookup: HashMap<K, usize>,
+    pub(super) edges: Vec<GraphEdgeEntry>,
+    pub(super) edge_lookup: HashMap<GraphEdgeId, usize>,
+    pub(super) options: GraphOptions,
 }
 
 impl<K: Eq + Hash> RetainedGraph<K> {
@@ -334,6 +347,62 @@ impl<K: Eq + Hash> Graph<K> {
     }
 }
 
+impl<K: Clone + Eq + Hash> Graph<K> {
+    /// Append graph vertices through the Scene's current publication path.
+    pub fn add_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(scene, &mut self.inner, vertices)
+    }
+
+    /// Append graph edges through the Scene's current publication path.
+    pub fn add_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn change_layout(
+        &mut self,
+        scene: &mut Scene,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(scene, &mut self.inner, options)
+    }
+}
+
 /// Explicit-position directed retained graph using shared Arrow geometry.
 /// The same read/lifetime and unsupported-feature boundaries as Graph apply.
 pub struct DiGraph<K> {
@@ -404,6 +473,60 @@ impl<K: Eq + Hash> DiGraph<K> {
 
     pub fn edge_mobjects(&self) -> impl Iterator<Item = (GraphEdge, &GraphEdgeMobject)> {
         self.inner.edge_mobjects()
+    }
+}
+
+impl<K: Clone + Eq + Hash> DiGraph<K> {
+    pub fn add_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn change_layout(
+        &mut self,
+        scene: &mut Scene,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(scene, &mut self.inner, options)
     }
 }
 

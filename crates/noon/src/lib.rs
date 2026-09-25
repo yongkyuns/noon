@@ -98,9 +98,9 @@ mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
 pub use graph_authoring::{
-    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphOptions,
-    DEFAULT_GRAPH_EDGE_STROKE_WIDTH, DEFAULT_GRAPH_VERTEX_RADIUS,
-    DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
+    GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+    DEFAULT_GRAPH_VERTEX_RADIUS, DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
 };
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
