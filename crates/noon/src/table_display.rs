@@ -146,6 +146,16 @@ impl Table {
             return Err(TableAuthoringError::InvalidStructure);
         }
         let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
+        let options = store
+            .borrow()
+            .semantic_table_layout(family.node_id())?
+            .map(|layout| TableOptions {
+                h_buff: layout.h_buff(),
+                v_buff: layout.v_buff(),
+                label_buff: layout.label_buff(),
+                include_outer_lines: layout.include_outer_lines(),
+            })
+            .unwrap_or_default();
         let table = Self {
             family,
             line_family: MobjectFamily::from_node(Rc::clone(&store), *lines)?,
@@ -159,7 +169,7 @@ impl Table {
                 .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
                 .transpose()?,
             entry_family,
-            options: TableOptions::default(),
+            options,
         };
         table.shape()?;
         Ok(table)

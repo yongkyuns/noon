@@ -394,6 +394,7 @@ fn stage(
     lines: Vec<SemanticObjectState>,
     rows: Option<&[Mobject]>,
     columns: Option<&[Mobject]>,
+    options: TableOptions,
 ) -> StagedTable {
     let entries_root = tx.create_node(SemanticNodeCreation::family());
     for group in entries.chunks(shape.columns) {
@@ -427,6 +428,15 @@ fn stage(
     for member in [entries_root, lines_root, highlights] {
         tx.add_member(root, member);
     }
+    tx.set_table_layout(
+        root,
+        noon_core::SemanticTransactionTableLayout::new(noon_core::SemanticTableLayout::new(
+            options.h_buff,
+            options.v_buff,
+            options.label_buff,
+            options.include_outer_lines,
+        )),
+    );
     if let Some(member) = row_labels {
         tx.add_member(root, member);
     }
@@ -629,6 +639,7 @@ fn commit_composite(
             lines,
             rows.as_deref(),
             columns.as_deref(),
+            options,
         );
         Ok(value.published(publish(semantic, tx)?))
     })?;
@@ -744,6 +755,7 @@ pub(super) fn publish_text_table(
                     lines,
                     rows.as_deref(),
                     columns.as_deref(),
+                    options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
             },
@@ -842,6 +854,7 @@ pub(super) fn publish_native_text_table(
                     lines,
                     rows.as_deref(),
                     columns.as_deref(),
+                    options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
             },
@@ -896,6 +909,7 @@ pub(super) fn publish_numeric_table(
                     rows.as_deref(),
                     row_bounds.as_deref(),
                     columns.as_deref(),
+                    options,
                     column_bounds.as_deref(),
                     options,
                 )
@@ -928,6 +942,7 @@ pub(super) fn publish_numeric_table(
                     layout.line_states(),
                     rows.as_deref(),
                     columns.as_deref(),
+                    options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
             },

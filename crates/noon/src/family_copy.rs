@@ -152,6 +152,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
+    let mut table_layouts = Vec::new();
     let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
     for target in references {
@@ -184,6 +185,9 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         };
         if let Some(graph) = graph_declaration {
             graph_declarations.push((id, graph));
+        }
+        if let Some(layout) = store.borrow().semantic_table_layout(id)? {
+            table_layouts.push((id, layout));
         }
         let creation = if let Some(members) = members {
             queue.extend(members.iter().rev().copied());
@@ -243,6 +247,12 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         transaction.set_graph_declaration(
             copied[&source_family],
             SemanticTransactionGraphDeclaration::new(graph.topology().clone(), vertices, edges),
+        );
+    }
+    for (source_family, layout) in table_layouts {
+        transaction.set_table_layout(
+            copied[&source_family],
+            noon_core::SemanticTransactionTableLayout::new(layout),
         );
     }
     Ok((

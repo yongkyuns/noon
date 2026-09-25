@@ -49,6 +49,8 @@ pub use semantic_bindings::*;
 
 mod semantic_graph;
 pub use semantic_graph::*;
+mod semantic_table_layout;
+pub use semantic_table_layout::*;
 
 mod semantic_animations;
 pub use semantic_animations::*;
@@ -604,6 +606,7 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
+    table_layouts: SemanticTableLayoutDeclarations,
     /// Derived index of authored inset display roles. The role on each ordinary
     /// display object remains authoritative; this bounds view discovery by active
     /// inset count rather than total semantic slots.
@@ -704,6 +707,7 @@ impl Clone for SemanticStore {
             next_insertion_order: self.next_insertion_order,
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
+            table_layouts: self.table_layouts.clone(),
             inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
@@ -964,6 +968,32 @@ impl SemanticStore {
             return Err(SemanticStoreError::NotFamily(scope));
         }
         Ok(node.graph_declaration())
+    }
+    pub fn semantic_table_layout(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<SemanticTableLayout>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(self.table_layouts.get(&scope).copied())
+    }
+    pub(crate) fn replace_semantic_table_layout(
+        &mut self,
+        scope: SemanticNodeId,
+        layout: SemanticTableLayout,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.table_layouts.insert(scope, layout);
+        Ok(())
     }
 
     pub(crate) fn replace_semantic_graph_declaration(
@@ -1517,6 +1547,7 @@ impl SemanticStore {
         }
         self.inset_2d_displays.remove(&id);
         self.incoming_references.remove(&id);
+        self.table_layouts.remove(&id);
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");

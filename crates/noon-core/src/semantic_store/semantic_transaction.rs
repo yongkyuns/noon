@@ -18,8 +18,8 @@ use crate::{
     SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
     SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
     SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
-    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
-    TextPresentationBaseline,
+    SemanticTransactionTableLayout, SemanticTransformInterpolation, SemanticUpdaterRegistration,
+    StoredGeometry, TextPresentationBaseline,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -152,6 +152,10 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         graph: SemanticTransactionGraphDeclaration,
     },
+    SetTableLayout {
+        scope: SemanticTransactionNodeRef,
+        layout: SemanticTransactionTableLayout,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -209,6 +213,7 @@ impl SemanticMutation {
             Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
                 .chain(graph.node_references())
                 .collect(),
+            Self::SetTableLayout { scope, .. } => vec![*scope],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -262,6 +267,7 @@ impl SemanticMutation {
             Self::ScopeSignal { scope, .. }
             | Self::SetForegroundMembers { scope, .. }
             | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
+            Self::SetTableLayout { scope, .. } => scope.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -308,6 +314,7 @@ impl SemanticMutation {
             | Self::ScopeSignal { .. }
             | Self::SetForegroundMembers { .. }
             | Self::SetGraphDeclaration { .. } => None,
+            Self::SetTableLayout { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -779,6 +786,17 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetGraphDeclaration {
             scope: scope.into(),
             graph,
+        });
+        self
+    }
+    pub fn set_table_layout(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        layout: SemanticTransactionTableLayout,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetTableLayout {
+            scope: scope.into(),
+            layout,
         });
         self
     }
@@ -2204,6 +2222,16 @@ impl SemanticMutationTransaction {
                 SemanticMutation::SetGraphDeclaration { .. } => {
                     changed.push(true);
                 }
+                SemanticMutation::SetTableLayout { scope, layout } => {
+                    catalog.ensure_family(*scope, index)?;
+                    if !layout.layout().is_valid() {
+                        return Err(SemanticMutationTransactionError::InvalidTableLayout {
+                            index,
+                            scope: *scope,
+                        });
+                    }
+                    changed.push(true);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -2875,6 +2903,10 @@ pub enum SemanticMutationTransactionError {
         scope: SemanticTransactionNodeRef,
         reason: &'static str,
     },
+    InvalidTableLayout {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+    },
     DuplicateForegroundScope {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -3221,6 +3253,7 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidTableLayout { index, scope } => write!(formatter, "semantic transaction mutation {index} has invalid Table layout for {scope:?}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"

@@ -829,6 +829,13 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::GraphDeclaration { scope });
                 }
+                SemanticMutation::SetTableLayout { scope, layout } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    store
+                        .replace_semantic_table_layout(scope, layout.layout())
+                        .expect("preflighted table layout scope remains a family");
+                    written_slots.insert(scope);
+                }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
                     let signal = resolve_node_ref(signal, &committed_nodes);
