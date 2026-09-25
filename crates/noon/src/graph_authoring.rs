@@ -449,6 +449,44 @@ impl<K: Clone + Eq + Hash> Graph<K> {
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout_positions(scene, &mut self.inner, positions)
     }
+
+    pub fn add_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn change_layout_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(live, &mut self.inner, options)
+    }
+
+    pub fn change_layout_positions_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(live, &mut self.inner, positions)
+    }
 }
 
 /// Explicit-position directed retained graph using shared Arrow geometry.
@@ -613,6 +651,44 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         positions: &[(f64, f64)],
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout_positions(scene, &mut self.inner, positions)
+    }
+
+    pub fn add_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn change_layout_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(live, &mut self.inner, options)
+    }
+
+    pub fn change_layout_positions_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(live, &mut self.inner, positions)
     }
 }
 

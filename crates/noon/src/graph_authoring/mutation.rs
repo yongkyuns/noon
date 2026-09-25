@@ -5,12 +5,12 @@
 //! declaration with ordinary family membership changes in the same transaction.
 
 use super::{
-    construction::{arrow_options, line_options, vertex_options},
+    construction::{arrow_options, line_options, vertex_options, GraphPublication},
     GraphAuthoringError, GraphEdgeEntry, GraphEdgeMobject, GraphVertexEntry, RetainedGraph,
 };
 use crate::{
     arrow_authoring::{resolve_staged_arrow, stage_prepared_arrow, PreparedArrow, StagedArrow},
-    AuthoringError, ManimArrow, ManimGeometryOptions, Mobject, MobjectFamily, Scene,
+    AuthoringError, ManimArrow, ManimGeometryOptions, Mobject, MobjectFamily,
 };
 use noon_core::{
     GraphEdge, GraphEdgeId, GraphTopology, GraphVertexId, SemanticGraphEdgeBinding,
@@ -86,8 +86,11 @@ enum StagedNewEdge {
     },
 }
 
-fn require_scene<K>(scene: &Scene, graph: &RetainedGraph<K>) -> Result<(), GraphAuthoringError> {
-    if !Rc::ptr_eq(scene.integration_store(), graph.family.integration_store()) {
+fn require_publication<K, P: GraphPublication>(
+    publication: &P,
+    graph: &RetainedGraph<K>,
+) -> Result<(), GraphAuthoringError> {
+    if !Rc::ptr_eq(&publication.graph_store(), graph.family.integration_store()) {
         return Err(GraphAuthoringError::Authoring(AuthoringError::ForeignStore));
     }
     graph.family.validate()?;
@@ -129,16 +132,17 @@ fn replace_declaration(
     );
 }
 
-pub(super) fn add_vertices<K, V>(
-    scene: &mut Scene,
+pub(super) fn add_vertices<K, V, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     vertices: V,
 ) -> Result<GraphMutationResult, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     V: IntoIterator<Item = (K, (f64, f64))>,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let vertices = vertices.into_iter().collect::<Vec<_>>();
     let mut seen = HashSet::new();
     for (key, position) in &vertices {
@@ -161,7 +165,7 @@ where
             Ok((key.clone(), id, *position))
         })
         .collect::<Result<Vec<_>, GraphAuthoringError>>()?;
-    let (result, staged) = scene.with_semantic_publication(|store, publish| {
+    let (result, staged) = publication.with_graph_publication(|store, publish| {
         let prepared = planned
             .iter()
             .map(|(key, id, position)| {
@@ -216,16 +220,17 @@ where
     Ok(mutation)
 }
 
-pub(super) fn add_edges<K, E>(
-    scene: &mut Scene,
+pub(super) fn add_edges<K, E, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     edges: E,
 ) -> Result<GraphMutationResult, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     E: IntoIterator<Item = (K, K)>,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let requested = edges.into_iter().collect::<Vec<_>>();
     if requested.is_empty() {
         return Ok(GraphMutationResult::default());
@@ -272,7 +277,7 @@ where
             (end_position.x, end_position.y),
         ));
     }
-    let (result, staged_edges) = scene.with_semantic_publication(|store, publish| {
+    let (result, staged_edges) = publication.with_graph_publication(|store, publish| {
         let mut prepared = Vec::with_capacity(planned.len());
         for (edge, start_position, end_position) in planned {
             let geometry = if directed {
@@ -413,16 +418,17 @@ where
     Ok(mutation)
 }
 
-pub(super) fn remove_vertices<K, V>(
-    scene: &mut Scene,
+pub(super) fn remove_vertices<K, V, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     vertices: V,
 ) -> Result<GraphMutationResult, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     V: IntoIterator<Item = K>,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let keys = vertices.into_iter().collect::<Vec<_>>();
     let mut seen = HashSet::new();
     let ids = keys
@@ -436,19 +442,20 @@ where
                 .ok_or(GraphAuthoringError::UnknownVertexKey)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    remove(graph, scene, &ids, &[])
+    remove(graph, publication, &ids, &[])
 }
 
-pub(super) fn remove_edges<K, E>(
-    scene: &mut Scene,
+pub(super) fn remove_edges<K, E, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     edges: E,
 ) -> Result<GraphMutationResult, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     E: IntoIterator<Item = (K, K)>,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let mut seen = HashSet::new();
     let ids = edges
         .into_iter()
@@ -462,17 +469,18 @@ where
             Ok(edge)
         })
         .collect::<Result<Vec<_>, GraphAuthoringError>>()?;
-    remove(graph, scene, &[], &ids)
+    remove(graph, publication, &[], &ids)
 }
 
-fn remove<K>(
+fn remove<K, P>(
     graph: &mut RetainedGraph<K>,
-    scene: &mut Scene,
+    publication: &mut P,
     vertices: &[GraphVertexId],
     requested_edges: &[GraphEdgeId],
 ) -> Result<GraphMutationResult, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
+    P: GraphPublication,
 {
     if vertices.is_empty() && requested_edges.is_empty() {
         return Ok(GraphMutationResult::default());
@@ -494,7 +502,7 @@ where
     }
     let removed_vertices = vertices.iter().copied().collect::<HashSet<_>>();
     let (result, removed_vertices, removed_edges) =
-        scene.with_semantic_publication(|store, publish| {
+        publication.with_graph_publication(|store, publish| {
             let mut transaction = SemanticMutationTransaction::new();
             for &vertex in vertices {
                 transaction.remove_member(
@@ -569,15 +577,16 @@ where
     Ok(mutation)
 }
 
-pub(super) fn change_layout<K>(
-    scene: &mut Scene,
+pub(super) fn change_layout<K, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     options: GraphLayoutOptions,
 ) -> Result<(), GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
     let edges = if options.layout == GraphLayout::Spring {
@@ -595,18 +604,19 @@ where
         Vec::new()
     };
     let positions = graph_layout(vertices.len(), &edges, &options)?;
-    publish_layout_positions(scene, vertices, &positions)
+    publish_layout_positions(publication, vertices, &positions)
 }
 
-pub(super) fn change_layout_positions<K>(
-    scene: &mut Scene,
+pub(super) fn change_layout_positions<K, P>(
+    publication: &mut P,
     graph: &mut RetainedGraph<K>,
     positions: &[(f64, f64)],
 ) -> Result<(), GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
+    P: GraphPublication,
 {
-    require_scene(scene, graph)?;
+    require_publication(publication, graph)?;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
     if positions.len() != vertices.len() {
@@ -622,15 +632,15 @@ where
             "explicit positions must be finite",
         ));
     }
-    publish_layout_positions(scene, vertices, positions)
+    publish_layout_positions(publication, vertices, positions)
 }
 
-fn publish_layout_positions(
-    scene: &mut Scene,
+fn publish_layout_positions<P: GraphPublication>(
+    publication: &mut P,
     vertices: Vec<(GraphVertexId, noon_core::SemanticNodeId)>,
     positions: &[(f64, f64)],
 ) -> Result<(), GraphAuthoringError> {
-    scene.with_semantic_publication(|store, publish| {
+    publication.with_graph_publication(|store, publish| {
         let mut transaction = SemanticMutationTransaction::new();
         for ((_, node), &(x, y)) in vertices.iter().zip(positions) {
             transaction.set_property(
