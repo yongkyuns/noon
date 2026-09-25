@@ -374,75 +374,40 @@ fn arrow_geometry(
     start_tip: bool,
     policy: noon_compile::CompiledGraphArrowPolicy,
 ) -> EffectiveArrowGeometry {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length = dx.hypot(dy);
-    let direction = if length == 0.0 {
-        Vec2::new(1.0, 0.0)
-    } else {
-        Vec2::new(dx / length, dy / length)
-    };
-    let buff = policy.buff();
-    let (visible_start, visible_end) = if buff > 0.0 && length >= 2.0 * buff && length > 0.0 {
-        (
-            Vec2::new(start.x + direction.x * buff, start.y + direction.y * buff),
-            Vec2::new(end.x - direction.x * buff, end.y - direction.y * buff),
-        )
-    } else {
-        (start, end)
-    };
-    let visible_dx = visible_end.x - visible_start.x;
-    let visible_dy = visible_end.y - visible_start.y;
-    let visible_length = visible_dx.hypot(visible_dy);
-    let tip_length = policy
-        .tip_length()
-        .min(policy.max_tip_length_to_length_ratio() * visible_length);
-    let end_base = Vec2::new(
-        visible_end.x - direction.x * tip_length,
-        visible_end.y - direction.y * tip_length,
+    let geometry = noon_geometry::ArrowGeometry::between(
+        (f64::from(start.x), f64::from(start.y)),
+        (f64::from(end.x), f64::from(end.y)),
+        f64::from(policy.buff()),
+        f64::from(policy.tip_length()),
+        f64::from(policy.max_tip_length_to_length_ratio()),
+        start_tip,
     );
-    let start_base = Vec2::new(
-        visible_start.x + direction.x * tip_length,
-        visible_start.y + direction.y * tip_length,
-    );
-    let shaft_start = if start_tip { start_base } else { visible_start };
-    let shaft_end = end_base;
-    // Match shared Arrow authoring: stroke capping happens after the end tip is
-    // attached and before an optional start tip shortens the shaft.
-    let cap_dx = end_base.x - visible_start.x;
-    let cap_dy = end_base.y - visible_start.y;
-    let stroke_cap_length = cap_dx.hypot(cap_dy);
-    let stroke_width = policy
-        .initial_stroke_width()
-        .min(policy.max_stroke_width_to_length_ratio() * stroke_cap_length);
-
+    let point = |(x, y): (f64, f64)| Vec2::new(x as f32, y as f32);
     EffectiveArrowGeometry {
-        visible_start,
-        visible_end,
-        direction,
-        tip_length,
-        shaft_start,
-        shaft_end,
-        stroke_width,
+        visible_start: point(geometry.visible_start),
+        visible_end: point(geometry.visible_end),
+        direction: point(geometry.direction),
+        tip_length: geometry.tip_length as f32,
+        shaft_start: point(geometry.shaft_start),
+        shaft_end: point(geometry.shaft_end),
+        stroke_width: geometry.stroke_width(
+            f64::from(policy.initial_stroke_width()),
+            f64::from(policy.max_stroke_width_to_length_ratio()),
+        ) as f32,
     }
 }
 
 fn triangle_tip_path(apex: Vec2, direction: Vec2, length: f32) -> VectorPath {
-    let base = Vec2::new(apex.x - direction.x * length, apex.y - direction.y * length);
-    let half_width = length * 0.5;
-    let perpendicular = Vec2::new(-direction.y, direction.x);
-    let first_base = Vec2::new(
-        base.x + perpendicular.x * half_width,
-        base.y + perpendicular.y * half_width,
+    let vertices = noon_geometry::arrow_tip_vertices(
+        (f64::from(apex.x), f64::from(apex.y)),
+        (f64::from(direction.x), f64::from(direction.y)),
+        f64::from(length),
     );
-    let second_base = Vec2::new(
-        base.x - perpendicular.x * half_width,
-        base.y - perpendicular.y * half_width,
-    );
+    let [apex, first, second] = vertices.map(|(x, y)| Vec2::new(x as f32, y as f32));
     VectorPath::new()
         .move_to(apex)
-        .line_to(first_base)
-        .line_to(second_base)
+        .line_to(first)
+        .line_to(second)
         .close()
 }
 

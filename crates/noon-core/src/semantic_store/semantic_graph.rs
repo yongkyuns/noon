@@ -196,7 +196,9 @@ impl SemanticGraphDeclaration {
             .chain(
                 edges
                     .values()
-                    .flat_map(|binding| [binding.family(), binding.line()]),
+                    .copied()
+                    .flat_map(SemanticGraphEdgeBinding::referenced_nodes)
+                    .flatten(),
             )
             .collect::<HashSet<_>>();
         debug_assert_eq!(edge_lines.len(), edges.len());
@@ -239,7 +241,7 @@ impl SemanticGraphDeclaration {
     ///
     /// This index is derived from the authoritative vertex and edge bindings at
     /// construction, so membership covers vertex objects, edge families, and
-    /// designated edge Lines without enumerating the graph.
+    /// designated edge Lines and Arrow tips without enumerating the graph.
     pub(crate) fn references_node(&self, node: SemanticNodeId) -> bool {
         self.data.referenced_nodes.contains(&node)
     }
@@ -525,6 +527,33 @@ mod tests {
             policy,
         };
         assert_eq!(dependency.referenced_nodes(), [Some(id(20)), Some(id(21))]);
+    }
+
+    #[test]
+    fn arrow_tip_invariant_membership_includes_both_tips_and_checks_generation() {
+        let mut topology = GraphTopology::new();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
+        let edge = topology.add_edge(a, b, true).unwrap();
+        let graph = SemanticGraphDeclaration::from_resolved(
+            topology,
+            vec![(a, id(1)), (b, id(2))],
+            vec![SemanticGraphEdgeBinding::from_resolved(
+                edge,
+                id(10),
+                id(11),
+                SemanticGraphEdgeDependency::Arrow {
+                    end_tip: id(20),
+                    start_tip: Some(id(21)),
+                    policy: SemanticGraphArrowPolicy::new(0.25, 0.35, 0.25),
+                },
+            )],
+        );
+        for node in [id(1), id(2), id(10), id(11), id(20), id(21)] {
+            assert!(graph.references_node(node));
+        }
+        assert!(!graph.references_node(SemanticNodeId::new(20, 1)));
+        assert!(!graph.references_node(id(22)));
     }
 
     #[test]
