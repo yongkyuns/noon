@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_metadata_requires_text_and_rejects_the_whole_transaction() {
+    fn invalid_numeric_metadata_rejects_the_whole_transaction() {
         let mut store = SemanticStore::new();
         let object =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -97,7 +97,7 @@ mod tests {
             .set_property(object, crate::SemanticObjectProperty::RotationZ, 0.5)
             .replace_decimal_number(
                 object,
-                SemanticDecimalNumber::new(1.0, 2, false, true, false, None, 48.0),
+                SemanticDecimalNumber::new(f64::NAN, 2, false, true, false, None, 48.0),
             );
         assert!(transaction.apply(&mut store).is_err());
         assert_eq!(
@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn visual_replacement_does_not_retain_receiver_numeric_metadata() {
+    fn visual_replacement_preserves_receiver_numeric_metadata() {
         let mut receiver = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         receiver.set_decimal_number(Some(SemanticDecimalNumber::new(
             1.0, 2, false, true, false, None, 48.0,
@@ -116,9 +116,9 @@ mod tests {
         let target = SemanticObjectState::new(StoredGeometry::Rectangle {
             size: crate::Vec2::new(2.0, 2.0),
         });
-        assert!(receiver
-            .with_visual_state_from(&target)
-            .decimal_number()
-            .is_none());
+        assert_eq!(
+            receiver.with_visual_state_from(&target).decimal_number(),
+            receiver.decimal_number()
+        );
     }
 }

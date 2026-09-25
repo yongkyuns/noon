@@ -604,6 +604,33 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Compile a detached numeric object without invalidating the live publication.
+    #[cfg(feature = "latex")]
+    pub fn create_decimal_number(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+        format: crate::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::DecimalNumber, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        crate::DecimalNumber::construct_with(
+            Rc::clone(self.store),
+            backend,
+            value,
+            format,
+            font_size,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            },
+        )
+        .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
     /// Persist one DecimalNumber value through the current execution publication.
     #[cfg(feature = "latex")]
     pub fn set_decimal_value(
@@ -638,6 +665,18 @@ impl<'a> LiveSession<'a> {
             .value()
             .map_err(crate::numeric_authoring::numeric_live_error)?;
         self.set_decimal_value(number, backend, value + delta)
+    }
+
+    /// Read DecimalNumber font size from the current effective publication.
+    pub fn decimal_font_size(
+        &self,
+        number: &crate::DecimalNumber,
+    ) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .font_size_at(&effective)
+            .map_err(crate::numeric_authoring::numeric_live_error)
     }
 
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].

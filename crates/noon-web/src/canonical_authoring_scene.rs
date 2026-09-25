@@ -2614,6 +2614,15 @@ impl CanonicalAuthoringScene {
             .live_increment_decimal_value(&number, compiler, delta)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_decimal_font_size(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())?;
+        self.active_live_player()?.live_decimal_font_size(&number)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn take_execution_player(
         &mut self,
@@ -2723,6 +2732,7 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod numbers;
     mod sample_space;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
@@ -6018,6 +6028,16 @@ mod wasm {
             self.inner
                 .mobject_color(handle.semantic_mobject())
                 .map(crate::WasmManimColor::from_color)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectDecimalFontSize)]
+        pub fn query_mobject_decimal_font_size(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_font_size(handle.semantic_mobject())
                 .map_err(typed_js_error)
         }
 

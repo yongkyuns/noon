@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from _noon_errors import engine_call
-from _manim_typst import _RetainedTextMobject
+from _manim_typst import _RetainedTextMobject, _live_text_context
 import _manim_semantic_handles as _semantic
 import noon as _base
 
@@ -23,10 +23,17 @@ class DecimalNumber(_RetainedTextMobject):
         if not math.isfinite(value): raise ValueError("DecimalNumber value must be finite")
         if isinstance(num_decimal_places, bool) or not isinstance(num_decimal_places, int) or not 0 <= num_decimal_places <= 12: raise ValueError("num_decimal_places must be an integer from 0 through 12")
         if unit is not None and not isinstance(unit, str): raise TypeError("unit must be a string or None")
-        handle = engine_call(_create_decimal, value, num_decimal_places, bool(include_sign), bool(group_with_commas), bool(show_ellipsis), unit, float(font_size))
+        context = _live_text_context()
+        handle = engine_call(_create_decimal, value, num_decimal_places, bool(include_sign), bool(group_with_commas), bool(show_ellipsis), unit, float(font_size), context)
+        if context is not None:
+            self._canonical_live_target_context = context
         self._numeric_handle = handle
         semantic = engine_call(handle.mobject)
         self._initialize_text(engine_call(handle.text), float(font_size), semantic, color, opacity)
+    @property
+    def font_size(self) -> float:
+        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        return float(engine_call(self._numeric_handle.fontSize, context))
     def get_value(self) -> float: return float(engine_call(self._numeric_handle.value))
     def set_value(self, number: float):
         value = float(number)

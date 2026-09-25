@@ -209,8 +209,9 @@ async function initializePyodide() {
   const numericHandle = (handle) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
     return {
-      get value() { return handle.value; },
-      get text() { return handle.text; },
+      value: () => handle.value,
+      text: () => handle.text,
+      fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
       mobject: () => handle.mobject(),
       integerValue: () => handle.integerValue(),
       setValue: (value) => handle.setValue(latexCompiler, value),
@@ -219,8 +220,12 @@ async function initializePyodide() {
       incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
     };
   };
-  self.noonCreateAuthoringDecimalNumberHandle = (...args) =>
-    numericHandle(authoringStore.createDecimalNumber(...args, latexCompiler));
+  self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
+    return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
+      : context.liveCreateDecimalNumber(...args));
+  };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);

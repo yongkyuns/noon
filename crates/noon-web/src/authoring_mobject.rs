@@ -175,6 +175,12 @@ mod wasm {
         number: noon::DecimalNumber,
     }
 
+    impl WasmDecimalNumberHandle {
+        pub(crate) fn from_number(number: noon::DecimalNumber) -> Self {
+            Self { number }
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmDecimalNumberHandle {
         #[wasm_bindgen(getter)]
@@ -191,6 +197,10 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn text(&self) -> Result<String, JsValue> {
             self.number.text().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = fontSize)]
+        pub fn font_size(&self) -> Result<f64, JsValue> {
+            self.number.font_size().map_err(js_error)
         }
         #[wasm_bindgen(js_name = setValue)]
         pub fn set_value(

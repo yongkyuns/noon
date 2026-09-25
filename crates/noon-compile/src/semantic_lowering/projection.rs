@@ -98,6 +98,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
+                | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }

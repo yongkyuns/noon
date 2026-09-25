@@ -9,15 +9,16 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
-    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
-    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
-    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
-    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
-    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransactionGraphDeclaration,
-    SemanticTransactionGraphEdgeDependency, SemanticTransformInterpolation,
-    SemanticUpdaterRegistration, StoredGeometry,
+    SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint,
+    SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry,
+    SemanticScalarSignalTrack, SemanticScalarSignalTrackError, SemanticSceneOperationError,
+    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
+    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
+    TextPresentationBaseline,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -92,6 +93,10 @@ pub enum SemanticMutation {
     ReplaceDecimalNumber {
         object: SemanticTransactionNodeRef,
         number: SemanticDecimalNumber,
+    },
+    ReplaceTextPresentationBaseline {
+        object: SemanticTransactionNodeRef,
+        baseline: Option<TextPresentationBaseline>,
     },
     SetZIndex {
         node: SemanticTransactionNodeRef,
@@ -176,6 +181,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
+            | Self::ReplaceTextPresentationBaseline { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
             Self::SetInset2DView {
@@ -237,6 +243,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
+            | Self::ReplaceTextPresentationBaseline { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::SetInset2DView { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
@@ -271,6 +278,9 @@ impl SemanticMutation {
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::ReplaceDecimalNumber { object, .. } => {
                 Some(SemanticMutationKey::DecimalNumber(*object))
+            }
+            Self::ReplaceTextPresentationBaseline { object, .. } => {
+                Some(SemanticMutationKey::TextPresentationBaseline(*object))
             }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
@@ -315,6 +325,7 @@ pub(super) enum SemanticMutationKey {
     ObjectContent(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
     DecimalNumber(SemanticTransactionNodeRef),
+    TextPresentationBaseline(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
@@ -360,6 +371,9 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     DecimalNumber {
+        object: SemanticNodeId,
+    },
+    TextPresentationBaseline {
         object: SemanticNodeId,
     },
     ObjectStyle {
@@ -576,6 +590,21 @@ impl SemanticMutationTransaction {
             object: object.into(),
             number,
         });
+        self
+    }
+
+    /// Replace receiver-owned presentation metadata atomically with related
+    /// text content. It does not create renderer work by itself.
+    pub fn replace_text_presentation_baseline(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        baseline: Option<TextPresentationBaseline>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceTextPresentationBaseline {
+                object: object.into(),
+                baseline,
+            });
         self
     }
 
@@ -1760,12 +1789,6 @@ impl SemanticMutationTransaction {
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
-                        // A generic visual replacement has no numeric source
-                        // contract. Keep staged state consistent with commit,
-                        // which clears stale DecimalNumber metadata. A
-                        // following ReplaceDecimalNumber in the same
-                        // transaction must therefore be observed as a change.
-                        state.set_decimal_number(None);
                     }
                     changed.push(did_change);
                 }
@@ -1826,7 +1849,7 @@ impl SemanticMutationTransaction {
                         *object,
                         index,
                     )?;
-                    if !number.is_valid() || state.content.text().is_none() {
+                    if !number.is_valid() {
                         return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
                             index,
                         });
@@ -1834,6 +1857,22 @@ impl SemanticMutationTransaction {
                     let did_change = state.decimal_number() != Some(number);
                     if did_change {
                         state.set_decimal_number(Some(number.clone()));
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::ReplaceTextPresentationBaseline { object, baseline } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.text_presentation_baseline() != *baseline;
+                    if did_change {
+                        match baseline {
+                            Some(baseline) => state.set_text_presentation_baseline(*baseline),
+                            None => state.clear_text_presentation_baseline(),
+                        }
                     }
                     changed.push(did_change);
                 }
@@ -2656,14 +2695,6 @@ fn set_object_content(
         .and_then(|node| node.semantic_object_state_mut())
         .expect("preflighted semantic object must remain valid while transaction owns the store")
         .content = content;
-    // A generic content replacement has no numeric source contract. Numeric
-    // value publication stages ReplaceDecimalNumber after this mutation in the
-    // same transaction; all other replacements must invalidate stale getters.
-    store
-        .node_mut(object)
-        .and_then(|node| node.semantic_object_state_mut())
-        .expect("preflighted semantic object must remain valid while transaction owns the store")
-        .set_decimal_number(None);
 }
 
 pub(super) fn validate_object_content_resource(

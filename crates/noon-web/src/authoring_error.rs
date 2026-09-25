@@ -1129,3 +1129,13 @@ mod tests {
         assert_eq!(execution.frame().objects[1], before.objects[1]);
     }
 }
+
+impl From<noon::NumericAuthoringError> for AuthoringFailure {
+    fn from(error: noon::NumericAuthoringError) -> Self {
+        match error {
+            noon::NumericAuthoringError::Text(error) => error.into(),
+            noon::NumericAuthoringError::Semantic(error) => error.into(),
+            other => Self::new("invalid_input", "numeric.input", other),
+        }
+    }
+}

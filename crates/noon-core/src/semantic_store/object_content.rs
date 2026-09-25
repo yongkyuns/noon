@@ -5,6 +5,30 @@ use crate::{
 };
 use std::sync::Arc;
 
+/// Receiver-owned baseline for Manim-compatible text presentation queries.
+///
+/// Content replacement deliberately preserves this declaration: current ink
+/// bounds may change, while the receiver's initial font size and height remain
+/// the scale reference.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextPresentationBaseline {
+    pub initial_font_size: f64,
+    pub initial_height: f64,
+}
+
+impl TextPresentationBaseline {
+    pub fn new(initial_font_size: f64, initial_height: f64) -> Option<Self> {
+        (initial_font_size.is_finite()
+            && initial_font_size > 0.0
+            && initial_height.is_finite()
+            && initial_height >= 0.0)
+            .then_some(Self {
+                initial_font_size,
+                initial_height,
+            })
+    }
+}
+
 mod coordinate_role;
 pub use coordinate_role::SemanticNumberLineRole;
 mod function_plot_role;
@@ -277,6 +301,7 @@ pub struct SemanticObjectState {
     // semantic objects to one optional pointer rather than embedding the
     // metadata payload in every authored object state.
     decimal_number: Option<Arc<SemanticDecimalNumber>>,
+    text_presentation_baseline: Option<TextPresentationBaseline>,
     signal_bindings: Vec<SemanticSignalBinding>,
 }
 
@@ -289,6 +314,7 @@ impl SemanticObjectState {
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
             decimal_number: None,
+            text_presentation_baseline: None,
             signal_bindings: Vec::new(),
         }
     }
@@ -306,10 +332,10 @@ impl SemanticObjectState {
             style: target.style.clone(),
             presentation: self.presentation,
             role: self.role,
-            // Numeric metadata describes the displayed numeric source. A visual
-            // replacement therefore follows a numeric target and otherwise clears;
-            // retaining the receiver's old value would make getters lie.
-            decimal_number: target.decimal_number.clone(),
+            // Manim become replaces geometry and paint, not the receiver's
+            // number or formatting inputs. Explicit set_value changes those.
+            decimal_number: self.decimal_number.clone(),
+            text_presentation_baseline: self.text_presentation_baseline,
             signal_bindings: self.signal_bindings.clone(),
         }
     }
@@ -338,8 +364,20 @@ impl SemanticObjectState {
         self.role = role;
     }
 
-    /// Reconstructible DecimalNumber inputs. A present value is valid only on
-    /// text content; transaction preflight enforces that relationship.
+    pub const fn text_presentation_baseline(&self) -> Option<TextPresentationBaseline> {
+        self.text_presentation_baseline
+    }
+
+    pub fn set_text_presentation_baseline(&mut self, baseline: TextPresentationBaseline) {
+        self.text_presentation_baseline = Some(baseline);
+    }
+
+    pub fn clear_text_presentation_baseline(&mut self) {
+        self.text_presentation_baseline = None;
+    }
+
+    /// Receiver-owned DecimalNumber inputs, retained across visual replacement.
+    /// A subsequent set_value reconstructs text from these authored inputs.
     pub fn decimal_number(&self) -> Option<&SemanticDecimalNumber> {
         self.decimal_number.as_deref()
     }
@@ -460,12 +498,15 @@ mod tests {
         receiver.set_z_index(7.0);
         receiver.assign_insertion_order(11);
         receiver.set_role(SemanticObjectRole::Camera2D);
+        let receiver_baseline = TextPresentationBaseline::new(36.0, 1.25).unwrap();
+        receiver.set_text_presentation_baseline(receiver_baseline);
         let mut target = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
         target.transform.translation = SemanticVec3::new(3.0, -2.0, 0.0);
         target.style.object_opacity = 0.25;
         target.set_z_index(-4.0);
         target.assign_insertion_order(99);
         target.set_role(SemanticObjectRole::ArrowEndTip);
+        target.set_text_presentation_baseline(TextPresentationBaseline::new(72.0, 3.0).unwrap());
 
         let copied = receiver.with_visual_state_from(&target);
 
@@ -474,6 +515,7 @@ mod tests {
         assert_eq!(copied.style, target.style);
         assert_eq!(copied.presentation(), receiver.presentation());
         assert_eq!(copied.role(), receiver.role());
+        assert_eq!(copied.text_presentation_baseline(), Some(receiver_baseline));
         assert_eq!(copied.signal_bindings(), receiver.signal_bindings());
     }
 

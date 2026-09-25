@@ -7,7 +7,8 @@ use crate::{
 use noon_core::{
     Rect, SemanticDecimalNumber, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, TextAffineTransform,
-    TextPart, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, Vec2, WHITE,
+    TextPart, TextPresentationBaseline, TextRenderItem, TextResource, TextSourceKind,
+    TextSourceSpan, Vec2, WHITE,
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -17,6 +18,8 @@ pub enum NumericAuthoringError {
     Text(TextAuthoringError),
     Semantic(crate::AuthoringError),
     NotDecimalNumber,
+    MissingPresentationBaseline,
+    InvalidEffectiveFontSize { value: f64 },
     IntegerOutOfRange { value: f64 },
 }
 impl std::fmt::Display for NumericAuthoringError {
@@ -26,6 +29,12 @@ impl std::fmt::Display for NumericAuthoringError {
             Self::Text(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
             Self::NotDecimalNumber => f.write_str("semantic object is not a DecimalNumber"),
+            Self::MissingPresentationBaseline => {
+                f.write_str("DecimalNumber has no retained text presentation baseline")
+            }
+            Self::InvalidEffectiveFontSize { value } => {
+                write!(f, "DecimalNumber effective font size is invalid: {value}")
+            }
             Self::IntegerOutOfRange { value } => {
                 write!(f, "Integer value {value} is outside i64 range")
             }
@@ -131,15 +140,32 @@ impl DecimalNumber {
         format: DecimalFormat,
         font_size: f32,
     ) -> Result<Self, NumericAuthoringError> {
-        Self::construct(store, backend, value, format, font_size)
+        Self::construct_with(
+            store,
+            backend,
+            value,
+            format,
+            font_size,
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(TextAuthoringError::Semantic)
+            },
+        )
     }
 
-    fn construct(
+    pub(crate) fn construct_with(
         store: Rc<RefCell<SemanticStore>>,
         backend: &mut impl LatexBackend,
         value: f64,
         format: DecimalFormat,
         font_size: f32,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            SemanticMutationTransaction,
+        )
+            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
     ) -> Result<Self, NumericAuthoringError> {
         let prepared = prepare_numeric_value(backend, value, format.clone(), font_size)?;
         let number = decimal_metadata(value, &format, font_size);
@@ -147,12 +173,12 @@ impl DecimalNumber {
             let mut state = SemanticObjectState::new(handle);
             state.style.fill = Some(SemanticPaint::Solid(WHITE));
             state.set_decimal_number(Some(number));
+            state.set_text_presentation_baseline(numeric_presentation_baseline(
+                semantic, handle, font_size,
+            )?);
             let mut transaction = SemanticMutationTransaction::new();
             transaction.add_node(SemanticNodeCreation::object(state));
-            transaction
-                .apply(semantic)
-                .map_err(crate::AuthoringError::from)
-                .map_err(TextAuthoringError::Semantic)
+            publish(semantic, transaction)
         })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("numeric admission adds one node")
@@ -194,6 +220,20 @@ impl DecimalNumber {
     }
     pub fn text(&self) -> Result<String, NumericAuthoringError> {
         Ok(format_decimal(self.value()?, &self.format()?)?)
+    }
+
+    /// Manim's current font-size observation derives from effective ink height
+    /// and the receiver-owned initial presentation baseline.
+    pub fn font_size(&self) -> Result<f64, NumericAuthoringError> {
+        let state = self.object.state()?;
+        effective_font_size(&self.object.integration_store().borrow(), &state)
+    }
+
+    pub(crate) fn font_size_at(
+        &self,
+        state: &SemanticObjectState,
+    ) -> Result<f64, NumericAuthoringError> {
+        effective_font_size(&self.object.integration_store().borrow(), state)
     }
 
     pub fn set_value(
@@ -600,34 +640,96 @@ fn decimal_replacement_transaction(
     format: &DecimalFormat,
     font_size: f32,
 ) -> Result<SemanticMutationTransaction, TextAuthoringError> {
-    let fixed_left = crate::semantic_mobject::boundary_for_content(
-        store,
-        effective.content,
-        effective.transform,
-    )
-    .map_err(TextAuthoringError::Semantic)?
-    .map_or(
-        crate::semantic_mobject::state_center(store, &effective)
-            .map_err(TextAuthoringError::Semantic)?
-            .0,
-        |bounds| bounds.min_x,
-    );
+    let fixed_left = left_edge_center(store, &effective)?;
+    let effective_font_size =
+        effective_font_size(store, &effective).map_err(|error| match error {
+            NumericAuthoringError::Text(error) => error,
+            NumericAuthoringError::Semantic(error) => TextAuthoringError::Semantic(error),
+            NumericAuthoringError::InvalidEffectiveFontSize { value } => {
+                TextAuthoringError::Semantic(crate::AuthoringError::InvalidRenderNumber {
+                    name: "DecimalNumber effective font size".into(),
+                    value,
+                })
+            }
+            NumericAuthoringError::MissingPresentationBaseline => {
+                TextAuthoringError::Semantic(crate::AuthoringError::NonPositiveNumber {
+                    name: "DecimalNumber initial presentation height".into(),
+                    value: 0.0,
+                })
+            }
+            NumericAuthoringError::Format(_)
+            | NumericAuthoringError::NotDecimalNumber
+            | NumericAuthoringError::IntegerOutOfRange { .. } => {
+                unreachable!("numeric replacement started from validated DecimalNumber state")
+            }
+        })?;
     effective.content = SemanticObjectContent::Text(handle);
-    let new_left = crate::semantic_mobject::boundary_for_content(
-        store,
-        effective.content,
-        effective.transform,
-    )
-    .map_err(TextAuthoringError::Semantic)?
-    .map_or(fixed_left, |bounds| bounds.min_x);
-    effective.transform.translation.x += fixed_left - new_left;
+    effective.transform = noon_core::SemanticTransform2_5D::default();
+    let scale = effective_font_size / f64::from(font_size);
+    effective.transform.scale.x = scale;
+    effective.transform.scale.y = scale;
+    let new_left = left_edge_center(store, &effective)?;
+    effective.transform.translation.x += fixed_left.0 - new_left.0;
+    effective.transform.translation.y += fixed_left.1 - new_left.1;
+    let baseline = numeric_presentation_baseline(store, handle, font_size)?;
     let mut transaction = SemanticMutationTransaction::new();
     crate::semantic_mobject::stage_state_changes(&mut transaction, node, authored, &effective);
     if authored.z_index() != effective.z_index() {
         transaction.set_z_index(node, effective.z_index());
     }
     transaction.replace_decimal_number(node, decimal_metadata(value, format, font_size));
+    transaction.replace_text_presentation_baseline(node, Some(baseline));
     Ok(transaction)
+}
+
+fn left_edge_center(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<(f64, f64), TextAuthoringError> {
+    Ok(
+        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
+            .map_err(TextAuthoringError::Semantic)?
+            .map_or(
+                (state.transform.translation.x, state.transform.translation.y),
+                |bounds| (bounds.min_x, (bounds.min_y + bounds.max_y) * 0.5),
+            ),
+    )
+}
+
+fn numeric_presentation_baseline(
+    store: &SemanticStore,
+    handle: noon_core::TextResourceHandle,
+    font_size: f32,
+) -> Result<TextPresentationBaseline, TextAuthoringError> {
+    let resource = store
+        .text_resources()
+        .get(handle)
+        .ok_or(TextAuthoringError::Text(
+            noon_core::TextResourceValidationError::InvalidSourceSpan,
+        ))?;
+    TextPresentationBaseline::new(f64::from(font_size), f64::from(resource.bounds.height()))
+        .ok_or(TextAuthoringError::InvalidFontSize(font_size))
+}
+
+fn effective_font_size(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<f64, NumericAuthoringError> {
+    let baseline = state
+        .text_presentation_baseline()
+        .ok_or(NumericAuthoringError::MissingPresentationBaseline)?;
+    if baseline.initial_height == 0.0 {
+        return Ok(baseline.initial_font_size);
+    }
+    let height =
+        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
+            .map_err(TextAuthoringError::Semantic)?
+            .map_or(0.0, |bounds| bounds.height());
+    let value = height / baseline.initial_height * baseline.initial_font_size;
+    if !value.is_finite() || value <= 0.0 || value > f64::from(f32::MAX) {
+        return Err(NumericAuthoringError::InvalidEffectiveFontSize { value });
+    }
+    Ok(value)
 }
 
 fn numeric_math_tex(source: &str, font_size: f32) -> Result<MathTex, NumericAuthoringError> {

@@ -246,45 +246,6 @@ impl LatexAdmission {
         (self.identity, self.resource, self.fonts, self.geometry)
     }
 
-    pub(crate) fn into_resource_parts(
-        self,
-    ) -> (
-        noon_core::TextResource,
-        noon_core::FontResourceArena,
-        noon_core::GeometryResourceArena,
-    ) {
-        (self.resource, self.fonts, self.geometry)
-    }
-
-    /// Publish a compiled LaTeX object with caller-owned semantic metadata.
-    /// Construction stays inside the same resource and semantic transaction.
-    pub(crate) fn publish_with_state<T>(
-        self,
-        store: &mut noon_core::SemanticStore,
-        build_state: impl FnOnce(noon_core::SemanticObjectState) -> noon_core::SemanticObjectState,
-        publish: impl FnOnce(
-            &mut noon_core::SemanticStore,
-            noon_core::SemanticMutationTransaction,
-        ) -> Result<T, TextAuthoringError>,
-    ) -> Result<T, TextAuthoringError> {
-        let Self {
-            identity,
-            resource,
-            fonts,
-            geometry,
-            transform,
-            style,
-        } = self;
-        store.publish_compiled_detached_text(
-            identity,
-            resource,
-            fonts,
-            &geometry,
-            move |handle| build_state(semantic_text_state(handle, transform, style)),
-            publish,
-        )
-    }
-
     pub(crate) fn publish<T>(
         self,
         store: &mut noon_core::SemanticStore,

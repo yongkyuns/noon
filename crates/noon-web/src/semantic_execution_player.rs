@@ -7,6 +7,8 @@ mod coordinates;
 mod pointer_input;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
+#[cfg(any(target_arch = "wasm32", test))]
+mod numbers;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;
