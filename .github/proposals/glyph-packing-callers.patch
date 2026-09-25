@@ -1,0 +1,21 @@
+diff --git a/crates/noon-render-wgpu/src/text/preparation.rs b/crates/noon-render-wgpu/src/text/preparation.rs
+--- a/crates/noon-render-wgpu/src/text/preparation.rs
++++ b/crates/noon-render-wgpu/src/text/preparation.rs
+@@ -1788,7 +1788,7 @@
+                 )
+                 .unwrap();
+         }
+-        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
++        let dense_quads = dense.prepared_frame(final_frame.time, false).mask_quads.to_vec();
+         let sparse_quads = sparse
+             .prepare_with_changes(
+                 &device,
+@@ -1863,7 +1863,7 @@
+                 )
+                 .unwrap();
+         }
+-        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
++        let dense_quads = dense.prepared_frame(final_frame.time, false).mask_quads.to_vec();
+         let sparse_quads = sparse
+             .prepare_with_changes(
+                 &device,

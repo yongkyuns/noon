@@ -29,6 +29,8 @@ jobs:
       - name: Apply candidate and retain its exact formatted source
         run: |
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/checkpoint-trigger.txt"
+          git apply --check "$RUNNER_TEMP/glyph-packing-callers.patch"
+          git apply "$RUNNER_TEMP/glyph-packing-callers.patch"
           git apply --check "$RUNNER_TEMP/glyph-packing-parent.patch" "$RUNNER_TEMP/glyph-packing-child.patch"
           git apply "$RUNNER_TEMP/glyph-packing-parent.patch" "$RUNNER_TEMP/glyph-packing-child.patch"
           rustup install
