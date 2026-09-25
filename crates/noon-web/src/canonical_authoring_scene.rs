@@ -1,5 +1,7 @@
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(target_arch = "wasm32")]
+mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(target_arch = "wasm32")]

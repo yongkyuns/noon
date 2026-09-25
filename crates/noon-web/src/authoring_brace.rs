@@ -4,7 +4,67 @@
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::js_error;
-use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
+use crate::{
+    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmLayoutAnchor, WasmManimGeometryOptions,
+};
+
+#[wasm_bindgen]
+pub struct WasmBraceLabelHandle {
+    inner: noon::BraceLabel,
+}
+
+#[wasm_bindgen]
+impl WasmBraceLabelHandle {
+    #[wasm_bindgen(js_name = family)]
+    pub fn family(&self) -> WasmAuthoringFamilyHandle {
+        WasmAuthoringFamilyHandle::from_semantic_family(self.inner.family().clone())
+    }
+
+    #[wasm_bindgen(js_name = brace)]
+    pub fn brace(&self) -> WasmAuthoringMobjectHandle {
+        WasmAuthoringMobjectHandle::from_semantic_mobject(self.inner.brace().object().clone())
+    }
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    /// Create the retained Brace/label relationship through the active live owner.
+    #[wasm_bindgen(js_name = liveCreateBraceLabel)]
+    pub fn live_create_brace_label(
+        &mut self,
+        target: &WasmLayoutAnchor,
+        label: &WasmLayoutAnchor,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> Result<WasmBraceLabelHandle, JsValue> {
+        self.create_live_brace_label(
+            &target.anchor,
+            label.anchor.clone(),
+            noon::BraceOptions {
+                direction: (direction_x, direction_y),
+                buff,
+                sharpness,
+                label_buff,
+            },
+        )
+        .map(|inner| WasmBraceLabelHandle { inner })
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveShiftBraceLabel)]
+    pub fn live_shift_brace_label(
+        &mut self,
+        brace: &mut WasmBraceLabelHandle,
+        target: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        self.shift_live_brace_label(&mut brace.inner, &target.anchor)
+            .map_err(js_error)
+    }
+}
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
