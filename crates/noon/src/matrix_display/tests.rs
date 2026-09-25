@@ -147,6 +147,9 @@ fn text_constructor_admits_baselines_and_centers_entries_with_brackets() {
     .unwrap();
     assert_eq!(matrix.shape().unwrap(), (2, 2));
     for entry in matrix.entries().unwrap() {
+        let CompositeEntryHandle::Mobject(entry) = entry else {
+            panic!("compiled single-source entry is a text leaf");
+        };
         assert!(entry
             .state()
             .unwrap()
@@ -173,8 +176,8 @@ fn copied_matrix_reconstructs_independent_durable_topology() {
     assert_eq!(copy.shape().unwrap(), (2, 2));
     assert_ne!(copy.family().node_id(), matrix.family().node_id());
     assert_ne!(
-        copy.entries().unwrap()[0].node_id(),
-        matrix.entries().unwrap()[0].node_id()
+        copy.entries().unwrap()[0].as_target().node_id(),
+        matrix.entries().unwrap()[0].as_target().node_id()
     );
     assert_ne!(
         copy.left_bracket().node_id(),

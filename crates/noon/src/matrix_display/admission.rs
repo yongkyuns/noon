@@ -563,7 +563,7 @@ pub(super) fn publish_target_mobject_matrix(
     }
     let all = all.expect("existing Matrix has bounds");
     let center = ((all.min_x + all.max_x) * 0.5, (all.min_y + all.max_y) * 0.5);
-    for translation in &mut translations {
+    for (_, translation) in &mut translations {
         translation.x -= center.0;
         translation.y -= center.1;
     }
