@@ -88,33 +88,14 @@ impl MatrixPublisher<'_, '_> {
                 operation(&mut store, &mut publish).map_err(Into::into)
             }
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| {
-                    operation(store, publish).map_err(text_publication_error)
-                })
-                .map_err(Into::into),
+                .with_semantic_publication(|store, publish| Ok(operation(store, publish)))
+                .map_err(MatrixAuthoringError::Semantic)?
+                .map_err(MatrixAuthoringError::Text),
             Self::Live(live) => live
-                .with_semantic_publication(|store, publish| {
-                    operation(store, publish).map_err(text_publication_error)
-                })
-                .map_err(|error| match error {
-                    crate::LiveSessionError::Authoring(error) => {
-                        MatrixAuthoringError::Semantic(error)
-                    }
-                    crate::LiveSessionError::Publication(error) => {
-                        MatrixAuthoringError::Semantic(AuthoringError::ExecutionPublication(error))
-                    }
-                    other => MatrixAuthoringError::LiveSession(other),
-                }),
+                .with_semantic_publication(|store, publish| Ok(operation(store, publish)))
+                .map_err(MatrixAuthoringError::LiveSession)?
+                .map_err(MatrixAuthoringError::Text),
         }
-    }
-}
-fn text_publication_error(error: TextAuthoringError) -> AuthoringError {
-    match error {
-        TextAuthoringError::Semantic(error) => error,
-        other => AuthoringError::InvalidRenderNumber {
-            name: other.to_string(),
-            value: f64::NAN,
-        },
     }
 }
 
@@ -467,12 +448,7 @@ pub(super) fn publish_numeric_matrix(
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut transforms = vec![SemanticTransform2_5D::default(); count];
                 let (bounds, _) = layout_text(&resources, &mut transforms, shape, options)
-                    .map_err(|error| {
-                        TextAuthoringError::Semantic(AuthoringError::InvalidRenderNumber {
-                            name: error.to_string(),
-                            value: f64::NAN,
-                        })
-                    })?;
+                    .expect("validated nonempty numeric matrix retains one resource per entry");
                 let mut brackets = brackets;
                 place_brackets(&resources, &mut transforms, &mut brackets, bounds, options);
                 let mut transaction = SemanticMutationTransaction::new();

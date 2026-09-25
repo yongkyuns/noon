@@ -37,21 +37,7 @@ pub struct WasmMatrixHandle {
 /// A validated set of existing Mobject entries for one Matrix admission.
 #[wasm_bindgen]
 pub struct WasmMobjectMatrixRows {
-    rows: Vec<Vec<MatrixEntryRoot>>,
-}
-
-#[derive(Clone)]
-enum MatrixEntryRoot {
-    Mobject(noon::Mobject),
-    Family(noon::MobjectFamily),
-}
-impl MatrixEntryRoot {
-    fn target(&self) -> noon::MobjectTarget<'_> {
-        match self {
-            Self::Mobject(object) => object.into(),
-            Self::Family(family) => family.into(),
-        }
-    }
+    rows: Vec<Vec<noon::CompositeEntryHandle>>,
 }
 
 #[wasm_bindgen]
@@ -72,7 +58,9 @@ impl WasmMobjectMatrixRows {
             .rows
             .last_mut()
             .ok_or_else(|| js_error("MobjectMatrix rows require beginRow before appendEntry"))?;
-        row.push(MatrixEntryRoot::Mobject(entry.semantic_mobject().clone()));
+        row.push(noon::CompositeEntryHandle::Mobject(
+            entry.semantic_mobject().clone(),
+        ));
         Ok(())
     }
     #[wasm_bindgen(js_name = appendFamilyEntry)]
@@ -83,7 +71,7 @@ impl WasmMobjectMatrixRows {
         let row = self.rows.last_mut().ok_or_else(|| {
             js_error("MobjectMatrix rows require beginRow before appendFamilyEntry")
         })?;
-        row.push(MatrixEntryRoot::Family(entry.semantic_family()?));
+        row.push(noon::CompositeEntryHandle::Family(entry.semantic_family()?));
         Ok(())
     }
 }
@@ -92,7 +80,11 @@ impl WasmMobjectMatrixRows {
     pub(crate) fn targets(&self) -> Vec<Vec<noon::MobjectTarget<'_>>> {
         self.rows
             .iter()
-            .map(|row| row.iter().map(MatrixEntryRoot::target).collect())
+            .map(|row| {
+                row.iter()
+                    .map(noon::CompositeEntryHandle::as_target)
+                    .collect()
+            })
             .collect()
     }
 }

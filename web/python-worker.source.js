@@ -249,31 +249,6 @@ async function initializePyodide() {
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
       : context.liveCreateDecimalNumber(...args));
   };
-  self.noonMatrixOptions = WasmMatrixOptions;
-  self.noonMobjectMatrixRows = WasmMobjectMatrixRows;
-  self.noonMatrixFromFamily = (family) => family.asMatrix();
-  self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
-    const options = new WasmMatrixOptions(v, h, bh, bv, stretch);
-    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), options, latexCompiler);
-  };
-  self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
-    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
-  };
-  self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
-    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
-  };
-  self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
-    const entries = new WasmMobjectMatrixRows();
-    for (const row of rows) {
-      entries.beginRow();
-      for (const entry of row) entries.appendEntry(entry);
-    }
-    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
-  };
   self.noonTableOptions = WasmTableOptions;
   self.noonMobjectTableRows = WasmMobjectTableRows;
   self.noonTableFromFamily = (family) => family.asTable();
