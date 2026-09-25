@@ -850,6 +850,7 @@ impl StagedTextReplacements {
         self.stages.get(&handle.arena)?.get(handle)
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.stages
             .values()
