@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 24);
+assert.equal(gallery.examples.length, 29);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -41,6 +41,11 @@ assert.deepEqual(
     "noon-markup-text",
     "noon-text-range-colors",
     "noon-pointer-selection",
+    "noon-brace-text",
+    "noon-sample-space",
+    "noon-polar-plane",
+    "noon-complex-plane",
+    "noon-zoomed-scene",
   ],
 );
 
@@ -259,5 +264,21 @@ assert.match(numberLineSource, /Create\(number_line\)/);
 assert.match(numberLineSource, /target = number_line\.n2p\(-2\)/, "query the transformed live line");
 assert.match(numberLineSource, /number_line\.p2n\(target\)/, "check the live coordinate round-trip");
 assert.doesNotMatch(numberLineSource, /positions =|x = value|value \* 1\.1/);
+
+const breadthCases = [
+  ["noon-brace-text", /BraceText\(/, "BraceText"],
+  ["noon-sample-space", /SampleSpace\(/, "SampleSpace"],
+  ["noon-polar-plane", /PolarPlane\(/, "PolarPlane"],
+  ["noon-complex-plane", /ComplexPlane\(/, "ComplexPlane"],
+  ["noon-zoomed-scene", /ZoomedScene/, "ZoomedScene"],
+];
+for (const [id, pattern, label] of breadthCases) {
+  const entry = readyEntries.find((candidate) => candidate.id === id);
+  assert.equal(entry?.parity_status, "candidate", `${id}: breadth coverage remains a candidate`);
+  assert.ok(entry?.features.includes("Manim-compatible"), `${id}: compatibility stays searchable`);
+  const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
+  assert.match(source, /from noon import\b/, `${id}: source must import Noon`);
+  assert.match(source, pattern, `${id}: source must exercise ${label}`);
+}
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");
