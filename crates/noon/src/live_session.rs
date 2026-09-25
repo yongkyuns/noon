@@ -693,6 +693,7 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Read DecimalNumber font size from the current effective publication.
+    #[cfg(feature = "latex")]
     pub fn decimal_font_size(
         &self,
         number: &crate::DecimalNumber,

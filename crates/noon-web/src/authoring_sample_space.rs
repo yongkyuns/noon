@@ -87,10 +87,6 @@ impl WasmSampleSpaceHandle {
         Self { sample_space }
     }
 
-    pub(crate) fn sample_space_mut(&mut self) -> &mut SampleSpace {
-        &mut self.sample_space
-    }
-
     pub fn family(&self) -> WasmAuthoringFamilyHandle {
         WasmAuthoringFamilyHandle::from_semantic_family(self.sample_space.family().clone())
     }
