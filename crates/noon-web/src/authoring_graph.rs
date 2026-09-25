@@ -155,6 +155,13 @@ impl NativeGraph {
         Ok(())
     }
 
+    pub(crate) fn copy_cold(&self) -> Result<Self, noon::GraphAuthoringError> {
+        match self {
+            Self::Undirected(graph) => graph.copy().map(Self::Undirected),
+            Self::Directed(graph) => graph.copy().map(Self::Directed),
+        }
+    }
+
     pub(crate) fn copy_live(
         &self,
         live: &mut noon::LiveSession<'_>,

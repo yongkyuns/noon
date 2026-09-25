@@ -54,9 +54,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_copy_graph(graph)
             }
-            PlayerOwnership::Unstarted => {
-                Err("live Graph copy requires an active canonical session".into())
-            }
+            PlayerOwnership::Unstarted => graph
+                .copy_cold()
+                .map_err(|error| AuthoringFailure::unclassified("graph.copy", &error)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }

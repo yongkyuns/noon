@@ -6,9 +6,9 @@ use crate::{
 };
 use noon_core::{
     Rect, SemanticDecimalNumber, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticTransform2_5D, TextAffineTransform,
-    TextPart, TextPresentationBaseline, TextRenderItem, TextResource, TextSourceKind,
-    TextSourceSpan, Vec2, WHITE,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticTransform2_5D, TextAffineTransform, TextPart, TextPresentationBaseline, TextRenderItem,
+    TextResource, TextSourceKind, TextSourceSpan, Vec2, WHITE,
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -331,12 +331,22 @@ impl PreparedDecimalValue {
         prepare_numeric_value(backend, value, format, font_size)
     }
 
+    pub(crate) fn dependencies(&self) -> &[NumericCompiledDependency] {
+        &self.dependencies
+    }
+
     pub(crate) fn compose_resource(
         &self,
         store: &SemanticStore,
         handles: &[noon_core::TextResourceHandle],
     ) -> Result<TextResource, TextAuthoringError> {
-        compose_numeric_text_resource(store, Arc::clone(&self.source), &self.tokens, handles, self.font_size)
+        compose_numeric_text_resource(
+            store,
+            Arc::clone(&self.source),
+            &self.tokens,
+            handles,
+            self.font_size,
+        )
     }
 
     pub(crate) fn decimal_state(
@@ -348,8 +358,16 @@ impl PreparedDecimalValue {
         let mut state = SemanticObjectState::new(handle);
         state.transform = transform;
         state.style.fill = Some(SemanticPaint::Solid(WHITE));
-        state.set_decimal_number(Some(decimal_metadata(self.value, &self.format, self.font_size)));
-        state.set_text_presentation_baseline(numeric_presentation_baseline(store, handle, self.font_size)?);
+        state.set_decimal_number(Some(decimal_metadata(
+            self.value,
+            &self.format,
+            self.font_size,
+        )));
+        state.set_text_presentation_baseline(numeric_presentation_baseline(
+            store,
+            handle,
+            self.font_size,
+        )?);
         Ok(state)
     }
 
