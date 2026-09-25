@@ -331,10 +331,6 @@ impl PreparedDecimalValue {
         prepare_numeric_value(backend, value, format, font_size)
     }
 
-    pub(crate) fn dependencies(&self) -> &[NumericCompiledDependency] {
-        &self.dependencies
-    }
-
     pub(crate) fn compose_resource(
         &self,
         store: &SemanticStore,
