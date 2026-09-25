@@ -1,8 +1,7 @@
 use super::*;
 use noon_core::{
-    Bounds2D64, GeometryRef, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectProperty, SemanticObjectState, SemanticStyle, SemanticTransform2_5D,
-    StoredGeometry, TextResource,
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
+    SemanticObjectState, SemanticStyle, SemanticTransform2_5D, StoredGeometry, TextResource,
 };
 
 type TextDependency = (
@@ -64,6 +63,20 @@ impl TablePublisher<'_, '_> {
             self.entry_state(object)
         })
         .map_err(Into::into)
+    }
+    fn publish_text<T>(
+        self,
+        operation: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            &mut dyn FnMut(
+                &mut noon_core::SemanticStore,
+                SemanticMutationTransaction,
+            )
+                -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TableAuthoringError> {
+        self.publish(|store, publish| Ok(operation(store, publish)))?
+            .map_err(TableAuthoringError::Text)
     }
     fn publish<T>(
         self,
@@ -175,14 +188,10 @@ struct GridLayout {
     heights: Vec<f64>,
     row_offset: usize,
     column_offset: usize,
-    shape: TableShape,
     options: TableOptions,
-    offset_x: f64,
-    offset_y: f64,
 }
 impl GridLayout {
     fn measure(
-        entries: &[Mobject],
         entry_bounds: &[Bounds2D64],
         shape: TableShape,
         row_labels: Option<&[Mobject]>,
@@ -225,16 +234,12 @@ impl GridLayout {
                 widths[index + column_offset] = widths[index + column_offset].max(bound.width());
             }
         }
-        let _ = entries;
         Ok(Self {
             widths,
             heights,
             row_offset,
             column_offset,
-            shape,
             options,
-            offset_x: 0.0,
-            offset_y: 0.0,
         })
     }
     fn centers(values: &[f64], gap: f64, inverted: bool) -> Vec<f64> {
@@ -257,21 +262,6 @@ impl GridLayout {
                 value
             })
             .collect()
-    }
-    fn cell_bounds(&self, row: usize, column: usize) -> Result<Bounds2D64, TableAuthoringError> {
-        if row >= self.shape.rows || column >= self.shape.columns {
-            return Err(TableAuthoringError::InvalidStructure);
-        }
-        let xs = Self::centers(&self.widths, self.options.h_buff, false);
-        let ys = Self::centers(&self.heights, self.options.v_buff, true);
-        let c = column + self.column_offset;
-        let r = row + self.row_offset;
-        Ok(Bounds2D64 {
-            min_x: xs[c] - self.widths[c] / 2.0 - self.options.h_buff / 2.0 + self.offset_x,
-            max_x: xs[c] + self.widths[c] / 2.0 + self.options.h_buff / 2.0 + self.offset_x,
-            min_y: ys[r] - self.heights[r] / 2.0 - self.options.v_buff / 2.0 + self.offset_y,
-            max_y: ys[r] + self.heights[r] / 2.0 + self.options.v_buff / 2.0 + self.offset_y,
-        })
     }
     fn line_states(&self) -> Vec<SemanticObjectState> {
         let xs = Self::centers(&self.widths, self.options.h_buff, false);
@@ -569,7 +559,6 @@ fn commit_composite(
         .map(|(items, states)| bounds_at_states(items, states))
         .transpose()?;
     let layout = GridLayout::measure(
-        &[],
         &entry_bounds,
         shape,
         rows.as_deref(),
@@ -692,7 +681,6 @@ pub(super) fn publish_text_table(
     let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
     let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
     let layout = GridLayout::measure(
-        &[],
         &entry_bounds,
         shape,
         rows.as_deref(),
@@ -714,55 +702,52 @@ pub(super) fn publish_text_table(
         .map(|item| item.dependency.clone())
         .collect();
     let lines = layout.line_states();
-    let published = publisher.publish(move |semantic, publish| {
-        semantic
-            .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
-                dependencies,
-                |semantic, handles| {
-                    handles
-                        .iter()
-                        .map(|handle| {
-                            semantic
-                                .text_resources()
-                                .get(*handle)
-                                .cloned()
-                                .ok_or(TextAuthoringError::MissingGeometryResource)
-                        })
-                        .collect()
-                },
-                |semantic, handles| {
-                    let mut tx = SemanticMutationTransaction::new();
-                    let leaves = prepared
-                        .iter()
-                        .zip(handles)
-                        .zip(transforms)
-                        .map(|((item, handle), transform)| {
-                            let mut state = SemanticObjectState::new(*handle);
-                            state.transform = transform;
-                            state.style = item.style.clone();
-                            state.set_text_presentation_baseline(
-                                crate::latex_authoring::latex_presentation_baseline(
-                                    &item.dependency.1,
-                                    transform,
-                                    item.font_size,
-                                )?,
-                            );
-                            Ok(tx.create_node(SemanticNodeCreation::object(state)).into())
-                        })
-                        .collect::<Result<Vec<_>, TextAuthoringError>>()?;
-                    let value = stage(
-                        &mut tx,
-                        leaves,
-                        shape,
-                        lines,
-                        rows.as_deref(),
-                        columns.as_deref(),
-                    );
-                    Ok(value
-                        .published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
-                },
-            )
-            .map_err(text_error)
+    let published = publisher.publish_text(move |semantic, publish| {
+        semantic.with_compiled_text_dependency_batch::<TextAuthoringError, _>(
+            dependencies,
+            |semantic, handles| {
+                handles
+                    .iter()
+                    .map(|handle| {
+                        semantic
+                            .text_resources()
+                            .get(*handle)
+                            .cloned()
+                            .ok_or(TextAuthoringError::MissingGeometryResource)
+                    })
+                    .collect()
+            },
+            |semantic, handles| {
+                let mut tx = SemanticMutationTransaction::new();
+                let leaves = prepared
+                    .iter()
+                    .zip(handles)
+                    .zip(transforms)
+                    .map(|((item, handle), transform)| {
+                        let mut state = SemanticObjectState::new(*handle);
+                        state.transform = transform;
+                        state.style = item.style.clone();
+                        state.set_text_presentation_baseline(
+                            crate::latex_authoring::latex_presentation_baseline(
+                                &item.dependency.1,
+                                transform,
+                                item.font_size,
+                            )?,
+                        );
+                        Ok(tx.create_node(SemanticNodeCreation::object(state)).into())
+                    })
+                    .collect::<Result<Vec<_>, TextAuthoringError>>()?;
+                let value = stage(
+                    &mut tx,
+                    leaves,
+                    shape,
+                    lines,
+                    rows.as_deref(),
+                    columns.as_deref(),
+                );
+                Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
+            },
+        )
     })?;
     make_table(store, published, options)
 }
@@ -797,7 +782,6 @@ pub(super) fn publish_native_text_table(
     let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
     let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
     let layout = GridLayout::measure(
-        &[],
         &entry_bounds,
         shape,
         rows.as_deref(),
@@ -819,52 +803,49 @@ pub(super) fn publish_native_text_table(
         .map(|item| item.dependency.clone())
         .collect();
     let lines = layout.line_states();
-    let published = publisher.publish(move |semantic, publish| {
-        semantic
-            .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
-                dependencies,
-                |semantic, handles| {
-                    handles
-                        .iter()
-                        .map(|handle| {
-                            semantic
-                                .text_resources()
-                                .get(*handle)
-                                .cloned()
-                                .ok_or(TextAuthoringError::MissingGeometryResource)
-                        })
-                        .collect()
-                },
-                |semantic, handles| {
-                    let mut tx = SemanticMutationTransaction::new();
-                    let leaves = prepared
-                        .iter()
-                        .zip(handles)
-                        .zip(transforms)
-                        .map(|((item, handle), transform)| {
-                            tx.create_node(SemanticNodeCreation::object(
-                                crate::text_authoring::semantic_text_state(
-                                    *handle,
-                                    transform,
-                                    item.style.clone(),
-                                ),
-                            ))
-                        })
-                        .map(Into::into)
-                        .collect();
-                    let value = stage(
-                        &mut tx,
-                        leaves,
-                        shape,
-                        lines,
-                        rows.as_deref(),
-                        columns.as_deref(),
-                    );
-                    Ok(value
-                        .published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
-                },
-            )
-            .map_err(text_error)
+    let published = publisher.publish_text(move |semantic, publish| {
+        semantic.with_compiled_text_dependency_batch::<TextAuthoringError, _>(
+            dependencies,
+            |semantic, handles| {
+                handles
+                    .iter()
+                    .map(|handle| {
+                        semantic
+                            .text_resources()
+                            .get(*handle)
+                            .cloned()
+                            .ok_or(TextAuthoringError::MissingGeometryResource)
+                    })
+                    .collect()
+            },
+            |semantic, handles| {
+                let mut tx = SemanticMutationTransaction::new();
+                let leaves = prepared
+                    .iter()
+                    .zip(handles)
+                    .zip(transforms)
+                    .map(|((item, handle), transform)| {
+                        tx.create_node(SemanticNodeCreation::object(
+                            crate::text_authoring::semantic_text_state(
+                                *handle,
+                                transform,
+                                item.style.clone(),
+                            ),
+                        ))
+                    })
+                    .map(Into::into)
+                    .collect();
+                let value = stage(
+                    &mut tx,
+                    leaves,
+                    shape,
+                    lines,
+                    rows.as_deref(),
+                    columns.as_deref(),
+                );
+                Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
+            },
+        )
     })?;
     make_table(store, published, options)
 }
@@ -894,7 +875,7 @@ pub(super) fn publish_numeric_table(
     preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
     let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
     let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
-    let published = publisher.publish(move |semantic, publish| {
+    let published = publisher.publish_text(move |semantic, publish| {
         crate::numeric_authoring::PreparedDecimalValue::publish_batch::<TextAuthoringError, _>(
             semantic,
             prepared,
@@ -910,7 +891,6 @@ pub(super) fn publish_numeric_table(
                     })
                     .collect::<Result<_, _>>()?;
                 let layout = GridLayout::measure(
-                    &[],
                     &bounds,
                     shape,
                     rows.as_deref(),
@@ -919,7 +899,7 @@ pub(super) fn publish_numeric_table(
                     column_bounds.as_deref(),
                     options,
                 )
-                .map_err(table_text_error)?;
+                .expect("validated nonempty table shape and label counts produce a grid");
                 let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
                 let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
                 let mut tx = SemanticMutationTransaction::new();
@@ -952,28 +932,8 @@ pub(super) fn publish_numeric_table(
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
             },
         )
-        .map_err(text_error)
     })?;
     make_table(store, published, options)
-}
-fn text_error(error: TextAuthoringError) -> AuthoringError {
-    match error {
-        TextAuthoringError::Semantic(error) => error,
-        other => AuthoringError::InvalidRenderNumber {
-            name: other.to_string(),
-            value: f64::NAN,
-        },
-    }
-}
-fn table_text_error(error: TableAuthoringError) -> TextAuthoringError {
-    match error {
-        TableAuthoringError::Text(error) => error,
-        TableAuthoringError::Semantic(error) => TextAuthoringError::Semantic(error),
-        other => TextAuthoringError::Semantic(AuthoringError::InvalidRenderNumber {
-            name: other.to_string(),
-            value: f64::NAN,
-        }),
-    }
 }
 
 pub(super) fn shape_from_family(
