@@ -309,33 +309,35 @@ impl GridLayout {
         let min_y =
             ys.last().unwrap() - self.heights.last().unwrap() / 2.0 - self.options.v_buff / 2.0;
         let mut output = Vec::new();
-        for (row, &y) in ys.iter().enumerate() {
-            if self.options.include_outer_lines || row > 0 {
+        for row in 0..=ys.len() {
+            if self.options.include_outer_lines || (row > 0 && row < ys.len()) {
+                let y = if row == 0 {
+                    max_y
+                } else if row == ys.len() {
+                    min_y
+                } else {
+                    ys[row - 1] - self.heights[row - 1] / 2.0 - self.options.v_buff / 2.0
+                };
                 let mut s = SemanticObjectState::new(GeometryRef::line(
-                    noon_core::Vec2::new(
-                        min_x as f32,
-                        (y + self.heights[row] / 2.0 + self.options.v_buff / 2.0) as f32,
-                    ),
-                    noon_core::Vec2::new(
-                        max_x as f32,
-                        (y + self.heights[row] / 2.0 + self.options.v_buff / 2.0) as f32,
-                    ),
+                    noon_core::Vec2::new(min_x as f32, y as f32),
+                    noon_core::Vec2::new(max_x as f32, y as f32),
                 ));
                 s.style = line_style();
                 output.push(s)
             }
         }
-        for (column, &x) in xs.iter().enumerate() {
-            if self.options.include_outer_lines || column > 0 {
+        for column in 0..=xs.len() {
+            if self.options.include_outer_lines || (column > 0 && column < xs.len()) {
+                let x = if column == 0 {
+                    min_x
+                } else if column == xs.len() {
+                    max_x
+                } else {
+                    xs[column - 1] + self.widths[column - 1] / 2.0 + self.options.h_buff / 2.0
+                };
                 let mut s = SemanticObjectState::new(GeometryRef::line(
-                    noon_core::Vec2::new(
-                        (x - self.widths[column] / 2.0 - self.options.h_buff / 2.0) as f32,
-                        min_y as f32,
-                    ),
-                    noon_core::Vec2::new(
-                        (x - self.widths[column] / 2.0 - self.options.h_buff / 2.0) as f32,
-                        max_y as f32,
-                    ),
+                    noon_core::Vec2::new(x as f32, min_y as f32),
+                    noon_core::Vec2::new(x as f32, max_y as f32),
                 ));
                 s.style = line_style();
                 output.push(s)
