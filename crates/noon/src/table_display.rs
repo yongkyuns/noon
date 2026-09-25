@@ -7,13 +7,14 @@
 mod admission;
 
 use crate::{
-    AuthoringError, Color, DecimalFormat, LatexBackend, Mobject, MobjectFamily, MobjectTarget,
-    NumericAuthoringError, Scene, TextAuthoringError,
+    AuthoringError, Color, CompositeEntryHandle, DecimalFormat, LatexBackend, Mobject,
+    MobjectFamily, MobjectTarget, NumericAuthoringError, Scene, TextAuthoringError,
 };
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 use admission::{
-    publish_existing_table, publish_numeric_table, publish_text_table, table_shape, TablePublisher,
+    publish_existing_table, publish_numeric_table, publish_target_table, publish_text_table,
+    table_shape, TablePublisher,
 };
 
 pub const DEFAULT_TABLE_H_BUFF: f64 = 1.3;
@@ -115,6 +116,9 @@ pub struct Table {
     column_label_family: Option<MobjectFamily>,
     options: TableOptions,
 }
+/// One retained Table entry root. This common display handle preserves family
+/// identity while layout operates on ordered descendant leaves.
+pub type TableEntry = CompositeEntryHandle;
 #[derive(Clone, Debug)]
 pub struct MathTable(Table);
 #[derive(Clone, Debug)]
@@ -227,32 +231,32 @@ impl Table {
     pub fn shape(&self) -> Result<(usize, usize), TableAuthoringError> {
         admission::shape_from_family(&self.entry_family)
     }
-    pub fn get_entries(&self) -> Result<Vec<Mobject>, TableAuthoringError> {
+    pub fn get_entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
         admission::entries(&self.entry_family)
     }
-    pub fn entries(&self) -> Result<Vec<Mobject>, TableAuthoringError> {
+    pub fn entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
         self.get_entries()
     }
-    pub fn rows(&self) -> Result<Vec<Vec<Mobject>>, TableAuthoringError> {
+    pub fn rows(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
         admission::rows(&self.entry_family)
     }
-    pub fn get_rows(&self) -> Result<Vec<Vec<Mobject>>, TableAuthoringError> {
+    pub fn get_rows(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
         self.rows()
     }
-    pub fn columns(&self) -> Result<Vec<Vec<Mobject>>, TableAuthoringError> {
+    pub fn columns(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
         admission::columns(&self.entry_family)
     }
-    pub fn get_columns(&self) -> Result<Vec<Vec<Mobject>>, TableAuthoringError> {
+    pub fn get_columns(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
         self.columns()
     }
-    pub fn get_entry(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
+    pub fn get_entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
         self.rows()?
             .get(row)
             .and_then(|items| items.get(column))
             .cloned()
             .ok_or(TableAuthoringError::InvalidStructure)
     }
-    pub fn entry(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
+    pub fn entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
         self.get_entry(row, column)
     }
     pub fn row_families(&self) -> Result<Vec<MobjectFamily>, TableAuthoringError> {
@@ -441,6 +445,81 @@ impl DecimalTable {
     }
 }
 impl MobjectTable {
+    /// Construct a table from retained object or family roots.  A family stays
+    /// one cell while its ordered leaves are translated together at commit.
+    pub fn from_target_rows<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        Self::from_target_rows_with_options(scene, rows, TableOptions::default())
+    }
+    pub fn from_target_rows_with_options<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
+    pub fn from_target_rows_in_store<'a, I, J>(
+        store: Rc<RefCell<noon_core::SemanticStore>>,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table(
+            TablePublisher::Store(store),
+            rows.into_iter().flatten().collect(),
+            shape,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
+    pub fn from_target_rows_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            None,
+            None,
+            options,
+        )
+        .map(Self)
+    }
     pub fn from_rows<I, J>(scene: &mut Scene, rows: I) -> Result<Self, TableAuthoringError>
     where
         I: IntoIterator<Item = J>,
@@ -567,6 +646,15 @@ where
 {
     rows.into_iter().map(|r| r.into_iter().collect()).collect()
 }
+fn collect_target_rows<'a, I, J>(rows: I) -> Vec<Vec<MobjectTarget<'a>>>
+where
+    I: IntoIterator<Item = J>,
+    J: IntoIterator<Item = MobjectTarget<'a>>,
+{
+    rows.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
+}
 fn integer_format() -> DecimalFormat {
     DecimalFormat {
         decimal_places: 0,
@@ -611,8 +699,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(table.shape().unwrap(), (2, 2));
-        assert_eq!(table.get_entries().unwrap(), entries);
-        assert_eq!(table.get_entry(1, 0).unwrap(), entries[2]);
+        assert_eq!(
+            table
+                .get_entries()
+                .unwrap()
+                .into_iter()
+                .map(|entry| match entry {
+                    TableEntry::Mobject(object) => object,
+                    TableEntry::Family(_) => panic!("leaf input remains a leaf entry"),
+                })
+                .collect::<Vec<_>>(),
+            entries
+        );
+        assert_eq!(
+            table.get_entry(1, 0).unwrap().as_target().node_id(),
+            entries[2].node_id()
+        );
         assert_eq!(table.row_families().unwrap().len(), 2);
         assert_eq!(table.column_families().unwrap().len(), 2);
         assert_eq!(
@@ -652,5 +754,56 @@ mod tests {
             TableAuthoringError::Semantic(AuthoringError::ForeignStore)
         ));
         assert_eq!(first.state().unwrap(), initial);
+    }
+
+    #[test]
+    fn family_entry_keeps_its_root_and_translates_each_leaf_once() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let first = circle(&store, 1.0);
+        let mut second = circle(&store, 0.5);
+        second.shift(3.0, 0.0).unwrap();
+        let family =
+            MobjectFamily::create(Rc::clone(&store), &[(&first).into(), (&second).into()]).unwrap();
+        let before = (first.state().unwrap(), second.state().unwrap());
+
+        let table =
+            MobjectTable::from_target_rows(&mut scene, vec![vec![MobjectTarget::from(&family)]])
+                .unwrap();
+
+        assert!(matches!(
+            table.get_entry(0, 0).unwrap(),
+            TableEntry::Family(entry) if entry.node_id() == family.node_id()
+        ));
+        let after = (first.state().unwrap(), second.state().unwrap());
+        assert_eq!(
+            after.1.transform.translation.x - after.0.transform.translation.x,
+            before.1.transform.translation.x - before.0.transform.translation.x
+        );
+    }
+
+    #[test]
+    fn overlapping_family_entries_fail_without_moving_a_leaf() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let first = circle(&store, 1.0);
+        let family = MobjectFamily::create(Rc::clone(&store), &[(&first).into()]).unwrap();
+        let before = first.state().unwrap();
+
+        let result = MobjectTable::from_target_rows(
+            &mut scene,
+            vec![vec![
+                MobjectTarget::from(&first),
+                MobjectTarget::from(&family),
+            ]],
+        );
+
+        assert!(matches!(
+            result,
+            Err(TableAuthoringError::Semantic(AuthoringError::Semantic(
+                noon_core::SemanticSceneOperationError::DuplicateMembershipTarget(_)
+            )))
+        ));
+        assert_eq!(first.state().unwrap(), before);
     }
 }

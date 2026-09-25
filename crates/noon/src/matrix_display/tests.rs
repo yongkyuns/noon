@@ -98,13 +98,25 @@ fn durable_nested_rows_reconstruct_shape_and_original_identities() {
     assert_eq!(matrix.shape().unwrap(), (1, 2));
     assert_eq!(
         matrix.entries().unwrap(),
-        vec![first.clone(), second.clone()]
+        vec![
+            MatrixEntry::Mobject(first.clone()),
+            MatrixEntry::Mobject(second.clone())
+        ]
     );
     assert_eq!(
         matrix.rows().unwrap(),
-        vec![vec![first.clone(), second.clone()]]
+        vec![vec![
+            MatrixEntry::Mobject(first.clone()),
+            MatrixEntry::Mobject(second.clone())
+        ]]
     );
-    assert_eq!(matrix.columns().unwrap(), vec![vec![first], vec![second]]);
+    assert_eq!(
+        matrix.columns().unwrap(),
+        vec![
+            vec![MatrixEntry::Mobject(first)],
+            vec![MatrixEntry::Mobject(second)]
+        ]
+    );
     assert_eq!(matrix.left_bracket(), &left);
     assert_eq!(matrix.right_bracket(), &right);
 }

@@ -42,6 +42,30 @@ pub(super) enum MatrixPublisher<'a, 'session> {
 }
 
 impl MatrixPublisher<'_, '_> {
+    fn store(&self) -> Rc<RefCell<noon_core::SemanticStore>> {
+        match self {
+            Self::Store(store) => Rc::clone(store),
+            Self::Scene(scene) => Rc::clone(scene.integration_store()),
+            Self::Live(live) => Rc::clone(live.integration_store()),
+        }
+    }
+    fn entry_state(&self, object: &Mobject) -> Result<SemanticObjectState, AuthoringError> {
+        match self {
+            Self::Store(_) => object.state(),
+            Self::Scene(scene) => scene.composite_entry_state(object),
+            Self::Live(live) => live.composite_entry_state(object),
+        }
+    }
+    fn composite_entries(
+        &self,
+        entries: &[MobjectTarget<'_>],
+    ) -> Result<Vec<crate::composite_entry::CompositeEntry>, MatrixAuthoringError> {
+        let store = self.store();
+        crate::composite_entry::capture_entries_with(&store, entries, |object| {
+            self.entry_state(object)
+        })
+        .map_err(Into::into)
+    }
     fn with_publication<T>(
         self,
         operation: impl FnOnce(
@@ -79,10 +103,7 @@ impl MatrixPublisher<'_, '_> {
                     crate::LiveSessionError::Publication(error) => {
                         MatrixAuthoringError::Semantic(AuthoringError::ExecutionPublication(error))
                     }
-                    other => MatrixAuthoringError::Semantic(AuthoringError::InvalidRenderNumber {
-                        name: other.to_string(),
-                        value: f64::NAN,
-                    }),
+                    other => MatrixAuthoringError::LiveSession(other),
                 }),
         }
     }
@@ -265,7 +286,7 @@ fn matrix_from_publication(
 }
 fn stage_matrix(
     transaction: &mut SemanticMutationTransaction,
-    entries: impl IntoIterator<Item = noon_core::SemanticLocalNodeToken>,
+    entries: impl IntoIterator<Item = noon_core::SemanticTransactionNodeRef>,
     shape: MatrixShape,
     left: noon_core::SemanticLocalNodeToken,
     right: noon_core::SemanticLocalNodeToken,
@@ -354,7 +375,13 @@ pub(super) fn publish_text_matrix(
                     });
                 let left = states.next().expect("two brackets")?;
                 let right = states.next().expect("two brackets")?;
-                let (root, entries) = stage_matrix(&mut transaction, leaves, shape, left, right);
+                let (root, entries) = stage_matrix(
+                    &mut transaction,
+                    leaves.into_iter().map(Into::into),
+                    shape,
+                    left,
+                    right,
+                );
                 let result =
                     publish(semantic, transaction).map_err(TextAuthoringError::Semantic)?;
                 Ok(Published {
@@ -471,7 +498,13 @@ pub(super) fn publish_numeric_matrix(
                         });
                 let left = bracket_nodes.next().expect("two brackets")?;
                 let right = bracket_nodes.next().expect("two brackets")?;
-                let (root, entries) = stage_matrix(&mut transaction, leaves, shape, left, right);
+                let (root, entries) = stage_matrix(
+                    &mut transaction,
+                    leaves.into_iter().map(Into::into),
+                    shape,
+                    left,
+                    right,
+                );
                 let result =
                     publish(semantic, transaction).map_err(TextAuthoringError::Semantic)?;
                 Ok(Published {
@@ -494,28 +527,25 @@ pub(super) fn publish_existing_mobject_matrix(
     shape: MatrixShape,
     options: MatrixOptions,
 ) -> Result<Matrix, MatrixAuthoringError> {
+    let targets = entries.iter().map(Into::into).collect();
+    publish_target_mobject_matrix(publisher, backend, targets, shape, options)
+}
+
+pub(super) fn publish_target_mobject_matrix(
+    publisher: MatrixPublisher<'_, '_>,
+    backend: &mut impl LatexBackend,
+    entries: Vec<MobjectTarget<'_>>,
+    shape: MatrixShape,
+    options: MatrixOptions,
+) -> Result<Matrix, MatrixAuthoringError> {
     let options = options.validate()?;
-    let presented = entries
-        .iter()
-        .map(|entry| {
-            let state = match &publisher {
-                MatrixPublisher::Store(_) => entry.state()?,
-                MatrixPublisher::Scene(scene) => scene.composite_entry_state(entry)?,
-                MatrixPublisher::Live(live) => live.composite_entry_state(entry)?,
-            };
-            let store = entry.integration_store().borrow();
-            let bounds = crate::semantic_mobject::boundary_for_content(
-                &store,
-                state.content,
-                state.transform,
-            )?
-            .ok_or(MatrixAuthoringError::InvalidStructure)?;
-            Ok((bounds, state.transform.translation))
-        })
-        .collect::<Result<Vec<_>, MatrixAuthoringError>>()?;
+    let entries = publisher.composite_entries(&entries)?;
     let mut bounds = None;
     let mut translations = Vec::new();
-    for (index, (item, base_translation)) in presented.into_iter().enumerate() {
+    for (index, entry) in entries.iter().enumerate() {
+        let item = entry
+            .bounds()?
+            .ok_or(MatrixAuthoringError::InvalidStructure)?;
         let dx = (index % shape.columns) as f64 * options.h_buff - item.max_x;
         let dy = -((index / shape.columns) as f64) * options.v_buff - item.min_y;
         let mut moved = item;
@@ -524,10 +554,12 @@ pub(super) fn publish_existing_mobject_matrix(
         moved.min_y += dy;
         moved.max_y += dy;
         include(&mut bounds, moved);
-        let mut translation = base_translation;
-        translation.x += dx;
-        translation.y += dy;
-        translations.push(translation);
+        for (leaf, state) in entry.leaves() {
+            let mut translation = state.transform.translation;
+            translation.x += dx;
+            translation.y += dy;
+            translations.push((leaf.node_id(), translation));
+        }
     }
     let bounds = bounds.ok_or(MatrixAuthoringError::EmptyMatrix)?;
     let mut bracket = brackets(
@@ -586,9 +618,9 @@ pub(super) fn publish_existing_mobject_matrix(
             },
             |semantic, handles| {
                 let mut transaction = SemanticMutationTransaction::new();
-                for (entry, translation) in entries.iter().zip(translations) {
+                for (entry, translation) in translations {
                     transaction.set_property(
-                        entry.node_id(),
+                        entry,
                         SemanticObjectProperty::Translation,
                         translation,
                     );
@@ -599,18 +631,12 @@ pub(super) fn publish_existing_mobject_matrix(
                 });
                 let left = nodes.next().expect("two brackets")?;
                 let right = nodes.next().expect("two brackets")?;
-                let entry_family = transaction.create_node(SemanticNodeCreation::family());
-                for row in entries.chunks(shape.columns) {
-                    let row_family = transaction.create_node(SemanticNodeCreation::family());
-                    for entry in row {
-                        transaction.add_member(row_family, entry.node_id());
-                    }
-                    transaction.add_member(entry_family, row_family);
-                }
-                let root = transaction.create_node(SemanticNodeCreation::family());
-                transaction.add_member(root, entry_family);
-                transaction.add_member(root, left);
-                transaction.add_member(root, right);
+                let roots = entries
+                    .iter()
+                    .map(|entry| entry.root().into())
+                    .collect::<Vec<_>>();
+                let (root, entry_family) =
+                    stage_matrix(&mut transaction, roots, shape, left, right);
                 let result =
                     publish(semantic, transaction).map_err(TextAuthoringError::Semantic)?;
                 Ok(Published {

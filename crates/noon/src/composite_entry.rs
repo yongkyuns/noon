@@ -1,8 +1,59 @@
 //! Shared admission for one retained object-or-family composite entry.
 
-use crate::{AuthoringError, ExecutionSession, Mobject, MobjectTarget};
+use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+
+/// An owned retained entry root returned by composite display families.
+///
+/// Construction APIs borrow [`MobjectTarget`] so callers keep their original
+/// root identity. Query APIs need an owned handle and use this common form for
+/// tables and matrices without flattening family entries.
+#[derive(Clone, Debug)]
+pub enum CompositeEntryHandle {
+    Mobject(Mobject),
+    Family(MobjectFamily),
+}
+
+impl PartialEq for CompositeEntryHandle {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Mobject(left), Self::Mobject(right)) => left == right,
+            (Self::Family(left), Self::Family(right)) => {
+                left.node_id() == right.node_id()
+                    && Rc::ptr_eq(left.integration_store(), right.integration_store())
+            }
+            _ => false,
+        }
+    }
+}
+
+impl CompositeEntryHandle {
+    pub fn as_target(&self) -> MobjectTarget<'_> {
+        match self {
+            Self::Mobject(object) => object.into(),
+            Self::Family(family) => family.into(),
+        }
+    }
+
+    pub(crate) fn from_node(
+        store: Rc<RefCell<SemanticStore>>,
+        node: SemanticNodeId,
+    ) -> Result<Self, AuthoringError> {
+        let kind = store.borrow().node(node).map(|value| value.kind().clone());
+        match kind {
+            Some(noon_core::SemanticNodeKind::AuthoringObject) => {
+                Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?))
+            }
+            Some(noon_core::SemanticNodeKind::Family(_)) => Ok(Self::Family(
+                MobjectFamily::from_node(Rc::clone(&store), node)?,
+            )),
+            _ => Err(AuthoringError::Semantic(
+                noon_core::SemanticSceneOperationError::UnknownNode(node),
+            )),
+        }
+    }
+}
 
 /// One supplied table/matrix entry and the leaves that must move with its root.
 #[derive(Clone, Debug)]
@@ -49,6 +100,19 @@ pub(crate) fn capture_entries(
     root: SemanticNodeId,
     entries: &[MobjectTarget<'_>],
 ) -> Result<Vec<CompositeEntry>, AuthoringError> {
+    capture_entries_with(store, entries, |object| {
+        crate::family_layout::composite_entry_state(store, execution, root, object)
+    })
+}
+
+/// The shared topology and overlap check, parameterized by the ownership-aware
+/// state capture boundary.  Table and matrix admission use their owning Scene
+/// or LiveSession here so Scene-owned execution observes effective placement.
+pub(crate) fn capture_entries_with(
+    store: &Rc<RefCell<SemanticStore>>,
+    entries: &[MobjectTarget<'_>],
+    mut capture_state: impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
+) -> Result<Vec<CompositeEntry>, AuthoringError> {
     let mut seen = BTreeSet::new();
     entries
         .iter()
@@ -66,8 +130,7 @@ pub(crate) fn capture_entries(
                     ));
                 }
                 let object = Mobject::from_node(Rc::clone(store), node)?;
-                let state =
-                    crate::family_layout::composite_entry_state(store, execution, root, &object)?;
+                let state = capture_state(&object)?;
                 captured.push((object, state));
             }
             Ok(CompositeEntry {
