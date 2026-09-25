@@ -232,7 +232,10 @@ def compile_authoring_source(
     source: str, filename: str = "<string>", *, portable: bool = True
 ) -> tuple[CodeType, dict[CodeType, CodeType]]:
     """Return executable module code and optional portable construct code pairs."""
-    original = compile(source, filename, "exec", dont_inherit=True)
+    original = compile(
+        source, filename, "exec",
+        flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True,
+    )
     if not portable or any(name in source for name in (BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL)):
         return original, {}
     originals = list(_function_codes(original))

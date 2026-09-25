@@ -2,7 +2,6 @@ import asyncio
 import inspect
 from pathlib import Path
 import textwrap
-from pathlib import Path
 from unittest.mock import patch
 import unittest
 
@@ -14,6 +13,35 @@ from _manim_source_execution import (
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_module_preparation_finishes_before_scene_definition(self):
+        from _manim_source_execution import execute_authoring_module
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                events = []
+                release = asyncio.Event()
+                async def prepare():
+                    events.append("preparing")
+                    await release.wait()
+                    events.append("prepared")
+                source = textwrap.dedent("""
+                    await prepare()
+                    class Example:
+                        events.append("defined")
+                        def construct(self):
+                            self.wait(0.2)
+                """)
+                code, pairs = compile_authoring_source(source, portable=portable)
+                namespace = {"prepare": prepare, "events": events}
+                task = asyncio.create_task(execute_authoring_module(code, namespace))
+                await asyncio.sleep(0)
+                self.assertEqual(events, ["preparing"])
+                self.assertNotIn("Example", namespace)
+                release.set()
+                await task
+                self.assertEqual(events, ["preparing", "prepared", "defined"])
+                self.assertEqual(bool(pairs), portable)
+                self.assertFalse(inspect.iscoroutinefunction(namespace["Example"].construct))
+
     async def test_source_invocation_restores_cleanup_after_failure(self):
         cleanups = []
         self.assertIsNone(current_source_invocation())
