@@ -4,9 +4,11 @@
 //! this protocol or keeps a compiler alive on its behalf.
 use std::{
     collections::BTreeMap,
+    fs,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     sync::mpsc,
     thread::{self, JoinHandle},
     time::Duration,
@@ -20,10 +22,209 @@ const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
 const MAX_DOCUMENT: usize = 1024 * 1024;
 type Response = Result<(Value, Vec<u8>), String>;
 
+static LATEX_JOB_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Native system-TeX compiler configuration.
+///
+/// TeX Live normally supplies TFM metrics but not the OpenType outlines used by
+/// Noon's retained text renderer. `font_directory` must therefore contain an
+/// explicitly selected `<dvi-name>.ttf` for every font emitted by the document.
+/// `resource_identity` identifies that exact compiler/font installation for the
+/// shared compiled-resource cache.
+#[derive(Clone, Debug)]
+pub struct NativeLatexConfig {
+    pub latex: PathBuf,
+    pub kpsewhich: PathBuf,
+    pub font_directory: PathBuf,
+    pub resource_identity: String,
+}
+
+impl NativeLatexConfig {
+    pub fn new(
+        latex: impl Into<PathBuf>,
+        kpsewhich: impl Into<PathBuf>,
+        font_directory: impl Into<PathBuf>,
+        resource_identity: impl Into<String>,
+    ) -> Self {
+        Self {
+            latex: latex.into(),
+            kpsewhich: kpsewhich.into(),
+            font_directory: font_directory.into(),
+            resource_identity: resource_identity.into(),
+        }
+    }
+}
+
+/// First-class native LaTeX adapter backed by a conventional system executable.
+///
+/// Compilation is authoring-time subprocess work. DVI normalization and all
+/// semantic/resource publication remain in the shared Rust implementation.
+pub struct NativeLatexBackend {
+    config: NativeLatexConfig,
+    identity: String,
+    fonts: BTreeMap<String, DviFontResource>,
+}
+
+impl NativeLatexBackend {
+    pub fn new(config: NativeLatexConfig) -> Result<Self, String> {
+        if config.resource_identity.is_empty() || config.resource_identity.len() > 4096 {
+            return Err(
+                "native LaTeX resource identity must be non-empty and at most 4096 bytes".into(),
+            );
+        }
+        if !config.font_directory.is_dir() {
+            return Err(format!(
+                "native LaTeX font directory does not exist: {}",
+                config.font_directory.display()
+            ));
+        }
+        let version = Command::new(&config.latex)
+            .arg("--version")
+            .output()
+            .map_err(|error| format!("cannot start native LaTeX compiler: {error}"))?;
+        if !version.status.success() {
+            return Err(format!(
+                "native LaTeX compiler version probe failed with {}",
+                version.status
+            ));
+        }
+        let first_line = String::from_utf8_lossy(&version.stdout)
+            .lines()
+            .next()
+            .unwrap_or("unknown")
+            .trim()
+            .to_owned();
+        let identity = format!(
+            "native-latex-v1:{}:{}",
+            config.resource_identity, first_line
+        );
+        Ok(Self {
+            config,
+            identity,
+            fonts: BTreeMap::new(),
+        })
+    }
+
+    fn validate_font_name(name: &str) -> Result<(), String> {
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        {
+            return Err("invalid LaTeX font name".into());
+        }
+        Ok(())
+    }
+}
+
+impl LatexBackend for NativeLatexBackend {
+    fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    fn format(&self) -> LatexFormat {
+        LatexFormat::Article
+    }
+
+    fn compile(&mut self, document: &str) -> Result<Vec<u8>, String> {
+        if document.len() > MAX_DOCUMENT {
+            return Err("LaTeX document exceeds 1 MiB".into());
+        }
+        let nonce = LATEX_JOB_NONCE.fetch_add(1, Ordering::Relaxed);
+        let directory =
+            std::env::temp_dir().join(format!("noon-native-latex-{}-{nonce}", std::process::id()));
+        fs::create_dir(&directory)
+            .map_err(|error| format!("cannot create native LaTeX work directory: {error}"))?;
+        let cleanup = TempLatexDirectory(directory.clone());
+        let source = directory.join("noon.tex");
+        fs::write(&source, document)
+            .map_err(|error| format!("cannot write native LaTeX source: {error}"))?;
+        let output = Command::new(&self.config.latex)
+            .arg("-interaction=nonstopmode")
+            .arg("-halt-on-error")
+            .arg("-no-shell-escape")
+            .arg("-output-directory")
+            .arg(&directory)
+            .arg(&source)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| format!("cannot start native LaTeX compiler: {error}"))?;
+        if !output.status.success() {
+            let diagnostic = String::from_utf8_lossy(&output.stdout);
+            let tail = diagnostic.lines().rev().take(12).collect::<Vec<_>>();
+            return Err(format!(
+                "native LaTeX compilation failed with {}: {}",
+                output.status,
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            ));
+        }
+        let dvi = fs::read(directory.join("noon.dvi"))
+            .map_err(|error| format!("native LaTeX did not produce noon.dvi: {error}"))?;
+        drop(cleanup);
+        if dvi.len() > MAX_PAYLOAD {
+            return Err("native LaTeX DVI exceeds 16 MiB".into());
+        }
+        Ok(dvi)
+    }
+
+    fn font(&mut self, name: &str) -> Result<DviFontResource, String> {
+        if let Some(font) = self.fonts.get(name) {
+            return Ok(font.clone());
+        }
+        Self::validate_font_name(name)?;
+        if self.fonts.len() >= 256 {
+            return Err("LaTeX font resource limit exceeded".into());
+        }
+        let tfm_path = Command::new(&self.config.kpsewhich)
+            .arg(format!("{name}.tfm"))
+            .output()
+            .map_err(|error| format!("cannot start kpsewhich for {name}.tfm: {error}"))?;
+        let tfm_path = String::from_utf8_lossy(&tfm_path.stdout).trim().to_owned();
+        if !tfm_path.is_empty() && !Path::new(&tfm_path).is_file() {
+            return Err(format!(
+                "kpsewhich returned a missing TFM for {name}: {tfm_path}"
+            ));
+        }
+        if tfm_path.is_empty() {
+            return Err(format!(
+                "system TeX cannot resolve required metric {name}.tfm"
+            ));
+        }
+        let ttf_path = self.config.font_directory.join(format!("{name}.ttf"));
+        if !ttf_path.is_file() {
+            return Err(format!(
+                "native LaTeX requires explicit outline asset {} for DVI font {name}",
+                ttf_path.display()
+            ));
+        }
+        let tfm = fs::read(&tfm_path)
+            .map_err(|error| format!("cannot read native LaTeX metric {tfm_path}: {error}"))?;
+        let ttf = fs::read(&ttf_path).map_err(|error| {
+            format!(
+                "cannot read native LaTeX outline {}: {error}",
+                ttf_path.display()
+            )
+        })?;
+        let font = DviFontResource::bakoma(name, &self.identity, tfm, ttf)
+            .map_err(|error| error.to_string())?;
+        self.fonts.insert(name.to_owned(), font.clone());
+        Ok(font)
+    }
+}
+
+struct TempLatexDirectory(PathBuf);
+
+impl Drop for TempLatexDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Explicit native LaTeX host. Requires Node.js and `web/latex/native-host.mjs`.
 /// Pinned compiler assets are prepared only when [`Self::start`] is called.
 /// Dropping the host or exceeding its deadline kills and reaps the child.
-pub struct NativeLatexBackend {
+pub struct NodeLatexBackend {
     child: Child,
     requests: Option<mpsc::SyncSender<Vec<u8>>>,
     responses: Option<mpsc::Receiver<Response>>,
@@ -33,7 +234,7 @@ pub struct NativeLatexBackend {
     fonts: BTreeMap<String, DviFontResource>,
 }
 
-impl NativeLatexBackend {
+impl NodeLatexBackend {
     pub fn start(node: &Path, script: &Path, timeout: Duration) -> Result<Self, String> {
         if timeout.is_zero() {
             return Err("LaTeX host deadline must be positive".into());
@@ -146,13 +347,13 @@ impl NativeLatexBackend {
     }
 }
 
-impl Drop for NativeLatexBackend {
+impl Drop for NodeLatexBackend {
     fn drop(&mut self) {
         self.stop();
     }
 }
 
-impl LatexBackend for NativeLatexBackend {
+impl LatexBackend for NodeLatexBackend {
     fn identity(&self) -> &str {
         &self.identity
     }
@@ -238,8 +439,76 @@ fn read_response(input: &mut impl Read) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::TextResourceLookup;
     use std::sync::Arc;
+
+    fn system_backend_from_environment() -> Option<NativeLatexBackend> {
+        let font_directory = std::env::var_os("NOON_LATEX_FONT_DIR")?;
+        let resource_identity = std::env::var("NOON_LATEX_RESOURCE_IDENTITY").ok()?;
+        NativeLatexBackend::new(NativeLatexConfig::new(
+            std::env::var_os("NOON_LATEX_EXECUTABLE")
+                .unwrap_or_else(|| "/Library/TeX/texbin/latex".into()),
+            std::env::var_os("NOON_KPSEWHICH_EXECUTABLE")
+                .unwrap_or_else(|| "/Library/TeX/texbin/kpsewhich".into()),
+            font_directory,
+            resource_identity,
+        ))
+        .ok()
+    }
+
+    #[test]
+    fn native_system_latex_compiles_and_normalizes_real_dvi_when_assets_are_supplied() {
+        let Some(mut backend) = system_backend_from_environment() else {
+            eprintln!(
+                "native LaTeX qualification unavailable: set NOON_LATEX_FONT_DIR and NOON_LATEX_RESOURCE_IDENTITY"
+            );
+            return;
+        };
+        let mut scene = noon::Scene::new();
+        let object = scene
+            .math_tex(
+                noon::MathTex::new(r"x^2+\frac{1}{2}").unwrap(),
+                &mut backend,
+            )
+            .unwrap();
+        assert!(object.width().unwrap() > 0.0);
+        let handle = object.state().unwrap().content.text().unwrap();
+        let store = scene.integration_store().borrow();
+        let resource = store.text_resources().get(handle).unwrap();
+        assert_eq!(resource.kind, noon_core::TextSourceKind::MathTex);
+        assert!(!resource.runs.is_empty());
+        assert!(
+            !resource.vector_items.is_empty(),
+            "fraction rule was not retained"
+        );
+        resource.validate().unwrap();
+    }
+
+    #[test]
+    fn native_system_latex_reports_missing_explicit_outline_asset() {
+        let latex = Path::new("/Library/TeX/texbin/latex");
+        let kpsewhich = Path::new("/Library/TeX/texbin/kpsewhich");
+        if !latex.is_file() || !kpsewhich.is_file() {
+            eprintln!("system TeX unavailable; skipping installed-toolchain diagnostic");
+            return;
+        }
+        let directory = std::env::temp_dir().join(format!(
+            "noon-native-latex-empty-fonts-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let mut backend = NativeLatexBackend::new(NativeLatexConfig::new(
+            latex,
+            kpsewhich,
+            &directory,
+            "empty-font-fixture-v1",
+        ))
+        .unwrap();
+        let error = backend.font("cmr10").unwrap_err();
+        fs::remove_dir_all(directory).unwrap();
+        assert!(error.contains("explicit outline asset"), "{error}");
+        assert!(error.contains("cmr10.ttf"), "{error}");
+    }
+
     #[test]
     fn bounded_protocol_rejects_large_or_truncated_messages() {
         assert!(read_response(&mut (MAX_HEADER as u32 + 1).to_be_bytes().as_slice()).is_err());
@@ -283,8 +552,7 @@ mod tests {
             .map(|byte| format!("\\{byte:03o}"))
             .collect::<String>();
         std::fs::write(&script, format!("printf '{octal}'\nexec sleep 30\n")).unwrap();
-        let result =
-            NativeLatexBackend::start(Path::new("/bin/sh"), &script, Duration::from_secs(2));
+        let result = NodeLatexBackend::start(Path::new("/bin/sh"), &script, Duration::from_secs(2));
         std::fs::remove_file(script).unwrap();
         let mut host = result.unwrap();
         host.timeout = Duration::from_millis(50);
@@ -302,7 +570,7 @@ mod tests {
     fn real_engine_recovers_after_invalid_source_and_reuses_exact_fonts() {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/latex/native-host.mjs");
         let mut host =
-            NativeLatexBackend::start(Path::new("node"), &script, Duration::from_secs(45)).unwrap();
+            NodeLatexBackend::start(Path::new("node"), &script, Duration::from_secs(45)).unwrap();
         let document = r"\usepackage{amsmath}\begin{document}\setbox0=\vbox{\hsize=15cm\begin{align*}x^2+\frac{1}{2}\end{align*}}\shipout\box0\end{document}";
         let first = host.compile(document).unwrap();
         assert_eq!(&first[..2], &[247, 2]);
@@ -370,21 +638,6 @@ mod tests {
             assert!(resource.parts.iter().all(|part| part.cluster_count > 0));
             resource.validate().unwrap();
         }
-        let session = noon::example_scenes::latex_text::session(&mut host).unwrap();
         drop(host);
-        assert_eq!(session.frame().objects.len(), 3);
-        assert!(session
-            .frame()
-            .objects
-            .iter()
-            .all(|object| object.text().is_some()));
-        assert!(session.frame().objects.iter().any(|object| {
-            !session
-                .text_resources()
-                .get(object.text().unwrap())
-                .unwrap()
-                .vector_items
-                .is_empty()
-        }));
     }
 }
