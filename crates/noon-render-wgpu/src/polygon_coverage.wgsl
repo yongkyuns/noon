@@ -30,7 +30,7 @@ fn clip_polygon_axis(
         let p_inside = select(p_coordinate <= boundary, p_coordinate >= boundary, keep_greater);
         let q_inside = select(q_coordinate <= boundary, q_coordinate >= boundary, keep_greater);
 
-        // A triangle clipped by four half-planes has at most seven vertices.
+        // A convex quad clipped by four half-planes has at most eight vertices.
         if p_inside {
             output.points[output.count] = p;
             output.count += 1u;
