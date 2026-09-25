@@ -7,12 +7,12 @@ mod semantic;
 pub use compiler::TextCompilerDiagnostics;
 #[cfg(feature = "native-text")]
 pub use markup::MarkupText;
+#[cfg(feature = "native-text")]
+pub(crate) use semantic::prepare_native_text;
 #[cfg(feature = "latex")]
 pub(crate) use semantic::PreparedDecimalLabels;
 #[cfg(feature = "typst")]
 pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
-#[cfg(feature = "native-text")]
-pub(crate) use semantic::{prepare_native_text, semantic_text_state};
 
 use std::sync::Arc;
 

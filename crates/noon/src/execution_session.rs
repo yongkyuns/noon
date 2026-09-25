@@ -60,12 +60,11 @@ use noon_compile::{
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, ObjectId, PreparedSemanticMutationTransaction, RateFunction,
-    ReactiveError, ReactiveValue, Rect, SemanticAffineLifecycleDirection,
-    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticFamilyTransformMode, SemanticLocalNodeToken, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
-    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    AnimationOptions, Camera2DState, ObjectId, RateFunction, ReactiveError, ReactiveValue, Rect,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticFamilyTransformMode,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
     SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
 };
 use noon_runtime::{
@@ -1591,11 +1590,12 @@ impl ExecutionSession {
     /// Publish one already-prepared composite that creates and scopes a fresh
     /// scalar input. Reactive enrollment and any numeric driver referencing the
     /// transaction-local signal share the same preflight and semantic commit.
+    #[cfg(feature = "latex")]
     pub(crate) fn publish_prepared_scoped_value_tracker(
         &mut self,
-        prepared: PreparedSemanticMutationTransaction<'_>,
+        prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
         root: SemanticNodeId,
-        signal_token: SemanticLocalNodeToken,
+        signal_token: noon_core::SemanticLocalNodeToken,
         initial: f64,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionAnimationError> {
         let semantic_signal = prepared

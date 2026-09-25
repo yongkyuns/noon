@@ -1,6 +1,6 @@
 //! Shared admission for one retained object-or-family composite entry.
 
-use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily, MobjectTarget};
+use crate::{AuthoringError, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
@@ -89,22 +89,6 @@ impl CompositeEntry {
     }
 }
 
-/// Capture each entry at one valid authored/effective placement state.
-///
-/// Families retain their root identity in the caller's topology while every
-/// ordered leaf is captured and later translated exactly once.  Descendant
-/// overlap is rejected before any transaction is created.
-pub(crate) fn capture_entries(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: Option<&ExecutionSession>,
-    root: SemanticNodeId,
-    entries: &[MobjectTarget<'_>],
-) -> Result<Vec<CompositeEntry>, AuthoringError> {
-    capture_entries_with(store, entries, |object| {
-        crate::family_layout::composite_entry_state(store, execution, root, object)
-    })
-}
-
 /// The shared topology and overlap check, parameterized by the ownership-aware
 /// state capture boundary.  Table and matrix admission use their owning Scene
 /// or LiveSession here so Scene-owned execution observes effective placement.
@@ -161,7 +145,10 @@ mod tests {
         let second = circle(&store);
         let family =
             MobjectFamily::create(Rc::clone(&store), &[(&first).into(), (&second).into()]).unwrap();
-        let entries = capture_entries(&store, None, first.node_id(), &[(&family).into()]).unwrap();
+        let entries = capture_entries_with(&store, &[(&family).into()], |object| {
+            crate::family_layout::composite_entry_state(&store, None, first.node_id(), object)
+        })
+        .unwrap();
         assert_eq!(entries[0].root(), family.node_id());
         assert_eq!(
             entries[0]
@@ -179,12 +166,11 @@ mod tests {
         let store = Rc::new(RefCell::new(SemanticStore::new()));
         let object = circle(&store);
         let family = MobjectFamily::create(Rc::clone(&store), &[(&object).into()]).unwrap();
-        assert!(capture_entries(
-            &store,
-            None,
-            object.node_id(),
-            &[(&object).into(), (&family).into()]
-        )
-        .is_err());
+        assert!(
+            capture_entries_with(&store, &[(&object).into(), (&family).into()], |entry| {
+                crate::family_layout::composite_entry_state(&store, None, object.node_id(), entry)
+            })
+            .is_err()
+        );
     }
 }

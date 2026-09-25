@@ -319,6 +319,7 @@ fn prepare_typst_spec(
     })
 }
 
+#[cfg(feature = "typst")]
 fn publish_detached_admission<A: CompiledTextAdmission>(
     store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     admission: A,
