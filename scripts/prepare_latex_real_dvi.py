@@ -13,4 +13,3 @@ args.out.mkdir(parents=True, exist_ok=True)
 for name in names:
     (args.out / f"{name}.tfm").write_bytes(base64.b64decode(table[name]))
 print(f"decoded {len(names)} TFMs to {args.out}")
-

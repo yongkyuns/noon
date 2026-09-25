@@ -122,4 +122,3 @@ export async function loadLatexAssets(fetchAsset = fetch) {
     },
   };
 }
-

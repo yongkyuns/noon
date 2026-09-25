@@ -179,4 +179,3 @@ export function createTexEngine(module, format, assets) {
     },
   };
 }
-

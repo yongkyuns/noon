@@ -61,4 +61,3 @@ test("sparse reset restores nonzero pages and clears prior compile memory", () =
   assert.equal(restored[42], 19);
   assert.equal(restored[60000], 0);
 });
-

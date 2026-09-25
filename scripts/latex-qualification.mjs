@@ -7,4 +7,3 @@ await qualifyPairedAuthoring({
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }],
 });
-
