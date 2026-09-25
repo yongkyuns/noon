@@ -202,6 +202,33 @@ impl AxesFrame {
     }
 }
 
+/// Polar queries over the same retained Cartesian axes snapshot. Manim's grid
+/// azimuth offset/direction affect grid decoration and labels, not coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PolarFrame {
+    axes: AxesFrame,
+}
+
+impl PolarFrame {
+    pub const fn new(axes: AxesFrame) -> Self {
+        Self { axes }
+    }
+    pub const fn axes(self) -> AxesFrame {
+        self.axes
+    }
+    pub fn polar_to_point(self, radius: f64, azimuth: f64) -> Result<[f64; 2], CoordinateError> {
+        if !radius.is_finite() || !azimuth.is_finite() {
+            return Err(CoordinateError::InvalidPoint);
+        }
+        self.axes
+            .coords_to_point(radius * azimuth.cos(), radius * azimuth.sin())
+    }
+    pub fn point_to_polar(self, point: [f64; 2]) -> Result<[f64; 2], CoordinateError> {
+        let [x, y] = self.axes.point_to_coords(point)?;
+        finite_point([x.hypot(y), y.atan2(x)])
+    }
+}
+
 pub fn origin_shift(range: [f64; 3]) -> f64 {
     if range[0] > 0.0 {
         range[0]

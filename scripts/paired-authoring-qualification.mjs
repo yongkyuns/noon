@@ -91,7 +91,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         };
         // Direct hosts must consume the initial publication before a seek.
         let presented = await present();
-        if (presented) {
+        if (presented && sampleTime > 0) {
           renderer.seekDirect(sampleTime);
           presented = await present();
         }
@@ -170,4 +170,3 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
 
   return report;
 }
-

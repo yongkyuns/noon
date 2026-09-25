@@ -11,6 +11,14 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
+    pub(crate) fn live_create_polar_plane(
+        &mut self,
+        options: &noon::ManimPolarPlaneOptions,
+    ) -> Result<noon::ManimPolarPlane, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.polar_plane(options)))?
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
     pub(crate) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,

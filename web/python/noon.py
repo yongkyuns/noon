@@ -763,6 +763,7 @@ _PUBLIC_EXPORTS = {
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",
+    "PolarPlane": "_manim_polar_plane",
     "ComplexPlane": "_manim_complex_plane",
     "Axes": "_manim_plotting",
     "FunctionGraph": "_manim_plotting",

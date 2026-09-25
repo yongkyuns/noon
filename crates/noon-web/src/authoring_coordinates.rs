@@ -28,6 +28,7 @@ pub(crate) enum CoordinateRequest {
     NumberLine(ManimNumberLineOptions),
     Axes(ManimAxesOptions),
     NumberPlane(noon::ManimNumberPlaneOptions),
+    PolarPlane(noon::ManimPolarPlaneOptions),
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -51,6 +52,7 @@ impl WasmCoordinateOptions {
             CoordinateRequest::NumberLine(options) => &mut options.style,
             CoordinateRequest::Axes(options) => &mut options.style,
             CoordinateRequest::NumberPlane(options) => &mut options.axis_style,
+            CoordinateRequest::PolarPlane(options) => &mut options.axis_style,
         }
     }
 }
@@ -99,8 +101,8 @@ impl WasmCoordinateOptions {
         let ticks = match &mut self.request {
             CoordinateRequest::NumberLine(options) => &mut options.ticks,
             CoordinateRequest::Axes(options) => &mut options.ticks,
-            CoordinateRequest::NumberPlane(_) => {
-                return Err(js_error("NumberPlane ticks are not supported"));
+            CoordinateRequest::NumberPlane(_) | CoordinateRequest::PolarPlane(_) => {
+                return Err(js_error("plane ticks are not supported"));
             }
         };
         *ticks = CoordinateTicks {
@@ -186,6 +188,10 @@ impl WasmAuthoringStore {
             }
             CoordinateRequest::NumberPlane(options) => {
                 noon::ManimNumberPlane::create(Rc::clone(&self.semantics), &options)
+                    .map(|plane| plane.family().clone())
+            }
+            CoordinateRequest::PolarPlane(options) => {
+                noon::ManimPolarPlane::create(Rc::clone(&self.semantics), &options)
                     .map(|plane| plane.family().clone())
             }
         };

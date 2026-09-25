@@ -66,7 +66,10 @@ impl Default for RiemannRectangleOptions {
 }
 
 pub(crate) mod area;
+mod polar_plane;
 pub use area::RiemannRectanglePlan;
+pub(crate) use polar_plane::prepare_polar_plane;
+pub use polar_plane::{ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection};
 
 #[cfg(test)]
 mod tests;

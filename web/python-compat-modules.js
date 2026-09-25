@@ -9,6 +9,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_plotting.py", runtimePath: "/tmp/_manim_plotting.py", label: "Noon shared coordinate and plotting wrappers" },
   { sourcePath: "python/_manim_number_plane.py", runtimePath: "/tmp/_manim_number_plane.py", label: "Noon shared number plane facade" },
   { sourcePath: "python/_manim_complex_plane.py", runtimePath: "/tmp/_manim_complex_plane.py", label: "Noon shared complex plane facade" },
+  { sourcePath: "python/_manim_polar_plane.py", runtimePath: "/tmp/_manim_polar_plane.py", label: "Noon shared polar plane facade" },
   { sourcePath: "python/_manim_implicit.py", runtimePath: "/tmp/_manim_implicit.py", label: "Noon shared implicit contour wrappers" },
   { sourcePath: "python/_manim_number_labels.py", runtimePath: "/tmp/_manim_number_labels.py", label: "Noon shared numeric Text label wrappers" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },

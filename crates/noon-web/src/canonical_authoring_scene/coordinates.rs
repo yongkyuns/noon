@@ -11,6 +11,13 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_create_path_family(paths)
     }
 
+    pub(super) fn live_create_polar_plane(
+        &mut self,
+        options: &noon::ManimPolarPlaneOptions,
+    ) -> Result<noon::ManimPolarPlane, AuthoringFailure> {
+        self.active_live_player()?.live_create_polar_plane(options)
+    }
+
     pub(super) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,

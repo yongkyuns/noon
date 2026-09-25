@@ -14,12 +14,51 @@ fn axes_options() -> ManimAxesOptions {
     ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
 }
 
+fn polar_options() -> ManimPolarPlaneOptions {
+    ManimPolarPlaneOptions {
+        radius_max: 2.0,
+        size: Some(4.0),
+        radius_step: 1.0,
+        azimuth_step: Some(4.0),
+        azimuth_offset: std::f64::consts::FRAC_PI_2,
+        azimuth_direction: PolarAzimuthDirection::Clockwise,
+        faded_line_ratio: 2,
+        ..Default::default()
+    }
+}
+
 fn resources(scene: &Scene) -> usize {
     scene
         .integration_store()
         .borrow()
         .geometry_resources()
         .len()
+}
+
+#[test]
+fn polar_plane_reuses_cartesian_frame_with_decorative_azimuth() {
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let frame = plane.authored_polar_frame().unwrap();
+
+    near(frame.polar_to_point(2.0, 0.0).unwrap(), [2.0, 0.0]);
+    near(
+        frame
+            .polar_to_point(2.0, std::f64::consts::FRAC_PI_2)
+            .unwrap(),
+        [0.0, 2.0],
+    );
+    near(frame.point_to_polar([2.0, 0.0]).unwrap(), [2.0, 0.0]);
+
+    let root = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(plane.family().node_id())
+        .unwrap();
+    assert_eq!(root.len(), 4);
+    assert_eq!(root[0], plane.faded_lines().unwrap().node_id());
+    assert_eq!(root[1], plane.background_lines().unwrap().node_id());
+    assert_eq!(resources(&scene), 0);
 }
 
 #[test]

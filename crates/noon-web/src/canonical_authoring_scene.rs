@@ -6353,6 +6353,10 @@ mod wasm {
                     .inner
                     .live_create_number_plane(&options)
                     .map(|plane| plane.family().clone()),
+                CoordinateRequest::PolarPlane(options) => self
+                    .inner
+                    .live_create_polar_plane(&options)
+                    .map(|plane| plane.family().clone()),
             };
             family
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)

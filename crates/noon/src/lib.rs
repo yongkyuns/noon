@@ -161,8 +161,9 @@ pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, RiemannRectangleOptions,
-    RiemannRectanglePlan, RiemannSample,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, ManimPolarPlane,
+    ManimPolarPlaneOptions, PolarAzimuthDirection, RiemannRectangleOptions, RiemannRectanglePlan,
+    RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -217,7 +218,7 @@ pub use noon_core::{
     TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
     YELLOW_C, YELLOW_D, YELLOW_E,
 };
-pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
+pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,

@@ -28,6 +28,8 @@ mod authoring_plot_presentation;
 #[cfg(target_arch = "wasm32")]
 mod authoring_plotting;
 #[cfg(target_arch = "wasm32")]
+mod authoring_polar_plane;
+#[cfg(target_arch = "wasm32")]
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
 mod authoring_synchronized_plotting;
@@ -123,6 +125,8 @@ pub use authoring_options::*;
 pub use authoring_plot_presentation::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plotting::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_polar_plane::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_synchronized_plotting::*;
 pub use canonical_authoring_scene::*;

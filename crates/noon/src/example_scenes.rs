@@ -30,6 +30,7 @@ pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod polar_plane;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
