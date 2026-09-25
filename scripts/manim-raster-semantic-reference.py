@@ -254,7 +254,9 @@ def main() -> int:
     # Sources remain repository-relative when a focused manifest lives elsewhere.
     # Match the JS capture driver; neither the manifest location nor cwd is a root.
     repo_root = Path(__file__).resolve().parent.parent
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     settings = {
+        "media_dir": str(args.output.parent.resolve() / "manim-media"),
         "renderer": "cairo",
         "frame_rate": float(reference["frame_rate"]),
         "pixel_width": int(reference["pixel_width"]),
