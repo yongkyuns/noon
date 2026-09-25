@@ -1553,6 +1553,7 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1851,6 +1852,11 @@ impl CanonicalAuthoringScene {
                     options,
                 }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
                     options,
@@ -4958,11 +4964,11 @@ mod wasm {
         pub fn create_camera_frame(
             &mut self,
             object_id: &str,
-        ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             let id = parse_object_id("camera frame object ID", object_id)?;
             self.inner
                 .create_camera_frame(id)
-                .map(crate::WasmLatexPartsHandle::new)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
@@ -6498,12 +6504,12 @@ mod wasm {
             &mut self,
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
-        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+        ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_create_latex(options.text, compiler)
-                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map(crate::WasmLatexPartsHandle::new)
                 .map_err(typed_js_error)
         }
 
