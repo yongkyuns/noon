@@ -53,15 +53,6 @@ pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, Num
     }
     let precision = options.decimal_places as usize;
     let mut text = format!("{value:.precision$}");
-    // Match Manim's display semantics: values that round to zero are shown
-    // without a negative sign, so include_sign can produce `+0`.
-    if text.starts_with('-')
-        && text[1..]
-            .chars()
-            .all(|character| character == '0' || character == '.')
-    {
-        text.remove(0);
-    }
     if options.group_with_commas {
         let sign_len = usize::from(matches!(text.as_bytes().first(), Some(b'-' | b'+')));
         let decimal = text[sign_len..]
@@ -80,6 +71,16 @@ pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, Num
     }
     if options.include_sign && !text.starts_with('-') {
         text.insert(0, '+');
+    }
+    // Manim uses NumPy's rounding only to decide whether a formatted negative
+    // value loses its sign. Keep that decision independent of Rust's formatted
+    // digits: `-0.005` at two places displays `0.01`, not `-0.01`.
+    let rounded_for_sign = (value * 10_f64.powi(options.decimal_places as i32)).round_ties_even();
+    if text.starts_with('-') && rounded_for_sign == 0.0 {
+        text.remove(0);
+        if options.include_sign {
+            text.insert(0, '+');
+        }
     }
     if options.show_ellipsis {
         text.push_str("...");
@@ -107,5 +108,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(format_decimal(-0.004, &format).unwrap(), "+0...m");
+    }
+
+    #[test]
+    fn keeps_manim_negative_zero_sign_rule_separate_from_formatted_digits() {
+        assert_eq!(
+            format_decimal(-0.005, &DecimalFormat::default()).unwrap(),
+            "0.01"
+        );
+        assert_eq!(
+            format_decimal(
+                -0.005,
+                &DecimalFormat {
+                    include_sign: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            "+0.01"
+        );
     }
 }

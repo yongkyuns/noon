@@ -4,7 +4,11 @@ use crate::{
     format_decimal, DecimalFormat, LatexBackend, MathTex, Mobject, NumericFormatError,
     TextAuthoringError,
 };
-use noon_core::{SemanticDecimalNumber, SemanticMutationTransaction, SemanticStore};
+use noon_core::{
+    Rect, SemanticDecimalNumber, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, TextAffineTransform,
+    TextPart, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, Vec2, WHITE,
+};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +78,42 @@ pub struct DecimalNumber {
     object: Mobject,
 }
 
+/// One DecimalNumber display prepared from individually compiled MathTex parts.
+/// The immutable glyph dependencies can be admitted once and composed through
+/// the same transaction owner for cold and live authoring.
+struct PreparedDecimalValue {
+    source: Arc<str>,
+    tokens: Vec<NumericLayoutToken>,
+    dependencies: Vec<NumericCompiledDependency>,
+    value: f64,
+    format: DecimalFormat,
+    font_size: f32,
+}
+
+type NumericCompiledDependency = (
+    noon_core::TextCompilationIdentity,
+    TextResource,
+    noon_core::FontResourceArena,
+    noon_core::GeometryResourceArena,
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericLayoutPart {
+    Digit,
+    Sign,
+    Minus,
+    Comma,
+    DecimalPoint,
+    Ellipsis,
+    Unit { superscript: bool },
+}
+
+struct NumericLayoutToken {
+    tex: Arc<str>,
+    span: TextSourceSpan,
+    part: NumericLayoutPart,
+}
+
 impl DecimalNumber {
     pub fn new(
         store: Rc<RefCell<SemanticStore>>,
@@ -101,25 +141,19 @@ impl DecimalNumber {
         format: DecimalFormat,
         font_size: f32,
     ) -> Result<Self, NumericAuthoringError> {
-        let source = format_decimal(value, &format)?;
-        let admission = crate::latex_authoring::prepare_math_tex(
-            numeric_math_tex(&source, font_size)?,
-            backend,
-        )?;
+        let prepared = prepare_numeric_value(backend, value, format.clone(), font_size)?;
         let number = decimal_metadata(value, &format, font_size);
-        let result = admission.publish_with_state(
-            &mut store.borrow_mut(),
-            move |mut state| {
-                state.set_decimal_number(Some(number));
-                state
-            },
-            |semantic, transaction| {
-                transaction
-                    .apply(semantic)
-                    .map_err(crate::AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
-        )?;
+        let result = prepared.publish(&mut store.borrow_mut(), move |semantic, handle| {
+            let mut state = SemanticObjectState::new(handle);
+            state.style.fill = Some(SemanticPaint::Solid(WHITE));
+            state.set_decimal_number(Some(number));
+            let mut transaction = SemanticMutationTransaction::new();
+            transaction.add_node(SemanticNodeCreation::object(state));
+            transaction
+                .apply(semantic)
+                .map_err(crate::AuthoringError::from)
+                .map_err(TextAuthoringError::Semantic)
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("numeric admission adds one node")
         };
@@ -167,45 +201,18 @@ impl DecimalNumber {
         backend: &mut impl LatexBackend,
         value: f64,
     ) -> Result<&mut Self, NumericAuthoringError> {
-        let before = self.object.state()?;
-        let format = self.format()?;
-        let font_size = self.metadata()?.font_size();
-        let source = format_decimal(value, &format)?;
-        let admission = crate::latex_authoring::prepare_math_tex(
-            numeric_math_tex(&source, font_size)?,
-            backend,
+        let authored = self.object.state()?;
+        self.publish_value(
+            self.prepare_value(backend, value)?,
+            authored.clone(),
+            authored,
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(TextAuthoringError::Semantic)
+            },
         )?;
-        let (resource, fonts, geometry) = admission.into_resource_parts();
-        let node = self.object.node_id();
-        let old = before.content.text();
-        let mut store = self.object.integration_store().borrow_mut();
-        store.with_compiled_text_resource(resource, fonts, &geometry, |store, handle| {
-            let mut next = before.clone();
-            let fixed_left =
-                crate::semantic_mobject::boundary_for_content(store, next.content, next.transform)
-                    .map_err(TextAuthoringError::Semantic)?
-                    .map_or(
-                        crate::semantic_mobject::state_center(store, &next)
-                            .map_err(TextAuthoringError::Semantic)?
-                            .0,
-                        |bounds| bounds.min_x,
-                    );
-            next.content = handle.into();
-            let new_left =
-                crate::semantic_mobject::boundary_for_content(store, next.content, next.transform)
-                    .map_err(TextAuthoringError::Semantic)?
-                    .map_or(fixed_left, |bounds| bounds.min_x);
-            next.transform.translation.x += fixed_left - new_left;
-            let mut transaction = SemanticMutationTransaction::new();
-            crate::semantic_mobject::stage_state_changes(&mut transaction, node, &before, &next);
-            transaction.replace_decimal_number(node, decimal_metadata(value, &format, font_size));
-            transaction
-                .apply(store)
-                .map_err(crate::AuthoringError::from)
-                .map_err(TextAuthoringError::Semantic)
-        })?;
-        let _ = old; // Resource retirement is owned by the semantic arena lifecycle.
-        drop(store);
         Ok(self)
     }
     pub fn increment_value(
@@ -228,57 +235,399 @@ impl DecimalNumber {
         )
             -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
     ) -> Result<(), NumericAuthoringError> {
-        let format = self.format()?;
-        let font_size = self.metadata()?.font_size();
-        let source = format_decimal(value, &format)?;
-        let admission = crate::latex_authoring::prepare_math_tex(
-            numeric_math_tex(&source, font_size)?,
-            backend,
-        )?;
-        let (resource, fonts, geometry) = admission.into_resource_parts();
+        self.publish_value(
+            self.prepare_value(backend, value)?,
+            authored,
+            effective,
+            publish,
+        )
+    }
+
+    fn prepare_value(
+        &self,
+        backend: &mut impl LatexBackend,
+        value: f64,
+    ) -> Result<PreparedDecimalValue, NumericAuthoringError> {
+        let metadata = self.metadata()?;
+        prepare_numeric_value(backend, value, self.format()?, metadata.font_size())
+    }
+
+    fn publish_value(
+        &self,
+        prepared: PreparedDecimalValue,
+        authored: SemanticObjectState,
+        effective: SemanticObjectState,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            SemanticMutationTransaction,
+        )
+            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
+    ) -> Result<(), NumericAuthoringError> {
+        let value = prepared.value;
+        let format = prepared.format.clone();
+        let font_size = prepared.font_size;
         let node = self.object.node_id();
-        self.object
-            .integration_store()
-            .borrow_mut()
-            .with_compiled_text_resource(resource, fonts, &geometry, |store, handle| {
-                let mut next = effective;
-                let fixed_left = crate::semantic_mobject::boundary_for_content(
-                    store,
-                    next.content,
-                    next.transform,
-                )
-                .map_err(TextAuthoringError::Semantic)?
-                .map_or(
-                    crate::semantic_mobject::state_center(store, &next)
-                        .map_err(TextAuthoringError::Semantic)?
-                        .0,
-                    |bounds| bounds.min_x,
-                );
-                next.content = handle.into();
-                let new_left = crate::semantic_mobject::boundary_for_content(
-                    store,
-                    next.content,
-                    next.transform,
-                )
-                .map_err(TextAuthoringError::Semantic)?
-                .map_or(fixed_left, |bounds| bounds.min_x);
-                next.transform.translation.x += fixed_left - new_left;
-                let mut transaction = SemanticMutationTransaction::new();
-                crate::semantic_mobject::stage_state_changes(
-                    &mut transaction,
-                    node,
-                    &authored,
-                    &next,
-                );
-                if authored.z_index() != next.z_index() {
-                    transaction.set_z_index(node, next.z_index());
-                }
-                transaction
-                    .replace_decimal_number(node, decimal_metadata(value, &format, font_size));
-                publish(store, transaction)
-            })?;
+        let store = self.object.integration_store();
+        prepared.publish(&mut store.borrow_mut(), |store, handle| {
+            let transaction = decimal_replacement_transaction(
+                store, node, &authored, effective, handle, value, &format, font_size,
+            )?;
+            publish(store, transaction)
+        })?;
         Ok(())
     }
+}
+
+impl PreparedDecimalValue {
+    fn publish<T>(
+        self,
+        store: &mut SemanticStore,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            noon_core::TextResourceHandle,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        let Self {
+            source,
+            tokens,
+            dependencies,
+            font_size,
+            ..
+        } = self;
+        store.with_compiled_text_dependencies(
+            dependencies,
+            |store, handles| {
+                compose_numeric_text_resource(store, source, &tokens, handles, font_size)
+            },
+            publish,
+        )
+    }
+}
+
+fn prepare_numeric_value(
+    backend: &mut impl LatexBackend,
+    value: f64,
+    format: DecimalFormat,
+    font_size: f32,
+) -> Result<PreparedDecimalValue, NumericAuthoringError> {
+    let (source, tokens) = numeric_layout_tokens(value, &format)?;
+    let mut dependencies = Vec::new();
+    dependencies
+        .try_reserve_exact(tokens.len())
+        .map_err(TextAuthoringError::from)?;
+    for token in &tokens {
+        dependencies.push(
+            crate::latex_authoring::prepare_math_tex(
+                numeric_math_tex(token.tex.as_ref(), font_size)?,
+                backend,
+            )?
+            .into_compiled_resource_parts(),
+        );
+    }
+    Ok(PreparedDecimalValue {
+        source,
+        tokens,
+        dependencies,
+        value,
+        format,
+        font_size,
+    })
+}
+
+fn numeric_layout_tokens(
+    value: f64,
+    format: &DecimalFormat,
+) -> Result<(Arc<str>, Vec<NumericLayoutToken>), NumericAuthoringError> {
+    let source: Arc<str> = Arc::from(format_decimal(value, format)?);
+    let mut numeric_end = source.len();
+    if let Some(unit) = &format.unit {
+        numeric_end = numeric_end
+            .checked_sub(unit.len())
+            .ok_or(TextAuthoringError::Text(
+                noon_core::TextResourceValidationError::InvalidSourceSpan,
+            ))?;
+    }
+    let ellipsis_start = if format.show_ellipsis {
+        numeric_end = numeric_end.checked_sub(3).ok_or(TextAuthoringError::Text(
+            noon_core::TextResourceValidationError::InvalidSourceSpan,
+        ))?;
+        Some(numeric_end)
+    } else {
+        None
+    };
+    let mut tokens = Vec::new();
+    for (start, character) in source[..numeric_end].char_indices() {
+        let part = match character {
+            '-' => NumericLayoutPart::Minus,
+            '+' => NumericLayoutPart::Sign,
+            ',' => NumericLayoutPart::Comma,
+            '.' => NumericLayoutPart::DecimalPoint,
+            '0'..='9' => NumericLayoutPart::Digit,
+            _ => unreachable!("numeric formatter emits only numeric punctuation"),
+        };
+        tokens.push(NumericLayoutToken {
+            tex: Arc::from(character.to_string()),
+            span: text_span(start, start + character.len_utf8())?,
+            part,
+        });
+    }
+    if let Some(start) = ellipsis_start {
+        tokens.push(NumericLayoutToken {
+            tex: Arc::from("\\dots"),
+            span: text_span(start, start + 3)?,
+            part: NumericLayoutPart::Ellipsis,
+        });
+    }
+    if let Some(unit) = &format.unit {
+        if !unit.is_empty() {
+            tokens.push(NumericLayoutToken {
+                tex: Arc::from(unit.as_str()),
+                span: text_span(
+                    numeric_end + usize::from(format.show_ellipsis) * 3,
+                    source.len(),
+                )?,
+                part: NumericLayoutPart::Unit {
+                    superscript: unit.starts_with('^'),
+                },
+            });
+        }
+    }
+    Ok((source, tokens))
+}
+
+fn text_span(start: usize, end: usize) -> Result<TextSourceSpan, TextAuthoringError> {
+    Ok(TextSourceSpan::new(
+        u32::try_from(start).map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidSourceSpan)
+        })?,
+        u32::try_from(end).map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidSourceSpan)
+        })?,
+    ))
+}
+
+fn compose_numeric_text_resource(
+    store: &SemanticStore,
+    source: Arc<str>,
+    tokens: &[NumericLayoutToken],
+    handles: &[noon_core::TextResourceHandle],
+    font_size: f32,
+) -> Result<TextResource, TextAuthoringError> {
+    let children: Result<Vec<_>, _> = handles
+        .iter()
+        .map(|handle| {
+            store
+                .text_resources()
+                .get(*handle)
+                .ok_or(TextAuthoringError::Text(
+                    noon_core::TextResourceValidationError::InvalidSourceSpan,
+                ))
+        })
+        .collect();
+    compose_numeric_text_resource_from_children(source, tokens, &children?, font_size)
+}
+
+fn compose_numeric_text_resource_from_children(
+    source: Arc<str>,
+    tokens: &[NumericLayoutToken],
+    children: &[&TextResource],
+    font_size: f32,
+) -> Result<TextResource, TextAuthoringError> {
+    if tokens.len() != children.len() || tokens.is_empty() {
+        return Err(TextAuthoringError::Text(
+            noon_core::TextResourceValidationError::InvalidSourceSpan,
+        ));
+    }
+    if !font_size.is_finite() || font_size <= 0.0 {
+        return Err(TextAuthoringError::InvalidFontSize(font_size));
+    }
+    let scale = font_size * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
+    let scale_transform = TextAffineTransform {
+        xx: scale,
+        yy: scale,
+        ..TextAffineTransform::IDENTITY
+    };
+    let digit_buff = 0.001 * font_size;
+    let mut bounds = Vec::with_capacity(children.len());
+    let mut transforms = Vec::with_capacity(children.len());
+    let mut cursor = 0.0;
+    for (index, child) in children.iter().enumerate() {
+        let scaled = transform_rect(child.bounds, scale_transform);
+        let placement = TextAffineTransform::translation(cursor - scaled.min.x, -scaled.min.y);
+        let placed = transform_rect(scaled, placement);
+        transforms.push(placement);
+        bounds.push(placed);
+        let gap = tokens.get(index + 1).map_or(0.0, |next| match next.part {
+            NumericLayoutPart::Unit { .. } => 2.0 * digit_buff,
+            _ => digit_buff,
+        });
+        cursor = placed.max.x + gap;
+    }
+    for (index, token) in tokens.iter().enumerate() {
+        let height = bounds[index].height();
+        let offset = match token.part {
+            NumericLayoutPart::Minus if index + 1 < bounds.len() => {
+                bounds[index + 1].height() / 2.0 - height
+            }
+            NumericLayoutPart::Comma => -height / 2.0,
+            _ => 0.0,
+        };
+        if offset != 0.0 {
+            transforms[index].ty += offset;
+            bounds[index] =
+                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
+        }
+    }
+    let overall_top = bounds
+        .iter()
+        .map(|bound| bound.max.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    for (index, token) in tokens.iter().enumerate() {
+        if matches!(token.part, NumericLayoutPart::Unit { superscript: true }) {
+            let offset = overall_top - bounds[index].max.y;
+            transforms[index].ty += offset;
+            bounds[index] =
+                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
+        }
+    }
+    let overall = bounds
+        .iter()
+        .copied()
+        .reduce(Rect::union)
+        .expect("numeric layout has tokens");
+    let recenter = TextAffineTransform::translation(-overall.center().x, -overall.center().y);
+    let mut runs = Vec::new();
+    let mut vectors = Vec::new();
+    let mut render_items = Vec::new();
+    let mut parts = Vec::new();
+    let mut cluster_ordinal = 0_u32;
+    for ((token, child), placement) in tokens.iter().zip(children).zip(transforms) {
+        let first_cluster = u32::try_from(
+            runs.iter()
+                .map(|run: &noon_core::GlyphRun| run.glyphs.len())
+                .sum::<usize>(),
+        )
+        .map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidClusterRange)
+        })?;
+        let first_vector = u32::try_from(vectors.len()).map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidVectorRange)
+        })?;
+        let run_offset = u32::try_from(runs.len()).map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidRenderItem)
+        })?;
+        let vector_offset = u32::try_from(vectors.len()).map_err(|_| {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidRenderItem)
+        })?;
+        let transform = scale_transform.then(placement).then(recenter);
+        for run in child.runs.iter() {
+            let mut run = run.clone();
+            run.transform = run.transform.then(transform);
+            for glyph in Arc::make_mut(&mut run.glyphs) {
+                glyph.cluster.source_span = token.span;
+                glyph.cluster.cluster_ordinal = cluster_ordinal;
+                glyph.cluster.semantic_key = None;
+                cluster_ordinal =
+                    cluster_ordinal
+                        .checked_add(1)
+                        .ok_or(TextAuthoringError::Text(
+                            noon_core::TextResourceValidationError::InvalidClusterRange,
+                        ))?;
+            }
+            runs.push(run);
+        }
+        for vector in child.vector_items.iter() {
+            let mut vector = vector.clone();
+            vector.transform = vector.transform.then(transform);
+            vector.source_span = Some(token.span);
+            vector.semantic_key = None;
+            vectors.push(vector);
+        }
+        for item in child.render_items.iter().copied() {
+            render_items.push(match item {
+                TextRenderItem::GlyphRun(index) => TextRenderItem::GlyphRun(run_offset + index),
+                TextRenderItem::Vector(index) => TextRenderItem::Vector(vector_offset + index),
+            });
+        }
+        parts.push(TextPart {
+            source_span: token.span,
+            first_cluster,
+            cluster_count: u32::try_from(child.glyph_count()).map_err(|_| {
+                TextAuthoringError::Text(
+                    noon_core::TextResourceValidationError::InvalidClusterRange,
+                )
+            })?,
+            first_vector,
+            vector_count: u32::try_from(child.vector_count()).map_err(|_| {
+                TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidVectorRange)
+            })?,
+            semantic_key: None,
+        });
+    }
+    Ok(TextResource {
+        source,
+        kind: TextSourceKind::MathTex,
+        runs: runs.into(),
+        vector_items: vectors.into(),
+        render_items: render_items.into(),
+        parts: parts.into(),
+        bounds: Rect::new(
+            overall.min - overall.center(),
+            overall.max - overall.center(),
+        ),
+        baseline: 0.0,
+        layout_artifact: None,
+    })
+}
+
+fn transform_rect(rect: Rect, transform: TextAffineTransform) -> Rect {
+    Rect::from_points([
+        transform.transform_point(rect.min),
+        transform.transform_point(Vec2::new(rect.min.x, rect.max.y)),
+        transform.transform_point(Vec2::new(rect.max.x, rect.min.y)),
+        transform.transform_point(rect.max),
+    ])
+    .expect("a rectangle has four corners")
+}
+
+fn decimal_replacement_transaction(
+    store: &SemanticStore,
+    node: noon_core::SemanticNodeId,
+    authored: &SemanticObjectState,
+    mut effective: SemanticObjectState,
+    handle: noon_core::TextResourceHandle,
+    value: f64,
+    format: &DecimalFormat,
+    font_size: f32,
+) -> Result<SemanticMutationTransaction, TextAuthoringError> {
+    let fixed_left = crate::semantic_mobject::boundary_for_content(
+        store,
+        effective.content,
+        effective.transform,
+    )
+    .map_err(TextAuthoringError::Semantic)?
+    .map_or(
+        crate::semantic_mobject::state_center(store, &effective)
+            .map_err(TextAuthoringError::Semantic)?
+            .0,
+        |bounds| bounds.min_x,
+    );
+    effective.content = SemanticObjectContent::Text(handle);
+    let new_left = crate::semantic_mobject::boundary_for_content(
+        store,
+        effective.content,
+        effective.transform,
+    )
+    .map_err(TextAuthoringError::Semantic)?
+    .map_or(fixed_left, |bounds| bounds.min_x);
+    effective.transform.translation.x += fixed_left - new_left;
+    let mut transaction = SemanticMutationTransaction::new();
+    crate::semantic_mobject::stage_state_changes(&mut transaction, node, authored, &effective);
+    if authored.z_index() != effective.z_index() {
+        transaction.set_z_index(node, effective.z_index());
+    }
+    transaction.replace_decimal_number(node, decimal_metadata(value, format, font_size));
+    Ok(transaction)
 }
 
 fn numeric_math_tex(source: &str, font_size: f32) -> Result<MathTex, NumericAuthoringError> {
@@ -340,6 +689,114 @@ impl Integer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon_core::{FontResourceArena, GeometryResourceArena};
+
+    fn text_box(source: &str, bounds: Rect) -> TextResource {
+        TextResource {
+            source: Arc::from(source),
+            kind: TextSourceKind::MathTex,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds,
+            baseline: 0.0,
+            layout_artifact: None,
+        }
+    }
+
+    #[test]
+    fn layout_applies_manim_minus_comma_and_superscript_rules() {
+        let mut store = SemanticStore::new();
+        let fonts = FontResourceArena::new();
+        let geometry = GeometryResourceArena::new();
+        let handles = [
+            store
+                .import_text_resource(
+                    text_box("-", Rect::new(Vec2::ZERO, Vec2::new(4.0, 1.0))),
+                    &fonts,
+                    &geometry,
+                )
+                .unwrap(),
+            store
+                .import_text_resource(
+                    text_box("1", Rect::new(Vec2::ZERO, Vec2::new(2.0, 4.0))),
+                    &fonts,
+                    &geometry,
+                )
+                .unwrap(),
+            store
+                .import_text_resource(
+                    text_box(",", Rect::new(Vec2::ZERO, Vec2::new(1.0, 2.0))),
+                    &fonts,
+                    &geometry,
+                )
+                .unwrap(),
+            store
+                .import_text_resource(
+                    text_box("^", Rect::new(Vec2::ZERO, Vec2::new(3.0, 3.0))),
+                    &fonts,
+                    &geometry,
+                )
+                .unwrap(),
+        ];
+        let tokens = [
+            NumericLayoutToken {
+                tex: Arc::from("-"),
+                span: TextSourceSpan::new(0, 1),
+                part: NumericLayoutPart::Minus,
+            },
+            NumericLayoutToken {
+                tex: Arc::from("1"),
+                span: TextSourceSpan::new(1, 2),
+                part: NumericLayoutPart::Digit,
+            },
+            NumericLayoutToken {
+                tex: Arc::from(","),
+                span: TextSourceSpan::new(2, 3),
+                part: NumericLayoutPart::Comma,
+            },
+            NumericLayoutToken {
+                tex: Arc::from("^"),
+                span: TextSourceSpan::new(3, 4),
+                part: NumericLayoutPart::Unit { superscript: true },
+            },
+        ];
+        let resource =
+            compose_numeric_text_resource(&store, Arc::from("-1,^"), &tokens, &handles, 48.0)
+                .unwrap();
+
+        let scale = 48.0 * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
+        assert!((resource.bounds.width() - (10.0 * scale + 4.0 * 0.001 * 48.0)).abs() < 1e-6);
+        assert!((resource.bounds.height() - 5.0 * scale).abs() < 1e-6);
+        assert_eq!(resource.parts.len(), 4);
+        assert_eq!(resource.parts[2].source_span, TextSourceSpan::new(2, 3));
+    }
+
+    #[test]
+    fn numeric_tokens_keep_punctuation_ellipsis_and_unit_as_distinct_parts() {
+        let format = DecimalFormat {
+            decimal_places: 2,
+            include_sign: true,
+            group_with_commas: true,
+            show_ellipsis: true,
+            unit: Some("^\\circ".into()),
+        };
+        let (source, tokens) = numeric_layout_tokens(12_345.6, &format).unwrap();
+
+        assert_eq!(source.as_ref(), "+12,345.60...^\\circ");
+        assert_eq!(tokens[0].part, NumericLayoutPart::Sign);
+        assert_eq!(tokens[3].part, NumericLayoutPart::Comma);
+        assert_eq!(tokens[7].part, NumericLayoutPart::DecimalPoint);
+        assert_eq!(tokens[10].part, NumericLayoutPart::Ellipsis);
+        assert_eq!(
+            tokens[11].part,
+            NumericLayoutPart::Unit { superscript: true }
+        );
+        assert_eq!(tokens[10].span, TextSourceSpan::new(10, 13));
+        assert_eq!(tokens[11].span, TextSourceSpan::new(13, 19));
+    }
+
     #[test]
     fn integer_uses_bankers_rounding() {
         assert_eq!(integer_value(2.5).unwrap(), 2);

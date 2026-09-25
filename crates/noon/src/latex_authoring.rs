@@ -232,6 +232,20 @@ pub(crate) struct LatexAdmission {
 }
 
 impl LatexAdmission {
+    /// Expose one prepared compiler-identified artifact for a composed text
+    /// admission. The caller must publish it through the shared dependency
+    /// batch so the identity cache and rollback ownership stay coherent.
+    pub(crate) fn into_compiled_resource_parts(
+        self,
+    ) -> (
+        noon_core::TextCompilationIdentity,
+        noon_core::TextResource,
+        noon_core::FontResourceArena,
+        noon_core::GeometryResourceArena,
+    ) {
+        (self.identity, self.resource, self.fonts, self.geometry)
+    }
+
     pub(crate) fn into_resource_parts(
         self,
     ) -> (

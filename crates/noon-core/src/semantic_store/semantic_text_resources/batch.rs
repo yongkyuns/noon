@@ -258,6 +258,121 @@ impl SemanticStore {
         })
     }
 
+    /// Admit compiler-identified immutable dependencies for one composed text
+    /// publication. Dependencies and the derived resource share the caller's
+    /// rollback scope, so live and cold authors can use the same admission path.
+    pub fn with_compiled_text_dependencies<E, T>(
+        &mut self,
+        dependencies: Vec<(
+            crate::TextCompilationIdentity,
+            TextResource,
+            FontResourceArena,
+            GeometryResourceArena,
+        )>,
+        compose: impl FnOnce(&Self, &[TextResourceHandle]) -> Result<TextResource, E>,
+        publish: impl FnOnce(&mut Self, TextResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<crate::GeometryResourceError>,
+    {
+        self.with_compiled_text_dependency_batch(
+            dependencies,
+            |store, handles| compose(store, handles).map(|resource| vec![resource]),
+            |store, handles| publish(store, handles[0]),
+        )
+    }
+
+    /// Admit a batch of derived resources using shared compiler dependencies.
+    /// Duplicate identities resolve once and all provisional handles disappear
+    /// if composition or semantic publication is rejected.
+    pub fn with_compiled_text_dependency_batch<E, T>(
+        &mut self,
+        dependencies: Vec<(
+            crate::TextCompilationIdentity,
+            TextResource,
+            FontResourceArena,
+            GeometryResourceArena,
+        )>,
+        compose: impl FnOnce(&Self, &[TextResourceHandle]) -> Result<Vec<TextResource>, E>,
+        publish: impl FnOnce(&mut Self, &[TextResourceHandle]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<crate::GeometryResourceError>,
+    {
+        let staged_fonts = self.preflight_compiled_dependency_fonts(&dependencies)?;
+        let mut resolved = HashMap::new();
+        let mut handles = Vec::new();
+        let mut installed = Vec::new();
+        resolved.try_reserve(dependencies.len())?;
+        handles.try_reserve_exact(dependencies.len())?;
+        installed.try_reserve_exact(dependencies.len())?;
+
+        let result = (|| {
+            for (identity, resource, _fonts, geometry) in dependencies {
+                let cached = resolved.get(&identity).copied().or_else(|| {
+                    self.compiled_text_resources
+                        .get(&identity)
+                        .copied()
+                        .filter(|handle| self.text_resources.get(*handle).is_some())
+                });
+                let handle = if let Some(handle) = cached {
+                    handle
+                } else {
+                    self.with_preflighted_compiled_text_resource(
+                        resource,
+                        &geometry,
+                        BTreeMap::new(),
+                        |_, handle| Ok::<_, E>(handle),
+                    )?
+                };
+                if cached.is_none() {
+                    installed.push((identity.clone(), handle));
+                }
+                resolved.insert(identity, handle);
+                handles.push(handle);
+            }
+            let resources = compose(self, &handles)?;
+            for resource in &resources {
+                self.validate_existing_text_dependencies(resource, &staged_fonts)?;
+            }
+            self.with_preflighted_text_resources(
+                resources
+                    .into_iter()
+                    .map(|resource| (resource, FontResourceArena::new()))
+                    .collect(),
+                staged_fonts,
+                publish,
+            )
+        })();
+        if result.is_ok() {
+            for (identity, handle) in installed {
+                self.remember_compiled_text_resource(identity, handle);
+            }
+        } else {
+            for (_, handle) in installed {
+                let resource = self
+                    .text_resources
+                    .remove(handle.id)
+                    .expect("unpublished dependency remains removable");
+                let paths = resource
+                    .vector_items
+                    .iter()
+                    .map(|item| item.geometry)
+                    .collect::<std::collections::HashSet<_>>();
+                for path in paths {
+                    self.geometry_resources
+                        .remove(path.id)
+                        .expect("unpublished dependency path remains removable");
+                }
+            }
+        }
+        result
+    }
+
     fn with_glyph_text_resources<T, E>(
         &mut self,
         inputs: Vec<(TextResource, FontResourceArena)>,
@@ -338,6 +453,53 @@ impl SemanticStore {
         self.stage_text_fonts(inputs.iter().map(|(resource, fonts)| (resource, fonts)))
     }
 
+    fn preflight_compiled_dependency_fonts(
+        &self,
+        dependencies: &[(
+            crate::TextCompilationIdentity,
+            TextResource,
+            FontResourceArena,
+            GeometryResourceArena,
+        )],
+    ) -> Result<PreparedGlyphFonts, SemanticTextImportError> {
+        let mut fonts = BTreeMap::new();
+        for (_, resource, source, _) in dependencies {
+            resource
+                .validate()
+                .map_err(SemanticTextImportError::Validation)?;
+            self.stage_one_text_resource_fonts(resource, source, &mut fonts)?;
+        }
+        Ok(fonts)
+    }
+
+    fn validate_existing_text_dependencies(
+        &self,
+        resource: &TextResource,
+        staged_fonts: &PreparedGlyphFonts,
+    ) -> Result<(), SemanticTextImportError> {
+        resource
+            .validate()
+            .map_err(SemanticTextImportError::Validation)?;
+        for run in resource.runs.iter() {
+            let key = FontResourceKey::from_face(&run.font);
+            if self.font_resources.get_for_face(&run.font).is_none()
+                && !staged_fonts.contains_key(&key)
+            {
+                return Err(SemanticTextImportError::MissingFont(key));
+            }
+        }
+        for vector in resource.vector_items.iter() {
+            let crate::GeometryResource::VectorPath(path) = self
+                .geometry_resources
+                .get(vector.geometry)
+                .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+            if !path.is_finite() {
+                return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry));
+            }
+        }
+        Ok(())
+    }
+
     fn preflight_text_fonts(
         &self,
         inputs: &[(TextResource, FontResourceArena)],
@@ -364,29 +526,39 @@ impl SemanticStore {
     ) -> Result<PreparedGlyphFonts, SemanticTextImportError> {
         let mut fonts = BTreeMap::new();
         for (resource, source) in inputs {
-            for run in resource.runs.iter() {
-                let key = FontResourceKey::from_face(&run.font);
-                let incoming = source
-                    .get_for_face(&run.font)
-                    .ok_or_else(|| SemanticTextImportError::MissingFont(key.clone()))?;
-                let existing = self
-                    .font_resources
-                    .get_for_face(&run.font)
-                    .map(|font| &font.data)
-                    .or_else(|| fonts.get(&key).map(|(_, data)| data));
-                if let Some(existing) = existing {
-                    if !Arc::ptr_eq(existing, &incoming.data) && *existing != incoming.data {
-                        return Err(SemanticTextImportError::Font(
-                            crate::FontResourceError::ConflictingResource(key),
-                        ));
-                    }
-                }
-                fonts
-                    .entry(key)
-                    .or_insert_with(|| (run.font.clone(), incoming.data.clone()));
-            }
+            self.stage_one_text_resource_fonts(resource, source, &mut fonts)?;
         }
         Ok(fonts)
+    }
+
+    fn stage_one_text_resource_fonts(
+        &self,
+        resource: &TextResource,
+        source: &FontResourceArena,
+        fonts: &mut PreparedGlyphFonts,
+    ) -> Result<(), SemanticTextImportError> {
+        for run in resource.runs.iter() {
+            let key = FontResourceKey::from_face(&run.font);
+            let incoming = source
+                .get_for_face(&run.font)
+                .ok_or_else(|| SemanticTextImportError::MissingFont(key.clone()))?;
+            let existing = self
+                .font_resources
+                .get_for_face(&run.font)
+                .map(|font| &font.data)
+                .or_else(|| fonts.get(&key).map(|(_, data)| data));
+            if let Some(existing) = existing {
+                if !Arc::ptr_eq(existing, &incoming.data) && *existing != incoming.data {
+                    return Err(SemanticTextImportError::Font(
+                        crate::FontResourceError::ConflictingResource(key),
+                    ));
+                }
+            }
+            fonts
+                .entry(key)
+                .or_insert_with(|| (run.font.clone(), incoming.data.clone()));
+        }
+        Ok(())
     }
 }
 

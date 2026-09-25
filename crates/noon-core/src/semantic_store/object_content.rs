@@ -3,6 +3,7 @@ use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry,
 };
+use std::sync::Arc;
 
 mod coordinate_role;
 pub use coordinate_role::SemanticNumberLineRole;
@@ -272,7 +273,10 @@ pub struct SemanticObjectState {
     pub style: SemanticStyle,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
-    decimal_number: Option<SemanticDecimalNumber>,
+    // Numeric inputs are only present on DecimalNumber objects. Keep ordinary
+    // semantic objects to one optional pointer rather than embedding the
+    // metadata payload in every authored object state.
+    decimal_number: Option<Arc<SemanticDecimalNumber>>,
     signal_bindings: Vec<SemanticSignalBinding>,
 }
 
@@ -337,11 +341,11 @@ impl SemanticObjectState {
     /// Reconstructible DecimalNumber inputs. A present value is valid only on
     /// text content; transaction preflight enforces that relationship.
     pub fn decimal_number(&self) -> Option<&SemanticDecimalNumber> {
-        self.decimal_number.as_ref()
+        self.decimal_number.as_deref()
     }
 
     pub fn set_decimal_number(&mut self, value: Option<SemanticDecimalNumber>) {
-        self.decimal_number = value;
+        self.decimal_number = value.map(Arc::new);
     }
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {
@@ -418,6 +422,14 @@ impl From<TextResourceHandle> for ObjectContentRef {
 mod tests {
     use super::*;
     use crate::{GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
+
+    #[test]
+    fn numeric_metadata_is_an_optional_shared_pointer() {
+        assert_eq!(
+            std::mem::size_of::<Option<Arc<SemanticDecimalNumber>>>(),
+            std::mem::size_of::<Arc<SemanticDecimalNumber>>()
+        );
+    }
 
     #[test]
     fn semantic_object_state_uses_shared_high_precision_authoring_values() {
