@@ -2,6 +2,25 @@ use super::{CanonicalAuthoringScene, PlayerOwnership};
 use crate::authoring_error::AuthoringFailure;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn live_brace_geometry_options(
+        &mut self,
+        target: &noon::LayoutAnchor,
+        options: noon::BraceOptions,
+    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_brace_geometry_options(target, options),
+            PlayerOwnership::Unstarted => self
+                .scene
+                .brace_geometry_options(target, options)
+                .map_err(|error| AuthoringFailure::unclassified("brace.prepare", &error)),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     pub(crate) fn live_create_brace_label(
         &mut self,
         target: &noon::LayoutAnchor,

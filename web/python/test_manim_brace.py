@@ -133,6 +133,21 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 else:
                     raise AssertionError("invalid Brace input unexpectedly succeeded")
             assert calls == before
+
+            import _manim_brace as brace_module
+            class Context:
+                def liveBraceGeometryOptions(self, anchor, *args):
+                    assert anchor is target
+                    calls.append(("live_brace", *args))
+                    return path_options("live_brace")
+                def liveCreateManimGeometry(self, candidate):
+                    return FakeHandle(candidate.snapshot)
+            context = Context()
+            brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            brace_module._shared._layout_anchor = lambda value: value
+            live_brace = Brace(target, buff=0.4)
+            assert calls[-1] == ("live_brace", 0.0, -1.0, 0.4, 2.0)
+            assert live_brace._canonical_live_target_context is context
             """
         )
 

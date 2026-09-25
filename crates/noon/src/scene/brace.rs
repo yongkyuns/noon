@@ -2,6 +2,16 @@
 use super::*;
 
 impl Scene {
+    /// Prepare Brace geometry from this scene's coherent current target state.
+    /// No semantic object or resource is published by this query.
+    pub fn brace_geometry_options(
+        &self,
+        target: &crate::LayoutAnchor,
+        options: crate::BraceOptions,
+    ) -> Result<crate::ManimGeometryOptions, AuthoringError> {
+        Ok(self.prepare_brace_geometry(target, None, options)?.options)
+    }
+
     pub(crate) fn prepare_brace_geometry(
         &self,
         target: &crate::LayoutAnchor,

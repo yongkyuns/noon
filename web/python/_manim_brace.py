@@ -136,14 +136,18 @@ class Brace(_compat.VMobject):
             fill_opacity=fill_value,
             background_stroke_width=background_stroke_width,
         )
-        candidate = engine_call(
-            target.beginBrace,
-            direction_value.x,
-            direction_value.y,
-            buff_value,
-            sharpness_value,
-            operation="Brace",
-        )
+        context = _shared._live_constructor_context("Brace", allow_unstarted=True)
+        if context is None:
+            candidate = engine_call(
+                target.beginBrace, direction_value.x, direction_value.y,
+                buff_value, sharpness_value, operation="Brace",
+            )
+        else:
+            candidate = engine_call(
+                context.liveBraceGeometryOptions, _shared._layout_anchor(mobject),
+                direction_value.x, direction_value.y, buff_value, sharpness_value,
+                operation="Brace",
+            )
         _finish_candidate(self, candidate, "Brace", options)
         self.buff = buff_value
         self.sharpness = sharpness_value

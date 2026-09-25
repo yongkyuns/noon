@@ -633,6 +633,18 @@ mod tests {
                 )
                 .unwrap();
             let authored_target = target.state().unwrap();
+            let candidate = scene
+                .live(&mut session)
+                .brace_geometry_options(&LayoutAnchor::from(&target), BraceOptions::default())
+                .unwrap();
+            let plain = scene
+                .live(&mut session)
+                .create_manim_geometry(candidate)
+                .unwrap();
+            let plain_bounds = plain.layout_bounds().unwrap().unwrap();
+            assert!(((plain_bounds.min_x + plain_bounds.max_x) * 0.5 - 3.0).abs() < 0.001);
+            assert!((plain_bounds.max_y + 0.2).abs() < 0.001);
+            assert_eq!(target.state().unwrap(), authored_target);
             let composite = if scene_owned {
                 scene.install_execution(session);
                 BraceLabel::new(

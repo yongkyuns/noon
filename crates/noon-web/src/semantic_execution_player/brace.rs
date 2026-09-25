@@ -2,6 +2,25 @@ use super::SemanticExecutionPlayer;
 use crate::authoring_error::AuthoringFailure;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_brace_geometry_options(
+        &mut self,
+        target: &noon::LayoutAnchor,
+        options: noon::BraceOptions,
+    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .brace_geometry_options(target, options)
+        .map_err(|error| AuthoringFailure::unclassified("brace.prepare", &error))
+    }
+
     pub(crate) fn live_create_brace_label(
         &mut self,
         target: &noon::LayoutAnchor,
