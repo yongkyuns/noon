@@ -171,7 +171,7 @@ galleryStyle.textContent = `
     display: block;
     width: 100%;
     aspect-ratio: 16 / 9;
-    object-fit: cover;
+    object-fit: contain;
     background: #1c1c1c;
     border-bottom: 1px solid #222d41;
   }

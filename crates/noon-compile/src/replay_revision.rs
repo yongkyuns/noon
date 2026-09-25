@@ -99,7 +99,13 @@ impl CompiledScene {
                 rows.insert(channel.object_index);
                 channels.insert(channel);
             }
-            ExecutionPatch::AddFamilyAnimation(_) => return None,
+            ExecutionPatch::AddFamilyAnimation(_) => {
+                // Family plans/channels are immutable and append-only, like the
+                // resource arena. Keep their indices resident across replay;
+                // their existing mapped interval gates their visible effect.
+                // The runtime admits this only when the interval does not start
+                // before publication. No row or channel payload is replaced.
+            }
         }
         Some(CompiledReplayRevision {
             rows: rows

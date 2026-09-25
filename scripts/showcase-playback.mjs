@@ -1,8 +1,24 @@
 // Browser UI automation only. The production player still owns playback and seek.
 import assert from "node:assert/strict";
 
-export async function seekPausedGallery(page, storyboardDuration) {
+export async function waitForPublishedGalleryFrame(page, targetTime, storyboardDuration) {
+  assert.ok(Number.isFinite(targetTime) && targetTime >= 0);
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
+  const tolerance = 8 * Number.EPSILON * Math.max(1, storyboardDuration);
+  await page.waitForFunction(async ({ targetTime, tolerance }) => {
+    const gallery = window.__noonExampleGallery;
+    if (!gallery) return false;
+    const report = await gallery.executionMetrics();
+    const time = Number(report?.metrics?.time);
+    return Number.isFinite(time) && Math.abs(time - targetTime) <= tolerance;
+  }, { targetTime, tolerance });
+  return page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+}
+
+export async function seekPausedGallery(page, storyboardDuration, sampleTime = null) {
+  assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
+  assert.ok(sampleTime === null || (Number.isFinite(sampleTime) && sampleTime >= 0 && sampleTime <= storyboardDuration),
+    "requested checkpoint is outside the storyboard");
   const waitReady = async (expectedTime = null, paused = false) => {
     await page.waitForFunction(({ expectedTime, paused }) => {
       const patch = document.querySelector("#patch-status");
@@ -29,17 +45,20 @@ export async function seekPausedGallery(page, storyboardDuration) {
   const authoredDuration = Number(await scrubber.getAttribute("max"));
   assert.ok(Number.isFinite(authoredDuration) && Math.abs(authoredDuration - storyboardDuration) < 1e-7,
     `Gallery duration ${authoredDuration} differs from storyboard ${storyboardDuration}`);
-  const requestedTime = await scrubber.evaluate((input) => {
-    input.value = input.max;
+  // Endpoint requests preserve the engine's actual floating-point duration.
+  const targetTime = sampleTime === null ? authoredDuration : sampleTime;
+  assert.ok(targetTime <= authoredDuration, "requested checkpoint exceeds the actual duration");
+  const requestedTime = await scrubber.evaluate((input, target) => {
+    input.value = String(target);
     const time = Number(input.value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     return time;
-  });
-  assert.ok(Math.abs(requestedTime - authoredDuration) <= 8 * Number.EPSILON * authoredDuration,
-    "Browser slider quantized the authored endpoint");
+  }, targetTime);
+  assert.ok(Math.abs(requestedTime - targetTime) <= 8 * Number.EPSILON * Math.max(1, authoredDuration),
+    "Browser slider quantized the requested checkpoint");
   // The slider remains enabled during a seek; data-busy is the command barrier.
-  await waitReady(authoredDuration, true);
-  return authoredDuration;
+  await waitReady(targetTime, true);
+  return targetTime;
 }
 
 // Run against real browser range inputs and the actual production controls,

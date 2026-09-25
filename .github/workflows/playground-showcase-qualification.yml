@@ -5,11 +5,28 @@ on:
     paths:
       - 'web/*gallery*'
       - 'web/showcase-*'
+      - 'web/thumbnails/showcase/**'
       - 'web/playground-playback-controls*'
       - 'web/python/examples/showcase_*.py'
       - 'web/python/examples/noon_showcase_manifest.json'
-      - 'web/python/test_showcase_contract.py'
+      - 'web/python/test_showcase*.py'
       - 'scripts/showcase-*'
+      - 'crates/noon/src/execution_session.rs'
+      - 'crates/noon/src/execution_session/**'
+      - 'crates/noon/src/live_session.rs'
+      - 'crates/noon/src/live_session/**'
+      - 'crates/noon/src/host_callbacks.rs'
+      - 'crates/noon/tests/callback_lifecycle_admission.rs'
+      - 'crates/noon/tests/scalar_timeline_replay.rs'
+      - 'crates/noon-runtime/src/signal_timeline.rs'
+      - 'crates/noon-runtime/src/prepared_frame.rs'
+      - 'crates/noon-runtime/src/execution_slots/runtime_transaction.rs'
+      - 'crates/noon-compile/src/replay_revision.rs'
+      - 'crates/noon-runtime/src/lib.rs'
+      - 'crates/noon-runtime/tests/display_channel_mutation.rs'
+      - 'crates/noon-runtime/src/replay.rs'
+      - 'crates/noon-runtime/src/replay/**'
+      - 'crates/noon-render-wgpu/**'
       - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
 
@@ -21,6 +38,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  callback-lifecycle:
+    name: Native callback lifecycle admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Qualify lifecycle and updater coexistence in shared Rust
+        run: |
+          cargo test -p noon --no-default-features --test callback_lifecycle_admission
+          cargo test -p noon-runtime --test display_channel_mutation
+          cargo test -p noon --no-default-features --test scalar_timeline_replay
+      - name: Qualify current glyph packing and retained renderer locality
+        run: |
+          cargo test -p noon-render-wgpu --lib
+          cargo test -p noon-render-wgpu --test text_retained_object_update_locality --test retained_scratch_reuse --test text_live_atlas_pages --test glyph_atlas_residency_churn
+          cargo clippy -p noon-render-wgpu --lib -- -D warnings
+
   capture:
     name: Actual showcase frames (${{ matrix.backend }})
     runs-on: ubuntu-latest
@@ -37,19 +74,26 @@ jobs:
       - uses: actions/checkout@v7
       - name: Source and editorial contracts
         run: |
-          node --test web/showcase-gallery.test.mjs scripts/showcase-*.test.mjs
-          python3 -m unittest discover -s web/python -p test_showcase_contract.py
+          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
           node --check scripts/showcase-capture.mjs
+          node --check scripts/showcase-live-review.mjs
       - name: Build the existing browser runtime
         uses: ./.github/actions/dev-wasm-build
         with:
           preflight: 'true'
+      - name: Qualify retained family replay in the shared runtime
+        run: cargo test -p noon-runtime replay::family_tests
       - name: Install the repository-pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
       - name: Capture exact Noon sources, validate temporal samples, and exercise real selection
+        id: capture
         run: node scripts/showcase-capture.mjs
+      - name: Record ordinary playback and qualify replay endpoints
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-live-review.mjs
       - name: Retain the review evidence even on failure
         if: always()
         uses: actions/upload-artifact@v7

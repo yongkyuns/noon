@@ -98,3 +98,44 @@ test("first-pass segment changes never expose a misleading percentage, and compl
   assert.equal(f.output.value, "2.70 / 5.70 s");
   assert.equal(f.preview.querySelector(".playback-live-status").hidden, true);
 });
+
+
+test("completed unavailable replay is disabled, not indefinitely busy", async () => {
+  const f = fixture();
+  f.controls.setBusy(true);
+  f.controls.setControllable(false);
+  f.controls.observe({ time: 9.2, playing: false });
+  f.controls.setUnavailable("UnsupportedDomain");
+  assert.equal(f.controls.element.dataset.busy, "true", "unavailability cannot clear an actual operation");
+  f.controls.setBusy(false);
+  assert.equal(f.controls.element.dataset.busy, "false");
+  assert.equal(f.controls.element.getAttribute("aria-busy"), "false");
+  assert.equal(f.controls.element.dataset.controllable, "false");
+  assert.equal(f.controls.element.dataset.elapsedSeconds, "9.2");
+  assert.equal(f.output.value, "9.20 s · completed");
+  assert.match(f.controls.element.title, /UnsupportedDomain/);
+  for (const selector of [".playback-toggle", ".playback-restart", ".playback-scrubber"]) {
+    const element = f.preview.querySelector(selector);
+    assert.equal(element.disabled, true);
+    element.dispatchEvent(new Event(selector.includes("scrubber") ? "input" : "click"));
+  }
+  await flush();
+  assert.deepEqual(f.calls, [], "no rejected capability may dispatch a runtime command");
+});
+
+test("unavailable capability does not hide an outstanding seek", async () => {
+  const f = fixture(); let resolve;
+  f.player.seek = () => new Promise(done => { resolve = done; });
+  f.range.value = "1";
+  f.range.dispatchEvent(new Event("input"));
+  f.controls.setUnavailable("UnsupportedDomain");
+  assert.equal(f.controls.element.dataset.busy, "true");
+  resolve({ time: 1, playing: false });
+  await flush();
+  assert.equal(f.controls.element.dataset.busy, "false");
+  assert.equal(f.range.disabled, true);
+  assert.equal(f.controls.element.dataset.controllable, "false");
+  f.controls.setControllable(true);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.controls.element.title, "");
+});
