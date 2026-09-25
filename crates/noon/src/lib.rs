@@ -116,6 +116,8 @@ pub mod live_coordinate_plotting_example;
 mod live_program;
 mod live_session;
 mod matrix_authoring;
+#[cfg(feature = "latex")]
+mod matrix_display;
 mod native_signal_authoring;
 #[cfg(feature = "latex")]
 mod numeric_authoring;
@@ -211,6 +213,12 @@ pub use live_session::{
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
     FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
     TransformToRequest,
+};
+#[cfg(feature = "latex")]
+pub use matrix_display::{
+    DecimalMatrix, IntegerMatrix, Matrix, MatrixAuthoringError, MatrixOptions, MobjectMatrix,
+    DEFAULT_MATRIX_BRACKET_H_BUFF, DEFAULT_MATRIX_BRACKET_V_BUFF, DEFAULT_MATRIX_H_BUFF,
+    DEFAULT_MATRIX_V_BUFF,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;

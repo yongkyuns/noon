@@ -249,6 +249,28 @@ impl LatexAdmission {
         (self.identity, self.resource, self.fonts, self.geometry)
     }
 
+    /// Keep compiler output separate from placement so composite authors can
+    /// lay out several shared LaTeX resources before one atomic publication.
+    pub(crate) fn into_compiled_resource_parts_with_presentation(
+        self,
+    ) -> (
+        noon_core::TextCompilationIdentity,
+        noon_core::TextResource,
+        noon_core::FontResourceArena,
+        noon_core::GeometryResourceArena,
+        noon_core::SemanticTransform2_5D,
+        noon_core::SemanticStyle,
+    ) {
+        (
+            self.identity,
+            self.resource,
+            self.fonts,
+            self.geometry,
+            self.transform,
+            self.style,
+        )
+    }
+
     pub(crate) fn publish<T>(
         self,
         store: &mut noon_core::SemanticStore,
