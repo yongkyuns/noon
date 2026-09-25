@@ -8,5 +8,11 @@ await qualifyPairedAuthoring({
     factory: "createNumericDecimalRenderer",
     objectCount: 1,
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
+  }, {
+    id: "variable",
+    file: "variable.py",
+    factory: "createVariableRenderer",
+    objectCount: 3,
+    preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }],
 });

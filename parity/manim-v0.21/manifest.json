@@ -841,6 +841,14 @@
       "notes": "Repeated substring, Unicode, whitespace/newline, and nonoverlapping positive/negative source ranges."
     },
     {
+      "id": "variable",
+      "scene": "VariableExample",
+      "source": "parity/manim-v0.21/core-examples/variable.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Shared Rust Variable composition with independently compiled label, equals sign, and retained numeric value."
+    },
+    {
       "id": "numeric-decimal-number",
       "scene": "NumericDecimalNumberExample",
       "source": "parity/manim-v0.21/core-examples/numeric_decimal_number.py",

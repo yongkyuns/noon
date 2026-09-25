@@ -327,3 +327,13 @@ pub async fn create_numeric_decimal_renderer(
     let session = noon::example_scenes::numeric_decimal::session(compiler).map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createVariableRenderer)]
+pub async fn create_variable_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::variable::session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
