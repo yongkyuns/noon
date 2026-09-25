@@ -11,6 +11,29 @@
   },
   "fixtures": [
     {
+      "id": "matrix",
+      "scene": "OrdinaryMatrix",
+      "source": "parity/manim-v0.21/core-examples/matrix.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate"
+    },
+    {
+      "id": "bar-chart",
+      "scene": "BarChartExample",
+      "source": "parity/manim-v0.21/core-examples/bar_chart.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate"
+    },
+    {
+      "id": "graph",
+      "scene": "GraphExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate"
+    },
+    {
       "id": "area-helpers",
       "scene": "RetainedAreaHelpers",
       "source": "parity/manim-v0.21/core-examples/area_helpers.py",
