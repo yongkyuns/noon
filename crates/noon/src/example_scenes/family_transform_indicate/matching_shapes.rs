@@ -81,6 +81,15 @@ fn rotated_triangle() -> VectorPath {
         .close()
 }
 
+#[cfg(test)]
+fn translation_boundary_triangle() -> VectorPath {
+    VectorPath::new()
+        .move_to(Vec2::new(-0.5, -0.8))
+        .line_to(Vec2::new(0.5, -0.8))
+        .line_to(Vec2::new(0.0, 0.8))
+        .close()
+}
+
 fn shape(scene: &Scene, path: VectorPath, position: Vec2, color: Color) -> Result<Mobject, String> {
     let mut object = Mobject::from_manim_geometry(
         Rc::clone(scene.integration_store()),
@@ -172,6 +181,63 @@ pub fn breadth_program() -> Result<LiveProgram<MatchingShapesLifecycle>, String>
             (&target_second).into(),
             (&target_padded).into(),
             (&target_leftover).into(),
+        ])
+        .map_err(|error| error.to_string())?;
+
+    scene
+        .into_live_program(MatchingShapesLifecycle {
+            source,
+            target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+fn translation_boundary_program() -> Result<LiveProgram<MatchingShapesLifecycle>, String> {
+    let mut scene = Scene::new();
+    let source_first = shape(
+        &scene,
+        translation_boundary_triangle(),
+        Vec2::new(-2.4, 0.0),
+        Color::BLUE,
+    )?;
+    let source_second = shape(
+        &scene,
+        translation_boundary_triangle(),
+        Vec2::new(-0.8, 0.0),
+        Color::BLUE,
+    )?;
+    let source = scene
+        .family(&[(&source_first).into(), (&source_second).into()])
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[(&source).into()])
+        .map_err(|error| error.to_string())?;
+
+    let target_first = shape(
+        &scene,
+        translation_boundary_triangle(),
+        Vec2::new(-2.4, 0.0),
+        Color::GREEN,
+    )?;
+    let target_second = shape(
+        &scene,
+        translation_boundary_triangle(),
+        Vec2::new(-0.8, 0.0),
+        Color::GREEN,
+    )?;
+    let target_padded = shape(
+        &scene,
+        translation_boundary_triangle(),
+        Vec2::new(0.8, 0.0),
+        Color::GREEN,
+    )?;
+    let target = scene
+        .family(&[
+            (&target_first).into(),
+            (&target_second).into(),
+            (&target_padded).into(),
         ])
         .map_err(|error| error.to_string())?;
 
@@ -361,5 +427,28 @@ mod tests {
             .take_renderer_publication()
             .transient_presentations()
             .is_empty());
+    }
+
+    #[test]
+    fn native_public_matching_activation_groups_translated_repeated_triangles() {
+        let mut program = translation_boundary_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+
+        // All three triangles must share the activation key. The 2 -> 3 group
+        // creates exactly one padded transform occurrence; a translation-sensitive
+        // key would instead produce three target-side FadeIns.
+        let publication = program.take_renderer_publication();
+        assert_eq!(publication.transient_presentations().len(), 1);
+        let padded = publication.transient_presentations()[0].state();
+        assert!((padded.transform.translation.x + 1.6).abs() < 1e-5);
+        assert!((padded.appearance - 0.5).abs() < 1e-5);
     }
 }
