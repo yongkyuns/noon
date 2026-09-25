@@ -202,7 +202,7 @@ pub async fn create_direct_typst_canvas_renderer(
         scene.add(&equation).map_err(js_error)?;
     }
     if typst_source.is_empty() && math_typst_source.is_empty() {
-        return Err(js_message(
+        return Err(js_error(
             "direct Typst canvas requires at least one text object",
         ));
     }
