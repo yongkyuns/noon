@@ -11,6 +11,8 @@ import initNoonWeb, {
   WasmTextColorBatch,
   WasmLatexCompiler,
   WasmLatexOptions,
+  WasmMatrixOptions,
+  WasmMobjectMatrixRows,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
