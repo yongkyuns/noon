@@ -905,4 +905,54 @@ mod tests {
         assert_eq!(integer_value(3.5).unwrap(), 4);
         assert!(integer_value(f64::NAN).is_err());
     }
+
+    #[test]
+    fn replacement_resets_rotation_preserves_left_edge_and_effective_font() {
+        let mut store = SemanticStore::new();
+        let fonts = FontResourceArena::new();
+        let geometry = GeometryResourceArena::new();
+        let old = store
+            .import_text_resource(
+                text_box("1", Rect::new(Vec2::new(-2.0, -1.0), Vec2::new(2.0, 1.0))),
+                &fonts,
+                &geometry,
+            )
+            .unwrap();
+        let fresh = store
+            .import_text_resource(
+                text_box("22", Rect::new(Vec2::new(-3.0, -1.0), Vec2::new(3.0, 1.0))),
+                &fonts,
+                &geometry,
+            )
+            .unwrap();
+        let mut authored = SemanticObjectState::new(old);
+        authored.set_decimal_number(Some(decimal_metadata(1.0, &DecimalFormat::default(), 48.0)));
+        authored.set_text_presentation_baseline(TextPresentationBaseline::new(48.0, 2.0).unwrap());
+        let node = store.insert_semantic_object(authored.clone());
+        let mut effective = authored.clone();
+        effective.transform.scale.x = 2.0;
+        effective.transform.scale.y = 2.0;
+        effective.transform.rotation_z = 0.6;
+        effective.transform.translation.x = 3.0;
+        effective.transform.translation.y = -2.0;
+        let before = left_edge_center(&store, &effective).unwrap();
+        let font = effective_font_size(&store, &effective).unwrap();
+        let tx = decimal_replacement_transaction(
+            &store,
+            node,
+            &authored,
+            effective,
+            fresh,
+            2.0,
+            &DecimalFormat::default(),
+            48.0,
+        )
+        .unwrap();
+        tx.apply(&mut store).unwrap();
+        let after = store.semantic_object_state_checked(node).unwrap();
+        assert_eq!(after.transform.rotation_z, 0.0);
+        assert!((left_edge_center(&store, after).unwrap().0 - before.0).abs() < 1e-9);
+        assert!((left_edge_center(&store, after).unwrap().1 - before.1).abs() < 1e-9);
+        assert!((effective_font_size(&store, after).unwrap() - font).abs() < 1e-9);
+    }
 }
