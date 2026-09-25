@@ -1,16 +1,16 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
-mod zoomed_view;
-#[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(target_arch = "wasm32")]
 mod graph;
+#[cfg(any(target_arch = "wasm32", test))]
+mod numbers;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
 #[cfg(any(target_arch = "wasm32", test))]
-mod numbers;
+mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;

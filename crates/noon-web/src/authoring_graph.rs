@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use crate::CanonicalAuthoringSceneContext;
 use crate::authoring_error::js_error;
+use crate::CanonicalAuthoringSceneContext;
 
 pub(crate) enum NativeGraph {
     Undirected(noon::Graph<u32>),

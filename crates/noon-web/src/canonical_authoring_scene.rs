@@ -2,10 +2,10 @@ mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
-#[cfg(any(target_arch = "wasm32", test))]
-mod sample_space;
 #[cfg(target_arch = "wasm32")]
 mod graph;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
