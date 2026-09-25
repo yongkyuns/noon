@@ -14,7 +14,7 @@ use noon_core::{
 
 use crate::{AuthoringError, Mobject, MobjectTarget, Scene, SceneMembershipRequest};
 
-const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
+use crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ZoomedSceneOptions {

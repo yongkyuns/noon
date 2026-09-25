@@ -264,6 +264,7 @@ class Member:
     def textParts(self): return RawList()
 class Parts:
     source="x"
+    fontSize=72.0
     def family(self): return object()
     def members(self): return (Member(),)
     def sourceMemberIndicesFor(self, needle):
@@ -272,6 +273,7 @@ class Parts:
 latex._create = lambda *args: Parts()
 latex._live_text_context = lambda: None
 value = noon.MathTex("x")
+assert value.font_size == 72.0
 part = value.get_part_by_tex("x")
 assert part.get_tex_string() == "x"
 value.set_color_by_tex("x", noon.BLUE)

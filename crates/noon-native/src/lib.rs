@@ -14,7 +14,7 @@ mod selection_overlay;
 #[cfg(feature = "latex")]
 mod latex;
 #[cfg(feature = "latex")]
-pub use latex::{NativeLatexBackend, NativeLatexConfig, NodeLatexBackend};
+pub use latex::{NativeLatexBackend, NativeLatexConfig};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

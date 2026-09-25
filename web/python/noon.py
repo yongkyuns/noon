@@ -760,6 +760,7 @@ Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
+    "SampleSpace": "_manim_sample_space",
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",
@@ -865,6 +866,7 @@ _PUBLIC_EXPORTS = {
     "MathTypst": "_manim_typst",
     "Tex": "_manim_latex",
     "MathTex": "_manim_latex",
+    "SingleStringMathTex": "_manim_latex",
     "prepare_latex": "_manim_latex",
 }
 

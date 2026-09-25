@@ -476,6 +476,10 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        self.store
+    }
+
     /// Associate an existing detached tracker while a continuation holds the
     /// only borrowed execution capability.
     ///
@@ -745,6 +749,22 @@ impl<'a> LiveSession<'a> {
         source: &Mobject,
     ) -> Result<SemanticObjectState, LiveSessionError> {
         crate::effective_capture::capture_mobject_state(self.store, self.session, source)
+            .map_err(LiveSessionError::from)
+    }
+
+    /// Capture conservative world-axis bounds from one coherent object state.
+    /// Reachable objects use the live effective transform; detached objects use
+    /// their validated authored state. Publication and callback gates are shared
+    /// with other live target-capture operations.
+    pub(crate) fn capture_boundary_bounds(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<noon_core::Bounds2D64>, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.require_target_capture()?;
+        let state = self.capture_mobject_state(mobject)?;
+        let store = self.store.borrow();
+        crate::semantic_mobject::boundary_for_content(&store, state.content, state.transform)
             .map_err(LiveSessionError::from)
     }
 

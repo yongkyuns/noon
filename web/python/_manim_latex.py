@@ -74,7 +74,7 @@ class _TexBase(_compat.VGroup):
 
     @property
     def font_size(self) -> float:
-        return self._font_size
+        return float(engine_call(lambda: self._semantic_latex_handle.fontSize))
 
     @property
     def tex_string(self) -> str:

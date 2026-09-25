@@ -2,6 +2,8 @@ mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -2692,6 +2694,7 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod sample_space;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 

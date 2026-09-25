@@ -159,6 +159,11 @@ impl WasmLatexPartsHandle {
     pub fn source(&self) -> String {
         self.parts.source().to_string()
     }
+
+    #[wasm_bindgen(getter, js_name = fontSize)]
+    pub fn font_size(&self) -> Result<f64, JsValue> {
+        self.parts.current_font_size().map_err(js_error)
+    }
 }
 
 pub(crate) fn member_colors(values: &[f64]) -> Result<Vec<Option<noon::Color>>, JsValue> {

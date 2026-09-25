@@ -728,6 +728,12 @@
       "expected_duration": 1.0
     },
     {
+      "id": "sample-space",
+      "scene": "SampleSpaceExample",
+      "source": "parity/manim-v0.21/core-examples/sample_space.py",
+      "expected_duration": 0.2
+    },
+    {
       "id": "path-queries",
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",

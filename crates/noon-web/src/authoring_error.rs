@@ -423,6 +423,37 @@ impl From<noon_core::SemanticScalarSignalQueryError> for AuthoringFailure {
     }
 }
 
+impl From<noon::TextPartAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TextPartAuthoringError) -> Self {
+        match error {
+            noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
+            noon::TextPartAuthoringError::NotText(_) => {
+                AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
+                AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
+                AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
+            }
+            noon::TextPartAuthoringError::Query(
+                noon::TextPartQueryError::NonContiguousClusters,
+            ) => AuthoringFailure::new(
+                "unsupported_operation",
+                "text_parts.non_contiguous_clusters",
+                error,
+            ),
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::NonContiguousVectors) => {
+                AuthoringFailure::new(
+                    "unsupported_operation",
+                    "text_parts.non_contiguous_vectors",
+                    error,
+                )
+            }
+        }
+    }
+}
+
 impl From<noon::TextAuthoringError> for AuthoringFailure {
     fn from(error: noon::TextAuthoringError) -> Self {
         use noon::TextAuthoringError as E;
