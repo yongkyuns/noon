@@ -18,11 +18,11 @@ use crate::{
 };
 use construction::build_graph;
 pub use mutation::{GraphLayout, GraphLayoutOptions, GraphMutationResult};
-use noon_core::{Color, SemanticGraphDeclaration, SemanticNodeId, SemanticStoreError, BLUE, WHITE};
+use noon_core::{Color, SemanticGraphDeclaration, SemanticNodeId, SemanticStoreError, WHITE};
 use std::{cell::Ref, collections::HashMap, hash::Hash};
 
-pub const DEFAULT_GRAPH_VERTEX_RADIUS: f64 = 0.15;
-pub const DEFAULT_GRAPH_VERTEX_STROKE_WIDTH: f64 = 0.02;
+pub const DEFAULT_GRAPH_VERTEX_RADIUS: f64 = 0.08;
+pub const DEFAULT_GRAPH_VERTEX_STROKE_WIDTH: f64 = 0.0;
 pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 
 /// Shared appearance for explicit-position Graph/DiGraph construction.
@@ -45,7 +45,7 @@ impl Default for GraphOptions {
     fn default() -> Self {
         Self {
             vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
-            vertex_fill: BLUE,
+            vertex_fill: WHITE,
             vertex_stroke: WHITE,
             vertex_stroke_width: DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
             edge_color: WHITE,
