@@ -109,7 +109,8 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
       assert.ok(Math.abs(metrics.time - (fixture.sampleTime ?? 0)) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${fixture.sampleTime ?? 0}`);
-      assert.equal(metrics.objectCount, fixture.objectCount);
+      assert.ok(metrics.objectCount > 0, "paired scenes must contain render objects");
+      if (fixture.objectCount !== undefined) assert.equal(metrics.objectCount, fixture.objectCount);
       assert.equal(metrics.rendererBackend, expectedBackend);
       assert.ok(metrics.drawCalls > 0);
       await page.evaluate(() => new Promise(resolve =>
@@ -137,6 +138,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: rust-wasm host`);
           const python = await capture(context, "python", expectedBackend, fixture);
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: Python host`);
+          assert.equal(python.metrics.objectCount, rust.metrics.objectCount, "paired hosts must publish the same object count");
           assert.equal(rust.png.width, 960);
           assert.equal(rust.png.height, 540);
           assert.equal(python.png.width, rust.png.width);

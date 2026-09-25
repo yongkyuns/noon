@@ -2,6 +2,7 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
   WasmCoordinateOptions,
+  WasmBarChartOptions,
   WasmSampleSpaceOptions,
   WasmPlotSamplingPlan,
   WasmManimArrowOptions,

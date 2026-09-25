@@ -139,10 +139,13 @@ impl PreparedBarLabels {
         let mut dependencies = Vec::with_capacity(self.labels.len());
         let mut placements = Vec::with_capacity(self.labels.len());
         for label in self.labels {
-            let (identity, resource, fonts, geometry, transform, style) =
+            let (identity, resource, fonts, geometry, transform, style, font_size) =
                 label.text.into_compiled_resource_parts_with_presentation();
+            let baseline = crate::latex_authoring::latex_presentation_baseline(
+                &resource, transform, font_size,
+            )?;
             dependencies.push((identity, resource, fonts, geometry));
-            placements.push((transform, style, label.target, label.direction));
+            placements.push((transform, style, label.target, label.direction, baseline));
         }
         let mut root = None;
         let result = store.with_compiled_text_dependency_batch::<TextAuthoringError, _>(
@@ -162,12 +165,13 @@ impl PreparedBarLabels {
             |store, handles| {
                 let family = transaction.create_node(SemanticNodeCreation::family());
                 root = Some(family);
-                for (handle, (transform, style, target, direction)) in
+                for (handle, (transform, style, target, direction, baseline)) in
                     handles.iter().zip(placements)
                 {
                     let mut state = SemanticObjectState::new(*handle);
                     state.transform = transform;
                     state.style = style;
+                    state.set_text_presentation_baseline(baseline);
                     let bounds = crate::semantic_mobject::boundary_for_content(
                         store,
                         state.content,

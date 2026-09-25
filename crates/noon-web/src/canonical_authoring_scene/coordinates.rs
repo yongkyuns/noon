@@ -1,5 +1,5 @@
-//! Dispatch only to the currently owned execution player. In particular a
-//! transferred context cannot create unpublished cold coordinate identities.
+//! Route coordinate authoring through the current owner; transferred contexts
+//! cannot create unpublished cold identities.
 use super::*;
 
 impl CanonicalAuthoringScene {
@@ -29,6 +29,12 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: &noon::ManimBarChartOptions,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return self
+                .scene
+                .bar_chart(options)
+                .map_err(crate::authoring_plotting::coordinate_failure);
+        }
         self.active_live_player()?.live_create_bar_chart(options)
     }
 
@@ -48,6 +54,12 @@ impl CanonicalAuthoringScene {
         labels: &noon::plot_presentation::NumberLabelOptions,
         compiler: &mut crate::WasmLatexCompiler,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return self
+                .scene
+                .bar_chart_with_axis_labels(options, labels, compiler)
+                .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
+        }
         self.active_live_player()?
             .live_create_labeled_bar_chart(options, labels, compiler)
     }
@@ -58,6 +70,11 @@ impl CanonicalAuthoringScene {
         compiler: &mut crate::WasmLatexCompiler,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return chart
+                .get_bar_labels(compiler, options)
+                .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
+        }
         self.active_live_player()?
             .live_bar_labels(chart, compiler, options)
     }
