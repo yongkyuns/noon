@@ -6,6 +6,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_semantic_handles.py", runtimePath: "/tmp/_manim_semantic_handles.py", label: "Noon shared semantic handle layer" },
   { sourcePath: "python/_manim_path_queries.py", runtimePath: "/tmp/_manim_path_queries.py", label: "Noon shared path query wrappers" },
   { sourcePath: "python/_manim_path_editing.py", runtimePath: "/tmp/_manim_path_editing.py", label: "Noon shared path editing wrappers" },
+  { sourcePath: "python/_manim_graph.py", runtimePath: "/tmp/_manim_graph.py", label: "Noon shared Graph facade" },
   { sourcePath: "python/_manim_plotting.py", runtimePath: "/tmp/_manim_plotting.py", label: "Noon shared coordinate and plotting wrappers" },
   { sourcePath: "python/_manim_number_plane.py", runtimePath: "/tmp/_manim_number_plane.py", label: "Noon shared number plane facade" },
   { sourcePath: "python/_manim_complex_plane.py", runtimePath: "/tmp/_manim_complex_plane.py", label: "Noon shared complex plane facade" },
