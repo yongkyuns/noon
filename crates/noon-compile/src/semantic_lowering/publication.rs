@@ -709,9 +709,9 @@ fn collect_existing_graph_roots(
     if !seen.insert(node) {
         return Ok(());
     }
-    let semantic = store.node(node).ok_or_else(|| {
-        SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
-    })?;
+    let semantic = store.node(node).ok_or(SemanticLoweringError::Store(
+        noon_core::SemanticStoreError::UnknownNode(node),
+    ))?;
     if semantic.graph_declaration().is_some() {
         roots.insert(node);
     }

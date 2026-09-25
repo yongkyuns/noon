@@ -1270,7 +1270,7 @@ mod tests {
 
     #[test]
     fn live_table_scale_updates_the_same_root_layout_declaration() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
         let first = circle(&store, 0.5);
         let second = circle(&store, 1.0);

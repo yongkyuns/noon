@@ -18,17 +18,6 @@ pub(crate) enum FamilyAffine {
 }
 
 impl FamilyAffine {
-    /// Keep ordinary affine edits resource-free. A world-axis scale that requires
-    /// shear is baked into only the affected immutable vector paths.
-    pub(crate) fn prepare(
-        self,
-        store: &SemanticStore,
-        leaves: &[SemanticNodeId],
-        bounds: Option<Bounds2D64>,
-    ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
-        self.prepare_for_scope(store, leaves, bounds, None)
-    }
-
     /// Prepare one affine edit for an addressed root.  A Table's spacing is an
     /// authored declaration on its own family root, so only a scale addressed
     /// at that root changes its buffers. Scaling an enclosing family still uses
@@ -292,9 +281,8 @@ impl LayoutAnchor {
         self.apply_affine_with_table_layout(operation, None)
     }
 
-    /// The direct `MobjectFamily::scale` entry point is the only generic affine
-    /// operation with Table's buffer-scaling override. Anchor scales keep that
-    /// override even when they supply a pivot; stretch explicitly opts out.
+    /// Direct family and anchor scales update Table buffers, including with a
+    /// pivot. Stretch operations explicitly opt out.
     pub(crate) fn apply_affine_with_table_layout(
         &self,
         operation: FamilyAffine,

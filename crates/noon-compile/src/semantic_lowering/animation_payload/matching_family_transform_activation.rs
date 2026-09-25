@@ -132,8 +132,7 @@ where
         super::matching_shape_activation::prepare_matching_family_activation_correspondence(
             prepared.store(),
             index,
-            source_root,
-            target_root,
+            (source_root, target_root),
             family.mode,
             activation_start,
             prior_tracks,

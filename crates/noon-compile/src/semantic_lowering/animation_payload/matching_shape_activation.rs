@@ -206,8 +206,7 @@ where
     prepare_matching_family_activation_correspondence(
         store,
         index,
-        source_root,
-        target_root,
+        (source_root, target_root),
         SemanticFamilyTransformMode::MatchingShapes,
         activation_start,
         prior_tracks,
@@ -218,8 +217,7 @@ where
 pub fn prepare_matching_family_activation_correspondence<F>(
     store: &SemanticStore,
     index: &SemanticExecutionIndex,
-    source_root: SemanticNodeId,
-    target_root: SemanticNodeId,
+    (source_root, target_root): (SemanticNodeId, SemanticNodeId),
     mode: SemanticFamilyTransformMode,
     activation_start: f64,
     prior_tracks: &[PreparedSemanticAnimationTrack],
