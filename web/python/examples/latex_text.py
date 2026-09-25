@@ -1,11 +1,9 @@
 from noon import *
 
 class LatexTextExample(Scene):
-    async def setup(self):
+    async def construct(self):
         # Optional preparation finishes before ordinary synchronous authoring.
         await prepare_latex()
-
-    def construct(self):
         title = Tex(r"Real \LaTeX{} in Noon", font_size=38).move_to((0, 2))
         fraction = SingleStringMathTex(r"x^2+\frac{1}{2}", font_size=64, color=BLUE).move_to((0, 0.5))
         equation = MathTex(
