@@ -34,6 +34,13 @@
       "qualification_status": "candidate"
     },
     {
+      "id": "graph-style",
+      "scene": "GraphStyleExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate"
+    },
+    {
       "id": "area-helpers",
       "scene": "RetainedAreaHelpers",
       "source": "parity/manim-v0.21/core-examples/area_helpers.py",

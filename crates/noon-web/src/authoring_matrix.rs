@@ -110,7 +110,6 @@ impl WasmAuthoringFamilyHandle {
     #[wasm_bindgen(js_name = asMatrix)]
     pub fn as_matrix(&self) -> Result<WasmMatrixHandle, JsValue> {
         self.semantic_family()
-            .map_err(|error| error)
             .and_then(|family| noon::Matrix::from_family(family).map_err(js_error))
             .map(WasmMatrixHandle::new)
     }
@@ -155,6 +154,18 @@ impl WasmMatrixHandle {
         let result = js_sys::Array::new();
         for family in self.matrix.row_families().map_err(js_error)? {
             result.push(&WasmAuthoringFamilyHandle::from_semantic_family(family).into());
+        }
+        Ok(result)
+    }
+    /// Read column roots without publishing temporary alias families.
+    pub fn columns(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for column in self.matrix.columns().map_err(js_error)? {
+            let entries = js_sys::Array::new();
+            for entry in column {
+                entries.push(&entry_handle(entry));
+            }
+            result.push(&entries);
         }
         Ok(result)
     }
