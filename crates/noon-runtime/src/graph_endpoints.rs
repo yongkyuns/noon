@@ -4,13 +4,10 @@
 //! metadata. This module derives only effective render geometry/style; it never
 //! mutates Semantic Scene geometry and never introduces a renderer graph path.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use noon_compile::{CompiledGraphEdgeDependency, CompiledGraphEdgeKind};
-use noon_core::{GeometryRef, Transform2D, Vec2, VectorPath};
+use noon_core::{GeometryRef, PathCommand, Transform2D, Vec2};
 
 use crate::{frame::FrameRowState, SceneInstance};
 
@@ -135,7 +132,7 @@ fn apply_prepared_graph_dependency(
     let end = prepared_render_transform(frame, rows, end_index).translation;
     match dependency.kind() {
         CompiledGraphEdgeKind::Line => {
-            set_prepared_effective_geometry(frame, rows, line_index, GeometryRef::line(start, end));
+            set_prepared_segment_transform(frame, rows, line_index, start, end);
         }
         CompiledGraphEdgeKind::Arrow {
             end_tip_index,
@@ -148,34 +145,31 @@ fn apply_prepared_graph_dependency(
                 return;
             }
             let geometry = arrow_geometry(start, end, start_tip_index.is_some(), policy);
-            set_prepared_effective_geometry(
+            set_prepared_segment_transform(
                 frame,
                 rows,
                 line_index,
-                GeometryRef::line(geometry.shaft_start, geometry.shaft_end),
+                geometry.shaft_start,
+                geometry.shaft_end,
             );
             set_prepared_stroke_width(frame, rows, line_index, geometry.stroke_width);
 
-            set_prepared_effective_geometry(
+            set_prepared_tip_transform(
                 frame,
                 rows,
                 end_tip_index as usize,
-                GeometryRef::path(triangle_tip_path(
-                    geometry.visible_end,
-                    geometry.direction,
-                    geometry.tip_length,
-                )),
+                geometry.visible_end,
+                geometry.direction,
+                geometry.tip_length,
             );
             if let Some(start_tip_index) = start_tip_index {
-                set_prepared_effective_geometry(
+                set_prepared_tip_transform(
                     frame,
                     rows,
                     start_tip_index as usize,
-                    GeometryRef::path(triangle_tip_path(
-                        geometry.visible_start,
-                        Vec2::new(-geometry.direction.x, -geometry.direction.y),
-                        geometry.tip_length,
-                    )),
+                    geometry.visible_start,
+                    Vec2::new(-geometry.direction.x, -geometry.direction.y),
+                    geometry.tip_length,
                 );
             }
         }
@@ -192,43 +186,51 @@ fn prepared_render_transform(
         .unwrap_or_else(|| frame.render_transform(object_index))
 }
 
-fn prepared_geometry_matches(
-    frame: &crate::FrameState,
-    rows: &BTreeMap<usize, FrameRowState>,
-    object_index: usize,
-    geometry: &GeometryRef,
-) -> bool {
-    let Some(row) = rows.get(&object_index) else {
-        return frame.render_geometry(object_index) == Some(geometry)
-            && frame.render_transform(object_index) == Transform2D::IDENTITY;
-    };
-    let current_geometry = row
-        .render_geometry
-        .as_deref()
-        .or_else(|| {
-            row.content_override
-                .as_ref()
-                .and_then(|content| content.geometry())
-        })
-        .or_else(|| frame.render_geometry(object_index));
-    current_geometry == Some(geometry)
-        && row.render_transform.unwrap_or(row.transform) == Transform2D::IDENTITY
-}
-
-fn set_prepared_effective_geometry(
+fn set_prepared_segment_transform(
     frame: &crate::FrameState,
     rows: &mut BTreeMap<usize, FrameRowState>,
     object_index: usize,
-    geometry: GeometryRef,
+    start: Vec2,
+    end: Vec2,
 ) {
-    if prepared_geometry_matches(frame, rows, object_index, &geometry) {
+    let Some(GeometryRef::Line {
+        start: source_start,
+        end: source_end,
+    }) = frame.objects[object_index].geometry()
+    else {
         return;
-    }
+    };
     let row = rows
         .entry(object_index)
         .or_insert_with(|| FrameRowState::from_frame(frame, object_index));
-    row.render_geometry = Some(Arc::new(geometry));
-    row.render_transform = Some(Transform2D::IDENTITY);
+    row.render_geometry = None;
+    row.render_transform = Some(similarity_transform(*source_start, *source_end, start, end));
+}
+
+fn set_prepared_tip_transform(
+    frame: &crate::FrameState,
+    rows: &mut BTreeMap<usize, FrameRowState>,
+    object_index: usize,
+    apex: Vec2,
+    direction: Vec2,
+    length: f32,
+) {
+    let Some(GeometryRef::VectorPath(path)) = frame.objects[object_index].geometry() else {
+        return;
+    };
+    let Some((source_apex, source_base)) = tip_axis(path) else {
+        return;
+    };
+    let row = rows
+        .entry(object_index)
+        .or_insert_with(|| FrameRowState::from_frame(frame, object_index));
+    row.render_geometry = None;
+    row.render_transform = Some(similarity_transform(
+        source_base,
+        source_apex,
+        apex - direction * length,
+        apex,
+    ));
 }
 
 fn set_prepared_stroke_width(
@@ -270,7 +272,7 @@ fn apply_graph_dependency(
 
     match dependency.kind() {
         CompiledGraphEdgeKind::Line => {
-            let changed = set_effective_geometry(frame, line_index, GeometryRef::line(start, end));
+            let changed = set_effective_segment_transform(frame, line_index, start, end);
             [changed.then_some(line_index), None, None]
         }
         CompiledGraphEdgeKind::Arrow {
@@ -284,35 +286,32 @@ fn apply_graph_dependency(
                 return [None, None, None];
             }
             let geometry = arrow_geometry(start, end, start_tip_index.is_some(), policy);
-            let line_geometry_changed = set_effective_geometry(
+            let line_geometry_changed = set_effective_segment_transform(
                 frame,
                 line_index,
-                GeometryRef::line(geometry.shaft_start, geometry.shaft_end),
+                geometry.shaft_start,
+                geometry.shaft_end,
             );
             let stroke_width_changed =
                 set_effective_stroke_width(frame, line_index, geometry.stroke_width);
             let line_changed = line_geometry_changed || stroke_width_changed;
 
             let end_tip_index = end_tip_index as usize;
-            let end_tip_changed = set_effective_geometry(
+            let end_tip_changed = set_effective_tip_transform(
                 frame,
                 end_tip_index,
-                GeometryRef::path(triangle_tip_path(
-                    geometry.visible_end,
-                    geometry.direction,
-                    geometry.tip_length,
-                )),
+                geometry.visible_end,
+                geometry.direction,
+                geometry.tip_length,
             );
             let start_tip_changed = start_tip_index.map(|start_tip_index| {
                 let start_tip_index = start_tip_index as usize;
-                let changed = set_effective_geometry(
+                let changed = set_effective_tip_transform(
                     frame,
                     start_tip_index,
-                    GeometryRef::path(triangle_tip_path(
-                        geometry.visible_start,
-                        Vec2::new(-geometry.direction.x, -geometry.direction.y),
-                        geometry.tip_length,
-                    )),
+                    geometry.visible_start,
+                    Vec2::new(-geometry.direction.x, -geometry.direction.y),
+                    geometry.tip_length,
                 );
                 (start_tip_index, changed)
             });
@@ -328,20 +327,96 @@ fn apply_graph_dependency(
 
 /// Install world-space effective geometry through the existing renderer-neutral
 /// override lane. A matching authored/effective row needs no allocation.
-fn set_effective_geometry(
+/// Reuse the authored compiled geometry and move it through the ordinary render
+/// transform lane. This keeps worker resource identity stable across endpoint
+/// updates; graph dependencies must never mint a world-space path per frame.
+fn set_effective_segment_transform(
     frame: &mut crate::FrameState,
     object_index: usize,
-    geometry: GeometryRef,
+    target_start: Vec2,
+    target_end: Vec2,
 ) -> bool {
-    let current_transform = frame.render_transform(object_index);
-    let current_geometry_matches = frame.render_geometry(object_index) == Some(&geometry);
-    if current_transform == Transform2D::IDENTITY && current_geometry_matches {
+    let Some(GeometryRef::Line { start, end }) = frame.objects[object_index].geometry() else {
+        return false;
+    };
+    set_effective_render_transform(
+        frame,
+        object_index,
+        similarity_transform(*start, *end, target_start, target_end),
+    )
+}
+
+fn set_effective_tip_transform(
+    frame: &mut crate::FrameState,
+    object_index: usize,
+    apex: Vec2,
+    direction: Vec2,
+    length: f32,
+) -> bool {
+    let Some(GeometryRef::VectorPath(path)) = frame.objects[object_index].geometry() else {
+        return false;
+    };
+    let Some((source_apex, source_base)) = tip_axis(path) else {
+        return false;
+    };
+    let target_base = apex - direction * length;
+    set_effective_render_transform(
+        frame,
+        object_index,
+        similarity_transform(source_base, source_apex, target_base, apex),
+    )
+}
+
+fn set_effective_render_transform(
+    frame: &mut crate::FrameState,
+    object_index: usize,
+    transform: Transform2D,
+) -> bool {
+    if frame.render_geometries[object_index].is_none()
+        && frame.render_transforms[object_index] == Some(transform)
+    {
         return false;
     }
-
-    frame.render_geometries[object_index] = Some(Arc::new(geometry));
-    frame.render_transforms[object_index] = Some(Transform2D::IDENTITY);
+    frame.render_geometries[object_index] = None;
+    frame.render_transforms[object_index] = Some(transform);
     true
+}
+
+fn tip_axis(path: &noon_core::VectorPath) -> Option<(Vec2, Vec2)> {
+    let [PathCommand::MoveTo { to: apex }, PathCommand::LineTo { to: first }, PathCommand::LineTo { to: second }, ..] =
+        path.commands()
+    else {
+        return None;
+    };
+    Some((*apex, (*first + *second) * 0.5))
+}
+
+fn similarity_transform(
+    source_start: Vec2,
+    source_end: Vec2,
+    target_start: Vec2,
+    target_end: Vec2,
+) -> Transform2D {
+    let source = source_end - source_start;
+    let target = target_end - target_start;
+    let source_length = source.length();
+    let target_length = target.length();
+    let scale = if source_length > 0.0 {
+        target_length / source_length
+    } else {
+        0.0
+    };
+    let rotation = if source_length > 0.0 && target_length > 0.0 {
+        target.y.atan2(target.x) - source.y.atan2(source.x)
+    } else {
+        0.0
+    };
+    let translation = target_start - (source_start * scale).rotate(rotation);
+    Transform2D {
+        translation,
+        rotation,
+        scale: Vec2::new(scale, scale),
+    }
 }
 
 fn set_effective_stroke_width(
@@ -395,20 +470,6 @@ fn arrow_geometry(
             f64::from(policy.max_stroke_width_to_length_ratio()),
         ) as f32,
     }
-}
-
-fn triangle_tip_path(apex: Vec2, direction: Vec2, length: f32) -> VectorPath {
-    let vertices = noon_geometry::arrow_tip_vertices(
-        (f64::from(apex.x), f64::from(apex.y)),
-        (f64::from(direction.x), f64::from(direction.y)),
-        f64::from(length),
-    );
-    let [apex, first, second] = vertices.map(|(x, y)| Vec2::new(x as f32, y as f32));
-    VectorPath::new()
-        .move_to(apex)
-        .line_to(first)
-        .line_to(second)
-        .close()
 }
 
 #[cfg(test)]
