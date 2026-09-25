@@ -1,0 +1,196 @@
+diff --git a/crates/noon-render-wgpu/src/gpu/retained_text.rs b/crates/noon-render-wgpu/src/gpu/retained_text.rs
+index e76f1fe..2164d89 100644
+--- a/crates/noon-render-wgpu/src/gpu/retained_text.rs
++++ b/crates/noon-render-wgpu/src/gpu/retained_text.rs
+@@ -139,6 +139,7 @@ impl PreparedRetainedTextSnapshot<'_> {
+     fn as_prepared_frame(&self) -> PreparedRetainedTextFrame<'_> {
+         PreparedRetainedTextFrame {
+             time: self.time,
++            layout_rebuilt: self.partial_upload_base_generation.is_none(),
+             mask_quads: self.mask_quads,
+             color_quads: self.color_quads,
+             items: self.items,
+@@ -2056,29 +2057,48 @@ impl RetainedFramePreparer {
+         self.prepared_generation_ready = false;
+         let partial_upload_base_generation = self.text_generation;
+         let includes_text = changes_include_text(frame, changes);
++        let mut text_layout_rebuilt = false;
+         if includes_text {
+             let prepared_text = self
+                 .text
+                 .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+-            copy_local_text_snapshot_updates(
+-                &mut self.snapshot_mask_quads,
+-                &mut self.snapshot_color_quads,
+-                &mut self.snapshot_text_items,
+-                &self.text_item_ranges,
+-                prepared_text.items,
+-                prepared_text.mask_quads,
+-                prepared_text.color_quads,
+-                changes,
+-                &mut self.dirty_mask_ranges,
+-                &mut self.dirty_color_ranges,
+-            );
++            text_layout_rebuilt = prepared_text.layout_rebuilt;
++            if text_layout_rebuilt {
++                // Glyph count/page topology can change during subpixel motion.
++                // Replacing text packing does not invalidate geometry residency.
++                self.snapshot_mask_quads.clear();
++                self.snapshot_mask_quads.extend_from_slice(prepared_text.mask_quads);
++                self.snapshot_color_quads.clear();
++                self.snapshot_color_quads.extend_from_slice(prepared_text.color_quads);
++                self.snapshot_text_items.clear();
++                self.snapshot_text_items.extend_from_slice(prepared_text.items);
++                self.snapshot_text_stats = prepared_text.stats;
++                self.text_item_ranges = text_item_ranges(prepared_text.items, frame.objects.len());
++                self.dirty_mask_ranges.clear();
++                self.dirty_color_ranges.clear();
++                self.incremental_stats.text_snapshot_copies =
++                    self.incremental_stats.text_snapshot_copies.saturating_add(1);
++            } else {
++                copy_local_text_snapshot_updates(
++                    &mut self.snapshot_mask_quads,
++                    &mut self.snapshot_color_quads,
++                    &mut self.snapshot_text_items,
++                    &self.text_item_ranges,
++                    prepared_text.items,
++                    prepared_text.mask_quads,
++                    prepared_text.color_quads,
++                    changes,
++                    &mut self.dirty_mask_ranges,
++                    &mut self.dirty_color_ranges,
++                );
++            }
+         } else {
+             self.dirty_mask_ranges.clear();
+             self.dirty_color_ranges.clear();
+         }
+         let text_instances_dirty =
+             !self.dirty_mask_ranges.is_empty() || !self.dirty_color_ranges.is_empty();
+-        if text_instances_dirty {
++        if text_instances_dirty || text_layout_rebuilt {
+             self.text_generation = self
+                 .text_generation
+                 .checked_add(1)
+@@ -2115,7 +2135,7 @@ impl RetainedFramePreparer {
+             self.geometry
+                 .prepare_incremental(&self.scratch, &FrameChanges::objects(scratch_changes))
+         };
+-        if geometry.stats.full_rebuilds > 0 {
++        if geometry.stats.full_rebuilds > 0 || text_layout_rebuilt {
+             self.render_items.clear();
+             rebuild_mixed_order(
+                 &mut self.render_items,
+@@ -2125,6 +2145,11 @@ impl RetainedFramePreparer {
+             );
+             reorder_mixed_items(&mut self.render_items, frame, &self.painter_order_indices);
+             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
++            self.visible_projection_ready = false;
++            self.snapshot_prepare_stats.glyph_batches = self.render_items.iter()
++                .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. })).count();
++            self.snapshot_prepare_stats.vector_items = self.snapshot_text_stats.vector_items;
++            self.snapshot_prepare_stats.outline_runs = self.snapshot_text_stats.outline_runs;
+             self.incremental_stats.mixed_order_rebuilds = self
+                 .incremental_stats
+                 .mixed_order_rebuilds
+@@ -2164,7 +2189,7 @@ impl RetainedFramePreparer {
+             items: &self.snapshot_text_items,
+             stats: self.snapshot_text_stats,
+             atlas: self.text.atlas(),
+-            partial_upload_base_generation: text_instances_dirty
++            partial_upload_base_generation: (text_instances_dirty && !text_layout_rebuilt)
+                 .then_some(partial_upload_base_generation),
+             dirty_mask_ranges: &self.dirty_mask_ranges,
+             dirty_color_ranges: &self.dirty_color_ranges,
+@@ -3973,6 +3998,91 @@ mod tests {
+         )
+     }
+ 
++    #[test]
++    fn subpixel_glyph_topology_matches_fresh_packing_without_rebuilding_geometry() {
++        use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
++
++        // Obtain the repository-bundled face through the existing Typst provider,
++        // then shape the same plain, small monospaced label as the native Text API.
++        let seed = compile_typst_resource(
++            "#set text(font: \"DejaVu Sans Mono\")\nA", TypstMode::Markup,
++        ).unwrap();
++        let face = &seed.resource.runs[0].font;
++        let font = NativeFontFace::new(
++            "DejaVu Sans Mono", seed.fonts.get_for_face(face).unwrap().data.clone(), face.face_index,
++        ).unwrap();
++        let artifact = NativeTextCompiler::new().compile_plain(
++            "TRACK 01", &font, &NativeTextOptions::new(10.0),
++        ).unwrap();
++        let mut texts = TextResourceArena::new();
++        let text = texts.insert(artifact.resource).unwrap();
++        let (mut frame, _, _, geometries) = geometry_and_fast_text_frame();
++        frame.objects[1].content = ObjectContentRef::Text(text);
++        frame.objects[1].transform = Transform2D {
++            scale: Vec2::new(1.0 / 72.0, 1.0 / 72.0),
++            translation: Vec2::new(-6.1, 2.3),
++            ..Transform2D::IDENTITY
++        };
++        let mut following = frame.objects[1].clone();
++        following.id = ObjectId::new(3);
++        following.transform.translation = Vec2::new(6.1, 1.5);
++        frame.objects.push(following);
++        frame.presences.push(true);
++        frame.reveals.push(1.0);
++        frame.morphs.push(0.0);
++        frame.render_geometries.push(None);
++        frame.render_transforms.push(None);
++        let metrics = TextDeviceMetrics::uniform(67.5).unwrap()
++            .with_world_origin_pixels(Vec2::new(480.0, 270.0)).unwrap();
++        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
++        let mut retained = RetainedFramePreparer::new();
++        retained.set_painter_order(&[0, 1, 2]);
++        let mut topology_changes = 0;
++        let mut previous_count = None;
++        for step in 0..=64 {
++            frame.time = step as f64 / 60.0;
++            frame.objects[1].transform.translation = Vec2::new(
++                -6.1 + (step % 8) as f32 / (67.5 * 8.0),
++                2.3 + (step / 8) as f32 / (67.5 * 8.0),
++            );
++            frame.objects[1].style.opacity = 0.825;
++            let changes = if step == 0 { FrameChanges::all() } else { FrameChanges::objects(vec![1]) };
++            let actual = retained.prepare_with_changes_inner(
++                &device, &queue, &frame, &changes, &texts, &artifact.fonts,
++                &geometries, metrics, true, Some(&[1, 2]), None,
++            ).unwrap();
++            let mut fresh = RetainedFramePreparer::new();
++            fresh.set_painter_order(&[0, 1, 2]);
++            let expected = fresh.prepare_with_changes_inner(
++                &device, &queue, &frame, &FrameChanges::all(), &texts, &artifact.fonts,
++                &geometries, metrics, true, Some(&[1, 2]), None,
++            ).unwrap();
++            assert_eq!(actual.render_items, expected.render_items, "painter-order ranges at step {step}");
++            assert_eq!(actual.text.stats, expected.text.stats, "text stats at step {step}");
++            assert_eq!(actual.text.mask_quads.len(), expected.text.mask_quads.len(), "glyph count at step {step}");
++            for (actual, expected) in actual.text.mask_quads.iter().zip(expected.text.mask_quads) {
++                assert_eq!(actual.origin, expected.origin, "glyph origin at step {step}");
++                assert_eq!(actual.axis_x, expected.axis_x, "glyph width at step {step}");
++                assert_eq!(actual.axis_y, expected.axis_y, "glyph height at step {step}");
++                assert_eq!(actual.color, expected.color);
++            }
++            if previous_count.is_some_and(|count| count != actual.text.mask_quads.len()) {
++                topology_changes += 1;
++                assert_eq!(actual.text.partial_upload_base_generation, None,
++                    "changed packing cannot update old GPU ranges partially");
++            }
++            previous_count = Some(actual.text.mask_quads.len());
++            if step > 0 {
++                assert_eq!(actual.geometry_stats().full_rebuilds, 0);
++                assert_eq!(actual.geometry_stats().geometry_cache_misses, 0);
++                assert_eq!(actual.geometry_stats().path_vertices_repacked, 0);
++            }
++        }
++        assert!(topology_changes > 0, "fixture must cross empty/nonempty glyph phases");
++        assert!(retained.text.incremental_stats().phase_fallbacks > 0);
++        assert_eq!(retained.incremental_stats().scratch_rebuilds, 1);
++    }
++
+     fn geometry_only_mega_path_frame() -> FrameState {
+         let path = |id, y| {
+             let style = Style {

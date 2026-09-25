@@ -1,0 +1,242 @@
+diff --git a/crates/noon-render-wgpu/src/text/gpu.rs b/crates/noon-render-wgpu/src/text/gpu.rs
+index 07972dc..48ff7d8 100644
+--- a/crates/noon-render-wgpu/src/text/gpu.rs
++++ b/crates/noon-render-wgpu/src/text/gpu.rs
+@@ -803,6 +803,7 @@ mod tests {
+     ) -> PreparedRetainedTextFrame<'a> {
+         PreparedRetainedTextFrame {
+             time: 0.0,
++            layout_rebuilt: true,
+             mask_quads: quads,
+             color_quads: &[],
+             items,
+diff --git a/crates/noon-render-wgpu/src/text/preparation.rs b/crates/noon-render-wgpu/src/text/preparation.rs
+index f9e91d8..475f6ec 100644
+--- a/crates/noon-render-wgpu/src/text/preparation.rs
++++ b/crates/noon-render-wgpu/src/text/preparation.rs
+@@ -161,7 +161,7 @@ pub struct RetainedTextPrepareStats {
+ ///
+ /// `reused_frames` return the existing prepared arrays untouched. Successful
+ /// `object_update_frames` mutate only already-resident quad records for changed text
+-/// objects and perform no raster or atlas lookups. Incompatible incremental changes
++/// objects; translation may use cached raster/atlas lookups. Incompatible changes
+ /// are counted as `fallback_rebuilds` before taking the conservative full path.
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub struct RetainedTextIncrementalStats {
+@@ -170,8 +170,8 @@ pub struct RetainedTextIncrementalStats {
+     pub object_update_frames: u64,
+     pub objects_updated: u64,
+     pub fallback_rebuilds: u64,
+-    /// Phase changes that retained the previous filtered mask because replacing it
+-    /// would change batch/page layout or exceed atlas residency.
++    /// Phase updates that require rebuilding glyph packing rather than retaining
++    /// an obsolete mask after batch topology or atlas residency changes.
+     pub phase_fallbacks: u64,
+ }
+ 
+@@ -189,6 +189,8 @@ struct PreparedTextObjectState {
+ #[derive(Debug)]
+ pub struct PreparedRetainedTextFrame<'a> {
+     pub time: f64,
++    /// This preparation replaced the packed glyph layout, including unchanged objects.
++    pub layout_rebuilt: bool,
+     pub mask_quads: &'a [GlyphQuadInstance],
+     pub color_quads: &'a [GlyphQuadInstance],
+     pub items: &'a [PreparedTextItem],
+@@ -358,21 +360,27 @@ impl RetainedTextQuadPreparer {
+         if self.prepared_once && changes.is_empty() && self.last_metrics == Some(metrics) {
+             self.incremental_stats.reused_frames =
+                 self.incremental_stats.reused_frames.saturating_add(1);
+-            return Ok(self.prepared_frame(frame.time));
++            return Ok(self.prepared_frame(frame.time, false));
+         }
+ 
+         if self.can_update_objects(frame, changes, texts, metrics)? {
+-            let updated =
+-                self.update_objects(device, queue, frame, changes, texts, fonts, metrics)?;
+-            self.incremental_stats.object_update_frames = self
+-                .incremental_stats
+-                .object_update_frames
+-                .saturating_add(1);
+-            self.incremental_stats.objects_updated = self
+-                .incremental_stats
+-                .objects_updated
+-                .saturating_add(updated as u64);
+-            return Ok(self.prepared_frame(frame.time));
++            if let Some(updated) =
++                self.update_objects(device, queue, frame, changes, texts, fonts, metrics)?
++            {
++                self.incremental_stats.object_update_frames = self
++                    .incremental_stats
++                    .object_update_frames
++                    .saturating_add(1);
++                self.incremental_stats.objects_updated = self
++                    .incremental_stats
++                    .objects_updated
++                    .saturating_add(updated as u64);
++                return Ok(self.prepared_frame(frame.time, false));
++            }
++            // A subpixel raster can become empty/nonempty, split a batch, or
++            // exhaust the current atlas generation. Old masks are not a valid
++            // substitute. Repack the current text frame and report that change
++            // to the mixed renderer so it replaces all affected GPU ranges.
+         }
+ 
+         if self.prepared_once && !changes.is_all() && !changes.is_empty() {
+@@ -380,12 +388,13 @@ impl RetainedTextQuadPreparer {
+                 self.incremental_stats.fallback_rebuilds.saturating_add(1);
+         }
+         self.full_rebuild(device, queue, frame, texts, fonts, metrics)?;
+-        Ok(self.prepared_frame(frame.time))
++        Ok(self.prepared_frame(frame.time, true))
+     }
+ 
+-    fn prepared_frame(&self, time: f64) -> PreparedRetainedTextFrame<'_> {
++    fn prepared_frame(&self, time: f64, layout_rebuilt: bool) -> PreparedRetainedTextFrame<'_> {
+         PreparedRetainedTextFrame {
+             time,
++            layout_rebuilt,
+             mask_quads: &self.mask_quads,
+             color_quads: &self.color_quads,
+             items: &self.items,
+@@ -466,7 +475,7 @@ impl RetainedTextQuadPreparer {
+         texts: &(impl TextResourceLookup + ?Sized),
+         fonts: &(impl FontResourceLookup + ?Sized),
+         metrics: TextDeviceMetrics,
+-    ) -> Result<usize, TextPrepareError> {
++    ) -> Result<Option<usize>, TextPrepareError> {
+         let mut updated = 0_usize;
+         for &index in changes.object_indices() {
+             let Some(state) = self.object_states[index].clone() else {
+@@ -494,9 +503,10 @@ impl RetainedTextQuadPreparer {
+                     fonts,
+                     metrics,
+                 )?;
+-            if phase_changed && !rerastered {
++            if (phase_changed || translation_changed) && !rerastered {
+                 self.incremental_stats.phase_fallbacks =
+                     self.incremental_stats.phase_fallbacks.saturating_add(1);
++                return Ok(None);
+             }
+             let delta = if rerastered {
+                 Vec2::ZERO
+@@ -547,7 +557,7 @@ impl RetainedTextQuadPreparer {
+             }
+             updated = updated.saturating_add(1);
+         }
+-        Ok(updated)
++        Ok(Some(updated))
+     }
+ 
+     #[allow(clippy::too_many_arguments)]
+@@ -1664,79 +1674,37 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn phase_churn_at_atlas_limit_keeps_live_unrelated_quads_valid() {
++    fn phase_churn_at_atlas_limit_rebuilds_current_masks_without_stale_fallback() {
+         let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+         let mut texts = TextResourceArena::new();
+         let handle = texts.insert(artifact.resource).unwrap();
+         let mut frame = two_text_frame(handle);
+         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+         let mut preparer = RetainedTextQuadPreparer::new(48).unwrap();
+-        let (baseline, baseline_pages) = {
+-            let prepared = preparer
+-                .prepare_with_changes(
+-                    &device,
+-                    &queue,
+-                    &frame,
+-                    &FrameChanges::all(),
+-                    &texts,
+-                    &artifact.fonts,
+-                    metrics(),
+-                )
+-                .unwrap();
+-            let pages = prepared
+-                .items
+-                .iter()
+-                .filter_map(|item| match item {
+-                    PreparedTextItem::GlyphBatch {
+-                        object_index: 1,
+-                        page,
+-                        ..
+-                    } => Some(*page),
+-                    _ => None,
+-                })
+-                .collect::<Vec<_>>();
+-            (prepared.mask_quads[0], pages)
+-        };
++        preparer.prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics()).unwrap();
+ 
+-        let mut crossed_page = false;
+         for step in 1..=32 {
+             frame.objects[1].transform.translation =
+                 Vec2::new(step as f32 / (67.5 * 8.0), (step % 7) as f32 / (67.5 * 8.0));
+-            let prepared = preparer
+-                .prepare_with_changes(
+-                    &device,
+-                    &queue,
+-                    &frame,
+-                    &FrameChanges::objects(vec![1]),
+-                    &texts,
+-                    &artifact.fonts,
+-                    metrics(),
+-                )
+-                .unwrap();
+-            assert_eq!(prepared.mask_quads[0], baseline);
+-            let pages = prepared
+-                .items
+-                .iter()
+-                .filter_map(|item| match item {
+-                    PreparedTextItem::GlyphBatch {
+-                        object_index: 1,
+-                        page,
+-                        ..
+-                    } => Some(*page),
+-                    _ => None,
+-                })
+-                .collect::<Vec<_>>();
+-            assert_eq!(pages.len(), baseline_pages.len());
+-            crossed_page |= pages != baseline_pages;
++            let prepared = preparer.prepare_with_changes(
++                &device, &queue, &frame, &FrameChanges::objects(vec![1]),
++                &texts, &artifact.fonts, metrics(),
++            ).unwrap();
++            let actual = prepared.mask_quads.to_vec();
++            let mut fresh = RetainedTextQuadPreparer::new(48).unwrap();
++            let expected = fresh.prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics()).unwrap();
++            assert_eq!(actual.len(), expected.mask_quads.len());
++            for (actual, expected) in actual.iter().zip(expected.mask_quads) {
++                // Atlas locations may differ across histories, but all glyph
++                // geometry and color must be derived from this exact frame.
++                assert_eq!(actual.origin, expected.origin);
++                assert_eq!(actual.axis_x, expected.axis_x);
++                assert_eq!(actual.axis_y, expected.axis_y);
++                assert_eq!(actual.color, expected.color);
++            }
+         }
+-
+-        assert_eq!(preparer.incremental_stats().rebuild_attempts, 1);
+-        assert_eq!(preparer.incremental_stats().fallback_rebuilds, 0);
+         assert!(preparer.incremental_stats().phase_fallbacks > 0);
+-        assert!(
+-            crossed_page,
+-            "phase churn must exercise local page rebinding"
+-        );
++        assert!(preparer.incremental_stats().fallback_rebuilds > 0);
+         assert_eq!(preparer.atlas().page_count(GlyphAtlasPlane::Mask), 2);
+         assert!(preparer.raster_stats().entries <= DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES);
+     }
+diff --git a/crates/noon-render-wgpu/tests/text_live_atlas_pages.rs b/crates/noon-render-wgpu/tests/text_live_atlas_pages.rs
+index 3526668..114961d 100644
+--- a/crates/noon-render-wgpu/tests/text_live_atlas_pages.rs
++++ b/crates/noon-render-wgpu/tests/text_live_atlas_pages.rs
+@@ -64,6 +64,7 @@ fn prepared_mask_frame<'a>(
+ ) -> PreparedRetainedTextFrame<'a> {
+     PreparedRetainedTextFrame {
+         time: 0.0,
++        layout_rebuilt: true,
+         mask_quads: quads,
+         color_quads: &[],
+         items,
