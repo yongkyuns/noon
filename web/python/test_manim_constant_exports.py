@@ -38,6 +38,8 @@ class ManimConstantExportTests(unittest.TestCase):
                 assert not hasattr(import_module(module), "install")
             assert namespace["Tex"].__module__ == "_manim_latex"
             assert namespace["MathTex"].__module__ == "_manim_latex"
+            assert namespace["SingleStringMathTex"].__module__ == "_manim_latex"
+            assert issubclass(namespace["MathTex"], namespace["SingleStringMathTex"])
             assert not issubclass(namespace["Text"], noon.Rectangle)
             assert namespace["SMALL_BUFF"] == 0.1
             assert namespace["MED_SMALL_BUFF"] == 0.25
