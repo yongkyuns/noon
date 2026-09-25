@@ -1751,6 +1751,41 @@ def _family_wrapper_key(value: object) -> str:
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
 
 
+def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
+    if leaf_type is None:
+        leaf_type = _compat.VMobject
+    if wrapper is None:
+        wrapper = object.__new__(_compat.Group)
+    if context is None:
+        context = getattr(wrapper, "_canonical_live_target_context", None)
+    old_members = getattr(wrapper, "_semantic_member_wrappers", {})
+    keys = list(engine_call(handle.memberKeys, operation="family.members"))
+    members = {}
+    for index, key in enumerate(keys):
+        key = str(key)
+        if bool(engine_call(handle.memberIsFamily, index, operation="family.members")):
+            member_handle = engine_call(handle.memberFamily, index, operation="family.members")
+            member = old_members.get(key)
+            if not isinstance(member, _compat.Group):
+                member = object.__new__(_compat.Group)
+            _attach_shared_family(member, member_handle, context, leaf_type)
+        else:
+            member_handle = engine_call(handle.memberMobject, index, operation="family.members")
+            member = old_members.get(key)
+            if not isinstance(member, _base.Mobject):
+                member = object.__new__(leaf_type)
+            _attach_shared_handle(member, member_handle)
+            if context is not None:
+                member._canonical_live_target_context = context
+        members[key] = member
+    wrapper._semantic_family_handle = handle
+    wrapper._semantic_member_wrappers = members
+    if context is not None:
+        wrapper._canonical_live_target_context = context
+    return wrapper
+
+
+
 def _group_members(self: _compat.Group) -> list[object]:
     # Ordering is observed from Rust only when requested. Mutations update this
     # identity registry locally; it is neither a membership nor an order cache.

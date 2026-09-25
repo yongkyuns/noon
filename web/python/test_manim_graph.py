@@ -5,7 +5,8 @@ import _manim_graph as graph
 
 
 class _Family:
-    pass
+    def memberKeys(self):
+        return []
 
 
 class _Handle:

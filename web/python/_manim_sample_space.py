@@ -60,35 +60,7 @@ def _leaf(handle, context=None):
 
 
 def _family_group(handle, wrapper=None, context=None):
-    if wrapper is None:
-        wrapper = object.__new__(_compat.Group)
-    if context is None:
-        context = getattr(wrapper, "_canonical_live_target_context", None)
-    old_members = getattr(wrapper, "_semantic_member_wrappers", {})
-    keys = list(engine_call(handle.memberKeys, operation="SampleSpace.parts"))
-    members = {}
-    for index, key in enumerate(keys):
-        key = str(key)
-        if bool(engine_call(handle.memberIsFamily, index, operation="SampleSpace.parts")):
-            member_handle = engine_call(handle.memberFamily, index, operation="SampleSpace.parts")
-            member = old_members.get(key)
-            if not isinstance(member, _compat.Group):
-                member = object.__new__(_compat.Group)
-            _family_group(member_handle, member, context)
-        else:
-            member_handle = engine_call(handle.memberMobject, index, operation="SampleSpace.parts")
-            member = old_members.get(key)
-            if not isinstance(member, _base.Mobject):
-                member = object.__new__(_compat.Rectangle)
-            _shared._attach_shared_handle(member, member_handle)
-            if context is not None:
-                member._canonical_live_target_context = context
-        members[key] = member
-    wrapper._semantic_family_handle = handle
-    wrapper._semantic_member_wrappers = members
-    if context is not None:
-        wrapper._canonical_live_target_context = context
-    return wrapper
+    return _shared._attach_shared_family(wrapper, handle, context, _compat.Rectangle)
 
 
 def _constructor_context():

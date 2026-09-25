@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections.abc import Hashable, Mapping
 
 import _manim_compat as _compat
-import _manim_plotting as _plot
 import _manim_semantic_handles as _shared
 import noon as _base
 from _noon_errors import engine_call
@@ -62,7 +61,7 @@ class _GraphBase(_compat.Group):
             context.liveCreateGraph, bool(self._directed), _array(ids), _array(positions),
             _array(edge_ids), operation="Graph.create",
         )
-        _plot._family(self, engine_call(self._graph_handle.family), [])
+        _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
         self._canonical_live_target_context = context
         if layout == "circular":
             center = _point(layout_center)
@@ -84,6 +83,9 @@ class _GraphBase(_compat.Group):
             except KeyError as error:
                 raise ValueError("Graph edge references an unknown vertex key") from error
         return values
+
+    def _refresh_semantic_members(self):
+        _shared._attach_shared_family(self, self._semantic_family_handle, self._context())
 
     def _context(self):
         return self._canonical_live_target_context
@@ -138,7 +140,7 @@ class _GraphBase(_compat.Group):
         return self
 
     def copy(self):
-        """Reconstruct an independent native declaration from Rust topology."""
+        """Copy the retained family, including appearance and endpoint bindings."""
         clone = object.__new__(type(self))
         clone._directed = self._directed
         clone._graph_key_ids = dict(self._graph_key_ids)
@@ -149,7 +151,7 @@ class _GraphBase(_compat.Group):
             self._graph_handle,
             operation="Graph.copy",
         )
-        _plot._family(clone, engine_call(clone._graph_handle.family), [])
+        _shared._attach_shared_family(clone, engine_call(clone._graph_handle.family), self._context())
         return clone
 
     def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0), positions=None):
