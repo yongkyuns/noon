@@ -6,10 +6,10 @@ mod brace;
 mod coordinates;
 #[cfg(target_arch = "wasm32")]
 mod graph;
-#[cfg(any(target_arch = "wasm32", test))]
-mod sample_space;
 #[cfg(target_arch = "wasm32")]
 mod matrix;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -130,6 +130,7 @@ enum OrdinaryCompositionChild {
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
     },
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     MatchingSourceFamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,

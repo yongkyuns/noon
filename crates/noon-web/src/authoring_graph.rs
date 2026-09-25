@@ -14,6 +14,8 @@ pub(crate) enum NativeGraph {
     Directed(noon::DiGraph<u32>),
 }
 
+// Native transport fixtures exercise explicit placement; browser bindings expose every operation.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) enum GraphOperation {
     AddVertices(Vec<(u32, (f64, f64))>),
     AddEdges(Vec<(u32, u32)>),
@@ -31,6 +33,7 @@ impl NativeGraph {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn apply(
         &mut self,
         scene: &mut noon::Scene,
@@ -155,6 +158,7 @@ impl NativeGraph {
         Ok(())
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn copy_cold(&self) -> Result<Self, noon::GraphAuthoringError> {
         match self {
             Self::Undirected(graph) => graph.copy().map(Self::Undirected),
@@ -162,6 +166,7 @@ impl NativeGraph {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn copy_live(
         &self,
         live: &mut noon::LiveSession<'_>,

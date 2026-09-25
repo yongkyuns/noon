@@ -57,6 +57,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error))
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_copy_graph(
         &mut self,
         graph: &NativeGraph,

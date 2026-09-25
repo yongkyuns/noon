@@ -11,6 +11,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_polar_plane(
         &mut self,
         options: &noon::ManimPolarPlaneOptions,
@@ -29,6 +30,7 @@ impl SemanticExecutionPlayer {
             .map_err(crate::plot_error::coordinate_failure)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
@@ -37,6 +39,7 @@ impl SemanticExecutionPlayer {
             .map_err(crate::plot_error::coordinate_failure)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_change_bar_values(
         &mut self,
         chart: &mut noon::ManimBarChart,
@@ -49,6 +52,7 @@ impl SemanticExecutionPlayer {
         .map_err(crate::plot_error::coordinate_failure)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_labeled_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
@@ -63,6 +67,7 @@ impl SemanticExecutionPlayer {
         })
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,

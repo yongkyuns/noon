@@ -1,13 +1,13 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(target_arch = "wasm32")]
 mod brace;
-#[cfg(target_arch = "wasm32")]
-mod matrix;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
 mod graph;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
+mod matrix;
+#[cfg(target_arch = "wasm32")]
 mod numbers;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
@@ -18,13 +18,13 @@ mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;
-use noon::ExecutionSession;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     RuntimeIdentity,
 };
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
+use noon::ExecutionSession;
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
     Transform2D,
@@ -3397,12 +3397,10 @@ mod tests {
         acknowledge(&mut player, &phase);
         let drive = player.live_drive_segment_to_authored_time(0.25).unwrap();
         acknowledge(&mut player, drive.callback_phase_json.as_ref().unwrap());
-        assert!(
-            player
-                .live_drive_segment_to_authored_time(0.25)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_to_authored_time(0.25)
+            .unwrap()
+            .reached_endpoint());
         player.live_complete_segment().unwrap();
         assert_eq!(player.time(), 0.25);
         assert_eq!(player.resource_bundle_bytes(), resources);
@@ -3744,12 +3742,10 @@ mod tests {
         let wake = player.live_segment_wake(1_000.0).unwrap();
         assert_eq!(wake.cadence(), "animation_frame");
         assert_eq!(wake.timer_after_milliseconds(), None);
-        assert!(
-            !player
-                .live_drive_segment_from_wall_time(2_000.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(!player
+            .live_drive_segment_from_wall_time(2_000.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -3759,12 +3755,10 @@ mod tests {
             Vec2::new(1.0, -0.5)
         );
 
-        assert!(
-            player
-                .live_drive_segment_from_wall_time(4_000.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_from_wall_time(4_000.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(player.time(), endpoint);
         player.live_complete_segment().unwrap();
         assert_eq!(
@@ -3781,12 +3775,10 @@ mod tests {
         let wait_wake = player.live_segment_wake(5_000.0).unwrap();
         assert_eq!(wait_wake.cadence(), "timer");
         assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
-        assert!(
-            player
-                .live_drive_segment_from_wall_time(6_000.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_from_wall_time(6_000.0)
+            .unwrap()
+            .reached_endpoint());
         player.live_complete_segment().unwrap();
         assert_eq!(player.time(), 3.0);
     }
@@ -3836,12 +3828,10 @@ mod tests {
         );
         assert_eq!(player.session.frame(), &frame);
 
-        assert!(
-            player
-                .live_drive_segment_to_authored_time(3.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_to_authored_time(3.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(
             player.time(),
             2.0,
@@ -3851,12 +3841,10 @@ mod tests {
         assert!(player.live_drive_segment_to_authored_time(3.0).is_err());
 
         player.live_wait(1.0).unwrap();
-        assert!(
-            player
-                .live_drive_segment_to_authored_time(3.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_to_authored_time(3.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(player.time(), 3.0);
     }
 
@@ -4187,11 +4175,9 @@ mod tests {
 
         let mut foreign_token = phase["token"].clone();
         foreign_token["sequence"] = serde_json::json!("999");
-        assert!(
-            player
-                .required_callback_read_json(&foreign_token.to_string(), &object_request)
-                .is_err()
-        );
+        assert!(player
+            .required_callback_read_json(&foreign_token.to_string(), &object_request)
+            .is_err());
         assert!(player.pending_callback_phase.is_some());
     }
 
@@ -4375,12 +4361,10 @@ mod tests {
             assert!(player.drain_delta_json().unwrap().is_none());
         }
         assert!(player.playback_time_at(f64::NAN).is_err());
-        assert!(
-            player
-                .live_drive_segment_from_wall_time(3_000.0)
-                .unwrap()
-                .reached_endpoint()
-        );
+        assert!(player
+            .live_drive_segment_from_wall_time(3_000.0)
+            .unwrap()
+            .reached_endpoint());
         player.live_complete_segment().unwrap();
         assert_eq!(player.time(), 2.0);
         player.live_wait(1.0).unwrap();

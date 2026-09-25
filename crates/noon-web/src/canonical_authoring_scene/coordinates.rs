@@ -11,6 +11,7 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_create_path_family(paths)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(super) fn live_create_polar_plane(
         &mut self,
         options: &noon::ManimPolarPlaneOptions,
@@ -25,6 +26,7 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_create_axes(options)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
@@ -38,6 +40,7 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_create_bar_chart(options)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_change_bar_values(
         &mut self,
         chart: &mut noon::ManimBarChart,
@@ -48,6 +51,7 @@ impl CanonicalAuthoringScene {
             .live_change_bar_values(chart, values, update_colors)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_labeled_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
@@ -64,6 +68,7 @@ impl CanonicalAuthoringScene {
             .live_create_labeled_bar_chart(options, labels, compiler)
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
