@@ -5,7 +5,6 @@ use crate::{
     AuthoringError, LayoutAnchor, ManimGeometryOptions, Mobject, Scene,
 };
 use noon_core::{Bounds2D64, SemanticNodeKind, SemanticTransform2_5D, Vec2, VectorPath, TAU};
-use std::rc::Rc;
 
 const BRACE_DEFAULT_MIN_WIDTH: f64 = 0.90552;
 
@@ -112,12 +111,17 @@ impl Scene {
         buff: f64,
         sharpness: f64,
     ) -> Result<Mobject, AuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        self.geometry(ManimGeometryOptions::brace(
-            target, direction, buff, sharpness,
-        )?)
+        let prepared = self.prepare_brace_geometry(
+            target,
+            None,
+            crate::BraceOptions {
+                direction,
+                buff,
+                sharpness,
+                ..Default::default()
+            },
+        )?;
+        self.geometry(prepared.options)
     }
 
     /// Construct a detached BraceBetweenPoints in this scene's semantic store.

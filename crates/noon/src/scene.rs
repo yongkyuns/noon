@@ -911,6 +911,7 @@ impl Scene {
 }
 #[cfg(test)]
 mod arrow_atomicity_tests;
+mod brace;
 #[cfg(test)]
 mod geometry_atomicity_tests;
 #[cfg(test)]

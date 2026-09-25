@@ -4,12 +4,12 @@
 //! relationship between that geometry and an existing object-or-family label;
 //! no renderer state or frontend layout cache participates in the operation.
 
+pub(crate) mod layout;
+
 use crate::{
-    family_authoring::FamilyTranslation,
-    family_layout::RelativePlacement,
-    geometry_authoring::{prepare_brace_geometry, PreparedBraceGeometry},
-    AuthoringError, LayoutAnchor, LiveSession, LiveSessionError, ManimGeometryOptions,
-    ManimNextToArgs, Mobject, MobjectFamily, Scene,
+    family_authoring::FamilyTranslation, family_layout::RelativePlacement,
+    geometry_authoring::PreparedBraceGeometry, AuthoringError, LayoutAnchor, LiveSession,
+    LiveSessionError, ManimNextToArgs, Mobject, MobjectFamily, Scene,
 };
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
@@ -53,12 +53,8 @@ impl Brace {
         options: BraceOptions,
     ) -> Result<Self, AuthoringError> {
         require_anchor_store(scene.integration_store(), target)?;
-        let object = scene.geometry(ManimGeometryOptions::brace(
-            target,
-            options.direction,
-            options.buff,
-            options.sharpness,
-        )?)?;
+        let prepared = scene.prepare_brace_geometry(target, None, options)?;
+        let object = scene.geometry(prepared.options)?;
         Ok(Self { object, options })
     }
 
@@ -100,7 +96,8 @@ impl BraceLabel {
         options: BraceOptions,
     ) -> Result<Self, AuthoringError> {
         let store = Rc::clone(scene.integration_store());
-        let prepared = PreparedComposite::new(&store, target, label.clone(), options)?;
+        let geometry = scene.prepare_brace_geometry(target, Some(&label), options)?;
+        let prepared = PreparedComposite::with_geometry(label.clone(), options, geometry)?;
         let (brace, family) = scene.with_semantic_publication(|store, publish| {
             publish_composite(store, &prepared, None, publish)
         })?;
@@ -173,7 +170,9 @@ impl BraceLabel {
         target: &LayoutAnchor,
     ) -> Result<(), AuthoringError> {
         let store = Rc::clone(scene.integration_store());
-        let prepared = PreparedComposite::new(&store, target, self.label.clone(), self.options)?;
+        let geometry = scene.prepare_brace_geometry(target, Some(&self.label), self.options)?;
+        let prepared =
+            PreparedComposite::with_geometry(self.label.clone(), self.options, geometry)?;
         let old_brace = self.brace.object.node_id();
         let (brace, _) = scene.with_semantic_publication(|store, publish| {
             publish_composite(
@@ -198,6 +197,8 @@ impl BraceLabel {
         scene: &mut Scene,
         label: LayoutAnchor,
     ) -> Result<(), AuthoringError> {
+        scene.require_brace_label_placement(&label)?;
+        scene.require_brace_label_placement(&LayoutAnchor::from(self.brace.object()))?;
         let store = Rc::clone(scene.integration_store());
         let prepared = PreparedLabelPlacement::for_existing_brace(
             &store,
@@ -221,7 +222,8 @@ impl BraceLabel {
         label: LayoutAnchor,
     ) -> Result<(), AuthoringError> {
         let store = Rc::clone(scene.integration_store());
-        let prepared = PreparedComposite::new(&store, target, label.clone(), self.options)?;
+        let geometry = scene.prepare_brace_geometry(target, Some(&label), self.options)?;
+        let prepared = PreparedComposite::with_geometry(label.clone(), self.options, geometry)?;
         let old_label = self.label.resolve()?;
         let old_brace = self.brace.object.node_id();
         let (brace, _) = scene.with_semantic_publication(|store, publish| {
@@ -405,19 +407,6 @@ impl PreparedLabelPlacement {
 }
 
 impl PreparedComposite {
-    fn new(
-        store: &Rc<RefCell<SemanticStore>>,
-        target: &LayoutAnchor,
-        label: LayoutAnchor,
-        options: BraceOptions,
-    ) -> Result<Self, AuthoringError> {
-        require_anchor_store(store, target)?;
-        require_anchor_store(store, &label)?;
-        let brace =
-            prepare_brace_geometry(target, options.direction, options.buff, options.sharpness)?;
-        Self::with_geometry(label, options, brace)
-    }
-
     fn with_geometry(
         label: LayoutAnchor,
         options: BraceOptions,
@@ -629,31 +618,43 @@ mod tests {
     }
     #[test]
     fn live_brace_observes_reactive_target_without_rewriting_it() {
-        let mut scene = Scene::new();
-        let target = scene.square(2.0).unwrap();
-        let label = scene.square(0.4).unwrap();
-        let pointer = scene.pointer_position_signal().unwrap();
-        scene.bind_native_translation(&target, &pointer).unwrap();
-        scene.add(&target).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session
-            .set_native_state_input(
-                noon_core::NativeStateSource::PointerPosition,
-                noon_core::NativeInputValue::Vec2(noon_core::Vec2::new(3.0, 1.0)),
-            )
-            .unwrap();
-        let authored_target = target.state().unwrap();
-        let mut live = scene.live(&mut session);
-        let composite = BraceLabel::new_live(
-            &mut live,
-            &LayoutAnchor::from(&target),
-            LayoutAnchor::from(&label),
-            BraceOptions::default(),
-        )
-        .unwrap();
-        let bounds = composite.brace().object().layout_bounds().unwrap().unwrap();
-        assert!(((bounds.min_x + bounds.max_x) * 0.5 - 3.0).abs() < 0.001);
-        assert!((bounds.max_y + 0.2).abs() < 0.001);
-        assert_eq!(target.state().unwrap(), authored_target);
+        for scene_owned in [false, true] {
+            let mut scene = Scene::new();
+            let target = scene.square(2.0).unwrap();
+            let label = scene.square(0.4).unwrap();
+            let pointer = scene.pointer_position_signal().unwrap();
+            scene.bind_native_translation(&target, &pointer).unwrap();
+            scene.add(&target).unwrap();
+            let mut session = scene.execution_session().unwrap();
+            session
+                .set_native_state_input(
+                    noon_core::NativeStateSource::PointerPosition,
+                    noon_core::NativeInputValue::Vec2(noon_core::Vec2::new(3.0, 1.0)),
+                )
+                .unwrap();
+            let authored_target = target.state().unwrap();
+            let composite = if scene_owned {
+                scene.install_execution(session);
+                BraceLabel::new(
+                    &mut scene,
+                    &LayoutAnchor::from(&target),
+                    LayoutAnchor::from(&label),
+                    BraceOptions::default(),
+                )
+                .unwrap()
+            } else {
+                BraceLabel::new_live(
+                    &mut scene.live(&mut session),
+                    &LayoutAnchor::from(&target),
+                    LayoutAnchor::from(&label),
+                    BraceOptions::default(),
+                )
+                .unwrap()
+            };
+            let bounds = composite.brace().object().layout_bounds().unwrap().unwrap();
+            assert!(((bounds.min_x + bounds.max_x) * 0.5 - 3.0).abs() < 0.001);
+            assert!((bounds.max_y + 0.2).abs() < 0.001);
+            assert_eq!(target.state().unwrap(), authored_target);
+        }
     }
 }

@@ -1,32 +1,30 @@
-//! Explicit live-session Brace queries use the common coherent observation policy.
+//! Scene-owned Brace queries share the explicit live-session observation policy.
 use super::*;
 
-impl LiveSession<'_> {
+impl Scene {
     pub(crate) fn prepare_brace_geometry(
         &self,
         target: &crate::LayoutAnchor,
-        label: &crate::LayoutAnchor,
+        label: Option<&crate::LayoutAnchor>,
         options: crate::BraceOptions,
-    ) -> Result<crate::geometry_authoring::PreparedBraceGeometry, LiveSessionError> {
+    ) -> Result<crate::geometry_authoring::PreparedBraceGeometry, AuthoringError> {
         crate::brace_authoring::layout::prepare_geometry(
-            self.store,
-            Some(self.session),
+            &self.store,
+            self.execution.as_ref(),
             target,
-            Some(label),
+            label,
             options,
         )
-        .map_err(Into::into)
     }
 
     pub(crate) fn require_brace_label_placement(
         &self,
         label: &crate::LayoutAnchor,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<(), AuthoringError> {
         crate::brace_authoring::layout::require_label_placement(
-            self.store,
-            Some(self.session),
+            &self.store,
+            self.execution.as_ref(),
             label,
         )
-        .map_err(Into::into)
     }
 }
