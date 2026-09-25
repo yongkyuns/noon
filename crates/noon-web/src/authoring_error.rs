@@ -75,6 +75,37 @@ impl Error for AuthoringFailure {
         self.cause.as_deref().map(|cause| cause as &dyn Error)
     }
 }
+impl From<noon::MatrixAuthoringError> for AuthoringFailure {
+    fn from(error: noon::MatrixAuthoringError) -> Self {
+        use noon::MatrixAuthoringError::*;
+        match error {
+            EmptyMatrix => Self::new("input", "matrix.empty", "a Matrix requires entries"),
+            RaggedRows { expected, actual } => Self::new(
+                "input",
+                "matrix.ragged_rows",
+                format!("matrix row has {actual} entries; expected {expected}"),
+            ),
+            DuplicateEntry => Self::new(
+                "input",
+                "matrix.duplicate_entry",
+                "a MobjectMatrix entry may occur only once",
+            ),
+            InvalidOption { name, value } => Self::new(
+                "input",
+                "matrix.invalid_option",
+                format!("invalid matrix {name}: {value}"),
+            ),
+            InvalidStructure => Self::new(
+                "semantic",
+                "matrix.invalid_structure",
+                "semantic family is not a valid Matrix",
+            ),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+        }
+    }
+}
 impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
     fn from(error: noon::FamilyCallbackPaintError) -> Self {
         use noon::FamilyCallbackPaintError::*;

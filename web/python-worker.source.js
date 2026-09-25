@@ -229,6 +229,8 @@ async function initializePyodide() {
       : context.liveCreateDecimalNumber(...args));
   };
   self.noonMatrixOptions = WasmMatrixOptions;
+  self.noonMobjectMatrixRows = WasmMobjectMatrixRows;
+  self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
     const options = new WasmMatrixOptions(v, h, bh, bv, stretch);
@@ -241,6 +243,15 @@ async function initializePyodide() {
   self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
     return context.liveCreateDecimalMatrix(rows, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
+    const entries = new WasmMobjectMatrixRows();
+    for (const row of rows) {
+      entries.beginRow();
+      for (const entry of row) entries.appendEntry(entry);
+    }
+    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);

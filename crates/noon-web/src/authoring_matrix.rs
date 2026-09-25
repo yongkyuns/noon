@@ -1,6 +1,6 @@
 //! Thin WASM handles for shared retained Matrix families.
 
-use crate::{authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle};
+use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, authoring_error::js_error};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -33,9 +33,55 @@ impl WasmMatrixOptions {
 pub struct WasmMatrixHandle {
     matrix: noon::Matrix,
 }
+
+/// A validated set of existing Mobject entries for one Matrix admission.
+#[wasm_bindgen]
+pub struct WasmMobjectMatrixRows {
+    rows: Vec<Vec<noon::Mobject>>,
+}
+
+#[wasm_bindgen]
+impl WasmMobjectMatrixRows {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    #[wasm_bindgen(js_name = beginRow)]
+    pub fn begin_row(&mut self) {
+        self.rows.push(Vec::new());
+    }
+
+    #[wasm_bindgen(js_name = appendEntry)]
+    pub fn append_entry(&mut self, entry: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+        let row = self
+            .rows
+            .last_mut()
+            .ok_or_else(|| js_error("MobjectMatrix rows require beginRow before appendEntry"))?;
+        row.push(entry.semantic_mobject().clone());
+        Ok(())
+    }
+}
+
+impl WasmMobjectMatrixRows {
+    pub(crate) fn entries(&self) -> Vec<Vec<noon::Mobject>> {
+        self.rows.clone()
+    }
+}
 impl WasmMatrixHandle {
     pub(crate) fn new(matrix: noon::Matrix) -> Self {
         Self { matrix }
+    }
+}
+
+#[wasm_bindgen]
+impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = asMatrix)]
+    pub fn as_matrix(&self) -> Result<WasmMatrixHandle, JsValue> {
+        self.semantic_family()
+            .map_err(|error| error)
+            .and_then(|family| noon::Matrix::from_family(family).map_err(js_error))
+            .map(WasmMatrixHandle::new)
     }
 }
 

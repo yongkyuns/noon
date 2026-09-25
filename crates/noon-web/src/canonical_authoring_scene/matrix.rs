@@ -1,5 +1,8 @@
 use super::wasm::CanonicalAuthoringSceneContext;
-use crate::{authoring_error::js_error, WasmLatexCompiler, WasmMatrixHandle, WasmMatrixOptions};
+use crate::{
+    WasmLatexCompiler, WasmMatrixHandle, WasmMatrixOptions, WasmMobjectMatrixRows,
+    authoring_error::js_error,
+};
 use wasm_bindgen::prelude::*;
 
 fn text_rows(rows: js_sys::Array) -> Result<Vec<Vec<String>>, JsValue> {
@@ -77,6 +80,20 @@ impl CanonicalAuthoringSceneContext {
             .active_live_player()
             .map_err(js_error)?
             .live_create_decimal_matrix(compiler, number_rows(rows)?, options.options)
+            .map(|value| WasmMatrixHandle::new(value.into_matrix()))
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = liveCreateMobjectMatrix)]
+    pub fn live_create_mobject_matrix(
+        &mut self,
+        rows: &WasmMobjectMatrixRows,
+        options: WasmMatrixOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmMatrixHandle, JsValue> {
+        self.inner
+            .active_live_player()
+            .map_err(js_error)?
+            .live_create_mobject_matrix(compiler, rows.entries(), options.options)
             .map(|value| WasmMatrixHandle::new(value.into_matrix()))
             .map_err(js_error)
     }
