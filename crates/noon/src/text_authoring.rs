@@ -17,16 +17,14 @@ pub(crate) use semantic::{prepare_native_text, semantic_text_state};
 use std::sync::Arc;
 
 use noon_compile::CompileError;
-#[cfg(feature = "typst")]
-use noon_core::TextSourceKind;
-#[cfg(any(feature = "native-text", feature = "typst"))]
-use noon_core::Vec2;
 use noon_core::{
     Color, FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
     TextResourceValidationError, Transform2D, WHITE,
 };
 #[cfg(feature = "native-text")]
 use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::{TextSourceKind, Vec2};
 #[cfg(feature = "native-text")]
 pub use noon_text::shaping::NativeFontFace;
 #[cfg(feature = "native-text")]
