@@ -353,9 +353,7 @@ fn matching_double_brace(value: &str, mut index: usize) -> Option<usize> {
             if depth == 0 && value[index..].starts_with("}}") {
                 return Some(index);
             }
-            if depth > 0 {
-                depth -= 1;
-            }
+            depth = depth.saturating_sub(1);
         }
         index += value[index..].chars().next()?.len_utf8();
     }
@@ -438,7 +436,7 @@ mod tests {
     fn rejects_unbounded_argument_batches_before_partition_growth() {
         assert!(matches!(
             LatexDocument::from_arguments(
-                std::iter::repeat("").take(MAX_LATEX_ARGUMENTS + 1),
+                std::iter::repeat_n("", MAX_LATEX_ARGUMENTS + 1),
                 TextSourceKind::MathTex,
             ),
             Err(LatexDocumentError::TooLarge)

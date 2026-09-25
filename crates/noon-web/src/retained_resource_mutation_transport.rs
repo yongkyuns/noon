@@ -6,6 +6,9 @@ use crate::{RetainedResourceBundle, TransportTextResourceHandle};
 pub const RETAINED_RESOURCE_MUTATION_CHANNEL: &str = "noon.execution.retained.resource_mutation";
 pub const RETAINED_RESOURCE_MUTATION_VERSION: u32 = 1;
 
+// Replacement bundles already own their resource buffers. This transient wire
+// envelope stays inline to avoid an extra allocation for every numeric update.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RetainedResourceMutationOperation {

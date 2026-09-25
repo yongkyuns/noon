@@ -510,7 +510,7 @@ pub fn normalize_dvi(
                         checksum,
                         scale,
                         design,
-                        resource: *supplied_font,
+                        resource: supplied_font,
                         tfm,
                         face,
                     },
@@ -630,6 +630,9 @@ struct ActiveFont<'a> {
     face: FontFaceIdentity,
 }
 
+// DVI opcode helpers receive explicit decoder state and bounded output sinks.
+// Keep these borrows local instead of introducing another mutable parser owner.
+#[allow(clippy::too_many_arguments)]
 fn set_char(
     font_code: u32,
     advance: bool,
@@ -786,6 +789,9 @@ fn glyph_bounds(ttf: &[u8], glyph: GlyphId, size: f32, origin: Vec2, advance: f3
         origin + Vec2::new(read(6)? as f32 * factor, read(8)? as f32 * factor),
     ))
 }
+// DVI opcode helpers receive explicit decoder state and bounded output sinks.
+// Keep these borrows local instead of introducing another mutable parser owner.
+#[allow(clippy::too_many_arguments)]
 fn push_rule(
     height: i64,
     width: i64,
@@ -835,6 +841,9 @@ fn resource_bounds(runs: &[GlyphRun], vector_bounds: Option<Rect>) -> Option<Rec
         })
 }
 
+// DVI opcode helpers receive explicit decoder state and bounded output sinks.
+// Keep these borrows local instead of introducing another mutable parser owner.
+#[allow(clippy::too_many_arguments)]
 fn parse_special(
     bytes: &[u8],
     source_len: u32,

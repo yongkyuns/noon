@@ -71,8 +71,7 @@ impl CanonicalAuthoringScene {
                 .map_err(AuthoringFailure::from),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_apply_semantic_transaction(transaction)
-                .map_err(AuthoringFailure::from),
+                .live_apply_semantic_transaction(transaction),
             PlayerOwnership::Unstarted => {
                 Err("zoom activation cannot follow pre-execution canonical timing".into())
             }

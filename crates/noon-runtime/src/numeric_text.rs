@@ -238,7 +238,8 @@ impl SceneInstance {
         let mut next_index = self.compiled.objects().len();
         for patch in transaction.mutations() {
             if let ExecutionPatch::CreateObject(object) = patch {
-                if !appended.contains_key(&object.id) {
+                if let std::collections::btree_map::Entry::Vacant(entry) = appended.entry(object.id)
+                {
                     let index = self
                         .compiled
                         .retained_object_index(object.id)
@@ -248,7 +249,7 @@ impl SceneInstance {
                             next_index += 1;
                             index
                         });
-                    appended.insert(object.id, index);
+                    entry.insert(index);
                 }
             }
         }

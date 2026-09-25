@@ -917,6 +917,16 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
     object.into()
 }
 
+impl From<noon::NumericAuthoringError> for AuthoringFailure {
+    fn from(error: noon::NumericAuthoringError) -> Self {
+        match error {
+            noon::NumericAuthoringError::Text(error) => error.into(),
+            noon::NumericAuthoringError::Semantic(error) => error.into(),
+            other => Self::new("invalid_input", "numeric.input", other),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1165,15 +1175,5 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
-    }
-}
-
-impl From<noon::NumericAuthoringError> for AuthoringFailure {
-    fn from(error: noon::NumericAuthoringError) -> Self {
-        match error {
-            noon::NumericAuthoringError::Text(error) => error.into(),
-            noon::NumericAuthoringError::Semantic(error) => error.into(),
-            other => Self::new("invalid_input", "numeric.input", other),
-        }
     }
 }
