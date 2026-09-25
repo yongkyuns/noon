@@ -19,6 +19,7 @@ class _Context:
     def __init__(self):
         self.next_token = 1
         self.fail = None
+        self.creation_calls = []
 
     def _call(self, operation):
         if self.fail == operation:
@@ -26,9 +27,12 @@ class _Context:
 
     def liveCreateGraph(self, *args):
         self._call("create")
+        self.creation_calls.append(args)
         handle = _Handle(self.next_token)
         self.next_token += 1
         return handle
+
+    liveCreateCircularGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -78,3 +82,17 @@ class GraphFacadeTests(unittest.TestCase):
         value = graph.Graph({"a": (0, 0)}, [])
         with self.assertRaisesRegex(ValueError, "unknown vertex"):
             value.add_edges([("a", "missing")])
+
+    def test_list_vertices_and_explicit_mapping_use_one_constructor(self):
+        value = graph.Graph(["a", "b"], [("a", "b")], layout={"a": (0, 0), "b": (1, 2)})
+        self.assertEqual(value._graph_key_ids, {"a": 0, "b": 1})
+        self.assertEqual(self.context.creation_calls, [(False, [0, 1], [0.0, 0.0, 1.0, 2.0], [0, 1])])
+
+    def test_invalid_layout_is_rejected_before_allocating_graph(self):
+        for layout in ["unsupported", {"a": (0, 0)}]:
+            with self.subTest(layout=layout):
+                with self.assertRaises((NotImplementedError, ValueError)):
+                    graph.Graph(["a", "b"], [("a", "b")], layout=layout)
+        with self.assertRaises(ValueError):
+            graph.Graph(["a"], [], layout_scale=float("nan"))
+        self.assertEqual(self.context.creation_calls, [])

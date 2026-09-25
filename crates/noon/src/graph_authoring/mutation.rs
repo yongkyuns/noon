@@ -60,6 +60,27 @@ impl Default for GraphLayoutOptions {
     }
 }
 
+impl GraphLayoutOptions {
+    /// Prepare positions without allocating semantic objects. Edge endpoints are
+    /// indices in the supplied vertex order, allowing constructors and retained
+    /// layout changes to share the same deterministic layout implementation.
+    pub fn positions(
+        &self,
+        vertex_count: usize,
+        edges: &[(usize, usize)],
+    ) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+        if edges
+            .iter()
+            .any(|&(start, end)| start >= vertex_count || end >= vertex_count)
+        {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "layout edge endpoints must reference existing vertices",
+            ));
+        }
+        graph_layout(vertex_count, edges, self)
+    }
+}
+
 /// Handles affected by one committed topology mutation.
 #[derive(Clone, Debug, Default)]
 pub struct GraphMutationResult {
@@ -603,7 +624,7 @@ where
     } else {
         Vec::new()
     };
-    let positions = graph_layout(vertices.len(), &edges, &options)?;
+    let positions = options.positions(vertices.len(), &edges)?;
     publish_layout_positions(publication, vertices, &positions)
 }
 
@@ -776,5 +797,30 @@ impl DeterministicRandom {
         self.state ^= self.state >> 7;
         self.state ^= self.state << 17;
         (self.state >> 11) as f64 / ((1u64 << 53) as f64)
+    }
+}
+
+#[cfg(test)]
+mod layout_preparation_tests {
+    use super::*;
+
+    #[test]
+    fn pure_layout_validates_edges_and_non_finite_inputs_before_construction() {
+        let options = GraphLayoutOptions {
+            layout: GraphLayout::Circular,
+            ..Default::default()
+        };
+        assert!(options.positions(2, &[(0, 2)]).is_err());
+        assert!(GraphLayoutOptions {
+            scale: f64::NAN,
+            ..options.clone()
+        }
+        .positions(0, &[])
+        .is_err());
+        let positions = options.positions(4, &[]).unwrap();
+        assert_eq!(positions.len(), 4);
+        assert!((positions[0].0 - 2.0).abs() < 1e-12);
+        assert!(positions[0].1.abs() < 1e-12);
+        assert_eq!(options.positions(1, &[]).unwrap(), vec![(0.0, 0.0)]);
     }
 }

@@ -1,4 +1,4 @@
-"""Thin Graph/DiGraph adapters over the active Rust live-session handle.
+"""Thin Graph/DiGraph adapters over the shared Rust authoring handle.
 
 Python owns only its arbitrary hashable-key to u32 mapping. Rust owns graph
 topology, arrow endpoints, persistent placements, and publication.
@@ -37,43 +37,48 @@ class _GraphBase(_compat.Group):
                  layout_center=(0.0, 0.0), **kwargs):
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
-        context = _shared._live_constructor_context("Graph")
-        if context is None:
-            raise RuntimeError("Graph construction requires an active canonical Scene session")
-        if not isinstance(vertices, Mapping):
-            raise TypeError("Graph vertices must be a mapping of hashable keys to positions")
+        explicit = layout if isinstance(layout, Mapping) else (
+            vertices if layout in {None, "explicit"} and isinstance(vertices, Mapping) else None
+        )
+        circular = isinstance(layout, str) and layout == "circular"
+        if explicit is None and not circular:
+            raise NotImplementedError("Graph requires a circular layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
-        ids, positions = [], []
-        for key, position in vertices.items():
+        positions = []
+        for key in vertices:
             if not isinstance(key, Hashable):
                 raise TypeError("Graph vertex keys must be hashable")
             if key in self._graph_key_ids:
                 raise ValueError("duplicate Graph vertex key")
-            vertex_id = self._next_graph_id
+            self._graph_key_ids[key] = self._next_graph_id
             self._next_graph_id += 1
-            self._graph_key_ids[key] = vertex_id
-            x, y = _point(position)
-            ids.append(vertex_id)
-            positions.extend((x, y))
+            if explicit is not None:
+                try:
+                    positions.extend(_point(explicit[key]))
+                except KeyError as error:
+                    raise ValueError("Graph layout must cover every vertex exactly once") from error
+        if explicit is not None and len(explicit) != len(self._graph_key_ids):
+            raise ValueError("Graph layout must cover every vertex exactly once")
         edge_ids = self._edge_ids(edges)
-        self._graph_handle = engine_call(
-            context.liveCreateGraph, bool(self._directed), _array(ids), _array(positions),
-            _array(edge_ids), operation="Graph.create",
-        )
+        center = _point(layout_center)
+        scale = _shared._ir._finite_number("layout_scale", layout_scale)
+        context = _shared._live_constructor_context("Graph", allow_unstarted=True)
+        if context is None:
+            raise RuntimeError("Graph construction requires a canonical Scene authoring context")
+        ids = _array(self._graph_key_ids.values())
+        if circular:
+            self._graph_handle = engine_call(
+                context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
+                scale, *center, operation="Graph.create",
+            )
+        else:
+            self._graph_handle = engine_call(
+                context.liveCreateGraph, bool(self._directed), ids, _array(positions),
+                _array(edge_ids), operation="Graph.create",
+            )
         _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
         self._canonical_live_target_context = context
-        if layout == "circular":
-            center = _point(layout_center)
-            engine_call(context.liveGraphCircularLayout, self._graph_handle,
-                        float(layout_scale), *center, operation="Graph.circular_layout")
-        elif layout in {None, "explicit"}:
-            pass
-        else:
-            raise NotImplementedError(
-                "Python Graph qualifies only circular and explicit layouts; "
-                "seeded random/spring remain native author-time APIs"
-            )
 
     def _edge_ids(self, edges):
         values = []
@@ -155,6 +160,8 @@ class _GraphBase(_compat.Group):
         return clone
 
     def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0), positions=None):
+        if isinstance(layout, Mapping):
+            positions, layout = layout, "explicit"
         if layout == "circular":
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
                         float(scale), *_point(center), operation="Graph.circular_layout")

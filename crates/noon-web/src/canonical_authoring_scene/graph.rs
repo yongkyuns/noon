@@ -15,7 +15,12 @@ impl CanonicalAuthoringScene {
                 .active_live_player()?
                 .live_create_graph(directed, vertices, edges),
             PlayerOwnership::Unstarted => {
-                Err("live Graph construction requires an active canonical session".into())
+                let graph = if directed {
+                    noon::DiGraph::new(&mut self.scene, vertices, edges).map(NativeGraph::Directed)
+                } else {
+                    noon::Graph::new(&mut self.scene, vertices, edges).map(NativeGraph::Undirected)
+                };
+                graph.map_err(|error| AuthoringFailure::unclassified("graph.create", &error))
             }
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
@@ -32,9 +37,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_mutate_graph(graph, operation),
-            PlayerOwnership::Unstarted => {
-                Err("live Graph mutation requires an active canonical session".into())
-            }
+            PlayerOwnership::Unstarted => graph
+                .apply(&mut self.scene, operation)
+                .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }

@@ -29,6 +29,68 @@ impl NativeGraph {
         }
     }
 
+    pub(crate) fn apply(
+        &mut self,
+        scene: &mut noon::Scene,
+        operation: GraphOperation,
+    ) -> Result<(), noon::GraphAuthoringError> {
+        match (self, operation) {
+            (Self::Undirected(graph), GraphOperation::AddVertices(vertices)) => {
+                graph.add_vertices(scene, vertices)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddVertices(vertices)) => {
+                graph.add_vertices(scene, vertices)?;
+            }
+            (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
+                graph.add_edges(scene, edges)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
+                graph.add_edges(scene, edges)?;
+            }
+            (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
+                graph.remove_vertices(scene, vertices)?;
+            }
+            (Self::Directed(graph), GraphOperation::RemoveVertices(vertices)) => {
+                graph.remove_vertices(scene, vertices)?;
+            }
+            (Self::Undirected(graph), GraphOperation::RemoveEdges(edges)) => {
+                graph.remove_edges(scene, edges)?;
+            }
+            (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
+                graph.remove_edges(scene, edges)?;
+            }
+            (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Circular,
+                        scale,
+                        center,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (Self::Directed(graph), GraphOperation::Circular { scale, center }) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Circular,
+                        scale,
+                        center,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
+                graph.change_layout_positions(scene, &positions)?;
+            }
+            (Self::Directed(graph), GraphOperation::Explicit(positions)) => {
+                graph.change_layout_positions(scene, &positions)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_live(
         &mut self,
         live: &mut noon::LiveSession<'_>,
@@ -197,6 +259,37 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmGraphHandle, JsValue> {
         let vertices = vertices(vertex_ids, positions)?;
         let edges = pairs(edge_pairs, "Graph edges")?;
+        self.create_live_graph(directed, vertices, edges)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
+    /// Compute a circular layout before publishing any semantic nodes.
+    #[wasm_bindgen(js_name = liveCreateCircularGraph)]
+    pub fn live_create_circular_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Circular,
+            scale,
+            center: (center_x, center_y),
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
         self.create_live_graph(directed, vertices, edges)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
