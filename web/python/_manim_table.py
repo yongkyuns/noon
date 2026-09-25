@@ -2,7 +2,12 @@
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
-from _manim_semantic_handles import _attach_shared_family, _family_wrapper_key, _live_constructor_context
+from _manim_semantic_handles import (
+    _attach_shared_family,
+    _family_wrapper_key,
+    _handle_for,
+    _live_constructor_context,
+)
 
 try:
     from js import noonCreateAuthoringTableHandle as _create_table
@@ -75,7 +80,11 @@ class Table(_compat.VGroup):
         opacity = float(kwargs.pop("fill_opacity", 1.0))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
-        return engine_call(self._table_handle.highlightCell, int(pos[0]), int(pos[1]), color, opacity)
+        color = _compat._as_color("color", color)
+        return engine_call(
+            self._table_handle.highlightCell,
+            int(pos[0]), int(pos[1]), color.red, color.green, color.blue, color.alpha, opacity,
+        )
 
     def add_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
         return self.get_highlighted_cell(pos, color, **kwargs)
@@ -111,8 +120,14 @@ class MobjectTable(Table):
             raise RuntimeError("MobjectTable requires Noon’s shared Rust authoring runtime")
         source_rows = [list(row) for row in table]
         def handle(value):
-            if not isinstance(value, _base.Mobject) or not hasattr(value, "_semantic_handle"):
-                raise TypeError("MobjectTable entries must be shared Mobjects")
-            return value._semantic_handle
+            if not isinstance(value, _base.Mobject):
+                raise TypeError("MobjectTable entries must be shared Mobjects or Groups")
+            family = getattr(value, "_semantic_family_handle", None)
+            if family is not None:
+                return family
+            semantic = _handle_for(value)
+            if semantic is None:
+                raise TypeError("MobjectTable entries require current shared semantic identities")
+            return semantic
         context = _live_constructor_context("MobjectTable", allow_unstarted=True)
         self._initialize_table(engine_call(_create_mobject_table, _rows(source_rows, handle), *_options(kwargs), context), context)

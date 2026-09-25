@@ -27,6 +27,8 @@ mod authoring_latex;
 pub use authoring_latex::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_matrix;
+#[cfg(target_arch = "wasm32")]
+mod authoring_table;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
@@ -135,6 +137,8 @@ pub use authoring_number_labels::*;
 pub use authoring_options::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plot_presentation::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_table::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plotting::*;
 #[cfg(target_arch = "wasm32")]

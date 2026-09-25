@@ -15,6 +15,8 @@ import initNoonWeb, {
   WasmLatexOptions,
   WasmMatrixOptions,
   WasmMobjectMatrixRows,
+  WasmTableOptions,
+  WasmMobjectTableRows,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -271,6 +273,36 @@ async function initializePyodide() {
       for (const entry of row) entries.appendEntry(entry);
     }
     return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonTableOptions = WasmTableOptions;
+  self.noonMobjectTableRows = WasmMobjectTableRows;
+  self.noonTableFromFamily = (family) => family.asTable();
+  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Table");
+    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
+    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
+    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
+    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectTableHandle = (rows, v, h, outer, context) => {
+    const entries = new WasmMobjectTableRows();
+    for (const row of Array.from(rows, row => Array.from(row))) {
+      entries.beginRow();
+      for (const entry of row) {
+        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        else entries.appendEntry(entry);
+      }
+    }
+    return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);

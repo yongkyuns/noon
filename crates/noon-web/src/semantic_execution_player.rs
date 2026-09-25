@@ -1,6 +1,8 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(target_arch = "wasm32")]
 mod brace;
+#[cfg(target_arch = "wasm32")]
+mod table;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
