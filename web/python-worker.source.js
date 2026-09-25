@@ -290,6 +290,7 @@ async function initializePyodide() {
     return {
       family: () => handle.family(),
       label: () => handle.label(),
+      equals: () => handle.equals(),
       tracker: () => handle.tracker(),
       value: () => numericHandle(handle.value()),
     };

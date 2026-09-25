@@ -3189,6 +3189,14 @@ mod wasm {
             crate::WasmLatexPartsHandle::new(self.variable.label().clone())
         }
 
+        #[wasm_bindgen(js_name = equals)]
+        pub fn equals(&self) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.variable
+                .equals()
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = value)]
         pub fn value(&self) -> crate::WasmDecimalNumberHandle {
             crate::WasmDecimalNumberHandle::from_number(self.variable.value().clone())

@@ -49,7 +49,7 @@ class MathTexPart(_CompiledTexLeaf):
         self._owner = owner
         self._part = part
         self._initialize_text(
-            owner.source, getattr(owner, "_font_size", 48.0), handle,
+            str(engine_call(handle.textSource)), getattr(owner, "_font_size", 48.0), handle,
             getattr(owner, "_initial_color", _base.WHITE),
             getattr(owner, "_initial_opacity", 1.0), presentation_applied=True,
         )
@@ -60,7 +60,7 @@ class MathTexPart(_CompiledTexLeaf):
 
     @property
     def tex_string(self) -> str:
-        return _source_slice(self._owner.source, self._part)
+        return _source_slice(self.source, self._part)
 
     def set_color(self, color: _base.Color, family: bool = True) -> MathTexPart:
         del family

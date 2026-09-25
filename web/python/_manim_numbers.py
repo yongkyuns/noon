@@ -91,7 +91,9 @@ class Variable(_compat.VGroup):
             raise NotImplementedError("Variable var_type must be DecimalNumber or Integer")
         if not isinstance(label, str):
             raise TypeError("Variable label must be a string")
-        places = kwargs.pop("num_decimal_places", 0 if var_type is Integer else 2)
+        places = kwargs.pop("num_decimal_places", 2)
+        if var_type is Integer:
+            places = 0
         include_sign = bool(kwargs.pop("include_sign", False))
         commas = bool(kwargs.pop("group_with_commas", True))
         ellipsis = bool(kwargs.pop("show_ellipsis", False))
@@ -116,7 +118,12 @@ class Variable(_compat.VGroup):
         self.tracker = ValueTracker._from_canonical(
             scene, context, engine_call(handle.tracker)
         )
-        self.equals = self.label[1]
+        equals_handle = engine_call(handle.equals)
+        self.equals = next(
+            part for part in self.label
+            if (part._semantic_handle.semanticSlot == equals_handle.semanticSlot
+                and part._semantic_handle.semanticGeneration == equals_handle.semanticGeneration)
+        )
         _attach_shared_family(self, engine_call(handle.family), context)
         self._semantic_member_wrappers = {
             _family_wrapper_key(self.label): self.label,
