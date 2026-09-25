@@ -874,6 +874,7 @@ mod tests {
     ) -> PreparedRetainedTextFrame<'a> {
         PreparedRetainedTextFrame {
             time: 0.0,
+            layout_rebuilt: true,
             mask_quads: quads,
             color_quads: &[],
             items,
