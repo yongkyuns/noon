@@ -247,7 +247,7 @@ fn brace_tip_and_direction(path: &VectorPath) -> Result<((f64, f64), (f64, f64))
             | noon_core::PathCommand::QuadraticTo { to, .. }
             | noon_core::PathCommand::CubicTo { to, .. } => {
                 let from = current.ok_or(AuthoringError::NonFiniteGeometry)?;
-                anchors.extend([from, to]);
+                anchors.push(from);
                 current = Some(to);
             }
             noon_core::PathCommand::Close => {}

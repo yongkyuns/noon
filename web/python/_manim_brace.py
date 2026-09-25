@@ -152,9 +152,9 @@ class Brace(_compat.VMobject):
     def get_tip(self) -> _base.Vec2:
         """Return the pinned ManimCE v0.21 brace-tip anchor."""
         # Cairo's Brace.get_tip() returns points[28] == the eighth anchor in
-        # the canonical cubic path. Noon's anchors come from the Rust-owned
+        # the canonical cubic path. Noon's start anchors come from the Rust-owned
         # retained VectorPath query, so Python owns only the class-specific index.
-        anchors = self.get_anchors()
+        anchors = self.get_start_anchors()
         if len(anchors) <= _BRACE_TIP_ANCHOR_INDEX:
             raise RuntimeError("Brace path does not contain the canonical tip anchor")
         return anchors[_BRACE_TIP_ANCHOR_INDEX]

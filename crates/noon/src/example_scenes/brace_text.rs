@@ -13,7 +13,9 @@ fn scene() -> Result<Scene, String> {
         let left_label = BraceText::new(
             &mut scene,
             &LayoutAnchor::from(&left),
-            Text::new("Label").with_font_size(36.0),
+            Text::new("Label")
+                .with_font_size(36.0)
+                .with_font("DejaVu Sans Mono"),
             BraceOptions::default(),
         )?;
         let mut right = scene.rectangle(2.5, 1.5)?;
@@ -21,7 +23,9 @@ fn scene() -> Result<Scene, String> {
         let right_label = BraceText::new(
             &mut scene,
             &LayoutAnchor::from(&right),
-            Text::new("Side").with_font_size(36.0),
+            Text::new("Side")
+                .with_font_size(36.0)
+                .with_font("DejaVu Sans Mono"),
             BraceOptions {
                 direction: (1.0, 0.0),
                 buff: 0.25,

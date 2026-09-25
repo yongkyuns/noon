@@ -138,7 +138,7 @@ impl BraceLabel {
         };
         let brace = Mobject::from_node(Rc::clone(&store), *brace)?;
         // Verify the canonical tip query needed by subsequent label placement.
-        if brace.path_query()?.anchors().len() <= 7 {
+        if brace.path_query()?.start_anchors().len() <= 7 {
             return Err(AuthoringError::NonFiniteGeometry);
         }
         let label = LayoutAnchor::from_node(store, *label);
@@ -380,7 +380,7 @@ impl PreparedLabelPlacement {
             return Err(AuthoringError::ForeignStore);
         }
         require_anchor_store(store, &label)?;
-        let anchors = brace.path_query()?.anchors();
+        let anchors = brace.path_query()?.start_anchors();
         let tip = *anchors.get(7).ok_or(AuthoringError::NonFiniteGeometry)?;
         let center = brace.center()?;
         let outward = (tip.0 - center.0, tip.1 - center.1);
@@ -547,6 +547,19 @@ mod tests {
             BraceOptions::default(),
         )
         .unwrap();
+        let tip = composite
+            .brace()
+            .object()
+            .path_query()
+            .unwrap()
+            .start_anchors()[7];
+        let first_bounds = first.layout_bounds().unwrap().unwrap();
+        assert!(
+            tip.0.abs() < 0.001,
+            "the brace tip lies below the target center"
+        );
+        assert!(((first_bounds.min_x + first_bounds.max_x) * 0.5 - tip.0).abs() < 0.001);
+        assert!((first_bounds.max_y - (tip.1 - 0.25)).abs() < 0.001);
         let brace = composite.brace().object().node_id();
         let replacement = scene.square(0.6).unwrap();
 
@@ -556,6 +569,11 @@ mod tests {
 
         assert_eq!(composite.brace().object().node_id(), brace);
         assert_eq!(composite.label().resolve().unwrap(), replacement.node_id());
+        let replacement_bounds = replacement.layout_bounds().unwrap().unwrap();
+        assert!(
+            ((replacement_bounds.min_x + replacement_bounds.max_x) * 0.5 - tip.0).abs() < 0.001
+        );
+        assert!((replacement_bounds.max_y - (tip.1 - 0.25)).abs() < 0.001);
         let members = members(composite.family());
         assert_eq!(members, vec![brace, replacement.node_id()]);
     }

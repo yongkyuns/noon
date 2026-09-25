@@ -171,7 +171,7 @@ class ManimBraceFacadeTests(unittest.TestCase):
             brace = Brace(Square(2.0))
             anchors = [noon.Vec2(float(index), 0.0) for index in range(8)]
             anchors[7] = noon.Vec2(0.0, -2.0)
-            brace.get_anchors = lambda: anchors
+            brace.get_start_anchors = lambda: anchors
             brace.get_center = lambda: noon.ORIGIN
 
             assert brace.get_tip() == noon.Vec2(0.0, -2.0)
