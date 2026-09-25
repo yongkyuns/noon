@@ -26,6 +26,22 @@ pub struct LatexParts {
 }
 
 impl LatexParts {
+    pub fn rebind_family(
+        &self,
+        family: crate::MobjectFamily,
+    ) -> Result<Self, crate::AuthoringError> {
+        if !Rc::ptr_eq(self.family.integration_store(), family.integration_store()) {
+            return Err(crate::AuthoringError::ForeignStore);
+        }
+        family.validate()?;
+        Ok(Self {
+            family,
+            members: Vec::new(),
+            source: Arc::clone(&self.source),
+            parts: self.parts.clone(),
+        })
+    }
+
     pub fn family(&self) -> &crate::MobjectFamily {
         &self.family
     }

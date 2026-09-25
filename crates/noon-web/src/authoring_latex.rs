@@ -113,6 +113,17 @@ impl WasmLatexPartsHandle {
         crate::WasmAuthoringFamilyHandle::from_semantic_family(self.parts.family().clone())
     }
 
+    #[wasm_bindgen(js_name = rebindFamily)]
+    pub fn rebind_family(
+        &self,
+        family: &crate::WasmAuthoringFamilyHandle,
+    ) -> Result<WasmLatexPartsHandle, JsValue> {
+        self.parts
+            .rebind_family(family.semantic_family()?)
+            .map(WasmLatexPartsHandle::new)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = members)]
     pub fn members(&self) -> Result<js_sys::Array, JsValue> {
         let current = self.parts.current_members().map_err(js_error)?;

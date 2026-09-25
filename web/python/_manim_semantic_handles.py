@@ -1754,6 +1754,9 @@ def _family_wrapper_key(value: object) -> str:
 def _group_members(self: _compat.Group) -> list[object]:
     # Ordering is observed from Rust only when requested. Mutations update this
     # identity registry locally; it is neither a membership nor an order cache.
+    refresh = getattr(self, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
     return [self._semantic_member_wrappers[str(key)]
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 

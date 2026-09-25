@@ -131,6 +131,7 @@ class _TexBase(_compat.VGroup):
         self._semantic_latex_handle = handle
         self._semantic_family_handle = engine_call(handle.family)
         self._semantic_member_wrappers = {}
+        self._part_views()
         if color_map:
             self.set_color_by_tex_to_color_map(color_map)
 
@@ -162,6 +163,21 @@ class _TexBase(_compat.VGroup):
             views.append(member)
         self._semantic_member_wrappers = live
         return tuple(views)
+
+    def _refresh_semantic_members(self) -> None:
+        self._part_views()
+
+    def copy(self):
+        import _manim_semantic_handles as semantic
+
+        clone = semantic._group_copy(self)
+        clone._semantic_latex_handle = engine_call(
+            self._semantic_latex_handle.rebindFamily,
+            clone._semantic_family_handle,
+        )
+        clone._semantic_member_wrappers = {}
+        clone._part_views()
+        return clone
 
     def _set_part_view_colors(self, selections):
         views = self._part_views()
