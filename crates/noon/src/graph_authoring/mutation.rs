@@ -18,10 +18,18 @@ use noon_core::{
     SemanticNodeCreation, SemanticObjectProperty, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeBinding, SemanticTransactionNodeRef,
 };
-use std::{collections::HashSet, hash::Hash, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    rc::Rc,
+};
 
 /// A deterministic author-time layout. Layout calculations never run on the
 /// playback path; the resulting positions are persistent object translations.
+///
+/// `Random` and `Spring` use Noon's seeded solver, not NetworkX-compatible
+/// random streams or force integration. `Spring` is O(iterations * V²) and is
+/// deliberately an author-time convenience rather than a runtime operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
@@ -318,6 +326,19 @@ where
                         StagedNewEdge::Arrow { edge, arrow }
                     }
                 };
+                // Graph edge families paint before all direct vertex members.
+                // Construction establishes the same edge-then-vertex ordering;
+                // keep it when an edit appends a new edge later.
+                let first_vertex = declaration
+                    .vertices()
+                    .next()
+                    .map(|(_, node)| node)
+                    .expect("validated edge endpoints require a graph vertex");
+                let family: SemanticTransactionNodeRef = match &staged_edge {
+                    StagedNewEdge::Line { family, .. } => (*family).into(),
+                    StagedNewEdge::Arrow { arrow, .. } => arrow.family.into(),
+                };
+                transaction.reorder_member_ref(root, family, Some(first_vertex.into()));
                 staged.push(staged_edge);
             }
             debug_assert_eq!(handle_index, handles.len());
@@ -559,28 +580,61 @@ where
     require_scene(scene, graph)?;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
-    let edges = declaration
-        .edges()
-        .map(|(edge, _)| {
-            let start = declaration
-                .topology()
-                .vertices()
-                .position(|id| id == edge.start)
-                .expect("edge start bound");
-            let end = declaration
-                .topology()
-                .vertices()
-                .position(|id| id == edge.end)
-                .expect("edge end bound");
-            (start, end)
-        })
-        .collect::<Vec<_>>();
+    let edges = if options.layout == GraphLayout::Spring {
+        let indices = declaration
+            .topology()
+            .vertices()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        declaration
+            .edges()
+            .map(|(edge, _)| (indices[&edge.start], indices[&edge.end]))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let positions = graph_layout(vertices.len(), &edges, &options)?;
+    publish_layout_positions(scene, vertices, &positions)
+}
+
+pub(super) fn change_layout_positions<K>(
+    scene: &mut Scene,
+    graph: &mut RetainedGraph<K>,
+    positions: &[(f64, f64)],
+) -> Result<(), GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+{
+    require_scene(scene, graph)?;
+    let declaration = graph.semantic_declaration()?.clone();
+    let vertices = declaration.vertices().collect::<Vec<_>>();
+    if positions.len() != vertices.len() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "explicit positions must cover every graph vertex exactly once",
+        ));
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "explicit positions must be finite",
+        ));
+    }
+    publish_layout_positions(scene, vertices, positions)
+}
+
+fn publish_layout_positions(
+    scene: &mut Scene,
+    vertices: Vec<(GraphVertexId, noon_core::SemanticNodeId)>,
+    positions: &[(f64, f64)],
+) -> Result<(), GraphAuthoringError> {
     scene.with_semantic_publication(|store, publish| {
         let mut transaction = SemanticMutationTransaction::new();
-        for ((_, node), (x, y)) in vertices.iter().copied().zip(positions.iter().copied()) {
+        for ((_, node), &(x, y)) in vertices.iter().zip(positions) {
             transaction.set_property(
-                node,
+                *node,
                 SemanticObjectProperty::Translation,
                 noon_core::SemanticVec3::new(x, y, 0.0),
             );

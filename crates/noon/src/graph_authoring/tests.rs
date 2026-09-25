@@ -452,6 +452,27 @@ fn topology_mutations_replace_the_declaration_without_churning_unrelated_binding
             .len(),
         3
     );
+    let root_members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(graph.family().node_id())
+        .unwrap()
+        .to_vec();
+    let edge_members = graph
+        .edge_mobjects()
+        .map(|(_, edge)| edge.family().node_id())
+        .collect::<Vec<_>>();
+    let vertex_members = graph
+        .vertex_keys()
+        .map(|key| graph.vertex(key).unwrap().node_id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_members,
+        edge_members
+            .into_iter()
+            .chain(vertex_members)
+            .collect::<Vec<_>>()
+    );
 
     let removed = graph.remove_vertices(&mut scene, ["b"]).unwrap();
     assert_eq!(removed.removed_vertices.len(), 1);
@@ -556,4 +577,22 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         })
         .collect::<Vec<_>>();
     assert_eq!(first_positions, second_positions);
+
+    first
+        .change_layout_positions(&mut first_scene, &[(-3.0, 2.0), (0.0, -1.0), (4.0, 3.0)])
+        .unwrap();
+    let explicit = first
+        .vertex_keys()
+        .map(|key| {
+            let translation = first
+                .vertex(key)
+                .unwrap()
+                .state()
+                .unwrap()
+                .transform
+                .translation;
+            (translation.x, translation.y)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(explicit, vec![(-3.0, 2.0), (0.0, -1.0), (4.0, 3.0)]);
 }

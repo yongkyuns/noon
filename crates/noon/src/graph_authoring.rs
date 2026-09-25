@@ -401,6 +401,15 @@ impl<K: Clone + Eq + Hash> Graph<K> {
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout(scene, &mut self.inner, options)
     }
+
+    /// Persist explicit positions in current graph vertex insertion order.
+    pub fn change_layout_positions(
+        &mut self,
+        scene: &mut Scene,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(scene, &mut self.inner, positions)
+    }
 }
 
 /// Explicit-position directed retained graph using shared Arrow geometry.
@@ -527,6 +536,15 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         options: GraphLayoutOptions,
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout(scene, &mut self.inner, options)
+    }
+
+    /// Persist explicit positions in current graph vertex insertion order.
+    pub fn change_layout_positions(
+        &mut self,
+        scene: &mut Scene,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(scene, &mut self.inner, positions)
     }
 }
 
