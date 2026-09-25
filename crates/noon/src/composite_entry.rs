@@ -18,6 +18,24 @@ impl CompositeEntry {
     pub(crate) fn leaves(&self) -> &[(Mobject, SemanticObjectState)] {
         &self.leaves
     }
+    pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
+        let mut result = None;
+        for (object, state) in &self.leaves {
+            if let Some(next) = crate::semantic_mobject::layout_for_content(
+                &object.integration_store().borrow(),
+                state.content,
+                state.transform,
+            )? {
+                if let Some(bounds) = &mut result {
+                    bounds.include(next.min_x, next.min_y);
+                    bounds.include(next.max_x, next.max_y);
+                } else {
+                    result = Some(next);
+                }
+            }
+        }
+        Ok(result)
+    }
 }
 
 /// Capture each entry at one valid authored/effective placement state.
@@ -58,4 +76,52 @@ pub(crate) fn capture_entries(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{MobjectFamily, SemanticObjectState, StoredGeometry};
+
+    fn circle(store: &Rc<RefCell<SemanticStore>>) -> Mobject {
+        Mobject::new(
+            Rc::clone(store),
+            SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn family_entry_preserves_root_and_captures_its_ordered_leaves() {
+        let store = Rc::new(RefCell::new(SemanticStore::new()));
+        let first = circle(&store);
+        let second = circle(&store);
+        let family =
+            MobjectFamily::create(Rc::clone(&store), &[(&first).into(), (&second).into()]).unwrap();
+        let entries = capture_entries(&store, None, first.node_id(), &[(&family).into()]).unwrap();
+        assert_eq!(entries[0].root(), family.node_id());
+        assert_eq!(
+            entries[0]
+                .leaves()
+                .iter()
+                .map(|(object, _)| object.clone())
+                .collect::<Vec<_>>(),
+            vec![first, second]
+        );
+        assert!(entries[0].bounds().unwrap().is_some());
+    }
+
+    #[test]
+    fn overlapping_family_descendants_are_rejected_before_publication() {
+        let store = Rc::new(RefCell::new(SemanticStore::new()));
+        let object = circle(&store);
+        let family = MobjectFamily::create(Rc::clone(&store), &[(&object).into()]).unwrap();
+        assert!(capture_entries(
+            &store,
+            None,
+            object.node_id(),
+            &[(&object).into(), (&family).into()]
+        )
+        .is_err());
+    }
 }
