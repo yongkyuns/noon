@@ -917,6 +917,16 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
     object.into()
 }
 
+impl From<noon::VariableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::VariableAuthoringError) -> Self {
+        match error {
+            noon::VariableAuthoringError::Text(error) => error.into(),
+            noon::VariableAuthoringError::Numeric(error) => error.into(),
+            noon::VariableAuthoringError::Authoring(error) => error.into(),
+        }
+    }
+}
+
 impl From<noon::NumericAuthoringError> for AuthoringFailure {
     fn from(error: noon::NumericAuthoringError) -> Self {
         match error {
