@@ -1,6 +1,6 @@
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import _manim_table as table
 
@@ -90,7 +90,11 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(detached._semantic_handle.semanticSlot, 11)
         self.assertEqual(table._get_highlighted_table.call_args.args[4:], (1.0, 1.0, 0.0, 1.0, 0.75))
         table._highlight_table.assert_not_called()
-        self.assertIs(value.add_highlighted_cell((2, 2)), value)
+        highlights = types.SimpleNamespace(_semantic_member_wrappers={})
+        with patch.object(table.Table, "submobjects", new_callable=PropertyMock,
+                          return_value=[None, None, highlights]):
+            self.assertIs(value.add_highlighted_cell((2, 2)), value)
+        self.assertEqual(highlights._semantic_member_wrappers["10:1"]._semantic_handle.semanticSlot, 10)
         for invalid in ((0, 1), (1.5, 1), (1, "2"), (1, 2, 3)):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "one-based"):
                 value.get_cell(invalid)

@@ -20,7 +20,7 @@ class MatrixLifecycle(Scene):
         assert len(ordinary.get_columns()) == 2
         assert len(ordinary.get_brackets()) == 2
         self.add(ordinary)
-        self.wait(0.05)
+        await self.wait(0.05)
         self.remove(ordinary)
         for matrix_type in (IntegerMatrix, DecimalMatrix):
             numeric = matrix_type([[1, -2], [3, 4]])
@@ -48,7 +48,7 @@ class MatrixLifecycle(Scene):
         else:
             raise AssertionError("duplicate Matrix roots must be rejected")
         self.add(supplied, clone)
-        self.wait(0.05)
+        await self.wait(0.05)
 
 `;
     const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1]);

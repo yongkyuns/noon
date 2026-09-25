@@ -22,7 +22,7 @@ await qualifyPairedAuthoring({
 class VariableLifecycle(Scene):
     async def construct(self):
         await prepare_latex()
-        self.wait(0.05)
+        await self.wait(0.05)
         variable = Variable(1.25, "x")
         assert variable.label[0].tex_string == "x"
         assert variable.equals.tex_string == "="
@@ -32,11 +32,11 @@ class VariableLifecycle(Scene):
         assert integer.value.get_value() == 3
         integer.shift(UP)
         self.add(variable, integer)
-        self.wait(0.05)
+        await self.wait(0.05)
         self.remove(integer)
         variable.tracker.set_value(7.5)
         assert variable.tracker.get_value() == 7.5
-        self.wait(0.05)
+        await self.wait(0.05)
 `;
     const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1, 0.15]);
     assert.equal(result.rendererBackend, expectedBackend);

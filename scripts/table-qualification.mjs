@@ -16,7 +16,7 @@ class TableLifecycle(Scene):
         table = Table([["a", "b"], ["c", "d"]], h_buff=0.9, v_buff=0.4,
                       include_outer_lines=True)
         self.add(table)
-        self.wait(0.05)
+        await self.wait(0.05)
         table.shift(RIGHT * 1.5).scale(0.8)
         center = table.get_entries((1, 1)).get_center()
         cell = table.get_cell((1, 1))
@@ -37,7 +37,7 @@ class TableLifecycle(Scene):
             assert len(numeric.get_entries()) == 4
             self.add(numeric)
             self.remove(numeric)
-        self.wait(0.05)
+        await self.wait(0.05)
 `;
     const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1]);
     assert.equal(result.rendererBackend, expectedBackend);

@@ -155,12 +155,14 @@ class Table(_compat.VGroup):
         color = _compat._as_color("color", color)
         context = _live_constructor_context("Table.add_highlighted_cell", allow_unstarted=True)
         row, column = _cell_position(pos)
-        engine_call(
+        handle = engine_call(
             _highlight_table,
             context,
             self._table_handle,
             row, column, color.red, color.green, color.blue, color.alpha, opacity,
         )
+        highlight = self._rectangle_wrapper(handle)
+        self.submobjects[2]._semantic_member_wrappers[_family_wrapper_key(highlight)] = highlight
         return self
 
 
