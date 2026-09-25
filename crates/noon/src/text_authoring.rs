@@ -14,6 +14,8 @@ pub use compiler::TextCompilerDiagnostics;
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
 pub(crate) use semantic::prepare_native_text;
+#[cfg(feature = "latex")]
+pub(crate) use semantic::PreparedDecimalLabels;
 #[cfg(feature = "typst")]
 pub(crate) use semantic::{math_typst_state, typst_state};
 

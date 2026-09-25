@@ -171,6 +171,8 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub use coordinate_authoring::BarLabelOptions;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
     ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,

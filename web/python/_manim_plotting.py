@@ -23,10 +23,11 @@ try:
     from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
     from js import noonAuthoringBarChartOptions as _bar_chart_options
     from js import noonCreateAuthoringBarChart as _create_bar_chart
+    from js import noonBarChartLabels as _bar_labels
     from js import noonPlotSamplingPlan as _sampling_plan
     from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _sampling_plan = _to_js = _jsnull = None
+    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _bar_labels = _sampling_plan = _to_js = _jsnull = None
 
 
 class _NumberLabel(NamedTuple):
@@ -501,7 +502,7 @@ class Axes(_compat.Group):
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
-class BarChart(_compat.Group):
+class BarChart(Axes):
     """Shared-Rust static bar chart with explicit, atomic value changes.
 
     The compatibility wrapper owns argument coercion and wrapper identity. Axes,
@@ -511,11 +512,20 @@ class BarChart(_compat.Group):
     def __init__(self, values, bar_names=None, y_range=None, x_length=None,
                  y_length=None, bar_colors=None, bar_width=0.6,
                  bar_fill_opacity=0.7, bar_stroke_width=3, **kwargs):
-        if bar_names is not None or kwargs:
-            unsupported = sorted(kwargs)
-            if bar_names is not None:
-                unsupported.append("bar_names")
+        x_config = dict(kwargs.pop("x_axis_config", {}))
+        name_size = float(x_config.pop("font_size", 24))
+        y_config = dict(kwargs.pop("y_axis_config", {}))
+        label_settings = {"font": "DejaVu Sans Mono", "font_size": 36, "buff": 0.25, "direction": _base.LEFT}
+        aliases = {"label_direction": "direction", "line_to_number_buff": "buff"}
+        for key, value in y_config.items():
+            label_settings[aliases.get(key, key)] = value
+        if kwargs or x_config:
+            unsupported = sorted(kwargs) + ["x_axis_config." + key for key in sorted(x_config)]
             raise NotImplementedError("unsupported BarChart option(s): " + ", ".join(unsupported))
+        if bar_names is not None:
+            bar_names = tuple(bar_names)
+            if not all(isinstance(name, str) for name in bar_names):
+                raise TypeError("bar names must be strings")
         values = tuple(float(value) for value in values)
         if _bar_chart_options is None:
             raise RuntimeError("BarChart requires the shared Rust authoring host")
@@ -534,44 +544,109 @@ class BarChart(_compat.Group):
                     _compat._as_color("bar color", color).alpha,
                 )]
                 engine_call(options.setColors, _array(rgba))
-            self._bar_chart_context = _coordinate_constructor_context()
-            self._bar_chart_handle = engine_call(
-                self._bar_chart_context.liveCreateBarChart if self._bar_chart_context is not None else _create_bar_chart,
-                options,
-            )
+            context = _shared._live_constructor_context("bar chart", allow_unstarted=True)
+            if bar_names is not None:
+                engine_call(options.setNames, _to_js(list(bar_names)), name_size)
+            from _manim_number_labels import _options
+            label_options, size, color = _options(label_settings)
         except BaseException:
             options.free()
             raise
+        self._bar_chart_handle = engine_call(_create_bar_chart, options, label_options, context)
         bars = engine_call(self._bar_chart_handle.bars)
-        self.bars = _shared._attach_shared_family(
-            object.__new__(_compat.VGroup), bars, self._bar_chart_context, _compat.Rectangle
-        )
+        self.bars = _family(object.__new__(_compat.VGroup), bars,
+                            [_leaf(handle, _compat.Rectangle) for handle in engine_call(bars.directMobjects)])
         axes = engine_call(self._bar_chart_handle.axes)
-        self.axes = _shared._attach_shared_family(
-            object.__new__(_compat.Group), axes, self._bar_chart_context
-        )
+        axis_members = [
+            _attach_number_line(object.__new__(NumberLine), engine_call(axes.coordinateAxis, index))
+            for index in (0, 1)
+        ]
+        self.axes = _family(object.__new__(Axes), axes, axis_members)
+        from _manim_number_labels import _family as _numeric_family, _remember
+        names = engine_call(self._bar_chart_handle.xLabels)
+        if names is not None and names is not _jsnull:
+            from _manim_latex import Tex
+            self.x_axis.labels = _chart_text_family(names, Tex, name_size, context)
+            self.x_axis._semantic_member_wrappers[_shared._family_wrapper_key(self.x_axis.labels)] = self.x_axis.labels
+        labels = engine_call(self._bar_chart_handle.yLabels)
+        _remember(self.y_axis, _numeric_family(labels, size, color))
         _family(self, engine_call(self._bar_chart_handle.family), [self.bars, self.axes])
-        _shared._attach_shared_family(
-            self, self._semantic_family_handle, self._bar_chart_context
-        )
+        self._bar_chart_context = context
+
+    def _rehydrate_semantic_family_handle(self):
+        """Rebind this copied wrapper to its copied Rust chart family."""
+        self._bar_chart_handle = engine_call(self._semantic_family_handle.barChart)
+        self.__dict__.pop("_bar_chart_context", None)
+
+    @property
+    def x_axis(self):
+        return self.axes.x_axis
+
+    @property
+    def y_axis(self):
+        return self.axes.y_axis
+
+    @property
+    def values(self):
+        return list(engine_call(self._bar_chart_handle.values))
+
+    @property
+    def _coordinate_handle(self):
+        return self.axes._coordinate_handle
+
+    def get_bar_labels(self, color=None, font_size=24, buff=0.25, label_constructor=None):
+        from _manim_latex import Tex, MathTex
+        constructor = Tex if label_constructor is None else label_constructor
+        if constructor not in (Tex, MathTex):
+            raise NotImplementedError("BarChart labels support Tex or MathTex")
+        if _bar_labels is None:
+            raise RuntimeError("BarChart labels require the shared Rust authoring host")
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        rgba = []
+        if color is not None:
+            c = _compat._as_color("label color", color)
+            rgba = [c.red, c.green, c.blue, c.alpha]
+        handle = engine_call(_bar_labels, self._bar_chart_handle, float(font_size), float(buff),
+                             constructor is MathTex, _array(rgba), context)
+        return _chart_text_family(handle, constructor, float(font_size), context)
 
     def change_bar_values(self, values, update_colors=True):
         values = tuple(float(value) for value in values)
-        engine_call(
-            self._bar_chart_context.liveChangeBarValues if self._bar_chart_context is not None else self._bar_chart_handle.changeBarValues,
-            *( (self._bar_chart_handle, _array(values), bool(update_colors)) if self._bar_chart_context is not None else (_array(values), bool(update_colors)) ),
-        )
-        _shared._attach_shared_family(
-            self.bars, engine_call(self._bar_chart_handle.bars), self._bar_chart_context,
-            _compat.Rectangle,
-        )
-        _shared._attach_shared_family(
-            self.axes, engine_call(self._bar_chart_handle.axes), self._bar_chart_context
-        )
-        _shared._attach_shared_family(
-            self, engine_call(self._bar_chart_handle.family), self._bar_chart_context
-        )
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        old = engine_call(self._bar_chart_handle.barPrefix, len(values))
+        if context is None:
+            engine_call(self._bar_chart_handle.changeBarValues, _array(values), bool(update_colors))
+        else:
+            engine_call(context.liveChangeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
+        new = engine_call(self._bar_chart_handle.barPrefix, len(values))
+        changed = []
+        for before, after in zip(old, new):
+            before_key = f"{int(before.semanticSlot)}:{int(before.semanticGeneration)}"
+            after_key = f"{int(after.semanticSlot)}:{int(after.semanticGeneration)}"
+            if before_key != after_key:
+                previous = self.bars._semantic_member_wrappers.pop(before_key, None)
+                replacement = _leaf(after, _compat.Rectangle)
+                if context is not None:
+                    replacement._canonical_live_target_context = context
+                self.bars._semantic_member_wrappers[after_key] = replacement
+                changed.extend((previous, replacement) if previous is not None else (replacement,))
+        scene = self.x_axis.shaft._scene
+        if changed and scene is not None:
+            from _manim_scene import _reconcile_completed_family_bindings
+            _reconcile_completed_family_bindings(scene, tuple(changed))
         return self
+
+
+def _chart_text_family(handle, constructor, font_size, context=None):
+    members = []
+    for object_handle, source in engine_call(handle.numberLabelMembers):
+        label = object.__new__(constructor)
+        label._initialize_text(str(source), font_size, object_handle, _base.WHITE, 1.0,
+                               presentation_applied=True)
+        if context is not None:
+            label._canonical_live_target_context = context
+        members.append(label)
+    return _family(object.__new__(_compat.VGroup), handle, members)
 
 
 def _callable(function):

@@ -1935,9 +1935,6 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             else:
                 target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
                 target.__dict__.pop("_semantic_arrow_index", None)
-        if hasattr(source, "_bar_chart_handle"):
-            target._bar_chart_handle = engine_call(target._semantic_family_handle.barChart)
-            target._bar_chart_context = getattr(source, "_bar_chart_context", None)
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)

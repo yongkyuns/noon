@@ -10,7 +10,9 @@ mod objects;
 pub(crate) use objects::prepare_native_text;
 #[cfg(feature = "typst")]
 pub(crate) use objects::{math_typst_state, typst_state};
+#[cfg(feature = "latex")]
+pub(crate) mod decimal_labels;
 #[cfg(feature = "native-text")]
 mod number_labels;
 #[cfg(feature = "latex")]
-pub(crate) mod decimal_labels;
+pub(crate) use decimal_labels::PreparedDecimalLabels;

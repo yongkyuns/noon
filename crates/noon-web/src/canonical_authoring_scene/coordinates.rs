@@ -42,6 +42,26 @@ impl CanonicalAuthoringScene {
             .live_change_bar_values(chart, values, update_colors)
     }
 
+    pub(crate) fn live_create_labeled_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+        labels: &noon::plot_presentation::NumberLabelOptions,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        self.active_live_player()?
+            .live_create_labeled_bar_chart(options, labels, compiler)
+    }
+
+    pub(crate) fn live_bar_labels(
+        &mut self,
+        chart: &noon::ManimBarChart,
+        compiler: &mut crate::WasmLatexCompiler,
+        options: &noon::BarLabelOptions,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.active_live_player()?
+            .live_bar_labels(chart, compiler, options)
+    }
+
     pub(super) fn live_create_number_line(
         &mut self,
         options: &noon::ManimNumberLineOptions,

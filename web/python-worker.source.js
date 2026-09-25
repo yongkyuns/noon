@@ -171,7 +171,19 @@ async function initializePyodide() {
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
   self.noonCreateAuthoringCoordinateHandle = (options) =>
     authoringStore.createCoordinates(options);
-  self.noonCreateAuthoringBarChart = (options) => authoringStore.createBarChart(options);
+  self.noonCreateAuthoringBarChart = (options, labels, context) => {
+    if (!latexCompiler) {
+      options.free(); labels.free();
+      throw new Error("Call await prepare_latex() before constructing BarChart");
+    }
+    return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
+      : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
+  };
+  self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing chart labels");
+    return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
+      : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);

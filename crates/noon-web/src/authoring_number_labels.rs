@@ -6,7 +6,7 @@ use noon::{ManimAxes, ManimNumberLine, Mobject};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
-fn failure(error: impl std::fmt::Display) -> JsValue {
+pub(crate) fn failure(error: impl std::fmt::Display) -> JsValue {
     js_error(AuthoringFailure::new(
         "invalid_input",
         "plot.number_labels",
@@ -17,7 +17,7 @@ fn failure(error: impl std::fmt::Display) -> JsValue {
 /// Inert presentation only. A family is created only by the consuming operation.
 #[wasm_bindgen]
 pub struct WasmNumberLabelOptions {
-    options: NumberLabelOptions,
+    pub(crate) options: NumberLabelOptions,
 }
 
 #[wasm_bindgen]

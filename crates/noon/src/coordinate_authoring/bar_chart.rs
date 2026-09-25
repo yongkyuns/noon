@@ -14,6 +14,9 @@ use noon_core::{
 use super::{CoordinateAuthoringError, ManimAxes, ManimAxesOptions};
 use crate::{AuthoringError, MobjectFamily, Scene};
 
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub(crate) mod labels;
+
 const DEFAULT_BAR_COLORS: [Color; 5] = [
     Color::from_hex(0x003F5C),
     Color::from_hex(0x58508D),
@@ -33,6 +36,8 @@ pub struct ManimBarChartOptions {
     pub bar_fill_opacity: f64,
     pub bar_stroke_width: f64,
     pub bar_colors: Vec<Color>,
+    pub bar_names: Option<Vec<String>>,
+    pub name_font_size: f32,
 }
 
 impl ManimBarChartOptions {
@@ -46,6 +51,8 @@ impl ManimBarChartOptions {
             bar_fill_opacity: 0.7,
             bar_stroke_width: 3.0,
             bar_colors: DEFAULT_BAR_COLORS.to_vec(),
+            bar_names: None,
+            name_font_size: 24.0,
         }
     }
 
@@ -112,6 +119,48 @@ impl ManimBarChart {
     }
     pub fn bars(&self) -> &MobjectFamily {
         &self.bars
+    }
+
+    /// Optional retained names attached to the horizontal axis.
+    pub fn x_labels(&self) -> Result<Option<MobjectFamily>, CoordinateAuthoringError> {
+        let axis = self.axes.x_axis()?;
+        let store = self.family.integration_store();
+        let node = store
+            .borrow()
+            .semantic_family_checked(axis.family().node_id())
+            .map_err(AuthoringError::from)?
+            .members_iter()
+            .nth(2);
+        node.map(|node| MobjectFamily::from_node(Rc::clone(store), node).map_err(Into::into))
+            .transpose()
+    }
+
+    /// The retained DecimalNumber family attached to the vertical axis.
+    #[cfg(all(feature = "native-text", feature = "latex"))]
+    pub fn y_labels(&self) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        let axis = self.axes.y_axis()?;
+        let store = self.family.integration_store();
+        let node = store
+            .borrow()
+            .semantic_family_checked(axis.family().node_id())
+            .map_err(AuthoringError::from)?
+            .members_iter()
+            .nth(2)
+            .ok_or(CoordinateAuthoringError::InvalidTopology)?;
+        MobjectFamily::from_node(Rc::clone(store), node).map_err(Into::into)
+    }
+
+    /// Resolve an authoritative bar prefix without materializing the remaining
+    /// chart leaves. This keeps wrapper refreshes local after zero-value swaps.
+    pub fn bar_prefix(
+        &self,
+        count: usize,
+    ) -> Result<Vec<crate::Mobject>, CoordinateAuthoringError> {
+        let store = self.family.integration_store();
+        direct_bar_nodes_prefix(&store.borrow(), &self.bars, count)?
+            .into_iter()
+            .map(|node| crate::Mobject::from_node(Rc::clone(store), node).map_err(Into::into))
+            .collect()
     }
     /// Read authored numeric inputs, independently of current rectangle geometry.
     pub fn values(&self) -> Result<Vec<f64>, CoordinateAuthoringError> {
@@ -411,6 +460,33 @@ pub(crate) fn prepare(
     ),
     CoordinateAuthoringError,
 > {
+    if options.bar_names.is_some() {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "bar names require create_with_axis_labels and a LaTeX backend",
+        ));
+    }
+    let prepared = prepare_chart(options)?;
+    Ok((
+        prepared.transaction,
+        prepared.chart,
+        prepared.axes,
+        prepared.bars,
+    ))
+}
+
+struct PreparedChart {
+    transaction: SemanticMutationTransaction,
+    chart: noon_core::SemanticLocalNodeToken,
+    axes: noon_core::SemanticLocalNodeToken,
+    bars: noon_core::SemanticLocalNodeToken,
+    x_axis: noon_core::SemanticLocalNodeToken,
+    y_axis: noon_core::SemanticLocalNodeToken,
+    frame: noon_geometry::AxesFrame,
+}
+
+fn prepare_chart(
+    options: &ManimBarChartOptions,
+) -> Result<PreparedChart, CoordinateAuthoringError> {
     validate_options(options)?;
     let count = options.values.len();
     let colors = crate::color_gradient(&options.bar_colors, count)?;
@@ -463,7 +539,15 @@ pub(crate) fn prepare(
     }
     transaction.add_member(chart, bars);
     transaction.add_member(chart, axes);
-    Ok((transaction, chart, axes, bars))
+    Ok(PreparedChart {
+        transaction,
+        chart,
+        axes,
+        bars,
+        x_axis: x,
+        y_axis: y,
+        frame,
+    })
 }
 
 fn validate_options(options: &ManimBarChartOptions) -> Result<(), CoordinateAuthoringError> {
@@ -488,6 +572,11 @@ fn validate_options(options: &ManimBarChartOptions) -> Result<(), CoordinateAuth
     if options.bar_colors.is_empty() {
         return Err(CoordinateAuthoringError::InvalidOptions(
             "bar_colors must not be empty",
+        ));
+    }
+    if !options.name_font_size.is_finite() || options.name_font_size <= 0.0 {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid bar-name font size",
         ));
     }
     Ok(())
@@ -549,6 +638,103 @@ fn bar_transform(
 fn set_bar_color(style: &mut SemanticStyle, color: Color) {
     style.fill = Some(SemanticPaint::Solid(color));
     style.stroke = Some(SemanticPaint::Solid(color));
+}
+
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub(crate) struct PreparedLabeledChart {
+    chart: PreparedChart,
+    labels: crate::text_authoring::PreparedDecimalLabels,
+    names: Option<labels::PreparedBarLabels>,
+}
+
+#[cfg(all(feature = "native-text", feature = "latex"))]
+impl PreparedLabeledChart {
+    pub(crate) fn prepare(
+        options: &ManimBarChartOptions,
+        label_options: &crate::plot_presentation::NumberLabelOptions,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Self, crate::plot_presentation::NumberLabelAuthoringError> {
+        let chart = prepare_chart(options)?;
+        let labels = crate::text_authoring::PreparedDecimalLabels::prepare(
+            backend,
+            chart.frame.y(),
+            None,
+            label_options,
+        )?;
+        let names = options
+            .bar_names
+            .as_ref()
+            .map(|names| {
+                labels::PreparedBarLabels::prepare_names(
+                    names,
+                    &options.values,
+                    chart.frame.x(),
+                    options.name_font_size,
+                    backend,
+                )
+            })
+            .transpose()?;
+        Ok(Self {
+            chart,
+            labels,
+            names,
+        })
+    }
+
+    pub(crate) fn publish(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            SemanticMutationTransaction,
+        ) -> Result<
+            noon_core::SemanticMutationTransactionResult,
+            crate::TextAuthoringError,
+        >,
+    ) -> Result<
+        (
+            noon_core::SemanticMutationTransactionResult,
+            [noon_core::SemanticLocalNodeToken; 3],
+        ),
+        crate::plot_presentation::NumberLabelAuthoringError,
+    > {
+        let chart = self.chart;
+        let (result, _) = self.labels.publish_with_transaction(
+            store,
+            Some(chart.y_axis.into()),
+            chart.transaction,
+            |store, transaction| match self.names {
+                Some(names) => names
+                    .publish_into(store, Some(chart.x_axis.into()), transaction, publish)
+                    .map(|(result, _)| result),
+                None => publish(store, transaction),
+            },
+        )?;
+        Ok((result, [chart.chart, chart.axes, chart.bars]))
+    }
+}
+
+#[cfg(all(feature = "native-text", feature = "latex"))]
+impl ManimBarChart {
+    /// Prepare bars, names, and retained DecimalNumber Y labels before one
+    /// semantic publication. Language adapters only provide inert options and a
+    /// compiler; family ownership and placement remain Rust-owned.
+    pub fn create_with_axis_labels(
+        store: Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        options: &ManimBarChartOptions,
+        label_options: &crate::plot_presentation::NumberLabelOptions,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Self, crate::plot_presentation::NumberLabelAuthoringError> {
+        let prepared = PreparedLabeledChart::prepare(options, label_options, backend)?;
+        let (result, [chart, axes, bars]) =
+            prepared.publish(&mut store.borrow_mut(), |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })?;
+        Self::from_result(store, &result, chart, axes, bars).map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
@@ -826,5 +1012,71 @@ mod tests {
             store.semantic_object_state_checked(nodes[2]).unwrap(),
             &unchanged
         );
+    }
+}
+
+#[cfg(all(test, feature = "native-text", feature = "latex"))]
+mod labeled_tests {
+    use super::*;
+
+    struct FailingCompiler;
+
+    impl crate::LatexBackend for FailingCompiler {
+        fn identity(&self) -> &str {
+            "bar-chart-label-rollback"
+        }
+        fn format(&self) -> crate::LatexFormat {
+            crate::LatexFormat::Preloaded
+        }
+        fn compile(&mut self, _: &str) -> Result<Vec<u8>, String> {
+            Err("compiler unavailable".into())
+        }
+        fn font(&mut self, _: &str) -> Result<crate::DviFontResource, String> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn named_labeled_construction_rolls_back_when_compilation_fails() {
+        let scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let before = {
+            let store = store.borrow();
+            (
+                store.len(),
+                store.scene_revision(),
+                store.text_resources().len(),
+                store.geometry_resources().len(),
+            )
+        };
+        let mut options = ManimBarChartOptions::new(vec![1.0], [0.0, 2.0, 1.0], 2.0, 2.0);
+        options.bar_names = Some(vec!["one".into()]);
+        assert!(ManimBarChart::create_with_axis_labels(
+            Rc::clone(&store),
+            &options,
+            &crate::plot_presentation::NumberLabelOptions::default(),
+            &mut FailingCompiler,
+        )
+        .is_err());
+        let store = store.borrow();
+        assert_eq!(
+            before,
+            (
+                store.len(),
+                store.scene_revision(),
+                store.text_resources().len(),
+                store.geometry_resources().len()
+            )
+        );
+    }
+
+    #[test]
+    fn bare_constructor_rejects_names_before_publication() {
+        let mut scene = Scene::new();
+        let before = scene.integration_store().borrow().len();
+        let mut options = ManimBarChartOptions::new(vec![1.0], [0.0, 2.0, 1.0], 2.0, 2.0);
+        options.bar_names = Some(vec!["one".into()]);
+        assert!(scene.bar_chart(&options).is_err());
+        assert_eq!(scene.integration_store().borrow().len(), before);
     }
 }

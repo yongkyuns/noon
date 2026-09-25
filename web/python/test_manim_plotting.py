@@ -41,6 +41,9 @@ class PlottingAdapterTests(unittest.TestCase):
         self.array_bridge = patch.object(plotting, "_to_js", lambda values: values)
         self.array_bridge.start()
         self.addCleanup(self.array_bridge.stop)
+        self.label_options = patch("_manim_number_labels._options", return_value=(Mock(), 36, plotting._base.WHITE))
+        self.label_options.start()
+        self.addCleanup(self.label_options.stop)
 
     def test_function_uses_each_shared_parameter_once_and_releases_plan(self):
         plan = Plan()
@@ -113,7 +116,7 @@ class PlottingAdapterTests(unittest.TestCase):
         options = Mock()
         chart = Mock()
         axes_family = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=[]))
+                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
         bars_family = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
                                       directMobjects=Mock(return_value=[]),
                                       memberKeys=Mock(return_value=[]))
@@ -124,15 +127,29 @@ class PlottingAdapterTests(unittest.TestCase):
         chart.family.return_value = chart_family
         chart.axes.return_value = axes_family
         chart.bars.return_value = bars_family
+        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
+        )
+        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        axes_family.coordinateAxis = Mock(side_effect=[axis, other_axis])
+        chart.xLabels.return_value = None
+        chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
+            numberLabelMembers=Mock(return_value=[]), memberKeys=Mock(return_value=[]))
+        chart.barPrefix.return_value = []
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=options)) as make_options, \
              patch.object(plotting, "_create_bar_chart", Mock(return_value=chart)) as create_chart, \
-             patch.object(plotting, "_coordinate_constructor_context", return_value=None):
+             patch.object(plotting._shared, "_live_constructor_context", return_value=None):
             result = plotting.BarChart((1, 2))
 
         make_options.assert_called_once_with([1.0, 2.0], [], 0.0, 0.0)
         options.setStyle.assert_called_once_with(0.6, 0.7, 3.0)
-        create_chart.assert_called_once_with(options)
+        create_chart.assert_called_once_with(options, unittest.mock.ANY, None)
         self.assertIs(result._bar_chart_handle, chart)
         self.assertIs(result.axes._semantic_family_handle, axes_family)
         self.assertIs(result.bars._semantic_family_handle, bars_family)
@@ -142,7 +159,7 @@ class PlottingAdapterTests(unittest.TestCase):
         chart = Mock()
         options = Mock()
         axes_family = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=[]))
+                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
         bars_family = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
                                       directMobjects=Mock(return_value=[]),
                                       memberKeys=Mock(return_value=[]))
@@ -153,14 +170,29 @@ class PlottingAdapterTests(unittest.TestCase):
         chart.family.return_value = chart_family
         chart.axes.return_value = axes_family
         chart.bars.return_value = bars_family
-        context.liveCreateBarChart.return_value = chart
+        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
+        )
+        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        axes_family.coordinateAxis = Mock(side_effect=[axis, other_axis])
+        chart.xLabels.return_value = None
+        chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
+            numberLabelMembers=Mock(return_value=[]), memberKeys=Mock(return_value=[]))
+        chart.barPrefix.return_value = []
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=options)), \
-             patch.object(plotting, "_coordinate_constructor_context", return_value=context):
+             patch.object(plotting, "_create_bar_chart", Mock(return_value=chart)) as create_chart, \
+             patch.object(plotting._shared, "_live_constructor_context", return_value=context), \
+             patch.object(plotting, "_coordinate_context", return_value=context):
             result = plotting.BarChart((1, 2))
             result.change_bar_values((3, 4), update_colors=False)
 
-        context.liveCreateBarChart.assert_called_once_with(options)
+        create_chart.assert_called_once_with(options, unittest.mock.ANY, context)
         context.liveChangeBarValues.assert_called_once_with(chart, [3.0, 4.0], False)
         chart.changeBarValues.assert_not_called()
 
@@ -169,18 +201,31 @@ class PlottingAdapterTests(unittest.TestCase):
         source_family = SimpleNamespace(semanticSlot=1, semanticGeneration=1,
                                         memberKeys=Mock(return_value=["2:1", "3:1"]))
         source_axes = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=[]))
+                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
         source_bars = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
                                       directMobjects=Mock(return_value=[]),
                                       memberKeys=Mock(return_value=[]))
         source_chart.family.return_value = source_family
         source_chart.axes.return_value = source_axes
         source_chart.bars.return_value = source_bars
+        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
+        )
+        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
+            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
+            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
+            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        source_axes.coordinateAxis = Mock(side_effect=[axis, other_axis])
+        source_chart.xLabels.return_value = None
+        source_chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
+            numberLabelMembers=Mock(return_value=[]), memberKeys=Mock(return_value=[]))
         context = Mock()
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=Mock())), \
              patch.object(plotting, "_create_bar_chart", Mock(return_value=source_chart)), \
-             patch.object(plotting, "_coordinate_constructor_context", return_value=None):
+             patch.object(plotting._shared, "_live_constructor_context", return_value=None):
             source = plotting.BarChart((1, 2))
 
         copied_root = Mock()
@@ -192,11 +237,13 @@ class PlottingAdapterTests(unittest.TestCase):
         copied_bars = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
                                      memberKeys=Mock(return_value=[]))
         def copied_family_for(source):
-            return {
+            mapped = {
                 id(source_family): copied_family,
                 id(source_axes): copied_axes,
                 id(source_bars): copied_bars,
-            }[id(source)]
+            }.get(id(source))
+            return mapped if mapped is not None else SimpleNamespace(
+                semanticSlot=99, semanticGeneration=1, memberKeys=Mock(return_value=[]))
         copied_root.familyFor.side_effect = copied_family_for
         copied_root.mobjectFor.side_effect = lambda _: SimpleNamespace(
             semanticSlot=11, semanticGeneration=1
@@ -213,7 +260,7 @@ class PlottingAdapterTests(unittest.TestCase):
         self.assertIs(copied.axes._semantic_family_handle, copied_axes)
         self.assertIs(copied.bars._semantic_family_handle, copied_bars)
         self.assertIs(copied._bar_chart_handle, copied_family.barChart.return_value)
-        self.assertIs(copied._bar_chart_context, source._bar_chart_context)
+        self.assertFalse(hasattr(copied, "_bar_chart_context"))
 
 
 if __name__ == "__main__":

@@ -30,6 +30,15 @@ impl WasmBarChartOptions {
         Ok(Self { options })
     }
 
+    #[wasm_bindgen(js_name = setNames)]
+    pub fn set_names(&mut self, names: Vec<String>, font_size: f64) -> Result<(), JsValue> {
+        self.options.name_font_size =
+            crate::authoring_mobject::text_authoring_f32("font size", font_size)
+                .map_err(crate::authoring_error::js_error)?;
+        self.options.bar_names = Some(names);
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setStyle)]
     pub fn set_style(&mut self, bar_width: f64, fill_opacity: f64, stroke_width: f64) {
         self.options.bar_width = bar_width;
@@ -81,6 +90,26 @@ impl WasmAuthoringStore {
 }
 
 #[wasm_bindgen]
+impl WasmAuthoringStore {
+    #[wasm_bindgen(js_name = createLabeledBarChart)]
+    pub fn create_labeled_bar_chart(
+        &self,
+        options: WasmBarChartOptions,
+        labels: crate::WasmNumberLabelOptions,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<WasmBarChartHandle, JsValue> {
+        noon::ManimBarChart::create_with_axis_labels(
+            std::rc::Rc::clone(&self.semantics),
+            &options.options,
+            &labels.options,
+            compiler,
+        )
+        .map(|chart| WasmBarChartHandle { chart })
+        .map_err(crate::authoring_number_labels::failure)
+    }
+}
+
+#[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveCreateBarChart)]
     pub fn live_create_bar_chart(
@@ -102,6 +131,22 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<(), JsValue> {
         self.inner
             .live_change_bar_values(&mut chart.chart, values, update_colors)
+            .map_err(crate::authoring_error::js_error)
+    }
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveCreateLabeledBarChart)]
+    pub fn live_create_labeled_bar_chart(
+        &mut self,
+        options: WasmBarChartOptions,
+        labels: crate::WasmNumberLabelOptions,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<WasmBarChartHandle, JsValue> {
+        self.inner
+            .live_create_labeled_bar_chart(&options.options, &labels.options, compiler)
+            .map(|chart| WasmBarChartHandle { chart })
             .map_err(crate::authoring_error::js_error)
     }
 }
@@ -134,6 +179,47 @@ impl WasmBarChartHandle {
         WasmAuthoringFamilyHandle::from_semantic_family(self.chart.bars().clone())
     }
 
+    #[wasm_bindgen(js_name = xLabels)]
+    pub fn x_labels(&self) -> Result<Option<WasmAuthoringFamilyHandle>, JsValue> {
+        self.chart
+            .x_labels()
+            .map(|family| family.map(WasmAuthoringFamilyHandle::from_semantic_family))
+            .map_err(crate::authoring_plotting::coordinate_failure)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = yLabels)]
+    pub fn y_labels(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        self.chart
+            .y_labels()
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_plotting::coordinate_failure)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    #[wasm_bindgen(js_name = barPrefix)]
+    pub fn bar_prefix(
+        &self,
+        count: usize,
+    ) -> Result<Vec<crate::WasmAuthoringMobjectHandle>, JsValue> {
+        self.chart
+            .bar_prefix(count)
+            .map(|bars| {
+                bars.into_iter()
+                    .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                    .collect()
+            })
+            .map_err(crate::authoring_plotting::coordinate_failure)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    pub fn values(&self) -> Result<Vec<f64>, JsValue> {
+        self.chart
+            .values()
+            .map_err(crate::authoring_plotting::coordinate_failure)
+            .map_err(crate::authoring_error::js_error)
+    }
+
     #[wasm_bindgen(js_name = changeBarValues)]
     pub fn change_bar_values(
         &mut self,
@@ -147,6 +233,72 @@ impl WasmBarChartHandle {
     }
 }
 
+fn label_options(
+    font_size: f64,
+    buff: f64,
+    math: bool,
+    rgba: &[f64],
+) -> Result<noon::BarLabelOptions, JsValue> {
+    let color = match rgba {
+        [] => None,
+        [r, g, b, a] => crate::authoring_mobject::family_color(true, *r, *g, *b, *a)
+            .map_err(crate::authoring_error::js_error)?,
+        _ => {
+            return Err(crate::authoring_error::js_error(
+                "label color requires four RGBA values",
+            ))
+        }
+    };
+    Ok(noon::BarLabelOptions {
+        font_size: crate::authoring_mobject::text_authoring_f32("font size", font_size)
+            .map_err(crate::authoring_error::js_error)?,
+        buff,
+        color,
+        math,
+    })
+}
+
+#[wasm_bindgen]
+impl WasmBarChartHandle {
+    #[wasm_bindgen(js_name = labelFamily)]
+    pub fn label_family(
+        &self,
+        font_size: f64,
+        buff: f64,
+        math: bool,
+        rgba: &[f64],
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        self.chart
+            .get_bar_labels(compiler, &label_options(font_size, buff, math, rgba)?)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_number_labels::failure)
+    }
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveBarLabelFamily)]
+    pub fn live_bar_label_family(
+        &mut self,
+        chart: &WasmBarChartHandle,
+        font_size: f64,
+        buff: f64,
+        math: bool,
+        rgba: &[f64],
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        self.inner
+            .live_bar_labels(
+                &chart.chart,
+                compiler,
+                &label_options(font_size, buff, math, rgba)?,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(crate::authoring_error::js_error)
+    }
+}
+
 /// Native and single-context WASM execute the same typed BarChart scene.
 #[cfg(all(
     feature = "renderer",
@@ -155,8 +307,9 @@ impl WasmBarChartHandle {
 #[wasm_bindgen(js_name = createBarChartRenderer)]
 pub async fn create_bar_chart_renderer(
     canvas: web_sys::OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
-    let session =
-        noon::example_scenes::bar_chart::session().map_err(crate::authoring_error::js_error)?;
+    let session = noon::example_scenes::bar_chart::session(compiler)
+        .map_err(crate::authoring_error::js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

@@ -49,6 +49,32 @@ impl SemanticExecutionPlayer {
         .map_err(crate::plot_error::coordinate_failure)
     }
 
+    pub(crate) fn live_create_labeled_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+        labels: &noon::plot_presentation::NumberLabelOptions,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(live.bar_chart_with_axis_labels(options, labels, compiler))
+        })?
+        .map_err(|error| {
+            AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+        })
+    }
+
+    pub(crate) fn live_bar_labels(
+        &mut self,
+        chart: &noon::ManimBarChart,
+        compiler: &mut crate::WasmLatexCompiler,
+        options: &noon::BarLabelOptions,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.bar_labels(chart, compiler, options)))?
+            .map_err(|error| {
+                AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+            })
+    }
+
     pub(crate) fn live_create_number_line(
         &mut self,
         options: &noon::ManimNumberLineOptions,
