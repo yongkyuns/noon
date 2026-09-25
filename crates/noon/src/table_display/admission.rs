@@ -110,18 +110,20 @@ struct PreparedText {
     dependency: TextDependency,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
+    font_size: f64,
 }
 fn prepare_text(
     backend: &mut impl LatexBackend,
     source: String,
 ) -> Result<PreparedText, TableAuthoringError> {
-    let (identity, resource, fonts, geometry, transform, style) =
+    let (identity, resource, fonts, geometry, transform, style, font_size) =
         crate::latex_authoring::prepare_math_tex(crate::MathTex::from_strings([source])?, backend)?
             .into_compiled_resource_parts_with_presentation();
     Ok(PreparedText {
         dependency: (identity, resource, fonts, geometry),
         transform,
         style,
+        font_size,
     })
 }
 fn text_bounds(resource: &TextResource, transform: SemanticTransform2_5D) -> Bounds2D64 {
@@ -717,10 +719,16 @@ pub(super) fn publish_text_table(
                             let mut state = SemanticObjectState::new(*handle);
                             state.transform = transform;
                             state.style = item.style.clone();
-                            tx.create_node(SemanticNodeCreation::object(state))
+                            state.set_text_presentation_baseline(
+                                crate::latex_authoring::latex_presentation_baseline(
+                                    &item.dependency.1,
+                                    transform,
+                                    item.font_size,
+                                )?,
+                            );
+                            Ok(tx.create_node(SemanticNodeCreation::object(state)).into())
                         })
-                        .map(Into::into)
-                        .collect();
+                        .collect::<Result<Vec<_>, TextAuthoringError>>()?;
                     let value = stage(
                         &mut tx,
                         leaves,
