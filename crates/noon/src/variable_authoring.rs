@@ -164,7 +164,6 @@ pub(crate) fn construct_variable(
     dependencies.extend(binding.dependencies().iter().cloned());
 
     let captured_binding_handles = RefCell::new(None);
-    let mut execution = execution;
     let published = store
         .borrow_mut()
         .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
