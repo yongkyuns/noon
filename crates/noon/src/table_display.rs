@@ -7,17 +7,19 @@
 mod admission;
 
 use crate::{
-    AuthoringError, Color, CompositeEntryHandle, DecimalFormat, LatexBackend, Mobject,
-    MobjectFamily, MobjectTarget, NumericAuthoringError, Scene, TextAuthoringError,
+    AuthoringError, Color, CompositeEntryHandle, Mobject, MobjectFamily, MobjectTarget, Scene,
+    TextAuthoringError,
 };
+#[cfg(feature = "latex")]
+use crate::{DecimalFormat, LatexBackend, NumericAuthoringError};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 #[cfg(feature = "native-text")]
 use admission::publish_native_text_table;
-use admission::{
-    publish_existing_table, publish_numeric_table, publish_target_table, publish_text_table,
-    table_shape, TablePublisher,
-};
+use admission::{publish_existing_table, publish_target_table, table_shape, TablePublisher};
+
+#[cfg(feature = "latex")]
+use admission::{publish_numeric_table, publish_text_table};
 
 pub const DEFAULT_TABLE_H_BUFF: f64 = 1.3;
 pub const DEFAULT_TABLE_V_BUFF: f64 = 0.8;
@@ -60,12 +62,22 @@ impl TableOptions {
 #[derive(Debug)]
 pub enum TableAuthoringError {
     EmptyTable,
-    RaggedRows { expected: usize, actual: usize },
+    RaggedRows {
+        expected: usize,
+        actual: usize,
+    },
     DuplicateEntry,
-    InvalidLabels { expected: usize, actual: usize },
-    InvalidOption { name: &'static str, value: f64 },
+    InvalidLabels {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidOption {
+        name: &'static str,
+        value: f64,
+    },
     InvalidStructure,
     Text(TextAuthoringError),
+    #[cfg(feature = "latex")]
     Numeric(NumericAuthoringError),
     Semantic(AuthoringError),
     LiveSession(crate::LiveSessionError),
@@ -84,6 +96,7 @@ impl std::fmt::Display for TableAuthoringError {
             Self::InvalidOption { name, value } => write!(f, "invalid table {name}: {value}"),
             Self::InvalidStructure => f.write_str("semantic family is not a valid Table"),
             Self::Text(error) => error.fmt(f),
+            #[cfg(feature = "latex")]
             Self::Numeric(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
             Self::LiveSession(error) => error.fmt(f),
@@ -101,6 +114,7 @@ impl From<TextAuthoringError> for TableAuthoringError {
         Self::Text(value)
     }
 }
+#[cfg(feature = "latex")]
 impl From<NumericAuthoringError> for TableAuthoringError {
     fn from(value: NumericAuthoringError) -> Self {
         Self::Numeric(value)
@@ -121,10 +135,13 @@ pub struct Table {
 /// One retained Table entry root. This common display handle preserves family
 /// identity while layout operates on ordered descendant leaves.
 pub type TableEntry = CompositeEntryHandle;
+#[cfg(feature = "latex")]
 #[derive(Clone, Debug)]
 pub struct MathTable(Table);
+#[cfg(feature = "latex")]
 #[derive(Clone, Debug)]
 pub struct IntegerTable(Table);
+#[cfg(feature = "latex")]
 #[derive(Clone, Debug)]
 pub struct DecimalTable(Table);
 #[derive(Clone, Debug)]
@@ -292,11 +309,13 @@ impl Table {
         let store = self.entry_family.integration_store();
         let row = store
             .borrow()
-            .semantic_family_member_at_checked(self.entry_family.node_id(), row)?
+            .semantic_family_member_at_checked(self.entry_family.node_id(), row)
+            .map_err(AuthoringError::from)?
             .ok_or(TableAuthoringError::InvalidStructure)?;
         let entry = store
             .borrow()
-            .semantic_family_member_at_checked(row, column)?
+            .semantic_family_member_at_checked(row, column)
+            .map_err(AuthoringError::from)?
             .ok_or(TableAuthoringError::InvalidStructure)?;
         CompositeEntryHandle::from_node(Rc::clone(store), entry).map_err(Into::into)
     }
@@ -400,6 +419,7 @@ impl Table {
     }
 }
 
+#[cfg(feature = "latex")]
 impl MathTable {
     pub fn from_rows<I, J, S>(
         scene: &mut Scene,
@@ -468,6 +488,7 @@ impl MathTable {
         self.0
     }
 }
+#[cfg(feature = "latex")]
 impl IntegerTable {
     pub fn from_rows<I, J>(
         scene: &mut Scene,
@@ -535,6 +556,7 @@ impl IntegerTable {
         self.0
     }
 }
+#[cfg(feature = "latex")]
 impl DecimalTable {
     pub fn from_rows<I, J>(
         scene: &mut Scene,
@@ -782,7 +804,9 @@ impl MobjectTable {
     }
 }
 macro_rules! table_deref { ($($type:ty),+ $(,)?) => { $(impl Deref for $type { type Target=Table; fn deref(&self)->&Table { &self.0 } })+ }; }
-table_deref!(MathTable, IntegerTable, DecimalTable, MobjectTable);
+table_deref!(MobjectTable);
+#[cfg(feature = "latex")]
+table_deref!(MathTable, IntegerTable, DecimalTable);
 fn collect_text_rows<I, J, S>(rows: I) -> Vec<Vec<String>>
 where
     I: IntoIterator<Item = J>,
@@ -793,6 +817,7 @@ where
         .map(|r| r.into_iter().map(|s| s.as_ref().to_owned()).collect())
         .collect()
 }
+#[cfg(feature = "latex")]
 fn collect_number_rows<I, J>(rows: I) -> Vec<Vec<f64>>
 where
     I: IntoIterator<Item = J>,
@@ -816,6 +841,7 @@ where
         .map(|row| row.into_iter().collect())
         .collect()
 }
+#[cfg(feature = "latex")]
 fn integer_format() -> DecimalFormat {
     DecimalFormat {
         decimal_places: 0,

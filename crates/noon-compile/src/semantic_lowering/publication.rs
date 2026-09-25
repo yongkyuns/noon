@@ -440,6 +440,7 @@ fn validate_mutations(
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
+                | SemanticMutation::SetTableLayout { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::ReorderMember { .. }
@@ -1066,6 +1067,7 @@ fn lower_semantic_publication(
             | SemanticMutation::ScopeSignal { .. }
             | SemanticMutation::SetForegroundMembers { .. }
             | SemanticMutation::SetGraphDeclaration { .. }
+            | SemanticMutation::SetTableLayout { .. }
             | SemanticMutation::SetInset2DView { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }

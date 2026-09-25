@@ -39,7 +39,7 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
             backend,
         )
         .map_err(|error| error.to_string())?;
-    let plus = scene
+    let mut plus = scene
         .math_tex(
             MathTex::new("+").map_err(|error| error.to_string())?,
             backend,

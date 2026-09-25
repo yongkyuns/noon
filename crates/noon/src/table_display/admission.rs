@@ -119,6 +119,7 @@ impl TablePublisher<'_, '_> {
     }
 }
 
+#[cfg(feature = "latex")]
 struct PreparedText {
     dependency: TextDependency,
     transform: SemanticTransform2_5D,
@@ -131,6 +132,7 @@ struct PreparedNativeText {
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
 }
+#[cfg(feature = "latex")]
 fn prepare_text(
     backend: &mut impl LatexBackend,
     source: String,
@@ -666,6 +668,7 @@ pub(super) fn publish_target_table(
 ) -> Result<Table, TableAuthoringError> {
     commit_composite(publisher, entries, shape, rows, columns, options)
 }
+#[cfg(feature = "latex")]
 pub(super) fn publish_text_table(
     publisher: TablePublisher<'_, '_>,
     backend: &mut impl LatexBackend,
@@ -862,6 +865,7 @@ pub(super) fn publish_native_text_table(
     })?;
     make_table(store, published, options)
 }
+#[cfg(feature = "latex")]
 pub(super) fn publish_numeric_table(
     publisher: TablePublisher<'_, '_>,
     backend: &mut impl LatexBackend,
@@ -1028,31 +1032,6 @@ pub(super) fn column_families(
         .map(|items| alias(&store, items))
         .collect()
 }
-fn retained_cell_bounds(
-    bounds: &[Bounds2D64],
-    shape: TableShape,
-    options: TableOptions,
-    row: usize,
-    column: usize,
-) -> Result<Bounds2D64, TableAuthoringError> {
-    if row >= shape.rows || column >= shape.columns {
-        return Err(TableAuthoringError::InvalidStructure);
-    }
-    let column_bounds = (0..shape.rows).map(|r| bounds[r * shape.columns + column]);
-    let row_bounds = (0..shape.columns).map(|c| bounds[row * shape.columns + c]);
-    let (min_x, max_x) = column_bounds.fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
-        (value.0.min(bound.min_x), value.1.max(bound.max_x))
-    });
-    let (min_y, max_y) = row_bounds.fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
-        (value.0.min(bound.min_y), value.1.max(bound.max_y))
-    });
-    Ok(Bounds2D64 {
-        min_x: min_x - options.h_buff * 0.5,
-        max_x: max_x + options.h_buff * 0.5,
-        min_y: min_y - options.v_buff * 0.5,
-        max_y: max_y + options.v_buff * 0.5,
-    })
-}
 fn selected_cell_bounds(
     publisher: &TablePublisher<'_, '_>,
     family: &MobjectFamily,
@@ -1060,19 +1039,42 @@ fn selected_cell_bounds(
     row: usize,
     column: usize,
 ) -> Result<Bounds2D64, TableAuthoringError> {
-    let values = rows(family)?;
-    let shape = TableShape {
-        rows: values.len(),
-        columns: shape_from_rows(&values)?,
+    let store = family.integration_store();
+    let (row_nodes, column_nodes) = {
+        let semantic = store.borrow();
+        let row_roots = semantic
+            .semantic_family_members_checked(family.node_id())
+            .map_err(AuthoringError::from)?;
+        let row_root = *row_roots
+            .get(row)
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        let row_nodes = semantic
+            .semantic_family_members_checked(row_root)
+            .map_err(AuthoringError::from)?;
+        if column >= row_nodes.len() {
+            return Err(TableAuthoringError::InvalidStructure);
+        }
+        let column_nodes = row_roots
+            .into_iter()
+            .map(|row_root| {
+                semantic
+                    .semantic_family_member_at_checked(row_root, column)
+                    .map_err(AuthoringError::from)?
+                    .ok_or(TableAuthoringError::InvalidStructure)
+            })
+            .collect::<Result<Vec<_>, TableAuthoringError>>()?;
+        (row_nodes, column_nodes)
     };
-    if row >= shape.rows || column >= shape.columns {
-        return Err(TableAuthoringError::InvalidStructure);
-    }
-    let row_targets: Vec<_> = values[row].iter().map(TableEntry::as_target).collect();
-    let column_targets: Vec<_> = values
-        .iter()
-        .map(|entries| entries[column].as_target())
-        .collect();
+    let handles = |nodes: Vec<_>| {
+        nodes
+            .into_iter()
+            .map(|node| CompositeEntryHandle::from_node(Rc::clone(store), node))
+            .collect::<Result<Vec<_>, AuthoringError>>()
+    };
+    let row_handles = handles(row_nodes)?;
+    let column_handles = handles(column_nodes)?;
+    let row_targets: Vec<_> = row_handles.iter().map(TableEntry::as_target).collect();
+    let column_targets: Vec<_> = column_handles.iter().map(TableEntry::as_target).collect();
     let row_entries = publisher.composite_entries(&row_targets)?;
     let column_entries = publisher.composite_entries(&column_targets)?;
     let row_bounds = row_entries
