@@ -801,8 +801,7 @@
       "source": "parity/manim-v0.21/core-examples/numeric_decimal_number.py",
       "expected_duration": 0.2,
       "requires_latex": true,
-      "qualification_status": "candidate",
-      "notes": "Paired DecimalNumber source fixture; exact raster qualification remains pending."
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
       "id": "latex-text",
@@ -810,8 +809,7 @@
       "source": "parity/manim-v0.21/core-examples/latex_text.py",
       "expected_duration": 0.2,
       "requires_latex": true,
-      "qualification_status": "candidate",
-      "notes": "Paired Tex, SingleStringMathTex, and MathTex source fixture; exact raster qualification remains pending."
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
       "id": "mathtex-substrings",
@@ -819,8 +817,7 @@
       "source": "parity/manim-v0.21/core-examples/mathtex_substrings.py",
       "expected_duration": 0.2,
       "requires_latex": true,
-      "qualification_status": "candidate",
-      "notes": "Focused MathTex substrings_to_isolate and per-substring color fixture; exact raster qualification remains pending."
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     }
   ],
   "sample_fractions": [
