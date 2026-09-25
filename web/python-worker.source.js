@@ -286,7 +286,13 @@ async function initializePyodide() {
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
     if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
-    return context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    return {
+      family: () => handle.family(),
+      label: () => handle.label(),
+      tracker: () => handle.tracker(),
+      value: () => numericHandle(handle.value()),
+    };
   };
   self.noonMatrixOptions = WasmMatrixOptions;
   self.noonMobjectMatrixRows = WasmMobjectMatrixRows;
