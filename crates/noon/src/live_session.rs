@@ -522,6 +522,31 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Prepare resources and publish one semantic transaction while borrowing
+    /// the already-running execution session. Composite authoring uses this
+    /// boundary so resource admission and the transaction share one rollback
+    /// scope without manufacturing a second Scene or runtime owner.
+    pub(crate) fn with_semantic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            &mut dyn FnMut(
+                &mut noon_core::SemanticStore,
+                SemanticMutationTransaction,
+            )
+                -> Result<SemanticMutationTransactionResult, crate::AuthoringError>,
+        ) -> Result<T, crate::AuthoringError>,
+    ) -> Result<T, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        let mut publish = |store: &mut noon_core::SemanticStore,
+                           transaction: SemanticMutationTransaction| {
+            self.session
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
+                .map_err(crate::AuthoringError::from)
+        };
+        operation(&mut store, &mut publish).map_err(Into::into)
+    }
+
     /// Add an existing detached object to this live scene root.
     pub fn add(
         &mut self,

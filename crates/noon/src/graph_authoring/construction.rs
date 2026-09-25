@@ -6,14 +6,72 @@ use super::{
 };
 use crate::{
     arrow_authoring::{resolve_staged_arrow, stage_prepared_arrow, PreparedArrow, StagedArrow},
-    AuthoringError, ManimArrow, ManimArrowOptions, ManimGeometryOptions, Mobject, MobjectFamily,
-    Scene,
+    AuthoringError, LiveSession, ManimArrow, ManimArrowOptions, ManimGeometryOptions, Mobject,
+    MobjectFamily, Scene,
 };
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeBinding,
+    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    SemanticNodeCreation, SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
+    SemanticTransactionGraphEdgeBinding,
 };
-use std::{collections::HashMap, hash::Hash, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
+
+/// One borrowed semantic publication boundary. Both ordinary `Scene` authoring
+/// and explicit `LiveSession` authoring use the same transaction/resource path.
+pub(super) trait GraphPublication {
+    fn graph_store(&self) -> Rc<RefCell<SemanticStore>>;
+
+    fn with_graph_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, GraphAuthoringError>;
+}
+
+impl GraphPublication for Scene {
+    fn graph_store(&self) -> Rc<RefCell<SemanticStore>> {
+        Rc::clone(self.integration_store())
+    }
+
+    fn with_graph_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, GraphAuthoringError> {
+        self.with_semantic_publication(operation)
+            .map_err(Into::into)
+    }
+}
+
+impl GraphPublication for LiveSession<'_> {
+    fn graph_store(&self) -> Rc<RefCell<SemanticStore>> {
+        Rc::clone(self.store())
+    }
+
+    fn with_graph_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, GraphAuthoringError> {
+        self.with_semantic_publication(operation)
+            .map_err(Into::into)
+    }
+}
 
 struct PlannedVertex<K> {
     key: K,
@@ -60,8 +118,8 @@ struct StagedEdge {
     geometry: StagedEdgeGeometry,
 }
 
-pub(super) fn build_graph<K, V, E>(
-    scene: &mut Scene,
+pub(super) fn build_graph<K, V, E, P>(
+    publication: &mut P,
     vertices: V,
     edges: E,
     directed: bool,
@@ -71,6 +129,7 @@ where
     K: Clone + Eq + Hash,
     V: IntoIterator<Item = (K, (f64, f64))>,
     E: IntoIterator<Item = (K, K)>,
+    P: GraphPublication,
 {
     // Validate the complete configuration independently of input cardinality.
     // These are inert requests: no semantic node or path is admitted here.
@@ -132,9 +191,9 @@ where
         planned_edges.push(PlannedEdge { edge, geometry });
     }
 
-    let store_rc = Rc::clone(scene.integration_store());
+    let store_rc = publication.graph_store();
     let (result, root, staged_vertices, staged_edges) =
-        scene.with_semantic_publication(|store, publish| {
+        publication.with_graph_publication(|store, publish| {
             let vertices = planned_vertices
                 .into_iter()
                 .map(|vertex| Ok((vertex.key, vertex.id, vertex.options.into_state(store)?)))
