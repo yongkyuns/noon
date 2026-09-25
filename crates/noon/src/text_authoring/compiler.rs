@@ -18,7 +18,7 @@ use std::{
 
 const MAX_ENTRIES: usize = 128;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
-const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-v1";
+const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct TextCompileKey(Arc<[u8]>, Arc<[Arc<[u8]>]>);
