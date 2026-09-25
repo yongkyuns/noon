@@ -74,10 +74,9 @@ class TableFacadeTests(unittest.TestCase):
 
     def test_entries_columns_and_cells_keep_the_shared_handle_contract(self):
         value = table.Table([["a", "b"], ["c", "d"]])
-        rows = []
-        for raw in self.handle.entries():
-            leaf = types.SimpleNamespace(_semantic_handle=raw)
-            rows.append(types.SimpleNamespace(submobjects=[leaf]))
+        leaves = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
+        rows = [types.SimpleNamespace(submobjects=leaves[:2]),
+                types.SimpleNamespace(submobjects=leaves[2:])]
         value._entry_family = lambda: types.SimpleNamespace(submobjects=rows)
         self.assertEqual(self.context.calls[0][0], "create")
         self.assertEqual(value.get_entries().submobjects[0]._semantic_handle, self.handle.a)
@@ -89,9 +88,25 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(cell._semantic_handle.semanticSlot, 9)
         detached = value.get_highlighted_cell((1, 1))
         self.assertEqual(detached._semantic_handle.semanticSlot, 11)
+        self.assertEqual(table._get_highlighted_table.call_args.args[4:], (1.0, 1.0, 0.0, 1.0, 0.75))
+        table._highlight_table.assert_not_called()
         self.assertIs(value.add_highlighted_cell((2, 2)), value)
-        with self.assertRaisesRegex(ValueError, "one-based"):
-            value.get_cell((0, 1))
+        for invalid in ((0, 1), (1.5, 1), (1, "2"), (1, 2, 3)):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "one-based"):
+                value.get_cell(invalid)
+
+    def test_single_entry_does_not_enumerate_other_rows_or_all_entries(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        leaf = types.SimpleNamespace(_semantic_handle=self.handle.c)
+        class UnrelatedRow:
+            @property
+            def submobjects(self):
+                raise AssertionError("a local entry lookup traversed an unrelated row")
+        value._entry_family = lambda: types.SimpleNamespace(
+            submobjects=[UnrelatedRow(), types.SimpleNamespace(submobjects=[leaf])])
+        with patch.object(self.handle, "entryAt", return_value=self.handle.c), \
+                patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
+            self.assertIs(value.get_entries((2, 1)), leaf)
 
 
 if __name__ == "__main__":

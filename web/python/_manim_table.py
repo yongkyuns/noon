@@ -1,4 +1,6 @@
 """Thin Table facades over Noon’s retained Rust table families."""
+from operator import index as _index
+
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
@@ -44,7 +46,8 @@ def _handle_key(handle):
 
 def _cell_position(pos):
     try:
-        row, column = (int(pos[0]), int(pos[1]))
+        row, column = pos
+        row, column = _index(row), _index(column)
     except (IndexError, TypeError, ValueError) as error:
         raise ValueError("Table positions must be one-based (row, column) pairs") from error
     if row < 1 or column < 1:
@@ -65,15 +68,22 @@ class Table(_compat.VGroup):
         _attach_shared_family(self, engine_call(handle.family), context)
 
     def get_entries(self, pos=None):
+        if pos is not None:
+            row, column = _cell_position(pos)
+            handle = engine_call(self._table_handle.entryAt, row, column)
+            # Observe only the addressed row's identity registry. Asking for one
+            # entry must not enumerate every entry in the table.
+            known = {
+                _family_wrapper_key(item): item
+                for item in self._entry_family().submobjects[row].submobjects
+            }
+            return known[_handle_key(handle)]
         entries = list(engine_call(self._table_handle.entries))
         known = {
             _family_wrapper_key(item): item
             for row in self._entry_family().submobjects
             for item in row.submobjects
         }
-        if pos is not None:
-            row, column = _cell_position(pos)
-            return known[_handle_key(engine_call(self._table_handle.entryAt, row, column))]
         return _compat.VGroup(*[known[_handle_key(item)] for item in entries])
 
     def _entry_family(self):
@@ -110,8 +120,8 @@ class Table(_compat.VGroup):
         row, column = _cell_position(pos)
         return self._rectangle_wrapper(engine_call(_table_cell, context, self._table_handle, row, column))
 
-    def get_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
-        opacity = float(kwargs.pop("fill_opacity", 1.0))
+    def get_highlighted_cell(self, pos, color=_base.PURE_YELLOW, **kwargs):
+        opacity = float(kwargs.pop("fill_opacity", 0.75))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
         color = _compat._as_color("color", color)
@@ -126,8 +136,8 @@ class Table(_compat.VGroup):
             row, column, color.red, color.green, color.blue, color.alpha, opacity,
         ))
 
-    def add_highlighted_cell(self, pos, color=_base.BLUE, **kwargs):
-        opacity = float(kwargs.pop("fill_opacity", 1.0))
+    def add_highlighted_cell(self, pos, color=_base.PURE_YELLOW, **kwargs):
+        opacity = float(kwargs.pop("fill_opacity", 0.75))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
         if _highlight_table is None:
