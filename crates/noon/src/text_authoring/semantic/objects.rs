@@ -4,8 +4,6 @@ use super::TextAuthoringError;
 use super::{MathTypst, Typst};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
-#[cfg(feature = "typst")]
-use noon_core::GeometryResourceArena;
 #[cfg(feature = "native-text")]
 use noon_core::Vec2;
 #[cfg(feature = "typst")]
@@ -162,33 +160,19 @@ fn typst_spec_state(
     text.presentation.validate()?;
     let identity = super::super::compiler::typst_identity(&text, mode);
     let artifact = text.compile_artifact(mode)?;
-    text_artifact_state(
-        store,
-        identity,
+    let (transform, style) = text_artifact_presentation(
         text.authored_transform(),
         text.presentation.color,
         text.presentation.opacity,
-        artifact.resource.as_ref().clone(),
-        artifact.fonts.as_ref().clone(),
-        artifact.geometry.as_ref().clone(),
-    )
-}
-
-#[cfg(feature = "typst")]
-fn text_artifact_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    identity: noon_core::TextCompilationIdentity,
-    transform: noon_core::Transform2D,
-    color: noon_core::Color,
-    opacity: f32,
-    resource: noon_core::TextResource,
-    fonts: noon_core::FontResourceArena,
-    geometries: GeometryResourceArena,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
-    let (transform, style) = text_artifact_presentation(transform, color, opacity)?;
+    )?;
     let handle = store
         .borrow_mut()
-        .import_compiled_text_resource(identity, resource, &fonts, &geometries)
+        .import_compiled_text_resource(
+            identity,
+            artifact.resource.as_ref().clone(),
+            artifact.fonts.as_ref(),
+            artifact.geometry.as_ref(),
+        )
         .map_err(TextAuthoringError::Import)?;
     Ok(semantic_text_state(handle, transform, style))
 }
@@ -327,6 +311,52 @@ mod tests {
             crate::text_authoring::compiler::text_compiler_diagnostics().successful_compiles,
             1
         );
+    }
+
+    #[test]
+    fn unicode_range_paint_is_shared_while_node_presentation_stays_independent() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let scene = crate::Scene::new();
+        let source = "é Noon";
+        let first = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::YELLOW)
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+        let second = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::BLUE)
+                    .shift(noon_core::Vec2::new(2.0, 0.0))
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+
+        let handle = first.state().unwrap().content.text().unwrap();
+        assert_eq!(second.state().unwrap().content.text(), Some(handle));
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .clone();
+        assert_eq!(resource.source.as_ref(), source);
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert_eq!(
+            first.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+        assert_eq!(
+            second.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::BLUE))
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
     }
 
     #[test]
