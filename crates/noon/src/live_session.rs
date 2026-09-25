@@ -604,6 +604,42 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Persist one DecimalNumber value through the current execution publication.
+    #[cfg(feature = "latex")]
+    pub fn set_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let authored = self.authored(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .set_value_live(backend, value, authored, effective, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn increment_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        delta: f64,
+    ) -> Result<(), LiveSessionError> {
+        let value = number
+            .value()
+            .map_err(crate::numeric_authoring::numeric_live_error)?;
+        self.set_decimal_value(number, backend, value + delta)
+    }
+
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;

@@ -206,6 +206,22 @@ async function initializePyodide() {
     return context == null ? authoringStore.createLatex(options, latexCompiler)
       : context.liveCreateLatex(options, latexCompiler);
   };
+  const numericHandle = (handle) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    return {
+      get value() { return handle.value; },
+      get text() { return handle.text; },
+      mobject: () => handle.mobject(),
+      integerValue: () => handle.integerValue(),
+      setValue: (value) => handle.setValue(latexCompiler, value),
+      incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
+      setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),
+      incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
+    };
+  };
+  self.noonCreateAuthoringDecimalNumberHandle = (...args) =>
+    numericHandle(authoringStore.createDecimalNumber(...args, latexCompiler));
+  self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);

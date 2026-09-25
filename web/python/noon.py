@@ -864,6 +864,8 @@ _PUBLIC_EXPORTS = {
     "MarkupText": "_manim_typst",
     "Typst": "_manim_typst",
     "MathTypst": "_manim_typst",
+    "DecimalNumber": "_manim_numbers",
+    "Integer": "_manim_numbers",
     "Tex": "_manim_latex",
     "MathTex": "_manim_latex",
     "SingleStringMathTex": "_manim_latex",

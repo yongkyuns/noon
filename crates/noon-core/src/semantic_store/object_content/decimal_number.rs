@@ -106,4 +106,19 @@ mod tests {
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
+
+    #[test]
+    fn visual_replacement_does_not_retain_receiver_numeric_metadata() {
+        let mut receiver = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        receiver.set_decimal_number(Some(SemanticDecimalNumber::new(
+            1.0, 2, false, true, false, None, 48.0,
+        )));
+        let target = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: crate::Vec2::new(2.0, 2.0),
+        });
+        assert!(receiver
+            .with_visual_state_from(&target)
+            .decimal_number()
+            .is_none());
+    }
 }

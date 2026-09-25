@@ -2585,6 +2585,35 @@ impl CanonicalAuthoringScene {
             .live_replace_content(target, source)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_set_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        value: f64,
+    ) -> Result<(), AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_set_decimal_value(&number, compiler, value)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_increment_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        delta: f64,
+    ) -> Result<(), AuthoringFailure> {
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_increment_decimal_value(&number, compiler, delta)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn take_execution_player(
         &mut self,
@@ -7112,6 +7141,38 @@ mod wasm {
             )?;
             self.inner
                 .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetDecimalValue)]
+        pub fn live_set_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_set_decimal_value(target.semantic_mobject(), compiler, value)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveIncrementDecimalValue)]
+        pub fn live_increment_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            delta: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_increment_decimal_value(target.semantic_mobject(), compiler, delta)
                 .map_err(typed_js_error)
         }
 

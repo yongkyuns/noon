@@ -302,7 +302,10 @@ impl SemanticObjectState {
             style: target.style.clone(),
             presentation: self.presentation,
             role: self.role,
-            decimal_number: self.decimal_number.clone(),
+            // Numeric metadata describes the displayed numeric source. A visual
+            // replacement therefore follows a numeric target and otherwise clears;
+            // retaining the receiver's old value would make getters lie.
+            decimal_number: target.decimal_number.clone(),
             signal_bindings: self.signal_bindings.clone(),
         }
     }

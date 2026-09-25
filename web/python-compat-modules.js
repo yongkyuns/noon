@@ -13,6 +13,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_sample_space.py", runtimePath: "/tmp/_manim_sample_space.py", label: "Noon shared SampleSpace wrapper" },
   { sourcePath: "python/_manim_implicit.py", runtimePath: "/tmp/_manim_implicit.py", label: "Noon shared implicit contour wrappers" },
   { sourcePath: "python/_manim_number_labels.py", runtimePath: "/tmp/_manim_number_labels.py", label: "Noon shared numeric Text label wrappers" },
+  { sourcePath: "python/_manim_numbers.py", runtimePath: "/tmp/_manim_numbers.py", label: "Noon DecimalNumber compatibility wrapper" },
   { sourcePath: "python/_manim_latex.py", runtimePath: "/tmp/_manim_latex.py", label: "Noon real LaTeX syntax adapter" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
   { sourcePath: "python/_manim_image.py", runtimePath: "/tmp/_manim_image.py", label: "Noon retained image compatibility layer" },

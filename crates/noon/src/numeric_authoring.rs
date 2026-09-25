@@ -45,6 +45,17 @@ impl From<crate::AuthoringError> for NumericAuthoringError {
     }
 }
 
+pub(crate) fn numeric_live_error(error: NumericAuthoringError) -> crate::LiveSessionError {
+    match error {
+        NumericAuthoringError::Text(TextAuthoringError::Semantic(
+            crate::AuthoringError::ExecutionPublication(error),
+        )) => crate::LiveSessionError::Publication(error),
+        NumericAuthoringError::Text(error) => crate::LiveSessionError::Text(error),
+        NumericAuthoringError::Semantic(error) => crate::LiveSessionError::from(error),
+        other => crate::LiveSessionError::Mobject(other.to_string()),
+    }
+}
+
 /// Shared Manim `Integer.get_value` conversion: ties go to the even integer
 /// and out-of-range values are rejected rather than saturated.
 pub fn integer_value(value: f64) -> Result<i64, NumericAuthoringError> {
@@ -203,6 +214,70 @@ impl DecimalNumber {
         delta: f64,
     ) -> Result<&mut Self, NumericAuthoringError> {
         self.set_value(backend, self.value()? + delta)
+    }
+
+    pub(crate) fn set_value_live(
+        &self,
+        backend: &mut impl LatexBackend,
+        value: f64,
+        authored: noon_core::SemanticObjectState,
+        effective: noon_core::SemanticObjectState,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            SemanticMutationTransaction,
+        )
+            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
+    ) -> Result<(), NumericAuthoringError> {
+        let format = self.format()?;
+        let font_size = self.metadata()?.font_size();
+        let source = format_decimal(value, &format)?;
+        let admission = crate::latex_authoring::prepare_math_tex(
+            numeric_math_tex(&source, font_size)?,
+            backend,
+        )?;
+        let (resource, fonts, geometry) = admission.into_resource_parts();
+        let node = self.object.node_id();
+        self.object
+            .integration_store()
+            .borrow_mut()
+            .with_compiled_text_resource(resource, fonts, &geometry, |store, handle| {
+                let mut next = effective;
+                let fixed_left = crate::semantic_mobject::boundary_for_content(
+                    store,
+                    next.content,
+                    next.transform,
+                )
+                .map_err(TextAuthoringError::Semantic)?
+                .map_or(
+                    crate::semantic_mobject::state_center(store, &next)
+                        .map_err(TextAuthoringError::Semantic)?
+                        .0,
+                    |bounds| bounds.min_x,
+                );
+                next.content = handle.into();
+                let new_left = crate::semantic_mobject::boundary_for_content(
+                    store,
+                    next.content,
+                    next.transform,
+                )
+                .map_err(TextAuthoringError::Semantic)?
+                .map_or(fixed_left, |bounds| bounds.min_x);
+                next.transform.translation.x += fixed_left - new_left;
+                let mut transaction = SemanticMutationTransaction::new();
+                crate::semantic_mobject::stage_state_changes(
+                    &mut transaction,
+                    node,
+                    &authored,
+                    &next,
+                );
+                if authored.z_index() != next.z_index() {
+                    transaction.set_z_index(node, next.z_index());
+                }
+                transaction
+                    .replace_decimal_number(node, decimal_metadata(value, &format, font_size));
+                publish(store, transaction)
+            })?;
+        Ok(())
     }
 }
 

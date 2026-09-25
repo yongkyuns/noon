@@ -2650,6 +2650,14 @@ fn set_object_content(
         .and_then(|node| node.semantic_object_state_mut())
         .expect("preflighted semantic object must remain valid while transaction owns the store")
         .content = content;
+    // A generic content replacement has no numeric source contract. Numeric
+    // value publication stages ReplaceDecimalNumber after this mutation in the
+    // same transaction; all other replacements must invalidate stale getters.
+    store
+        .node_mut(object)
+        .and_then(|node| node.semantic_object_state_mut())
+        .expect("preflighted semantic object must remain valid while transaction owns the store")
+        .set_decimal_number(None);
 }
 
 pub(super) fn validate_object_content_resource(

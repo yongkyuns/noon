@@ -325,50 +325,6 @@ impl SemanticStore {
         })
     }
 
-    /// Admit one compiled text resource and publish through the caller's cold or
-    /// live transaction owner. Fonts, vector paths and the text resource share
-    /// one rollback scope; a rejected publication leaves no imported resources.
-    pub fn with_compiled_text_resource<E, T>(
-        &mut self,
-        mut resource: TextResource,
-        fonts: FontResourceArena,
-        geometry: &GeometryResourceArena,
-        publish: impl FnOnce(&mut Self, TextResourceHandle) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<SemanticTextImportError>
-            + From<std::collections::TryReserveError>
-            + From<crate::GeometryResourceError>,
-    {
-        let staged_fonts = self.preflight_text_fonts(&[(resource.clone(), fonts.clone())])?;
-        let mut sources = Vec::new();
-        let mut indices = HashMap::new();
-        for vector in resource.vector_items.iter() {
-            if let std::collections::hash_map::Entry::Vacant(entry) = indices.entry(vector.geometry)
-            {
-                let GeometryResource::VectorPath(path) = geometry
-                    .get(vector.geometry)
-                    .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
-                if !path.is_finite() {
-                    return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
-                }
-                let index = sources.len();
-                sources.push(path.as_ref().clone());
-                entry.insert(index);
-            }
-        }
-        self.with_geometry_paths(sources, |store, geometry_handles| {
-            for vector in std::sync::Arc::make_mut(&mut resource.vector_items) {
-                vector.geometry = geometry_handles[indices[&vector.geometry]];
-            }
-            store.with_preflighted_text_resources(
-                vec![(resource, fonts)],
-                staged_fonts,
-                |store, text_handles| publish(store, text_handles[0]),
-            )
-        })
-    }
-
     fn preflight_glyph_text_resources(
         &self,
         inputs: &[(TextResource, FontResourceArena)],
