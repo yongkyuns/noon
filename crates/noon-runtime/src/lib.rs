@@ -5,6 +5,7 @@
 mod derived_display_evaluation;
 mod execution_slots;
 mod frame;
+mod graph_endpoints;
 mod prepared_frame;
 mod reactive;
 mod renderer_publication;
@@ -165,6 +166,8 @@ pub struct SceneInstance {
     effective_driver_rows: BTreeSet<usize>,
     active_family_animation_indices: BTreeSet<usize>,
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
+    /// Monotonic diagnostic count of sparse graph dependency visits.
+    graph_dependency_visits: u64,
 }
 
 impl Clone for SceneInstance {
@@ -188,6 +191,7 @@ impl Clone for SceneInstance {
             effective_driver_rows: self.effective_driver_rows.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
+            graph_dependency_visits: self.graph_dependency_visits,
         }
     }
 }
@@ -225,6 +229,7 @@ impl SceneInstance {
             effective_driver_rows: BTreeSet::new(),
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
+            graph_dependency_visits: 0,
         };
         instance.seek_unchecked(0.0);
         instance
@@ -335,11 +340,13 @@ impl SceneInstance {
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
+        self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_added(&mut self, object_index: usize) {
         self.changes.insert_added(object_index);
         self.spatial_changes.insert_added(object_index);
+        self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_removed(&mut self, object_index: usize) {
@@ -948,6 +955,7 @@ impl SceneInstance {
         }
 
         self.reapply_reactive();
+        self.refresh_all_graph_dependencies();
         self.last_stats = stats;
     }
 
