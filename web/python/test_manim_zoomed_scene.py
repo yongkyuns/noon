@@ -1,19 +1,22 @@
 import unittest
 import sys
-from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import patch
 
-bridge = ModuleType("js")
-bridge.noonResolveAnimationOptions = lambda *args: None
-bridge.__getattr__ = lambda name: object()
-sys.modules.setdefault("js", bridge)
-
 import noon
-import _manim_camera
-import _manim_scene
-import _manim_semantic_handles
-import _manim_zoomed_scene as zoomed
+_previous_js = sys.modules.get("js")
+sys.modules["js"] = SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)
+try:
+    import _manim_camera
+    import _manim_scene
+    import _manim_semantic_handles
+    import _manim_zoomed_scene as zoomed
+finally:
+    if _previous_js is None:
+        sys.modules.pop("js", None)
+    else:
+        sys.modules["js"] = _previous_js
+
 
 
 class _View:
