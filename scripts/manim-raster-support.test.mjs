@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareEffectiveFrames } from "./manim-raster-support.mjs";
+import { compareEffectiveFrames, rasterFixtureSource } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("raster fixture adaptation leaves default sources without LaTeX preparation", () => {
+  const source = "from manim import *\nclass Example(Scene):\n    pass\n";
+  const adapted = rasterFixtureSource(source, "Example");
+  assert.equal(adapted.match(/prepare_latex/g), null);
+  assert.match(adapted, /^from noon import \*/);
+});
+
+test("raster fixture adaptation prepares LaTeX exactly once when requested", () => {
+  const source = "from manim import *\nclass Example(Scene):\n    pass\n";
+  const adapted = rasterFixtureSource(source, "Example", { requires_latex: true });
+  assert.equal(adapted.match(/from noon import prepare_latex/g)?.length, 1);
+  assert.equal(adapted.match(/await prepare_latex\(\)/g)?.length, 1);
+  assert.match(adapted, /^from noon import prepare_latex\nawait prepare_latex\(\)\nfrom noon import \*/);
+});
 
 test("effective comparison accepts f32 rounding and reports the actual error", () => {
   const actual = structuredClone(frame);

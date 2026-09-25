@@ -794,6 +794,33 @@
       "expected_duration": 0.2,
       "qualification_status": "candidate",
       "notes": "Repeated substring, Unicode, whitespace/newline, and nonoverlapping positive/negative source ranges."
+    },
+    {
+      "id": "numeric-decimal-number",
+      "scene": "NumericDecimalNumberExample",
+      "source": "parity/manim-v0.21/core-examples/numeric_decimal_number.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate",
+      "notes": "Paired DecimalNumber source fixture; exact raster qualification remains pending."
+    },
+    {
+      "id": "latex-text",
+      "scene": "LatexTextExample",
+      "source": "parity/manim-v0.21/core-examples/latex_text.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate",
+      "notes": "Paired Tex, SingleStringMathTex, and MathTex source fixture; exact raster qualification remains pending."
+    },
+    {
+      "id": "mathtex-substrings",
+      "scene": "MathTexSubstrings",
+      "source": "parity/manim-v0.21/core-examples/mathtex_substrings.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate",
+      "notes": "Focused MathTex substrings_to_isolate and per-substring color fixture; exact raster qualification remains pending."
     }
   ],
   "sample_fractions": [

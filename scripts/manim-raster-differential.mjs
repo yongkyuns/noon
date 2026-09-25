@@ -201,7 +201,7 @@ async function prepareHostCapturePage(page) {
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
-    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene), loopDuration: Math.max(1, fixture.expected_duration + 1) },
+    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
   );
   assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: shared source execution`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
