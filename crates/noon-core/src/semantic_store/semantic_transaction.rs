@@ -1603,6 +1603,7 @@ impl SemanticMutationTransaction {
         let mut staged_signal_scope_additions = Vec::new();
         let mut staged_signal_scope_membership = HashSet::new();
         let mut staged_foreground = HashMap::new();
+        let mut staged_table_layouts = HashMap::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -2230,14 +2231,19 @@ impl SemanticMutationTransaction {
                             scope: *scope,
                         });
                     }
-                    changed.push(match scope {
-                        SemanticTransactionNodeRef::Existing(scope) => {
-                            store.semantic_table_layout(*scope).map_err(|error| {
-                                SemanticMutationTransactionError::Node { index, error }
-                            })? != Some(*layout)
-                        }
-                        SemanticTransactionNodeRef::Pending(_) => true,
-                    });
+                    let previous = match staged_table_layouts.get(scope).copied() {
+                        Some(previous) => Some(previous),
+                        None => match scope {
+                            SemanticTransactionNodeRef::Existing(scope) => {
+                                store.semantic_table_layout(*scope).map_err(|error| {
+                                    SemanticMutationTransactionError::Node { index, error }
+                                })?
+                            }
+                            SemanticTransactionNodeRef::Pending(_) => None,
+                        },
+                    };
+                    changed.push(previous != Some(*layout));
+                    staged_table_layouts.insert(*scope, *layout);
                 }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);

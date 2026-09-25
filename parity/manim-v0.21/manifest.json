@@ -11,6 +11,21 @@
   },
   "fixtures": [
     {
+      "id": "math-table",
+      "scene": "MathTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "qualification_status": "candidate"
+    },
+    {
+      "id": "mobject-table",
+      "scene": "MobjectTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate"
+    },
+    {
       "id": "matrix",
       "scene": "OrdinaryMatrix",
       "source": "parity/manim-v0.21/core-examples/matrix.py",

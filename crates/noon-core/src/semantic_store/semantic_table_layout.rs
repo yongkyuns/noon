@@ -1,7 +1,5 @@
 //! Sparse authored Table layout declarations on ordinary family roots.
 
-use crate::SemanticNodeId;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SemanticTableLayout {
     h_buff: f64,
@@ -41,6 +39,28 @@ impl SemanticTableLayout {
 mod tests {
     use super::*;
     use crate::{SemanticMutationTransaction, SemanticNodeCreation, SemanticStore};
+
+    #[test]
+    fn repeated_layout_writes_observe_prior_transaction_values() {
+        let mut store = SemanticStore::new();
+        let original = SemanticTableLayout::new(1.0, 1.0, 0.5, false);
+        let changed = SemanticTableLayout::new(2.0, 0.5, 0.25, true);
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        tx.set_table_layout(root, original);
+        tx.set_table_layout(root, changed);
+        let result = tx.apply(&mut store).unwrap();
+        let root = result.resolve(root).unwrap();
+        assert_eq!(store.semantic_table_layout(root).unwrap(), Some(changed));
+
+        // Returning to the value in the base store must still publish the
+        // second write, since the first write changes the transaction overlay.
+        let mut tx = SemanticMutationTransaction::new();
+        tx.set_table_layout(root, original);
+        tx.set_table_layout(root, changed);
+        tx.apply(&mut store).unwrap();
+        assert_eq!(store.semantic_table_layout(root).unwrap(), Some(changed));
+    }
 
     #[test]
     fn invalid_owner_or_value_rolls_back_and_retirement_releases_layout() {

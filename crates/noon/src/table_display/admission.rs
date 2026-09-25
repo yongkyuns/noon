@@ -913,7 +913,6 @@ pub(super) fn publish_numeric_table(
                     rows.as_deref(),
                     row_bounds.as_deref(),
                     columns.as_deref(),
-                    options,
                     column_bounds.as_deref(),
                     options,
                 )

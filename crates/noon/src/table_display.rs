@@ -165,7 +165,8 @@ impl Table {
         let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
         let options = store
             .borrow()
-            .semantic_table_layout(family.node_id())?
+            .semantic_table_layout(family.node_id())
+            .map_err(AuthoringError::from)?
             .map(|layout| TableOptions {
                 h_buff: layout.h_buff(),
                 v_buff: layout.v_buff(),
@@ -1023,21 +1024,41 @@ mod tests {
         )
         .unwrap()
         .into_table();
-        let authored = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        let authored = table
+            .get_cell(1, 1)
+            .unwrap()
+            .layout_bounds()
+            .unwrap()
+            .expect("table cells have concrete bounds");
         let restored = Table::from_family(table.family().clone()).unwrap();
         assert_eq!(
-            restored.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
+            restored
+                .get_cell(1, 1)
+                .unwrap()
+                .layout_bounds()
+                .unwrap()
+                .expect("rehydrated table cells have concrete bounds"),
             authored
         );
         let copied = table.family().copy_family().unwrap();
         let copied = Table::from_family(copied.root().clone()).unwrap();
         assert_eq!(
-            copied.get_cell(1, 1).unwrap().layout_bounds().unwrap(),
+            copied
+                .get_cell(1, 1)
+                .unwrap()
+                .layout_bounds()
+                .unwrap()
+                .expect("copied table cells have concrete bounds"),
             authored
         );
 
         table.entry_family().shift(3.0, -2.0).unwrap();
-        let shifted = table.get_cell(1, 1).unwrap().layout_bounds().unwrap();
+        let shifted = table
+            .get_cell(1, 1)
+            .unwrap()
+            .layout_bounds()
+            .unwrap()
+            .expect("shifted table cells have concrete bounds");
         assert_eq!(shifted.min_x, authored.min_x + 3.0);
         assert_eq!(shifted.max_x, authored.max_x + 3.0);
         assert_eq!(shifted.min_y, authored.min_y - 2.0);
@@ -1047,7 +1068,8 @@ mod tests {
                 .highlight_cell(1, 1, Color::BLUE, 0.5)
                 .unwrap()
                 .layout_bounds()
-                .unwrap(),
+                .unwrap()
+                .expect("highlight cells have concrete bounds"),
             shifted
         );
     }
@@ -1081,12 +1103,50 @@ mod tests {
         };
         let column = [bounds(&entries[0][0]), bounds(&entries[1][0])];
         let row = [bounds(&entries[1][0]), bounds(&entries[1][1])];
-        let cell = table.get_cell(1, 0).unwrap().layout_bounds().unwrap();
-        assert_eq!(cell.min_x, column.iter().map(|bound| bound.min_x).fold(f64::INFINITY, f64::min) - .875);
-        assert_eq!(cell.max_x, column.iter().map(|bound| bound.max_x).fold(f64::NEG_INFINITY, f64::max) + .875);
-        assert_eq!(cell.min_y, row.iter().map(|bound| bound.min_y).fold(f64::INFINITY, f64::min) - .3);
-        assert_eq!(cell.max_y, row.iter().map(|bound| bound.max_y).fold(f64::NEG_INFINITY, f64::max) + .3);
-        assert_eq!(copy.get_cell(1, 0).unwrap().layout_bounds().unwrap(), cell);
+        let cell = table
+            .get_cell(1, 0)
+            .unwrap()
+            .layout_bounds()
+            .unwrap()
+            .expect("table cells have concrete bounds");
+        assert_eq!(
+            cell.min_x,
+            column
+                .iter()
+                .map(|bound| bound.min_x)
+                .fold(f64::INFINITY, f64::min)
+                - 0.875
+        );
+        assert_eq!(
+            cell.max_x,
+            column
+                .iter()
+                .map(|bound| bound.max_x)
+                .fold(f64::NEG_INFINITY, f64::max)
+                + 0.875
+        );
+        assert_eq!(
+            cell.min_y,
+            row.iter()
+                .map(|bound| bound.min_y)
+                .fold(f64::INFINITY, f64::min)
+                - 0.3
+        );
+        assert_eq!(
+            cell.max_y,
+            row.iter()
+                .map(|bound| bound.max_y)
+                .fold(f64::NEG_INFINITY, f64::max)
+                + 0.3
+        );
+        assert_eq!(
+            copy.get_cell(1, 0)
+                .unwrap()
+                .layout_bounds()
+                .unwrap()
+                .expect("copied table cells have concrete bounds"),
+            cell
+        );
     }
 
     #[test]

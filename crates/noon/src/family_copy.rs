@@ -187,7 +187,11 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             graph_declarations.push((id, graph));
         }
         if members.is_some() {
-            if let Some(layout) = store.borrow().semantic_table_layout(id)? {
+            if let Some(layout) = store
+                .borrow()
+                .semantic_table_layout(id)
+                .map_err(AuthoringError::from)?
+            {
                 table_layouts.push((id, layout));
             }
         }

@@ -20,8 +20,10 @@ try:
     from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
     from js import noonHighlightTableCell as _highlight_table
     from js import noonGetHighlightedTableCell as _get_highlighted_table
+    from js import noonTableFromFamily as _table_from_family
     from js import noonTableCell as _table_cell
 except ImportError:
+    _table_from_family = None
     _create_table = _create_math_table = _create_integer_table = None
     _create_decimal_table = _create_mobject_table = _highlight_table = _get_highlighted_table = _table_cell = None
 
@@ -66,6 +68,14 @@ class Table(_compat.VGroup):
     def _initialize_table(self, handle, context):
         self._table_handle = handle
         _attach_shared_family(self, engine_call(handle.family), context)
+
+    def _rehydrate_semantic_family_handle(self):
+        if _table_from_family is None:
+            raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
+        self._initialize_table(
+            engine_call(_table_from_family, self._semantic_family_handle),
+            getattr(self, "_canonical_live_target_context", None),
+        )
 
     def get_entries(self, pos=None):
         if pos is not None:
