@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
@@ -26,6 +27,7 @@ const exactFamilies = new Map([
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
   ["image-raster-qualification.yml", "renderer"],
+  ["foreground-matching-qualification.yml", "manim"],
 ]);
 
 function classifyWorkflow(name) {
@@ -235,4 +237,41 @@ test("architecture diagrams stay a read-only check with independently preserved 
   assert.match(preservation, /^        if: always\(\)$/m);
   assert.match(preservation, /uses: actions\/upload-artifact@/);
   assert.match(preservation, /docs\/diagrams\//);
+});
+
+
+test("foreground matching has an explicit reference family without a broad prefix exemption", () => {
+  assert.equal(classifyWorkflow("foreground-matching-qualification.yml"), "manim");
+  assert.equal(classifyWorkflow("foreground-unregistered.yml"), null);
+});
+
+test("foreground qualification requires success from every evidence stage", async () => {
+  const workflow = await readFile(new URL("foreground-matching-qualification.yml", workflowDir), "utf8");
+  assert.match(workflow, /permissions:\n  contents: read/);
+  const gate = workflow.split("      - name: Require every qualification stage\n")[1];
+  assert.ok(gate, "foreground qualification must retain its final required-stage gate");
+  assert.match(gate, /^        if: always\(\)$/m);
+  const stages = { RASTER: "raster", TOLERANCES: "tolerances", WITNESSES: "witnesses", CADENCE: "cadence" };
+  for (const [variable, step] of Object.entries(stages)) {
+    assert.ok(gate.includes(`${variable}: \${{ steps.${step}.outcome }}`),
+      `${variable} must observe the real ${step} outcome`);
+  }
+  const script = gate.split("        run: |\n")[1];
+  assert.ok(script, "foreground final gate must execute its required-stage checks");
+  const allPassed = Object.fromEntries(Object.keys(stages).map(name => [name, "success"]));
+  const run = (outcomes) => {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], {
+      encoding: "utf8", timeout: 10_000, env: { ...process.env, ...outcomes },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.signal, null);
+    return result.status;
+  };
+  assert.equal(run(allPassed), 0);
+  for (const stage of Object.keys(stages)) {
+    for (const outcome of ["", "failure", "skipped", "cancelled"]) {
+      assert.notEqual(run({ ...allPassed, [stage]: outcome }), 0,
+        `${stage}=${JSON.stringify(outcome)} must not qualify`);
+    }
+  }
 });

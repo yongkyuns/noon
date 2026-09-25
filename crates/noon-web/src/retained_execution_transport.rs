@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 5;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -73,6 +73,8 @@ pub struct RetainedTransportObjectState {
     pub slot: TransportSlotId,
     pub order: u32,
     pub object: ObjectId,
+    /// Effective layer of this published row, not its painter rank.
+    pub z_index: f64,
     pub content: TransportObjectContent,
     pub transform: Transform2D,
     pub style: Style,
@@ -134,6 +136,7 @@ pub enum RetainedExecutionTransportError {
     StructuralChangeRequiresSnapshot,
     FrameShapeMismatch,
     InvalidObjectIndex(usize),
+    InvalidZIndex(TransportSlotId),
     InvalidOrder(u32),
     DuplicateSlot(TransportSlotId),
     DuplicateObject(ObjectId),
@@ -184,6 +187,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::InvalidObjectIndex(index) => {
                 write!(formatter, "invalid retained frame object index {index}")
             }
+            Self::InvalidZIndex(slot) => write!(
+                formatter,
+                "retained slot {}:{} has a non-finite z-index",
+                slot.slot, slot.generation
+            ),
             Self::InvalidOrder(order) => {
                 write!(formatter, "invalid retained execution render order {order}")
             }
@@ -1190,6 +1198,7 @@ fn transport_object(
         },
         order: slot_index,
         object: object.id,
+        z_index: object.z_index,
         content: (&object.content).into(),
         transform: object.transform,
         style: object.style,
@@ -1213,6 +1222,9 @@ fn transport_object(
 fn validate_object_state(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
+    if !object.z_index.is_finite() {
+        return Err(RetainedExecutionTransportError::InvalidZIndex(object.slot));
+    }
     if let Some(transform) = object.render_transform {
         if !transform.translation.x.is_finite()
             || !transform.translation.y.is_finite()
@@ -1259,7 +1271,7 @@ fn frame_object(
     content: ObjectContentRef,
 ) -> FrameObjectState {
     FrameObjectState {
-        z_index: 0.0,
+        z_index: object.z_index,
         id: object.object,
         content,
         transform: object.transform,
@@ -1941,3 +1953,6 @@ mod tests {
         assert!(mirror.frame().is_none());
     }
 }
+
+#[cfg(test)]
+mod z_index_tests;
