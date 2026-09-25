@@ -657,5 +657,4 @@ fn validate_entries(
 }
 
 #[cfg(test)]
-#[path = "matrix_display/tests.rs"]
 mod tests;

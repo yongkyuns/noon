@@ -1,11 +1,10 @@
 //! Persistent DecimalNumber through the shared Rust renderer.
 #[cfg(feature = "latex")]
-#[path = "support/latex.rs"]
-mod latex;
+mod support;
 
 #[cfg(feature = "latex")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = latex::backend()?;
+    let mut backend = support::latex::backend()?;
     noon_native::run(noon::example_scenes::numeric_decimal::session(
         &mut backend,
     )?)?;
