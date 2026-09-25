@@ -1053,48 +1053,30 @@ pub(super) fn column_families(
         .map(|items| alias(&store, items))
         .collect()
 }
-fn layout_for_family(
-    family: &MobjectFamily,
-    options: TableOptions,
-) -> Result<GridLayout, TableAuthoringError> {
-    let values = rows(family)?;
-    let shape = TableShape {
-        rows: values.len(),
-        columns: shape_from_rows(&values)?,
-    };
-    let entries = values.into_iter().flatten().collect::<Vec<_>>();
-    let targets: Vec<_> = entries.iter().map(TableEntry::as_target).collect();
-    let entries = crate::composite_entry::capture_entries(
-        family.integration_store(),
-        None,
-        family.node_id(),
-        &targets,
-    )?;
-    let bounds = entries
-        .iter()
-        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
-        .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    layout_from_retained_bounds(&bounds, shape, options)
-}
-
-/// Reconstruct the entry lattice under the Table's authored spacing contract.
-///
-/// Cell bounds come from current retained entry ink, while Manim's `h_buff`
-/// and `v_buff` remain the original authored distances. In particular, buffers
-/// do not inherit a leaf's scale and cannot be inferred from uneven rows.
-fn layout_from_retained_bounds(
+fn retained_cell_bounds(
     bounds: &[Bounds2D64],
     shape: TableShape,
     options: TableOptions,
-) -> Result<GridLayout, TableAuthoringError> {
-    let mut layout = GridLayout::measure(&[], bounds, shape, None, None, None, None, options)?;
-    let expected_x =
-        GridLayout::centers(&layout.widths, layout.options.h_buff, false)[layout.column_offset];
-    let expected_y =
-        GridLayout::centers(&layout.heights, layout.options.v_buff, true)[layout.row_offset];
-    layout.offset_x = (bounds[0].min_x + bounds[0].max_x) * 0.5 - expected_x;
-    layout.offset_y = (bounds[0].min_y + bounds[0].max_y) * 0.5 - expected_y;
-    Ok(layout)
+    row: usize,
+    column: usize,
+) -> Result<Bounds2D64, TableAuthoringError> {
+    if row >= shape.rows || column >= shape.columns {
+        return Err(TableAuthoringError::InvalidStructure);
+    }
+    let column_bounds = (0..shape.rows).map(|r| bounds[r * shape.columns + column]);
+    let row_bounds = (0..shape.columns).map(|c| bounds[row * shape.columns + c]);
+    let (min_x, max_x) = column_bounds.fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
+        (value.0.min(bound.min_x), value.1.max(bound.max_x))
+    });
+    let (min_y, max_y) = row_bounds.fold((f64::INFINITY, f64::NEG_INFINITY), |value, bound| {
+        (value.0.min(bound.min_y), value.1.max(bound.max_y))
+    });
+    Ok(Bounds2D64 {
+        min_x: min_x - options.h_buff * 0.5,
+        max_x: max_x + options.h_buff * 0.5,
+        min_y: min_y - options.v_buff * 0.5,
+        max_y: max_y + options.v_buff * 0.5,
+    })
 }
 pub(super) fn cell(
     family: &MobjectFamily,
@@ -1128,8 +1110,7 @@ pub(super) fn cell_in_publisher(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let layout = layout_from_retained_bounds(&bounds, shape, options)?;
-    let bounds = layout.cell_bounds(row, column)?;
+    let bounds = retained_cell_bounds(&bounds, shape, options, row, column)?;
     let store = publisher.store();
     let result = publisher.publish(move |semantic, publish| {
         let mut transaction = SemanticMutationTransaction::new();
@@ -1250,8 +1231,7 @@ fn highlight_with_membership(
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, TableAuthoringError>>()?;
-    let layout = layout_from_retained_bounds(&bounds, shape, options)?;
-    let bounds = layout.cell_bounds(row, column)?;
+    let bounds = retained_cell_bounds(&bounds, shape, options, row, column)?;
     let mut style = SemanticStyle::default();
     style.fill = Some(noon_core::SemanticPaint::Solid(color));
     style.fill_opacity = opacity;
