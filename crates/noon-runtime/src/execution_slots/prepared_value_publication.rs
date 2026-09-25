@@ -216,6 +216,7 @@ impl SceneInstance {
                 }
             }
             self.reapply_reactive_for_object(object_index);
+            self.reapply_numeric_text_for_object(object_index);
             if before.differs_from_frame(&self.frame, object_index) {
                 self.mark_changed(object_index);
             }

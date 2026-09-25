@@ -6,6 +6,7 @@ use noon_compile::{
 use noon_core::{ObjectId, PublicationContext, Style, Transform2D};
 use noon_core::{ReactiveValue, SignalId};
 
+use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
     effective_object_conservative_bounds, upper_bound_start, EffectiveBoundsBasis,
@@ -66,6 +67,7 @@ pub struct PreparedFrameEvaluation {
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
+    numeric_text: Vec<PreparedNumericTextUpdate>,
 }
 
 impl PreparedFrameEvaluation {
@@ -385,6 +387,13 @@ impl SceneInstance {
             }
         }
 
+        let numeric_text = match reactive.as_ref() {
+            Some(reactive) => self
+                .prepare_changed_numeric_text(reactive)
+                .map_err(EvaluationError::NumericText)?,
+            None => Vec::new(),
+        };
+
         self.refresh_prepared_graph_dependencies(&mut rows);
 
         Ok(PreparedFrameEvaluation {
@@ -406,6 +415,7 @@ impl SceneInstance {
             scheduler_stats: preview.stats(),
             prior_driver_rows,
             reactive,
+            numeric_text,
         })
     }
 
@@ -496,6 +506,7 @@ impl SceneInstance {
                 .reactive
                 .as_ref()
                 .is_some_and(|update| !update.is_empty())
+            || !prepared.numeric_text.is_empty()
             || !effective.writes.is_empty();
         if may_publish && self.publication.frame_epoch().checked_next().is_none() {
             return Err(PreparedFrameCommitError::FrameEpochExhausted(
@@ -518,6 +529,7 @@ impl SceneInstance {
                 .reactive
                 .as_ref()
                 .is_some_and(|update| !update.is_empty())
+            || !prepared.numeric_text.is_empty()
             || !effective.writes.is_empty();
         let next_frame = if may_publish {
             Some(self.publication.frame_epoch().checked_next().ok_or(
@@ -567,6 +579,11 @@ impl SceneInstance {
             .map(|row| (row.object_index, row.state))
             .collect::<BTreeMap<_, _>>();
         let mut next_drivers = BTreeSet::new();
+        next_drivers.extend(
+            self.numeric_text
+                .object_indices()
+                .filter(|&object_index| self.object_slot_is_live(object_index)),
+        );
         for (object_index, write) in effective.writes {
             let row = final_rows
                 .entry(object_index)
@@ -593,6 +610,7 @@ impl SceneInstance {
             }
         }
         self.effective_driver_rows = next_drivers;
+        self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
         if time_changed || changed || reactive_changed {
             self.publication = self.publication.with_frame_epoch(

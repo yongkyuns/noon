@@ -998,6 +998,15 @@ impl ExecutionSession {
         self.runtime.text_resources()
     }
 
+    /// Bounded retained resources synthesized by effective numeric drivers.
+    pub fn effective_text_resource_stats(&self) -> noon_core::TextResourceStats {
+        self.runtime.effective_text_resource_stats()
+    }
+
+    pub fn effective_text_resource_slot_capacity(&self) -> usize {
+        self.runtime.effective_text_resource_slot_capacity()
+    }
+
     /// Read-only font resources projected with this execution session.
     pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
         self.runtime.font_resources()

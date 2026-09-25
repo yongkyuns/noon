@@ -6,11 +6,13 @@ use noon_core::{
 };
 
 use crate::{
-    CompiledGraphEdgeDependency, CompiledGraphEdgeKind, CompiledObject, CompiledResourceError,
-    CompiledResources, CompiledScene, DynamicProperties,
+    CompiledGraphEdgeDependency, CompiledGraphEdgeKind, CompiledNumericTextDriver, CompiledObject,
+    CompiledResourceError, CompiledResources, CompiledScene, DynamicProperties,
 };
 
-use super::{SemanticExecutionGraphEdgeKind, SemanticExecutionProjection};
+use super::{
+    SemanticExecutionGraphEdgeKind, SemanticExecutionProjection, SemanticReactiveProjection,
+};
 
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +36,10 @@ pub enum SemanticCompiledSceneError {
     Resource {
         node: SemanticNodeId,
         error: CompiledResourceError,
+    },
+    UnknownNumericSignal {
+        node: SemanticNodeId,
+        signal: SemanticNodeId,
     },
 }
 
@@ -74,6 +80,11 @@ impl std::fmt::Display for SemanticCompiledSceneError {
                 node.slot(),
                 node.generation()
             ),
+            Self::UnknownNumericSignal { node, signal } => write!(
+                formatter,
+                "semantic numeric object {}:{} references unlowered scalar signal {}:{}",
+                node.slot(), node.generation(), signal.slot(), signal.generation()
+            ),
         }
     }
 }
@@ -98,7 +109,7 @@ impl CompiledScene {
     pub fn from_semantic_projection(
         projection: &SemanticExecutionProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, false, None)
+        materialize_semantic_projection(projection, false, None, None)
     }
 
     /// Materialize object values after the canonical A1.6 entry point has
@@ -108,8 +119,9 @@ impl CompiledScene {
     pub(crate) fn from_semantic_projection_after_reactive_lowering(
         projection: &SemanticExecutionProjection,
         store: &SemanticStore,
+        reactive: &SemanticReactiveProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, true, Some(store))
+        materialize_semantic_projection(projection, true, Some(store), Some(reactive))
     }
 }
 
@@ -117,6 +129,7 @@ fn materialize_semantic_projection(
     projection: &SemanticExecutionProjection,
     reactive_bindings_lowered: bool,
     store: Option<&SemanticStore>,
+    reactive: Option<&SemanticReactiveProjection>,
 ) -> Result<CompiledScene, SemanticCompiledSceneError> {
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
     // Root/family traversal already carries the authoritative same-z painter order.
@@ -143,6 +156,7 @@ fn materialize_semantic_projection(
     let mut objects = Vec::with_capacity(count);
     let mut object_indices = BTreeMap::new();
     let mut resources = CompiledResources::default();
+    let mut numeric_text_drivers = Vec::new();
 
     for (index, object) in ordered.into_iter().enumerate() {
         if !reactive_bindings_lowered && !object.signal_bindings.is_empty() {
@@ -166,6 +180,43 @@ fn materialize_semantic_projection(
             dynamic: DynamicProperties::default(),
             live: true,
         });
+        if let Some(number) = object.decimal_number.as_ref() {
+            if let Some(binding) = number.binding() {
+                let reactive =
+                    reactive.ok_or(SemanticCompiledSceneError::UnknownNumericSignal {
+                        node: object.semantic_id,
+                        signal: binding.signal(),
+                    })?;
+                let signal = reactive.execution_signal_id(binding.signal()).ok_or(
+                    SemanticCompiledSceneError::UnknownNumericSignal {
+                        node: object.semantic_id,
+                        signal: binding.signal(),
+                    },
+                )?;
+                for (_, handle) in binding.token_resources() {
+                    resources
+                        .capture_text(store.expect("bound numeric lowering has store"), *handle)
+                        .map_err(|error| SemanticCompiledSceneError::Resource {
+                            node: object.semantic_id,
+                            error,
+                        })?;
+                }
+                numeric_text_drivers.push(CompiledNumericTextDriver {
+                    signal,
+                    object_index,
+                    format: noon_core::DecimalFormat {
+                        decimal_places: number.decimal_places(),
+                        include_sign: number.include_sign(),
+                        group_with_commas: number.group_with_commas(),
+                        show_ellipsis: number.show_ellipsis(),
+                        unit: number.unit().map(str::to_owned),
+                    },
+                    font_size: number.font_size(),
+                    point_to_scene_scale: binding.point_to_scene_scale(),
+                    token_resources: binding.token_resources().to_vec().into(),
+                });
+            }
+        }
         object_indices.insert(object.execution_id, object_index);
     }
 
@@ -292,6 +343,7 @@ fn materialize_semantic_projection(
         graph_owner_dependencies,
         graph_incident_dependencies,
         graph_dirty_dependencies,
+        numeric_text_drivers,
         resources,
     })
 }

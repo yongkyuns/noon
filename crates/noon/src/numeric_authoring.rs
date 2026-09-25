@@ -2,13 +2,14 @@
 
 use crate::{
     format_decimal, DecimalFormat, LatexBackend, MathTex, Mobject, NumericFormatError,
-    TextAuthoringError,
+    TextAuthoringError, ValueTracker,
 };
 use noon_core::{
-    Rect, SemanticDecimalNumber, SemanticMutationTransaction, SemanticNodeCreation,
+    compose_numeric_text_resource as compose_numeric_resource, numeric_text_layout,
+    NumericTextLayoutToken, NumericTextResourceError, SemanticDecimalNumber,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNumericTextBinding,
     SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore,
-    SemanticTransform2_5D, TextAffineTransform, TextPart, TextPresentationBaseline, TextRenderItem,
-    TextResource, TextSourceKind, TextSourceSpan, Vec2, WHITE,
+    SemanticTransform2_5D, TextPresentationBaseline, TextResource, WHITE,
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -92,7 +93,7 @@ pub struct DecimalNumber {
 /// the same transaction owner for cold and live authoring.
 pub(crate) struct PreparedDecimalValue {
     source: Arc<str>,
-    tokens: Vec<NumericLayoutToken>,
+    tokens: Vec<NumericTextLayoutToken>,
     dependencies: Vec<NumericCompiledDependency>,
     value: f64,
     format: DecimalFormat,
@@ -106,22 +107,7 @@ pub(crate) type NumericCompiledDependency = (
     noon_core::GeometryResourceArena,
 );
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NumericLayoutPart {
-    Digit,
-    Sign,
-    Minus,
-    Comma,
-    DecimalPoint,
-    Ellipsis,
-    Unit { superscript: bool },
-}
-
-struct NumericLayoutToken {
-    tex: Arc<str>,
-    span: TextSourceSpan,
-    part: NumericLayoutPart,
-}
+type NumericLayoutToken = NumericTextLayoutToken;
 
 impl DecimalNumber {
     pub fn new(
@@ -261,6 +247,71 @@ impl DecimalNumber {
         delta: f64,
     ) -> Result<&mut Self, NumericAuthoringError> {
         self.set_value(backend, self.value()? + delta)
+    }
+
+    /// Bind this retained number to a shared scalar tracker.
+    ///
+    /// Every glyph/token resource needed by the configured format is compiled and
+    /// admitted now. Runtime updates therefore perform only formatting, retained
+    /// composition and one effective resource publication for this object.
+    pub fn bind_to_tracker(
+        &mut self,
+        backend: &mut impl LatexBackend,
+        tracker: &ValueTracker,
+    ) -> Result<&mut Self, NumericAuthoringError> {
+        tracker.require_store(self.object.integration_store())?;
+        let metadata = self.metadata()?;
+        let format = self.format()?;
+        let font_size = metadata.font_size();
+        let token_sources = numeric_template_sources(&format);
+        let mut dependencies = Vec::with_capacity(token_sources.len());
+        for source in &token_sources {
+            dependencies.push(
+                crate::latex_authoring::prepare_math_tex(
+                    numeric_math_tex(source.as_ref(), font_size)?,
+                    backend,
+                )?
+                .into_compiled_resource_parts(),
+            );
+        }
+
+        let node = self.object.node_id();
+        let signal = tracker.node_id();
+        let store = self.object.integration_store();
+        let captured = RefCell::new(None::<Vec<noon_core::TextResourceHandle>>);
+        store
+            .borrow_mut()
+            .with_compiled_text_dependency_batch::<TextAuthoringError, _>(
+                dependencies,
+                |_store, handles| {
+                    *captured.borrow_mut() = Some(handles.to_vec());
+                    Ok(Vec::new())
+                },
+                |store, _derived| {
+                    let handles = captured
+                        .borrow_mut()
+                        .take()
+                        .expect("numeric template composition captures dependency handles");
+                    let token_resources =
+                        token_sources.into_iter().zip(handles).collect::<Vec<_>>();
+                    let binding = SemanticNumericTextBinding::new(
+                        signal,
+                        token_resources.into(),
+                        crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE,
+                    );
+                    let number = metadata.clone().with_binding(binding);
+                    // The current authored value remains the DecimalNumber base value.
+                    debug_assert_eq!(number.value(), metadata.value());
+                    let mut transaction = SemanticMutationTransaction::new();
+                    transaction.replace_decimal_number(node, number);
+                    transaction
+                        .apply(store)
+                        .map(|_| ())
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(TextAuthoringError::Semantic)
+                },
+            )?;
+        Ok(self)
     }
 
     pub(crate) fn set_value_live(
@@ -466,76 +517,39 @@ fn prepare_numeric_value(
     })
 }
 
+fn numeric_template_sources(format: &DecimalFormat) -> Vec<Arc<str>> {
+    let mut sources = (b'0'..=b'9')
+        .map(|digit| Arc::<str>::from(char::from(digit).to_string()))
+        .collect::<Vec<_>>();
+    sources.push(Arc::from("-"));
+    if format.include_sign {
+        sources.push(Arc::from("+"));
+    }
+    if format.group_with_commas {
+        sources.push(Arc::from(","));
+    }
+    if format.decimal_places > 0 {
+        sources.push(Arc::from("."));
+    }
+    if format.show_ellipsis {
+        sources.push(Arc::from("\\dots"));
+    }
+    if let Some(unit) = format.unit.as_deref().filter(|unit| !unit.is_empty()) {
+        sources.push(Arc::from(unit));
+    }
+    sources.sort_unstable_by(|left, right| left.as_ref().cmp(right.as_ref()));
+    sources.dedup();
+    sources
+}
+
 fn numeric_layout_tokens(
     value: f64,
     format: &DecimalFormat,
 ) -> Result<(Arc<str>, Vec<NumericLayoutToken>), NumericAuthoringError> {
-    let source: Arc<str> = Arc::from(format_decimal(value, format)?);
-    let mut numeric_end = source.len();
-    if let Some(unit) = &format.unit {
-        numeric_end = numeric_end
-            .checked_sub(unit.len())
-            .ok_or(TextAuthoringError::Text(
-                noon_core::TextResourceValidationError::InvalidSourceSpan,
-            ))?;
-    }
-    let ellipsis_start = if format.show_ellipsis {
-        numeric_end = numeric_end.checked_sub(3).ok_or(TextAuthoringError::Text(
-            noon_core::TextResourceValidationError::InvalidSourceSpan,
-        ))?;
-        Some(numeric_end)
-    } else {
-        None
-    };
-    let mut tokens = Vec::new();
-    for (start, character) in source[..numeric_end].char_indices() {
-        let part = match character {
-            '-' => NumericLayoutPart::Minus,
-            '+' => NumericLayoutPart::Sign,
-            ',' => NumericLayoutPart::Comma,
-            '.' => NumericLayoutPart::DecimalPoint,
-            '0'..='9' => NumericLayoutPart::Digit,
-            _ => unreachable!("numeric formatter emits only numeric punctuation"),
-        };
-        tokens.push(NumericLayoutToken {
-            tex: Arc::from(character.to_string()),
-            span: text_span(start, start + character.len_utf8())?,
-            part,
-        });
-    }
-    if let Some(start) = ellipsis_start {
-        tokens.push(NumericLayoutToken {
-            tex: Arc::from("\\dots"),
-            span: text_span(start, start + 3)?,
-            part: NumericLayoutPart::Ellipsis,
-        });
-    }
-    if let Some(unit) = &format.unit {
-        if !unit.is_empty() {
-            tokens.push(NumericLayoutToken {
-                tex: Arc::from(unit.as_str()),
-                span: text_span(
-                    numeric_end + usize::from(format.show_ellipsis) * 3,
-                    source.len(),
-                )?,
-                part: NumericLayoutPart::Unit {
-                    superscript: unit.starts_with('^'),
-                },
-            });
-        }
-    }
-    Ok((source, tokens))
-}
-
-fn text_span(start: usize, end: usize) -> Result<TextSourceSpan, TextAuthoringError> {
-    Ok(TextSourceSpan::new(
-        u32::try_from(start).map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidSourceSpan)
-        })?,
-        u32::try_from(end).map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidSourceSpan)
-        })?,
-    ))
+    numeric_text_layout(value, format).map_err(|error| match error {
+        NumericTextResourceError::Format(error) => NumericAuthoringError::Format(error),
+        other => NumericAuthoringError::Text(numeric_resource_error(other)),
+    })
 }
 
 fn compose_numeric_text_resource(
@@ -565,161 +579,28 @@ fn compose_numeric_text_resource_from_children(
     children: &[&TextResource],
     font_size: f32,
 ) -> Result<TextResource, TextAuthoringError> {
-    if tokens.len() != children.len() || tokens.is_empty() {
-        return Err(TextAuthoringError::Text(
-            noon_core::TextResourceValidationError::InvalidSourceSpan,
-        ));
-    }
-    if !font_size.is_finite() || font_size <= 0.0 {
-        return Err(TextAuthoringError::InvalidFontSize(font_size));
-    }
-    let scale = font_size * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
-    let scale_transform = TextAffineTransform {
-        xx: scale,
-        yy: scale,
-        ..TextAffineTransform::IDENTITY
-    };
-    let digit_buff = 0.001 * font_size;
-    let mut bounds = Vec::with_capacity(children.len());
-    let mut transforms = Vec::with_capacity(children.len());
-    let mut cursor = 0.0;
-    for (index, child) in children.iter().enumerate() {
-        let scaled = transform_rect(child.bounds, scale_transform);
-        let placement = TextAffineTransform::translation(cursor - scaled.min.x, -scaled.min.y);
-        let placed = transform_rect(scaled, placement);
-        transforms.push(placement);
-        bounds.push(placed);
-        let gap = tokens.get(index + 1).map_or(0.0, |next| match next.part {
-            NumericLayoutPart::Unit { .. } => 2.0 * digit_buff,
-            _ => digit_buff,
-        });
-        cursor = placed.max.x + gap;
-    }
-    for (index, token) in tokens.iter().enumerate() {
-        let height = bounds[index].height();
-        let offset = match token.part {
-            NumericLayoutPart::Minus if index + 1 < bounds.len() => {
-                bounds[index + 1].height() / 2.0 - height
-            }
-            NumericLayoutPart::Comma => -height / 2.0,
-            _ => 0.0,
-        };
-        if offset != 0.0 {
-            transforms[index].ty += offset;
-            bounds[index] =
-                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
-        }
-    }
-    let overall_top = bounds
-        .iter()
-        .map(|bound| bound.max.y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    for (index, token) in tokens.iter().enumerate() {
-        if matches!(token.part, NumericLayoutPart::Unit { superscript: true }) {
-            let offset = overall_top - bounds[index].max.y;
-            transforms[index].ty += offset;
-            bounds[index] =
-                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
-        }
-    }
-    let overall = bounds
-        .iter()
-        .copied()
-        .reduce(Rect::union)
-        .expect("numeric layout has tokens");
-    let recenter = TextAffineTransform::translation(-overall.center().x, -overall.center().y);
-    let mut runs = Vec::new();
-    let mut vectors = Vec::new();
-    let mut render_items = Vec::new();
-    let mut parts = Vec::new();
-    let mut cluster_ordinal = 0_u32;
-    for ((token, child), placement) in tokens.iter().zip(children).zip(transforms) {
-        let first_cluster = u32::try_from(
-            runs.iter()
-                .map(|run: &noon_core::GlyphRun| run.glyphs.len())
-                .sum::<usize>(),
-        )
-        .map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidClusterRange)
-        })?;
-        let first_vector = u32::try_from(vectors.len()).map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidVectorRange)
-        })?;
-        let run_offset = u32::try_from(runs.len()).map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidRenderItem)
-        })?;
-        let vector_offset = u32::try_from(vectors.len()).map_err(|_| {
-            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidRenderItem)
-        })?;
-        let transform = scale_transform.then(placement).then(recenter);
-        for run in child.runs.iter() {
-            let mut run = run.clone();
-            run.transform = run.transform.then(transform);
-            for glyph in Arc::make_mut(&mut run.glyphs) {
-                glyph.cluster.source_span = token.span;
-                glyph.cluster.cluster_ordinal = cluster_ordinal;
-                glyph.cluster.semantic_key = None;
-                cluster_ordinal =
-                    cluster_ordinal
-                        .checked_add(1)
-                        .ok_or(TextAuthoringError::Text(
-                            noon_core::TextResourceValidationError::InvalidClusterRange,
-                        ))?;
-            }
-            runs.push(run);
-        }
-        for vector in child.vector_items.iter() {
-            let mut vector = vector.clone();
-            vector.transform = vector.transform.then(transform);
-            vector.source_span = Some(token.span);
-            vector.semantic_key = None;
-            vectors.push(vector);
-        }
-        for item in child.render_items.iter().copied() {
-            render_items.push(match item {
-                TextRenderItem::GlyphRun(index) => TextRenderItem::GlyphRun(run_offset + index),
-                TextRenderItem::Vector(index) => TextRenderItem::Vector(vector_offset + index),
-            });
-        }
-        parts.push(TextPart {
-            source_span: token.span,
-            first_cluster,
-            cluster_count: u32::try_from(child.glyph_count()).map_err(|_| {
-                TextAuthoringError::Text(
-                    noon_core::TextResourceValidationError::InvalidClusterRange,
-                )
-            })?,
-            first_vector,
-            vector_count: u32::try_from(child.vector_count()).map_err(|_| {
-                TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidVectorRange)
-            })?,
-            semantic_key: None,
-        });
-    }
-    Ok(TextResource {
+    compose_numeric_resource(
         source,
-        kind: TextSourceKind::MathTex,
-        runs: runs.into(),
-        vector_items: vectors.into(),
-        render_items: render_items.into(),
-        parts: parts.into(),
-        bounds: Rect::new(
-            overall.min - overall.center(),
-            overall.max - overall.center(),
-        ),
-        baseline: 0.0,
-        layout_artifact: None,
-    })
+        tokens,
+        children,
+        font_size,
+        crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE,
+    )
+    .map_err(numeric_resource_error)
 }
 
-fn transform_rect(rect: Rect, transform: TextAffineTransform) -> Rect {
-    Rect::from_points([
-        transform.transform_point(rect.min),
-        transform.transform_point(Vec2::new(rect.min.x, rect.max.y)),
-        transform.transform_point(Vec2::new(rect.max.x, rect.min.y)),
-        transform.transform_point(rect.max),
-    ])
-    .expect("a rectangle has four corners")
+fn numeric_resource_error(error: NumericTextResourceError) -> TextAuthoringError {
+    match error {
+        NumericTextResourceError::Format(_) => unreachable!("composition does not format values"),
+        NumericTextResourceError::InvalidFontSize { bits } => {
+            TextAuthoringError::InvalidFontSize(f32::from_bits(bits))
+        }
+        NumericTextResourceError::InvalidResource(error) => TextAuthoringError::Text(error),
+        NumericTextResourceError::InvalidSourceSpan
+        | NumericTextResourceError::TokenCountMismatch => {
+            TextAuthoringError::Text(noon_core::TextResourceValidationError::InvalidSourceSpan)
+        }
+    }
 }
 
 fn decimal_replacement_transaction(
@@ -769,7 +650,14 @@ fn decimal_replacement_transaction(
     if authored.z_index() != effective.z_index() {
         transaction.set_z_index(node, effective.z_index());
     }
-    transaction.replace_decimal_number(node, decimal_metadata(value, format, font_size));
+    let mut metadata = decimal_metadata(value, format, font_size);
+    if let Some(binding) = authored
+        .decimal_number()
+        .and_then(SemanticDecimalNumber::binding)
+    {
+        metadata = metadata.with_binding(binding.clone());
+    }
+    transaction.replace_decimal_number(node, metadata);
     transaction.replace_text_presentation_baseline(node, Some(baseline));
     Ok(transaction)
 }
@@ -883,7 +771,48 @@ impl Integer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{FontResourceArena, GeometryResourceArena};
+    use noon_core::{
+        FontResourceArena, GeometryResourceArena, Rect, TextSourceKind, TextSourceSpan, Vec2,
+    };
+
+    type NumericLayoutPart = noon_core::NumericTextPart;
+
+    struct RuleBackend;
+
+    impl LatexBackend for RuleBackend {
+        fn identity(&self) -> &str {
+            "numeric-variable-rule-fixture"
+        }
+
+        fn format(&self) -> crate::LatexFormat {
+            crate::LatexFormat::Preloaded
+        }
+
+        fn font(&mut self, _: &str) -> Result<crate::DviFontResource, String> {
+            Err("font-free fixture".into())
+        }
+
+        fn compile(&mut self, _: &str) -> Result<Vec<u8>, String> {
+            let mut dvi = vec![247, 2];
+            for value in [25_400_000u32, 473_628_672, 1000] {
+                dvi.extend(value.to_be_bytes());
+            }
+            dvi.push(0);
+            dvi.push(139);
+            dvi.extend([0; 44]);
+            dvi.push(132);
+            dvi.extend(655_360i32.to_be_bytes());
+            dvi.extend(327_680i32.to_be_bytes());
+            dvi.push(140);
+            dvi.push(248);
+            dvi.extend([0; 28]);
+            dvi.push(249);
+            dvi.extend([0; 4]);
+            dvi.push(2);
+            dvi.extend([223; 4]);
+            Ok(dvi)
+        }
+    }
 
     fn text_box(source: &str, bounds: Rect) -> TextResource {
         TextResource {
@@ -1046,5 +975,98 @@ mod tests {
         assert!((left_edge_center(&store, after).unwrap().0 - before.0).abs() < 1e-9);
         assert!((left_edge_center(&store, after).unwrap().1 - before.1).abs() < 1e-9);
         assert!((effective_font_size(&store, after).unwrap() - font).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tracker_binding_updates_effective_text_with_stable_authored_revision_and_bounded_slot() {
+        use noon_core::TextResourceLookup;
+
+        let mut backend = RuleBackend;
+        let mut scene = crate::Scene::new();
+        let tracker = scene.value_tracker(-0.004).unwrap();
+        let unrelated = scene.value_tracker(1.0).unwrap();
+        let mut number = DecimalNumber::new(
+            Rc::clone(scene.integration_store()),
+            &mut backend,
+            -0.004,
+            DecimalFormat {
+                decimal_places: 2,
+                include_sign: true,
+                group_with_commas: true,
+                show_ellipsis: true,
+                unit: Some("m".into()),
+            },
+        )
+        .unwrap();
+        number.bind_to_tracker(&mut backend, &tracker).unwrap();
+        scene.add(number.mobject()).unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let initial_context = session.publication_context();
+        let initial_handle = session.frame().objects[0].text().unwrap();
+        assert_eq!(
+            session
+                .text_resources()
+                .get(initial_handle)
+                .unwrap()
+                .source
+                .as_ref(),
+            "+0.00...m"
+        );
+        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+
+        session
+            .set_reactive_input(tracker.node_id(), 12_345.6_f32)
+            .unwrap();
+        let changed = session.publication_context();
+        assert_eq!(changed.scene_revision(), initial_context.scene_revision());
+        assert_eq!(
+            changed.execution_revision(),
+            initial_context.execution_revision()
+        );
+        assert_ne!(changed.frame_epoch(), initial_context.frame_epoch());
+        let changed_handle = session.frame().objects[0].text().unwrap();
+        assert_eq!(changed_handle.id, initial_handle.id);
+        assert!(changed_handle.version > initial_handle.version);
+        assert!(session.text_resources().get(initial_handle).is_none());
+        assert_eq!(
+            session
+                .text_resources()
+                .get(changed_handle)
+                .unwrap()
+                .source
+                .as_ref(),
+            "+12,345.60...m"
+        );
+
+        session
+            .set_reactive_input(unrelated.node_id(), 2.0_f32)
+            .unwrap();
+        assert_eq!(session.frame().objects[0].text(), Some(changed_handle));
+        let before_rejection = session.publication_context();
+        assert!(session
+            .set_reactive_input(tracker.node_id(), f32::NAN)
+            .is_err());
+        assert_eq!(session.publication_context(), before_rejection);
+        assert_eq!(session.frame().objects[0].text(), Some(changed_handle));
+
+        for value in 0..64 {
+            session
+                .set_reactive_input(tracker.node_id(), value as f32 + 0.25)
+                .unwrap();
+        }
+        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+        let current = session.frame().objects[0].text().unwrap();
+        assert_eq!(
+            session
+                .text_resources()
+                .get(current)
+                .unwrap()
+                .source
+                .as_ref(),
+            "+63.25...m"
+        );
     }
 }

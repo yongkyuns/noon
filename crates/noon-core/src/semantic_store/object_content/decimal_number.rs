@@ -5,6 +5,55 @@
 
 use std::sync::Arc;
 
+use crate::{SemanticNodeId, TextResourceHandle};
+
+/// Authored declaration for tracker-driven effective numeric content.
+///
+/// Token resources are immutable compiler outputs prepared before playback. Runtime
+/// formatting only composes these retained resources; it never invokes a text backend.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticNumericTextBinding {
+    signal: SemanticNodeId,
+    token_resources: Arc<[(Arc<str>, TextResourceHandle)]>,
+    point_to_scene_scale_bits: u32,
+}
+
+impl SemanticNumericTextBinding {
+    pub fn new(
+        signal: SemanticNodeId,
+        token_resources: Arc<[(Arc<str>, TextResourceHandle)]>,
+        point_to_scene_scale: f32,
+    ) -> Self {
+        Self {
+            signal,
+            token_resources,
+            point_to_scene_scale_bits: point_to_scene_scale.to_bits(),
+        }
+    }
+
+    pub const fn signal(&self) -> SemanticNodeId {
+        self.signal
+    }
+
+    pub fn token_resources(&self) -> &[(Arc<str>, TextResourceHandle)] {
+        &self.token_resources
+    }
+
+    pub const fn point_to_scene_scale(&self) -> f32 {
+        f32::from_bits(self.point_to_scene_scale_bits)
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.token_resources.is_empty()
+            && self.point_to_scene_scale().is_finite()
+            && self.point_to_scene_scale() > 0.0
+            && self
+                .token_resources
+                .windows(2)
+                .all(|pair| pair[0].0.as_ref() < pair[1].0.as_ref())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SemanticDecimalNumber {
     value_bits: u64,
@@ -14,6 +63,7 @@ pub struct SemanticDecimalNumber {
     show_ellipsis: bool,
     unit: Option<Arc<str>>,
     font_size_bits: u32,
+    binding: Option<Arc<SemanticNumericTextBinding>>,
 }
 
 impl SemanticDecimalNumber {
@@ -35,6 +85,7 @@ impl SemanticDecimalNumber {
             show_ellipsis,
             unit,
             font_size_bits: font_size.to_bits(),
+            binding: None,
         }
     }
 
@@ -60,11 +111,23 @@ impl SemanticDecimalNumber {
         f32::from_bits(self.font_size_bits)
     }
 
+    pub fn binding(&self) -> Option<&SemanticNumericTextBinding> {
+        self.binding.as_deref()
+    }
+
+    pub fn with_binding(mut self, binding: SemanticNumericTextBinding) -> Self {
+        self.binding = Some(Arc::new(binding));
+        self
+    }
+
     pub fn is_valid(&self) -> bool {
         self.value().is_finite()
             && self.decimal_places <= 12
             && self.font_size().is_finite()
             && self.font_size() > 0.0
+            && self
+                .binding()
+                .is_none_or(SemanticNumericTextBinding::is_valid)
     }
 }
 

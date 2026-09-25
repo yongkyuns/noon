@@ -122,8 +122,6 @@ mod matrix_display;
 mod native_signal_authoring;
 #[cfg(feature = "latex")]
 mod numeric_authoring;
-#[cfg(feature = "latex")]
-mod numeric_format;
 mod path_alignment;
 mod path_editing;
 mod path_queries;
@@ -226,6 +224,8 @@ pub use matrix_display::{
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
+#[cfg(feature = "latex")]
+pub use noon_core::{format_decimal, DecimalFormat, NumericFormatError};
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
     GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
@@ -252,8 +252,6 @@ pub use noon_geometry::{
 pub use noon_runtime::EvaluationError;
 #[cfg(feature = "latex")]
 pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
-#[cfg(feature = "latex")]
-pub use numeric_format::{format_decimal, DecimalFormat, NumericFormatError};
 pub use path_queries::PathQuery;
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;

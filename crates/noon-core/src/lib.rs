@@ -9,6 +9,7 @@
 
 mod animation;
 mod graph_topology;
+mod numeric_format;
 mod object_state;
 mod publication;
 mod reactive;
@@ -17,6 +18,7 @@ mod semantic_store;
 
 pub use animation::*;
 pub use graph_topology::*;
+pub use numeric_format::*;
 pub use object_state::*;
 pub use publication::*;
 pub use reactive::*;

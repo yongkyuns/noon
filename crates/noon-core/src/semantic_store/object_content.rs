@@ -34,7 +34,7 @@ pub use coordinate_role::SemanticNumberLineRole;
 mod function_plot_role;
 pub use function_plot_role::SemanticFunctionPlotRole;
 mod decimal_number;
-pub use decimal_number::SemanticDecimalNumber;
+pub use decimal_number::{SemanticDecimalNumber, SemanticNumericTextBinding};
 
 /// Authored numeric input and constructor paint for an ordinary chart rectangle.
 ///

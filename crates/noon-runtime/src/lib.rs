@@ -6,6 +6,7 @@ mod derived_display_evaluation;
 mod execution_slots;
 mod frame;
 mod graph_endpoints;
+mod numeric_text;
 mod prepared_frame;
 mod reactive;
 mod renderer_publication;
@@ -43,6 +44,7 @@ use noon_core::{
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
     MANIM_STRAIGHT_PATH_ARC_THRESHOLD,
 };
+use numeric_text::NumericTextRuntime;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EvaluationStats {
@@ -61,6 +63,7 @@ pub enum EvaluationError {
     RequiredCallbackPending,
     RequiredCallbackBarrier,
     Reactive(noon_core::ReactiveError),
+    NumericText(noon_core::NumericTextResourceError),
 }
 
 impl std::fmt::Display for EvaluationError {
@@ -86,6 +89,7 @@ impl std::fmt::Display for EvaluationError {
             Self::RequiredCallbackBarrier => formatter
                 .write_str("semantic host callbacks require callback-aware session advancement"),
             Self::Reactive(error) => error.fmt(formatter),
+            Self::NumericText(error) => error.fmt(formatter),
         }
     }
 }
@@ -94,6 +98,7 @@ impl std::error::Error for EvaluationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Reactive(error) => Some(error),
+            Self::NumericText(error) => Some(error),
             _ => None,
         }
     }
@@ -168,6 +173,7 @@ pub struct SceneInstance {
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
     /// Monotonic diagnostic count of sparse graph dependency visits.
     graph_dependency_visits: u64,
+    numeric_text: NumericTextRuntime,
 }
 
 impl Clone for SceneInstance {
@@ -192,7 +198,17 @@ impl Clone for SceneInstance {
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
             graph_dependency_visits: self.graph_dependency_visits,
+            numeric_text: self.numeric_text.clone(),
         }
+    }
+}
+
+impl noon_core::TextResourceLookup for SceneInstance {
+    fn get(&self, handle: noon_core::TextResourceHandle) -> Option<&noon_core::TextResource> {
+        self.numeric_text
+            .resources()
+            .get(handle)
+            .or_else(|| self.compiled.text_resources().get(handle))
     }
 }
 
@@ -206,6 +222,7 @@ impl SceneInstance {
 
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
+        let numeric_text = NumericTextRuntime::new(&compiled);
         let groups = build_groups(&compiled);
         let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
         let mut instance = Self {
@@ -230,6 +247,7 @@ impl SceneInstance {
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
             graph_dependency_visits: 0,
+            numeric_text,
         };
         instance.seek_unchecked(0.0);
         instance
@@ -296,7 +314,7 @@ impl SceneInstance {
             self.publication,
             &self.frame,
             changes,
-            self.compiled.text_resources(),
+            self,
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
             self.compiled.raster_image_resources(),
@@ -322,7 +340,7 @@ impl SceneInstance {
             self.publication,
             &self.frame,
             changes,
-            self.compiled.text_resources(),
+            self,
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
             self.compiled.raster_image_resources(),
@@ -386,7 +404,16 @@ impl SceneInstance {
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
-        self.compiled.text_resources()
+        self
+    }
+
+    /// Bounded effective numeric-resource diagnostics.
+    pub fn effective_text_resource_stats(&self) -> noon_core::TextResourceStats {
+        self.numeric_text.resources().stats()
+    }
+
+    pub fn effective_text_resource_slot_capacity(&self) -> usize {
+        self.numeric_text.resources().slot_capacity()
     }
 
     pub fn raster_image_resources(&self) -> &impl noon_core::RasterImageResourceLookup {
@@ -581,6 +608,7 @@ impl SceneInstance {
                 self.reposition_painter_row(object_index);
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
+                self.reapply_numeric_text_for_object(object_index);
             }
             ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -596,6 +624,7 @@ impl SceneInstance {
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
                 self.clear_family_animation_runtime_state(object_index);
+                self.effective_driver_rows.remove(&object_index);
                 let position = self.painter_ranks[object_index]
                     .take()
                     .expect("removed row was live") as usize;
@@ -697,6 +726,7 @@ impl SceneInstance {
                 &mut evaluation,
             );
             self.reapply_reactive_for_object(channel.object_index as usize);
+            self.reapply_numeric_text_for_object(channel.object_index as usize);
             self.last_stats = evaluation;
             self.last_patch_stats = RuntimePatchStats {
                 objects_recomputed: 1,
@@ -763,6 +793,7 @@ impl SceneInstance {
         for object_index in affected_objects.into_iter().flatten() {
             self.relower_object(object_index, self.frame.time, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
+            self.reapply_numeric_text_for_object(object_index);
             self.mark_changed(object_index);
             patch_stats.objects_recomputed += 1;
         }
@@ -828,6 +859,7 @@ impl SceneInstance {
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
         self.reapply_reactive_for_object(index);
+        self.reapply_numeric_text_for_object(index);
         if self.frame.objects[index] != before {
             self.mark_changed(index);
         }
@@ -958,6 +990,7 @@ impl SceneInstance {
         }
 
         self.reapply_reactive();
+        self.reapply_numeric_text();
         self.refresh_all_graph_dependencies();
         self.last_stats = stats;
     }

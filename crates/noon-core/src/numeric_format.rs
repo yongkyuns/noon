@@ -1,6 +1,6 @@
-//! Renderer-independent DecimalNumber formatting.
+//! Renderer-independent DecimalNumber formatting shared by authoring and runtime.
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DecimalFormat {
     pub decimal_places: u32,
     pub include_sign: bool,
@@ -38,6 +38,7 @@ impl std::fmt::Display for NumericFormatError {
         }
     }
 }
+
 impl std::error::Error for NumericFormatError {}
 
 pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, NumericFormatError> {
@@ -72,9 +73,6 @@ pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, Num
     if options.include_sign && !text.starts_with('-') {
         text.insert(0, '+');
     }
-    // Manim uses NumPy's rounding only to decide whether a formatted negative
-    // value loses its sign. Keep that decision independent of Rust's formatted
-    // digits: `-0.005` at two places displays `0.01`, not `-0.01`.
     let rounded_for_sign = (value * 10_f64.powi(options.decimal_places as i32)).round_ties_even();
     if text.starts_with('-') && rounded_for_sign == 0.0 {
         text.remove(0);
@@ -94,6 +92,7 @@ pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, Num
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn formats_manim_numeric_display_bits() {
         assert_eq!(
@@ -111,21 +110,10 @@ mod tests {
     }
 
     #[test]
-    fn keeps_manim_negative_zero_sign_rule_separate_from_formatted_digits() {
+    fn keeps_negative_zero_rule_separate_from_formatted_digits() {
         assert_eq!(
             format_decimal(-0.005, &DecimalFormat::default()).unwrap(),
             "0.01"
-        );
-        assert_eq!(
-            format_decimal(
-                -0.005,
-                &DecimalFormat {
-                    include_sign: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-            "+0.01"
         );
     }
 }

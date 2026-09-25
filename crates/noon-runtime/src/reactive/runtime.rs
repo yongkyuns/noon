@@ -4,8 +4,7 @@ use noon_compile::{CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch,
     PreparedComputeInputEnrollment, PreparedComputeInputEnrollmentBatch, Property,
-    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveValue,
-    SignalId,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveValue, SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
@@ -61,6 +60,14 @@ impl PreparedReactiveRuntimeUpdate {
     }
     pub(crate) fn property_changes(&self) -> &[(usize, Property, ReactiveValue)] {
         &self.property_changes
+    }
+
+    pub(crate) fn signal_changes(&self) -> &[noon_core::SignalChange] {
+        self.compute.update().signal_changes()
+    }
+
+    pub(crate) const fn stats(&self) -> ReactiveRuntimeStats {
+        self.stats
     }
 }
 
@@ -294,6 +301,10 @@ impl SceneInstance {
         instance.publication = publication;
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
+        let numeric = instance
+            .prepare_all_numeric_text()
+            .expect("lowered numeric text declarations are validated");
+        instance.commit_numeric_text_updates(numeric, false);
         instance.refresh_all_graph_dependencies();
         instance
     }
@@ -368,6 +379,9 @@ impl SceneInstance {
             })?
             .prepare_input_batch(inputs)
             .map_err(crate::EvaluationError::Reactive)?;
+        let numeric = self
+            .prepare_changed_numeric_text(&prepared)
+            .map_err(crate::EvaluationError::NumericText)?;
         let effective_changed = !prepared.is_empty();
         if effective_changed {
             self.invalidate_replay_input();
@@ -377,6 +391,7 @@ impl SceneInstance {
             .as_mut()
             .expect("prepared reactive inputs retain their runtime")
             .commit_prepared_input_batch(prepared);
+        self.commit_numeric_text_updates(numeric, false);
         self.seek_unchecked(time);
         self.last_reactive_stats = stats;
         if self.frame.time != previous_time || effective_changed {
@@ -397,48 +412,49 @@ impl SceneInstance {
         if self.replay_is_sealed() {
             return Err(crate::EvaluationError::ReplaySealed);
         }
-        let update = self
+        let prepared = self
             .reactive
             .as_mut()
             .ok_or(crate::EvaluationError::Reactive(
                 ReactiveError::UnknownSignal(signal),
             ))?
-            .state
-            .set_input(signal, value)
+            .prepare_input_batch(&[(signal, value.into())])
             .map_err(crate::EvaluationError::Reactive)?;
-        let effective_changed = !update.signal_changes().is_empty();
+        let numeric = self
+            .prepare_changed_numeric_text(&prepared)
+            .map_err(crate::EvaluationError::NumericText)?;
+        let effective_changed = !prepared.is_empty();
         if effective_changed {
             self.invalidate_replay_input();
         }
-        let evaluation = update.stats();
+        let prepared_stats = prepared.stats();
+        let property_changes = prepared.property_changes().to_vec();
+        self.last_reactive_stats = self
+            .reactive
+            .as_mut()
+            .expect("prepared reactive input retains its runtime")
+            .commit_prepared_input_batch(prepared);
         let mut applied_targets = 0;
         let mut changed_targets = 0;
 
-        for change in update.property_changes() {
-            let target = self
-                .reactive
-                .as_ref()
-                .expect("reactive state exists while applying its update")
-                .target(change.object, change.property);
-            if !self
-                .compiled
-                .object_slot_is_live(target.object_index as u32)
-            {
+        for (object_index, property, value) in property_changes {
+            if !self.compiled.object_slot_is_live(object_index as u32) {
                 continue;
             }
             applied_targets += 1;
-            if apply_reactive_value(
-                &mut self.frame,
-                target.object_index,
-                target.property,
-                &change.value,
-            ) {
-                self.mark_changed(target.object_index);
+            if apply_reactive_value(&mut self.frame, object_index, property, &value) {
+                self.mark_changed(object_index);
                 changed_targets += 1;
             }
         }
 
-        self.last_reactive_stats = runtime_stats(evaluation, applied_targets, changed_targets);
+        self.commit_numeric_text_updates(numeric, true);
+        self.last_reactive_stats = ReactiveRuntimeStats {
+            derived_signals_evaluated: prepared_stats.derived_signals_evaluated,
+            bindings_invalidated: prepared_stats.bindings_invalidated,
+            dense_targets_applied: applied_targets,
+            dense_targets_changed: changed_targets,
+        };
         if effective_changed {
             self.publish_effective_change();
         }
@@ -515,19 +531,6 @@ impl SceneInstance {
                 .expect("lowered reactive target references a valid signal");
             apply_reactive_value_to_row(&mut row, target.property, value);
         }
-    }
-}
-
-fn runtime_stats(
-    evaluation: ReactiveEvaluationStats,
-    dense_targets_applied: usize,
-    dense_targets_changed: usize,
-) -> ReactiveRuntimeStats {
-    ReactiveRuntimeStats {
-        derived_signals_evaluated: evaluation.derived_signals_evaluated,
-        bindings_invalidated: evaluation.bindings_invalidated,
-        dense_targets_applied,
-        dense_targets_changed,
     }
 }
 

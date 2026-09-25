@@ -113,6 +113,17 @@ pub struct CompiledObject {
     pub live: bool,
 }
 
+/// One sparse tracker-to-effective-text execution declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledNumericTextDriver {
+    pub signal: noon_core::SignalId,
+    pub object_index: u32,
+    pub format: noon_core::DecimalFormat,
+    pub font_size: f32,
+    pub point_to_scene_scale: f32,
+    pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
+}
+
 impl CompiledObject {
     pub fn new(
         id: ObjectId,
@@ -603,6 +614,8 @@ pub struct CompiledScene {
     /// Any graph-owned row -> dependency indices that must be re-derived when
     /// that effective row changes. Includes vertices, designated Lines and tips.
     graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
+    /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
+    numeric_text_drivers: Vec<CompiledNumericTextDriver>,
     resources: CompiledResources,
 }
 
@@ -1063,6 +1076,7 @@ impl CompiledScene {
             graph_owner_dependencies: HashMap::new(),
             graph_incident_dependencies: HashMap::new(),
             graph_dirty_dependencies: HashMap::new(),
+            numeric_text_drivers: Vec::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -1159,6 +1173,10 @@ impl CompiledScene {
             .get(&owner)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    pub fn numeric_text_drivers(&self) -> &[CompiledNumericTextDriver] {
+        &self.numeric_text_drivers
     }
 
     /// Return only the graph dependencies touching one compiled vertex row.

@@ -196,6 +196,7 @@ impl SemanticExecutionIndex {
                 base_style: state.base_style,
                 presentation: state.presentation,
                 signal_bindings: state.signal_bindings,
+                decimal_number: state.decimal_number,
             })
             .collect::<Vec<_>>();
         let execution_ids = objects
@@ -291,6 +292,8 @@ pub struct SemanticExecutionObject {
     /// Ordered authored signal drivers. Signal identity remains semantic here; the
     /// runtime consumer maps it to native reactive slots and dirty closure later.
     pub signal_bindings: Vec<SemanticSignalBinding>,
+    /// Optional numeric source/format declaration used to lower effective text drivers.
+    pub decimal_number: Option<noon_core::SemanticDecimalNumber>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,6 +611,7 @@ struct LoweredObjectState {
     base_style: Style,
     presentation: SemanticPresentation,
     signal_bindings: Vec<SemanticSignalBinding>,
+    decimal_number: Option<noon_core::SemanticDecimalNumber>,
 }
 
 fn lower_object_state(
@@ -620,6 +624,7 @@ fn lower_object_state(
         base_style: lower_semantic_style(semantic_id, state)?,
         presentation: state.presentation(),
         signal_bindings: state.signal_bindings().to_vec(),
+        decimal_number: state.decimal_number().cloned(),
     })
 }
 
