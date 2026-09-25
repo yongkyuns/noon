@@ -6,6 +6,7 @@ pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
 mod execution_patch;
+mod graph_dependencies;
 mod replay_revision;
 pub use replay_revision::CompiledReplayRevision;
 mod semantic_lowering;
@@ -24,8 +25,9 @@ use noon_core::{
 };
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
-    CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    CompositionTimeMap, GeometryRef, GraphEdgeId, ObjectId, ObjectStateField, Property, Style,
+    TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    VectorPath,
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
@@ -35,7 +37,10 @@ use noon_core::{
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
-pub use execution_patch::{ExecutionMutationTransaction, ExecutionPatch};
+pub use execution_patch::{
+    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, ExecutionMutationTransaction,
+    ExecutionPatch,
+};
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
 
@@ -478,25 +483,45 @@ pub enum CompiledGraphEdgeKind {
 /// runtime which effective rows must be recomputed when either vertex moves.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompiledGraphEdgeDependency {
+    owner: ObjectId,
+    edge: GraphEdgeId,
     start_vertex_index: u32,
     end_vertex_index: u32,
     line_index: u32,
     kind: CompiledGraphEdgeKind,
+    live: bool,
 }
 
 impl CompiledGraphEdgeDependency {
     pub const fn new(
+        owner: ObjectId,
+        edge: GraphEdgeId,
         start_vertex_index: u32,
         end_vertex_index: u32,
         line_index: u32,
         kind: CompiledGraphEdgeKind,
     ) -> Self {
         Self {
+            owner,
+            edge,
             start_vertex_index,
             end_vertex_index,
             line_index,
             kind,
+            live: true,
         }
+    }
+
+    pub const fn owner(self) -> ObjectId {
+        self.owner
+    }
+
+    pub const fn edge(self) -> GraphEdgeId {
+        self.edge
+    }
+
+    pub const fn is_live(self) -> bool {
+        self.live
     }
 
     pub const fn start_vertex_index(self) -> u32 {
@@ -570,6 +595,9 @@ pub struct CompiledScene {
     family_animations: Vec<CompiledFamilyAnimationChannel>,
     /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
     graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
+    graph_dependency_indices: HashMap<(ObjectId, GraphEdgeId), u32>,
+    free_graph_dependency_indices: Vec<u32>,
+    graph_owner_dependencies: HashMap<ObjectId, Vec<u32>>,
     /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
     graph_incident_dependencies: HashMap<u32, Vec<u32>>,
     /// Any graph-owned row -> dependency indices that must be re-derived when
@@ -694,6 +722,11 @@ pub enum CompilePatchError {
     ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
+    TooManyGraphDependencies(usize),
+    DuplicateGraphDependency {
+        owner: ObjectId,
+        edge: GraphEdgeId,
+    },
     InvalidFamilyAnimation,
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -746,6 +779,16 @@ impl std::fmt::Display for CompilePatchError {
             Self::TooManyFamilyAnimations => {
                 formatter.write_str("scene contains too many family animation plans")
             }
+            Self::TooManyGraphDependencies(count) => write!(
+                formatter,
+                "scene contains too many graph endpoint dependencies: {count}"
+            ),
+            Self::DuplicateGraphDependency { owner, edge } => write!(
+                formatter,
+                "graph dependency owner {} repeats edge {}",
+                owner.get(),
+                edge.get()
+            ),
             Self::InvalidZIndex(id) => write!(formatter, "object {} has non-finite z-index", id.get()),
             Self::InvalidFamilyAnimation => {
                 formatter.write_str("invalid family animation plan, timing, or mapping")
@@ -1015,6 +1058,9 @@ impl CompiledScene {
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
             graph_edge_dependencies: Vec::new(),
+            graph_dependency_indices: HashMap::new(),
+            free_graph_dependency_indices: Vec::new(),
+            graph_owner_dependencies: HashMap::new(),
             graph_incident_dependencies: HashMap::new(),
             graph_dirty_dependencies: HashMap::new(),
             resources: CompiledResources::default(),
@@ -1099,6 +1145,20 @@ impl CompiledScene {
 
     pub fn graph_edge_dependencies(&self) -> &[CompiledGraphEdgeDependency] {
         &self.graph_edge_dependencies
+    }
+
+    pub fn graph_edge_dependency(&self, index: u32) -> Option<CompiledGraphEdgeDependency> {
+        self.graph_edge_dependencies
+            .get(index as usize)
+            .copied()
+            .filter(|dependency| dependency.is_live())
+    }
+
+    pub fn graph_dependencies_for_owner(&self, owner: ObjectId) -> &[u32] {
+        self.graph_owner_dependencies
+            .get(&owner)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Return only the graph dependencies touching one compiled vertex row.
@@ -1305,6 +1365,10 @@ impl CompiledScene {
             ExecutionPatch::ReorderObject { object, before } => {
                 self.painter_reorder_changes(*object, *before)
             }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.graph_dependencies_patch_changes(*owner, dependencies),
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
@@ -1489,6 +1553,10 @@ impl CompiledScene {
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_style = *style;
             }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.apply_graph_dependencies(*owner, dependencies)?,
             ExecutionPatch::AddTrack(track) => {
                 if self.track_locators.contains_key(&track.id) {
                     return Err(CompilePatchError::DuplicateTrack(track.id));

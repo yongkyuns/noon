@@ -249,3 +249,77 @@ fn callback_motion_publishes_vertex_and_endpoints_in_one_retained_delta() {
     assert_eq!(player.resource_bundle_bytes(), resources);
     mirror.apply_family(delta).unwrap();
 }
+
+#[test]
+fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
+    use crate::authoring_graph::{GraphOperation, NativeGraph};
+
+    let mut scene = noon::Scene::new();
+    let sentinel = scene.circle(0.1).unwrap();
+    scene.add(&sentinel).unwrap();
+    let session = scene.execution_session().unwrap();
+    let mut player = live_player(&scene, session);
+    let resources = player.resource_bundle_bytes();
+    let mut mirror =
+        crate::InstalledRetainedExecutionMirror::from_bundle_bytes(&resources).unwrap();
+    mirror
+        .apply_family(player.delta(true).unwrap().unwrap())
+        .unwrap();
+
+    let mut graph = player
+        .live_create_graph(true, vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))], vec![(1, 2)])
+        .unwrap();
+    player
+        .live_mutate_graph(
+            &mut graph,
+            GraphOperation::Explicit(vec![(0.0, 1.0), (2.0, -1.0)]),
+        )
+        .unwrap();
+    player
+        .with_live_session(|live| live.add_many(&[noon::MobjectTarget::Family(graph.family())]))
+        .unwrap();
+    let NativeGraph::Directed(digraph) = &graph else {
+        panic!("created directed graph must retain directed wrapper");
+    };
+    let arrow = digraph.edge(&1, &2).unwrap().arrow().unwrap();
+    let shaft = player
+        .session
+        .execution_object_id(arrow.shaft().node_id())
+        .unwrap();
+    let tip = player
+        .session
+        .execution_object_id(arrow.end_tip().node_id())
+        .unwrap();
+    let admitted = player.delta(false).unwrap().unwrap();
+    for id in [shaft, tip] {
+        assert!(admitted
+            .retained
+            .objects
+            .iter()
+            .find(|row| row.object == id)
+            .unwrap()
+            .render_transform
+            .is_some());
+    }
+    mirror.apply_family(admitted).unwrap();
+
+    player
+        .live_mutate_graph(
+            &mut graph,
+            GraphOperation::Explicit(vec![(-2.0, 0.5), (3.0, 0.25)]),
+        )
+        .unwrap();
+    let moved = player.delta(false).unwrap().unwrap();
+    assert!(moved.resource_additions.is_none());
+    for id in [shaft, tip] {
+        assert!(moved
+            .retained
+            .objects
+            .iter()
+            .find(|row| row.object == id)
+            .unwrap()
+            .render_transform
+            .is_some());
+    }
+    mirror.apply_family(moved).unwrap();
+}

@@ -765,8 +765,14 @@ impl<'a> LiveSession<'a> {
         self.require_family(source)?;
         self.require_target_capture()?;
         let (transaction, pending) =
-            crate::family_copy::prepare_family_copy(source, references, |mobject| {
-                self.capture_mobject_state(mobject)
+            crate::family_copy::prepare_family_copy(source, references, |mobject, graph_row| {
+                crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                    self.store,
+                    self.session,
+                    mobject,
+                    graph_row,
+                )
+                .map_err(LiveSessionError::from)
             })?;
         let result = self.apply(transaction)?;
         pending.resolve(&result).map_err(LiveSessionError::from)

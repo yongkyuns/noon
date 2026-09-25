@@ -15,6 +15,49 @@ use noon_core::{GeometryRef, PathCommand, Transform2D, Vec2};
 use crate::{frame::FrameRowState, SceneInstance};
 
 impl SceneInstance {
+    pub(crate) fn apply_graph_dependency_patch(
+        &mut self,
+        patch: &noon_compile::ExecutionPatch,
+    ) -> Result<(), noon_compile::CompilePatchError> {
+        let noon_compile::ExecutionPatch::SetGraphDependencies { owner, .. } = patch else {
+            unreachable!("graph dependency helper accepts only graph patches");
+        };
+        self.compiled.apply_execution_patch(patch)?;
+        let dependencies = self.compiled.graph_dependencies_for_owner(*owner).to_vec();
+        for dependency_index in dependencies {
+            let dependency = self
+                .compiled
+                .graph_edge_dependency(dependency_index)
+                .expect("owner index names one live graph dependency");
+            let line = dependency.line_index() as usize;
+            self.frame.objects[line].content = self.compiled.objects()[line].content.clone();
+            self.frame.objects[line].text_bounds = self.compiled.objects()[line].text_bounds;
+            if let noon_compile::CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } = dependency.kind()
+            {
+                for tip in std::iter::once(end_tip_index).chain(start_tip_index) {
+                    let tip = tip as usize;
+                    self.frame.objects[tip].content = self.compiled.objects()[tip].content.clone();
+                    self.frame.objects[tip].text_bounds = self.compiled.objects()[tip].text_bounds;
+                }
+            }
+            self.graph_dependency_visits = self.graph_dependency_visits.saturating_add(1);
+            for changed_row in apply_graph_dependency(&self.compiled, &mut self.frame, dependency)
+                .into_iter()
+                .flatten()
+            {
+                self.changes.insert(changed_row);
+                self.spatial_changes.insert(changed_row);
+            }
+        }
+        self.last_stats = crate::EvaluationStats::default();
+        self.last_patch_stats = crate::RuntimePatchStats::default();
+        Ok(())
+    }
+
     /// Re-derive dependencies owned by one changed effective row.
     ///
     /// Vertex rows visit only their incident dependencies. Designated edge/tip
@@ -33,11 +76,7 @@ impl SceneInstance {
             ..
         } = self;
         for &dependency_index in compiled.graph_dependencies_for_changed_row(object_index) {
-            let Some(dependency) = compiled
-                .graph_edge_dependencies()
-                .get(dependency_index as usize)
-                .copied()
-            else {
+            let Some(dependency) = compiled.graph_edge_dependency(dependency_index) else {
                 debug_assert!(false, "compiled Graph dependency index remains in range");
                 continue;
             };
@@ -63,7 +102,12 @@ impl SceneInstance {
             graph_dependency_visits,
             ..
         } = self;
-        for dependency in compiled.graph_edge_dependencies().iter().copied() {
+        for dependency in compiled
+            .graph_edge_dependencies()
+            .iter()
+            .copied()
+            .filter(|dependency| dependency.is_live())
+        {
             *graph_dependency_visits = (*graph_dependency_visits).saturating_add(1);
             for changed_row in apply_graph_dependency(compiled, frame, dependency)
                 .into_iter()
@@ -96,12 +140,7 @@ impl SceneInstance {
         }
 
         for dependency_index in dependencies {
-            let Some(dependency) = self
-                .compiled
-                .graph_edge_dependencies()
-                .get(dependency_index as usize)
-                .copied()
-            else {
+            let Some(dependency) = self.compiled.graph_edge_dependency(dependency_index) else {
                 debug_assert!(false, "compiled Graph dependency index remains in range");
                 continue;
             };

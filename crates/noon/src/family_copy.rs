@@ -7,7 +7,11 @@ use noon_core::{
     SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeBinding,
 };
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 /// A detached copied family and a derived mapping for host wrapper reconstruction.
 /// The semantic store owns all copied nodes; dropping this lookup does not change them.
@@ -139,10 +143,11 @@ impl PendingFamilyCopy {
 pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     source: &MobjectFamily,
     references: &[MobjectTarget<'_>],
-    mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
+    mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
 ) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), E> {
     source.validate()?;
     let store = source.integration_store();
+    let graph_dependency_rows = graph_dependency_copy_rows(source)?;
     let mut transaction = SemanticMutationTransaction::new();
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
@@ -186,7 +191,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             SemanticNodeCreation::family()
         } else {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
-            let mut state = capture(&mobject)?;
+            let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
@@ -250,6 +255,40 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     ))
 }
 
+fn graph_dependency_copy_rows<E: From<AuthoringError>>(
+    source: &MobjectFamily,
+) -> Result<HashSet<SemanticNodeId>, E> {
+    let store = source.integration_store().borrow();
+    let mut rows = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![source.node_id()];
+    while let Some(node_id) = stack.pop() {
+        if !seen.insert(node_id) {
+            continue;
+        }
+        let node = store.node(node_id).ok_or_else(|| {
+            AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(node_id))
+        })?;
+        let SemanticNodeKind::Family(_) = node.kind() else {
+            continue;
+        };
+        if let Some(graph) = node.graph_declaration() {
+            for (_, binding) in graph.edges() {
+                rows.insert(binding.line());
+                if let SemanticGraphEdgeDependency::Arrow {
+                    end_tip, start_tip, ..
+                } = binding.dependency()
+                {
+                    rows.insert(end_tip);
+                    rows.extend(start_tip);
+                }
+            }
+        }
+        stack.extend(node.members_iter());
+    }
+    Ok(rows)
+}
+
 impl MobjectFamily {
     /// Copy the complete authored family, preserving order and internal aliases.
     pub fn copy_family(&self) -> Result<FamilyCopy, AuthoringError> {
@@ -263,7 +302,8 @@ impl MobjectFamily {
         &self,
         references: &[MobjectTarget<'_>],
     ) -> Result<FamilyCopy, AuthoringError> {
-        let (transaction, pending) = prepare_family_copy(self, references, Mobject::state)?;
+        let (transaction, pending) =
+            prepare_family_copy(self, references, |mobject, _| mobject.state())?;
         let result = transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map_err(AuthoringError::from)?;

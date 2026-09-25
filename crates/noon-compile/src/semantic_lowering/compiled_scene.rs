@@ -215,6 +215,8 @@ fn materialize_semantic_projection(
             }
         }
         graph_edge_dependencies.push(CompiledGraphEdgeDependency::new(
+            dependency.owner,
+            dependency.edge,
             start_vertex_index,
             end_vertex_index,
             line_index,
@@ -253,6 +255,23 @@ fn materialize_semantic_projection(
         }
     }
 
+    let graph_dependency_indices = projection
+        .graph_edges()
+        .iter()
+        .enumerate()
+        .map(|(index, dependency)| ((dependency.owner, dependency.edge), index as u32))
+        .collect();
+    let graph_owner_dependencies = graph_edge_dependencies.iter().enumerate().fold(
+        HashMap::<_, Vec<_>>::new(),
+        |mut owners, (index, dependency)| {
+            owners
+                .entry(dependency.owner())
+                .or_default()
+                .push(index as u32);
+            owners
+        },
+    );
+
     Ok(CompiledScene {
         family_order,
         family_ranks,
@@ -268,6 +287,9 @@ fn materialize_semantic_projection(
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
         graph_edge_dependencies,
+        graph_dependency_indices,
+        free_graph_dependency_indices: Vec::new(),
+        graph_owner_dependencies,
         graph_incident_dependencies,
         graph_dirty_dependencies,
         resources,

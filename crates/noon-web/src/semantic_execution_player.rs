@@ -5,7 +5,7 @@ mod brace;
 mod matrix;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod graph;
 #[cfg(any(target_arch = "wasm32", test))]
 mod numbers;

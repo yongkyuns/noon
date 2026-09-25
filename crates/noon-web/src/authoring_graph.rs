@@ -1,10 +1,12 @@
 //! Opaque Graph/DiGraph handles. Python maps its arbitrary keys to `u32`; this
 //! module never interprets graph JSON or owns endpoint/layout geometry.
 
-use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
 use crate::authoring_error::js_error;
+#[cfg(target_arch = "wasm32")]
 use crate::CanonicalAuthoringSceneContext;
 
 pub(crate) enum NativeGraph {
@@ -22,7 +24,7 @@ pub(crate) enum GraphOperation {
 }
 
 impl NativeGraph {
-    fn family(&self) -> &noon::MobjectFamily {
+    pub(crate) fn family(&self) -> &noon::MobjectFamily {
         match self {
             Self::Undirected(graph) => graph.family(),
             Self::Directed(graph) => graph.family(),
@@ -153,59 +155,18 @@ impl NativeGraph {
         Ok(())
     }
 
-    fn snapshot_graph(
-        graph: &noon::Graph<u32>,
-    ) -> Result<(Vec<(u32, (f64, f64))>, Vec<(u32, u32)>), noon::GraphAuthoringError> {
-        let mut keys = HashMap::new();
-        let mut vertices = Vec::new();
-        for &key in graph.vertex_keys() {
-            let vertex = graph.vertex(&key).expect("graph key resolves to a vertex");
-            let translation = vertex.state()?.transform.translation;
-            keys.insert(graph.vertex_id(&key).expect("graph key has an ID"), key);
-            vertices.push((key, (translation.x, translation.y)));
-        }
-        let edges = graph
-            .edge_mobjects()
-            .map(|(edge, _)| (keys[&edge.start], keys[&edge.end]))
-            .collect();
-        Ok((vertices, edges))
-    }
-
-    fn snapshot_digraph(
-        graph: &noon::DiGraph<u32>,
-    ) -> Result<(Vec<(u32, (f64, f64))>, Vec<(u32, u32)>), noon::GraphAuthoringError> {
-        let mut keys = HashMap::new();
-        let mut vertices = Vec::new();
-        for &key in graph.vertex_keys() {
-            let vertex = graph.vertex(&key).expect("graph key resolves to a vertex");
-            let translation = vertex.state()?.transform.translation;
-            keys.insert(graph.vertex_id(&key).expect("graph key has an ID"), key);
-            vertices.push((key, (translation.x, translation.y)));
-        }
-        let edges = graph
-            .edge_mobjects()
-            .map(|(edge, _)| (keys[&edge.start], keys[&edge.end]))
-            .collect();
-        Ok((vertices, edges))
-    }
-
     pub(crate) fn copy_live(
         &self,
         live: &mut noon::LiveSession<'_>,
     ) -> Result<Self, noon::GraphAuthoringError> {
         match self {
-            Self::Undirected(graph) => {
-                let (vertices, edges) = Self::snapshot_graph(graph)?;
-                noon::Graph::new_live(live, vertices, edges).map(Self::Undirected)
-            }
-            Self::Directed(graph) => {
-                let (vertices, edges) = Self::snapshot_digraph(graph)?;
-                noon::DiGraph::new_live(live, vertices, edges).map(Self::Directed)
-            }
+            Self::Undirected(graph) => graph.copy_live(live).map(Self::Undirected),
+            Self::Directed(graph) => graph.copy_live(live).map(Self::Directed),
         }
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
     let chunks = values.chunks_exact(2);
     if !chunks.remainder().is_empty() {
@@ -214,6 +175,7 @@ fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
     Ok(chunks.map(|pair| (pair[0], pair[1])).collect())
 }
 
+#[cfg(target_arch = "wasm32")]
 fn vertices(ids: &[u32], positions: &[f64]) -> Result<Vec<(u32, (f64, f64))>, JsValue> {
     if positions.len() != ids.len() * 2 {
         return Err(js_error(
@@ -232,11 +194,13 @@ fn vertices(ids: &[u32], positions: &[f64]) -> Result<Vec<(u32, (f64, f64))>, Js
         .collect()
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct WasmGraphHandle {
     inner: NativeGraph,
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl WasmGraphHandle {
     #[wasm_bindgen(js_name = family)]
@@ -245,6 +209,7 @@ impl WasmGraphHandle {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     /// Build an opaque native Graph/DiGraph through the active live player.

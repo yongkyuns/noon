@@ -493,6 +493,10 @@ impl SceneInstance {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
         }
+        if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {
+            self.apply_graph_dependency_patch(patch)?;
+            return Ok(&self.frame);
+        }
         if matches!(
             patch,
             ExecutionPatch::AddTrack(_)

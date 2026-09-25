@@ -265,6 +265,7 @@ pub enum SemanticExecutionGraphEdgeKind {
 /// execution compatibility identities. Dense compiled rows are assigned later.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SemanticExecutionGraphEdgeDependency {
+    pub owner: ObjectId,
     pub edge: GraphEdgeId,
     pub start_vertex: ObjectId,
     pub end_vertex: ObjectId,
@@ -427,6 +428,7 @@ enum PendingGraphEdgeKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PendingGraphEdgeDependency {
+    owner: SemanticNodeId,
     edge: GraphEdgeId,
     start_vertex: SemanticNodeId,
     end_vertex: SemanticNodeId,
@@ -445,6 +447,7 @@ impl PendingGraphEdgeDependency {
                 .expect("validated visible graph dependency has an execution identity")
         };
         SemanticExecutionGraphEdgeDependency {
+            owner: compatibility_object_id(self.owner),
             edge: self.edge,
             start_vertex: resolve(self.start_vertex),
             end_vertex: resolve(self.end_vertex),
@@ -586,6 +589,7 @@ fn lower_graph_dependencies(
                 }
             };
             dependencies.push(PendingGraphEdgeDependency {
+                owner: root,
                 edge: edge.id,
                 start_vertex,
                 end_vertex,
@@ -708,7 +712,7 @@ fn lower_vector_xy(
     })
 }
 
-fn lower_scalar_f32(
+pub(super) fn lower_scalar_f32(
     field: SemanticExecutionField,
     value: f64,
 ) -> Result<f32, SemanticExecutionValueError> {

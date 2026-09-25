@@ -7,6 +7,7 @@
 //! declaration atomically alongside their ordinary membership changes.
 
 mod construction;
+mod copy;
 mod mutation;
 #[cfg(test)]
 mod tests;
@@ -28,7 +29,7 @@ pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 ///
 /// All options are validated, including for an empty graph. Directed edges use
 /// `vertex_radius` as their default buff. Explicit positions are authored once;
-/// moving a vertex does not yet update the incident edges automatically.
+/// incident edges follow vertex movement through shared runtime dependencies.
 #[derive(Clone, Debug)]
 pub struct GraphOptions {
     pub vertex_radius: f64,
@@ -289,7 +290,7 @@ impl<K: Eq + Hash> RetainedGraph<K> {
 /// Topology survives this wrapper on its semantic family root. Key lookups return
 /// ordinary handles, which can become stale after explicit semantic deletion.
 /// Use `semantic_declaration` for a fallible authoritative read. Self-loop
-/// geometry, endpoint following, and persistent topology edits are not supported.
+/// geometry is not supported.
 pub struct Graph<K> {
     inner: RetainedGraph<K>,
 }

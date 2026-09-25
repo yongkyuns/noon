@@ -15,7 +15,7 @@ mod authoring_coordinates;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod authoring_graph;
 #[cfg(target_arch = "wasm32")]
 mod authoring_image;

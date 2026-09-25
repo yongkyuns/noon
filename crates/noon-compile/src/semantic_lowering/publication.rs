@@ -2,19 +2,24 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    ObjectId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticMutationTransaction,
-    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
+    GraphEdgeId, ObjectId, PreparedSemanticMutationTransaction, SemanticGraphEdgeDependency,
+    SemanticMutation, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
+    SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
     SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
 
 use super::{
-    SemanticCompiledSceneError, SemanticExecutionIndex, SemanticExecutionReachability,
-    SemanticExecutionReachabilityUpdate, SemanticExecutionValueError, SemanticGeometryValueError,
-    SemanticLoweringError, lower_content, lower_semantic_geometry_value, lower_semantic_style,
+    lower_content, lower_scalar_f32, lower_semantic_geometry_value, lower_semantic_style,
     lower_semantic_style_value, lower_semantic_transform, lower_semantic_transform_value,
-    semantic_execution_object_id,
+    semantic_execution_object_id, SemanticCompiledSceneError, SemanticExecutionField,
+    SemanticExecutionIndex, SemanticExecutionReachability, SemanticExecutionReachabilityUpdate,
+    SemanticExecutionValueError, SemanticGeometryValueError, SemanticLoweringError,
 };
-use crate::{CompiledObject, CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
+use crate::{
+    CompiledGraphArrowPolicy, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
+    CompiledObject, CompiledResources, ExecutionMutationTransaction, ExecutionPatch,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
@@ -157,6 +162,13 @@ struct PreparedEntry {
     compiled: CompiledObject,
 }
 
+#[derive(Clone, Debug)]
+struct PreparedGraphUpdate {
+    scope: SemanticNodeId,
+    dependencies: Vec<CompiledGraphDependencyDefinition>,
+    preflight_dependencies: bool,
+}
+
 /// Fully fallible compiler work retained until transaction-local names become IDs.
 #[derive(Debug)]
 pub struct PreparedSemanticPublication {
@@ -164,6 +176,7 @@ pub struct PreparedSemanticPublication {
     resource_additions: CompiledResources,
     entries: Vec<PreparedEntry>,
     possible_exits: Vec<ObjectId>,
+    graph_updates: Vec<PreparedGraphUpdate>,
     stats: SemanticPublicationPreparationStats,
 }
 
@@ -182,6 +195,16 @@ impl PreparedSemanticPublication {
 
     pub fn possible_entry_count(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn conservative_graph_patches(&self) -> impl Iterator<Item = ExecutionPatch> + '_ {
+        self.graph_updates
+            .iter()
+            .filter(|update| update.preflight_dependencies)
+            .map(|update| ExecutionPatch::SetGraphDependencies {
+                owner: semantic_execution_object_id(update.scope),
+                dependencies: update.dependencies.clone(),
+            })
     }
 
     /// Conservative create patches using the held transaction's allocator identities.
@@ -237,6 +260,33 @@ impl PreparedSemanticPublication {
             entry.compiled.id = semantic_execution_object_id(semantic);
             patches.push(ExecutionPatch::CreateObject(entry.compiled));
         }
+        let mut active_graphs = membership
+            .entered_graph_roots()
+            .iter()
+            .chain(membership.updated_graph_roots())
+            .copied()
+            .collect::<HashSet<_>>();
+        for scope in membership.exited_graph_roots() {
+            active_graphs.remove(scope);
+        }
+        for update in self.graph_updates {
+            if active_graphs.contains(&update.scope) {
+                patches.push(ExecutionPatch::SetGraphDependencies {
+                    owner: semantic_execution_object_id(update.scope),
+                    dependencies: update.dependencies,
+                });
+            }
+        }
+        patches.extend(
+            membership
+                .exited_graph_roots()
+                .iter()
+                .copied()
+                .map(|scope| ExecutionPatch::SetGraphDependencies {
+                    owner: semantic_execution_object_id(scope),
+                    dependencies: Vec::new(),
+                }),
+        );
         BoundSemanticPublication {
             transaction: ExecutionMutationTransaction::from_mutations(patches),
             resource_additions: self.resource_additions,
@@ -299,6 +349,7 @@ pub fn prepare_semantic_updater_publication(
             resource_additions: CompiledResources::default(),
             entries: Vec::new(),
             possible_exits: Vec::new(),
+            graph_updates: Vec::new(),
             stats: SemanticPublicationPreparationStats::default(),
         },
         revised,
@@ -456,6 +507,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         .into_iter()
         .map(semantic_execution_object_id)
         .collect::<Vec<_>>();
+    let graph_updates = prepare_graph_updates(prepared, reachability)?;
     let stats = SemanticPublicationPreparationStats {
         object_states_lowered: entries.len(),
         possible_entries: entries.len(),
@@ -466,7 +518,287 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         resource_additions,
         entries,
         possible_exits,
+        graph_updates,
         stats,
+    })
+}
+
+fn prepare_graph_updates(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    reachability: &SemanticExecutionReachability,
+) -> Result<Vec<PreparedGraphUpdate>, SemanticPublicationLoweringError> {
+    let staged = prepared
+        .candidate_mutations()
+        .filter_map(|mutation| match mutation {
+            SemanticMutation::SetGraphDeclaration { scope, graph } => {
+                prepared.planned_node_id(*scope).map(|scope| (scope, graph))
+            }
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let mut entering = HashSet::new();
+    let mut exiting = HashSet::new();
+    for mutation in prepared.candidate_mutations() {
+        match mutation {
+            SemanticMutation::AddMember { family, member }
+                if family
+                    .existing()
+                    .is_some_and(|family| reachability.is_reachable(family)) =>
+            {
+                collect_prepared_graph_roots(
+                    prepared,
+                    *member,
+                    &staged,
+                    &mut HashSet::new(),
+                    &mut entering,
+                )?;
+            }
+            SemanticMutation::RemoveMember { family, member }
+                if family
+                    .existing()
+                    .is_some_and(|family| reachability.is_reachable(family)) =>
+            {
+                if let Some(member) = member.existing() {
+                    collect_existing_graph_roots(
+                        prepared.store(),
+                        member,
+                        &mut HashSet::new(),
+                        &mut exiting,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut roots = staged.keys().copied().collect::<HashSet<_>>();
+    roots.extend(entering.iter().copied());
+    roots.extend(exiting.iter().copied());
+    let mut roots = roots.into_iter().collect::<Vec<_>>();
+    roots.sort_unstable();
+    roots
+        .into_iter()
+        .map(|scope| {
+            let dependencies = if let Some(graph) = staged.get(&scope) {
+                lower_transaction_graph(prepared, scope, graph)?
+            } else if let Some(graph) = prepared
+                .store()
+                .semantic_graph_declaration(scope)
+                .map_err(SemanticLoweringError::from)?
+            {
+                lower_existing_graph(prepared, scope, graph)?
+            } else {
+                Vec::new()
+            };
+            Ok(PreparedGraphUpdate {
+                scope,
+                dependencies,
+                preflight_dependencies: entering.contains(&scope)
+                    || (staged.contains_key(&scope) && reachability.is_reachable(scope)),
+            })
+        })
+        .collect()
+}
+
+fn collect_prepared_graph_roots(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    node: SemanticTransactionNodeRef,
+    staged: &HashMap<SemanticNodeId, &SemanticTransactionGraphDeclaration>,
+    seen: &mut HashSet<SemanticNodeId>,
+    roots: &mut HashSet<SemanticNodeId>,
+) -> Result<(), SemanticPublicationLoweringError> {
+    let Some(id) = prepared.planned_node_id(node) else {
+        return Ok(());
+    };
+    if !seen.insert(id) {
+        return Ok(());
+    }
+    if staged.contains_key(&id)
+        || prepared
+            .store()
+            .semantic_graph_declaration(id)
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        roots.insert(id);
+    }
+    match prepared.family_members(node) {
+        Ok(members) => {
+            for member in members {
+                collect_prepared_graph_roots(prepared, member, staged, seen, roots)?;
+            }
+        }
+        Err(SemanticTransactionReadError::NotFamily(_)) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn collect_existing_graph_roots(
+    store: &noon_core::SemanticStore,
+    node: SemanticNodeId,
+    seen: &mut HashSet<SemanticNodeId>,
+    roots: &mut HashSet<SemanticNodeId>,
+) -> Result<(), SemanticPublicationLoweringError> {
+    if !seen.insert(node) {
+        return Ok(());
+    }
+    let semantic = store.node(node).ok_or_else(|| {
+        SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
+    })?;
+    if semantic.graph_declaration().is_some() {
+        roots.insert(node);
+    }
+    if matches!(semantic.kind(), SemanticNodeKind::Family(_)) {
+        for member in semantic.members_iter() {
+            collect_existing_graph_roots(store, member, seen, roots)?;
+        }
+    }
+    Ok(())
+}
+
+fn lower_transaction_graph(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    scope: SemanticNodeId,
+    graph: &SemanticTransactionGraphDeclaration,
+) -> Result<Vec<CompiledGraphDependencyDefinition>, SemanticPublicationLoweringError> {
+    let vertices = graph.vertices().iter().copied().collect::<HashMap<_, _>>();
+    let edges = graph
+        .edges()
+        .iter()
+        .copied()
+        .map(|binding| (binding.id(), binding))
+        .collect::<HashMap<_, _>>();
+    graph
+        .topology()
+        .edges()
+        .map(|edge| {
+            let binding = edges[&edge.id];
+            lower_graph_dependency(
+                prepared,
+                scope,
+                edge.id,
+                vertices[&edge.start],
+                vertices[&edge.end],
+                binding.line(),
+                binding.dependency(),
+            )
+        })
+        .collect()
+}
+
+fn lower_existing_graph(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    scope: SemanticNodeId,
+    graph: &noon_core::SemanticGraphDeclaration,
+) -> Result<Vec<CompiledGraphDependencyDefinition>, SemanticPublicationLoweringError> {
+    graph
+        .topology()
+        .edges()
+        .map(|edge| {
+            let binding = graph
+                .edge_binding(edge.id)
+                .expect("validated graph edge binding");
+            let dependency = match binding.dependency() {
+                SemanticGraphEdgeDependency::Line => SemanticTransactionGraphEdgeDependency::Line,
+                SemanticGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                } => SemanticTransactionGraphEdgeDependency::Arrow {
+                    end_tip: end_tip.into(),
+                    start_tip: start_tip.map(Into::into),
+                    policy,
+                },
+            };
+            lower_graph_dependency(
+                prepared,
+                scope,
+                edge.id,
+                graph
+                    .vertex_node(edge.start)
+                    .expect("validated start binding")
+                    .into(),
+                graph
+                    .vertex_node(edge.end)
+                    .expect("validated end binding")
+                    .into(),
+                binding.line().into(),
+                dependency,
+            )
+        })
+        .collect()
+}
+
+fn lower_graph_dependency(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    scope: SemanticNodeId,
+    edge: GraphEdgeId,
+    start: SemanticTransactionNodeRef,
+    end: SemanticTransactionNodeRef,
+    line: SemanticTransactionNodeRef,
+    dependency: SemanticTransactionGraphEdgeDependency,
+) -> Result<CompiledGraphDependencyDefinition, SemanticPublicationLoweringError> {
+    let resolve = |node| {
+        prepared
+            .planned_node_id(node)
+            .map(semantic_execution_object_id)
+            .expect("validated graph dependency survives the prepared transaction")
+    };
+    let kind = match dependency {
+        SemanticTransactionGraphEdgeDependency::Line => CompiledGraphDependencyKind::Line,
+        SemanticTransactionGraphEdgeDependency::Arrow {
+            end_tip,
+            start_tip,
+            policy,
+        } => {
+            let line_id = prepared
+                .planned_node_id(line)
+                .expect("validated graph line survives preparation");
+            let shaft = prepared.proposed_object_state(line)?;
+            let SemanticObjectRole::ArrowShaft(shaft_policy) = shaft.role() else {
+                return Err(SemanticLoweringError::InvalidGraphDependency {
+                    root: scope,
+                    edge,
+                    reason: "Arrow shaft lost its authored shaft role",
+                }
+                .into());
+            };
+            let lower = |field, value| {
+                lower_scalar_f32(field, value).map_err(|error| error.with_node(line_id))
+            };
+            CompiledGraphDependencyKind::Arrow {
+                end_tip: resolve(end_tip),
+                start_tip: start_tip.map(resolve),
+                policy: CompiledGraphArrowPolicy::new(
+                    lower(SemanticExecutionField::GraphArrowBuff, policy.buff())?,
+                    lower(
+                        SemanticExecutionField::GraphArrowTipLength,
+                        policy.tip_length(),
+                    )?,
+                    lower(
+                        SemanticExecutionField::GraphArrowTipLengthRatio,
+                        policy.max_tip_length_to_length_ratio(),
+                    )?,
+                    lower(
+                        SemanticExecutionField::GraphArrowInitialStrokeWidth,
+                        shaft_policy.initial_stroke_width(),
+                    )?,
+                    lower(
+                        SemanticExecutionField::GraphArrowStrokeWidthRatio,
+                        shaft_policy.max_stroke_width_to_length_ratio(),
+                    )?,
+                ),
+            }
+        }
+    };
+    Ok(CompiledGraphDependencyDefinition {
+        edge,
+        start_vertex: resolve(start),
+        end_vertex: resolve(end),
+        line: resolve(line),
+        kind,
     })
 }
 
