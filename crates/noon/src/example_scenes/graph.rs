@@ -35,6 +35,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(graph.family()),
         MobjectTarget::Family(digraph.family()),
     ])?;
+    scene.wait(0.21)?;
     Ok(scene)
 }
 

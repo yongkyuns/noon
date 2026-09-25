@@ -40,6 +40,23 @@ impl CanonicalAuthoringScene {
             }
         }
     }
+
+    pub(crate) fn live_copy_graph(
+        &mut self,
+        graph: &NativeGraph,
+    ) -> Result<NativeGraph, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_copy_graph(graph)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Graph copy requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
 }
 
 impl super::wasm::CanonicalAuthoringSceneContext {
@@ -58,5 +75,12 @@ impl super::wasm::CanonicalAuthoringSceneContext {
         operation: GraphOperation,
     ) -> Result<(), AuthoringFailure> {
         self.inner.live_mutate_graph(graph, operation)
+    }
+
+    pub(crate) fn copy_live_graph(
+        &mut self,
+        graph: &NativeGraph,
+    ) -> Result<NativeGraph, AuthoringFailure> {
+        self.inner.live_copy_graph(graph)
     }
 }

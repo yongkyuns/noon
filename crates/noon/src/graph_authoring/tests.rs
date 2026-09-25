@@ -323,6 +323,41 @@ fn running_scene_constructs_detached_graph_in_one_coherent_publication() {
 }
 
 #[test]
+fn live_graph_construction_keeps_independent_authoritative_ids() {
+    let mut scene = Scene::new();
+    let sentinel = scene.circle(0.25).unwrap();
+    scene.add(&sentinel).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let root = scene.root();
+    let mut live = crate::LiveSession::new(&store, root, &mut execution);
+
+    let first = Graph::new_live(
+        &mut live,
+        [(1_u32, (-1.0, 0.0)), (2, (1.0, 0.0))],
+        [(1_u32, 2_u32)],
+    )
+    .unwrap();
+    let second = Graph::new_live(
+        &mut live,
+        [(1_u32, (-1.0, 0.0)), (2, (1.0, 0.0))],
+        [(1_u32, 2_u32)],
+    )
+    .unwrap();
+    assert_ne!(first.family().node_id(), second.family().node_id());
+    assert_ne!(
+        first.vertex(&1).unwrap().node_id(),
+        second.vertex(&1).unwrap().node_id()
+    );
+    assert_ne!(
+        first.edge(&1, &2).unwrap().family().node_id(),
+        second.edge(&1, &2).unwrap().family().node_id()
+    );
+    assert_eq!(first.topology().unwrap().edges().count(), 1);
+    assert_eq!(second.topology().unwrap().edges().count(), 1);
+}
+
+#[test]
 fn stale_live_publication_rolls_back_directed_graph_nodes_and_tip_resources() {
     let mut scene = Scene::new();
     let mut sentinel = scene.circle(0.25).unwrap();

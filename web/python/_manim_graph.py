@@ -11,6 +11,7 @@ from collections.abc import Hashable, Mapping
 import _manim_compat as _compat
 import _manim_plotting as _plot
 import _manim_semantic_handles as _shared
+import noon as _base
 from _noon_errors import engine_call
 
 try:
@@ -26,7 +27,7 @@ def _array(values):
 
 
 def _point(value):
-    point = _compat._as_vec2(value)
+    point = _base._as_vec2(value)
     return float(point.x), float(point.y)
 
 
@@ -91,6 +92,7 @@ class _GraphBase(_compat.Group):
         if not isinstance(vertices, Mapping):
             raise TypeError("Graph vertices must be a mapping of hashable keys to positions")
         pending, ids, positions = [], [], []
+        next_id = self._next_graph_id
         for key, position in vertices.items():
             if not isinstance(key, Hashable):
                 raise TypeError("Graph vertex keys must be hashable")
@@ -98,15 +100,22 @@ class _GraphBase(_compat.Group):
                 raise ValueError("duplicate Graph vertex key")
             x, y = _point(position)
             pending.append((key, x, y))
-            ids.append(self._next_graph_id)
-            self._next_graph_id += 1
+            ids.append(next_id)
+            next_id += 1
             positions.extend((x, y))
         engine_call(self._context().liveGraphAddVertices, self._graph_handle,
                     _array(ids), _array(positions), operation="Graph.add_vertices")
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
+        self._next_graph_id = next_id
         return self
 
     def add_edges(self, edges):
+        """Add only edges whose endpoints already exist.
+
+        Manim's implicit missing-vertex creation needs a shared compound
+        publication with default placement; it is deliberately unsupported
+        here so Python never splits that operation into transactions.
+        """
         engine_call(self._context().liveGraphAddEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.add_edges")
         return self
@@ -127,6 +136,21 @@ class _GraphBase(_compat.Group):
         engine_call(self._context().liveGraphRemoveEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.remove_edges")
         return self
+
+    def copy(self):
+        """Reconstruct an independent native declaration from Rust topology."""
+        clone = object.__new__(type(self))
+        clone._directed = self._directed
+        clone._graph_key_ids = dict(self._graph_key_ids)
+        clone._next_graph_id = self._next_graph_id
+        clone._canonical_live_target_context = self._context()
+        clone._graph_handle = engine_call(
+            clone._canonical_live_target_context.liveGraphCopy,
+            self._graph_handle,
+            operation="Graph.copy",
+        )
+        _plot._family(clone, engine_call(clone._graph_handle.family), [])
+        return clone
 
     def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0), positions=None):
         if layout == "circular":

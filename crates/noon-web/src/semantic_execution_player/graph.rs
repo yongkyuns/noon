@@ -55,4 +55,22 @@ impl SemanticExecutionPlayer {
             )
             .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error))
     }
+
+    pub(crate) fn live_copy_graph(
+        &mut self,
+        graph: &NativeGraph,
+    ) -> Result<NativeGraph, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        graph
+            .copy_live(&mut noon::LiveSession::new(
+                &semantics,
+                self.semantic_root
+                    .expect("live semantic store has one scene root"),
+                &mut self.session,
+            ))
+            .map_err(|error| AuthoringFailure::unclassified("graph.copy", &error))
+    }
 }

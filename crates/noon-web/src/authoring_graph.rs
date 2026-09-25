@@ -1,6 +1,7 @@
 //! Opaque Graph/DiGraph handles. Python maps its arbitrary keys to `u32`; this
 //! module never interprets graph JSON or owns endpoint/layout geometry.
 
+use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use crate::CanonicalAuthoringSceneContext;
@@ -89,6 +90,58 @@ impl NativeGraph {
         }
         Ok(())
     }
+
+    fn snapshot_graph(
+        graph: &noon::Graph<u32>,
+    ) -> Result<(Vec<(u32, (f64, f64))>, Vec<(u32, u32)>), noon::GraphAuthoringError> {
+        let mut keys = HashMap::new();
+        let mut vertices = Vec::new();
+        for &key in graph.vertex_keys() {
+            let vertex = graph.vertex(&key).expect("graph key resolves to a vertex");
+            let translation = vertex.state()?.transform.translation;
+            keys.insert(graph.vertex_id(&key).expect("graph key has an ID"), key);
+            vertices.push((key, (translation.x, translation.y)));
+        }
+        let edges = graph
+            .edge_mobjects()
+            .map(|(edge, _)| (keys[&edge.start], keys[&edge.end]))
+            .collect();
+        Ok((vertices, edges))
+    }
+
+    fn snapshot_digraph(
+        graph: &noon::DiGraph<u32>,
+    ) -> Result<(Vec<(u32, (f64, f64))>, Vec<(u32, u32)>), noon::GraphAuthoringError> {
+        let mut keys = HashMap::new();
+        let mut vertices = Vec::new();
+        for &key in graph.vertex_keys() {
+            let vertex = graph.vertex(&key).expect("graph key resolves to a vertex");
+            let translation = vertex.state()?.transform.translation;
+            keys.insert(graph.vertex_id(&key).expect("graph key has an ID"), key);
+            vertices.push((key, (translation.x, translation.y)));
+        }
+        let edges = graph
+            .edge_mobjects()
+            .map(|(edge, _)| (keys[&edge.start], keys[&edge.end]))
+            .collect();
+        Ok((vertices, edges))
+    }
+
+    pub(crate) fn copy_live(
+        &self,
+        live: &mut noon::LiveSession<'_>,
+    ) -> Result<Self, noon::GraphAuthoringError> {
+        match self {
+            Self::Undirected(graph) => {
+                let (vertices, edges) = Self::snapshot_graph(graph)?;
+                noon::Graph::new_live(live, vertices, edges).map(Self::Undirected)
+            }
+            Self::Directed(graph) => {
+                let (vertices, edges) = Self::snapshot_digraph(graph)?;
+                noon::DiGraph::new_live(live, vertices, edges).map(Self::Directed)
+            }
+        }
+    }
 }
 
 fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
@@ -145,6 +198,13 @@ impl CanonicalAuthoringSceneContext {
         let vertices = vertices(vertex_ids, positions)?;
         let edges = pairs(edge_pairs, "Graph edges")?;
         self.create_live_graph(directed, vertices, edges)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphCopy)]
+    pub fn live_graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
+        self.copy_live_graph(&graph.inner)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }
