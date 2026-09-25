@@ -599,7 +599,7 @@ pub(super) fn duplicate_mutation_error(
         }
         SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
-                }
+        }
         SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateContent { index, object }
         }

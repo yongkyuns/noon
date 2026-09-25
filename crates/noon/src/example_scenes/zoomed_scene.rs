@@ -7,6 +7,8 @@ use crate::{
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
+        // ZoomedScene includes the ordinary invisible main-camera frame.
+        scene.camera_frame()?;
         let mut focus_options = ManimGeometryOptions::circle(0.22)?;
         focus_options.set_color(
             YELLOW.red.into(),
