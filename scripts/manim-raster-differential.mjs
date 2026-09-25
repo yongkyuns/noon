@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { serveRepository } from "./browser-test-server.mjs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -18,6 +19,12 @@ const repoRoot = path.resolve(scriptDir, "..");
 const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
+const referenceFontPaths = JSON.parse(process.env.NOON_MANIM_REFERENCE_FONTS ?? "[]");
+assert.ok(Array.isArray(referenceFontPaths) && referenceFontPaths.every(value => typeof value === "string"),
+  "NOON_MANIM_REFERENCE_FONTS must be a JSON array of font paths");
+const referenceFonts = await Promise.all(referenceFontPaths.map(async font => ({
+  path: path.resolve(font), sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
+})));
 const fixtureSources = new Map();
 for (const fixture of manifest.fixtures) {
   const relativeSource = fixture.source ?? reference.source;
@@ -119,6 +126,7 @@ async function renderManimReferences() {
   verifyManimVersion();
   await mkdir(semanticRoot, { recursive: true });
   runChecked("python3", [
+    path.join("scripts", "manim-reference-run.py"),
     path.join("scripts", "manim-raster-semantic-reference.py"),
     "--manifest",
     manifestPath,
@@ -140,6 +148,7 @@ async function renderManimReferences() {
     await mkdir(frameDir, { recursive: true });
 
     runChecked("python3", [
+      path.join("scripts", "manim-reference-run.py"),
       "-m",
       "manim",
       "--renderer=cairo",
@@ -370,6 +379,7 @@ function bboxDelta(referenceStats, actualStats) {
 
 async function compareAll(references, backendResults) {
   const report = {
+    referenceFonts,
     reference,
     enforce,
     generatedAt: new Date().toISOString(),
