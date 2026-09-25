@@ -54,7 +54,9 @@ class DecimalNumber(_RetainedTextMobject):
     def font_size(self) -> float:
         context = _semantic._live_mutation_context(self) if self._scene is not None else None
         return float(engine_call(self._numeric_handle.fontSize, context))
-    def get_value(self) -> float: return float(engine_call(self._numeric_handle.value))
+    def get_value(self) -> float:
+        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        return float(engine_call(self._numeric_handle.value, context))
     def set_value(self, number: float):
         value = float(number)
         context = _semantic._live_mutation_context(self)
@@ -70,7 +72,9 @@ class DecimalNumber(_RetainedTextMobject):
 
 class Integer(DecimalNumber):
     def __init__(self, number: float = 0, **kwargs): kwargs["num_decimal_places"] = 0; super().__init__(number, **kwargs)
-    def get_value(self) -> int: return int(engine_call(self._numeric_handle.integerValue))
+    def get_value(self) -> int:
+        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        return int(engine_call(self._numeric_handle.integerValue, context))
 
 
 class Variable(_compat.VGroup):

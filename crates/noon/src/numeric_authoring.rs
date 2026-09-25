@@ -21,6 +21,8 @@ pub enum NumericAuthoringError {
     NotDecimalNumber,
     MissingPresentationBaseline,
     InvalidEffectiveFontSize { value: f64 },
+    MissingEffectiveNumericSignal { signal: noon_core::SemanticNodeId },
+    NonScalarEffectiveNumericSignal { signal: noon_core::SemanticNodeId },
     IntegerOutOfRange { value: f64 },
 }
 impl std::fmt::Display for NumericAuthoringError {
@@ -35,6 +37,15 @@ impl std::fmt::Display for NumericAuthoringError {
             }
             Self::InvalidEffectiveFontSize { value } => {
                 write!(f, "DecimalNumber effective font size is invalid: {value}")
+            }
+            Self::MissingEffectiveNumericSignal { signal } => {
+                write!(
+                    f,
+                    "DecimalNumber bound signal {signal:?} has no effective value"
+                )
+            }
+            Self::NonScalarEffectiveNumericSignal { signal } => {
+                write!(f, "DecimalNumber bound signal {signal:?} is not scalar")
             }
             Self::IntegerOutOfRange { value } => {
                 write!(f, "Integer value {value} is outside i64 range")
@@ -196,8 +207,31 @@ impl DecimalNumber {
             .cloned()
             .ok_or(NumericAuthoringError::NotDecimalNumber)
     }
+    /// Read the retained authored/base value. A tracker binding never mutates this
+    /// declaration; use the live-session query for the current runtime value.
     pub fn value(&self) -> Result<f64, NumericAuthoringError> {
         Ok(self.metadata()?.value())
+    }
+
+    /// Read the coherent current value from this number's declared tracker binding.
+    /// Unbound numbers retain their authored/base value in every execution.
+    pub(crate) fn current_value(
+        &self,
+        execution: &crate::ExecutionSession,
+    ) -> Result<f64, NumericAuthoringError> {
+        let metadata = self.metadata()?;
+        let Some(binding) = metadata.binding() else {
+            return Ok(metadata.value());
+        };
+        match execution.effective_signal_value(binding.signal()) {
+            Some(ReactiveValue::Scalar(value)) => Ok(f64::from(*value)),
+            Some(_) => Err(NumericAuthoringError::NonScalarEffectiveNumericSignal {
+                signal: binding.signal(),
+            }),
+            None => Err(NumericAuthoringError::MissingEffectiveNumericSignal {
+                signal: binding.signal(),
+            }),
+        }
     }
     pub fn format(&self) -> Result<DecimalFormat, NumericAuthoringError> {
         let number = self.metadata()?;
@@ -700,6 +734,8 @@ fn decimal_replacement_transaction(
             }
             NumericAuthoringError::Format(_)
             | NumericAuthoringError::NotDecimalNumber
+            | NumericAuthoringError::MissingEffectiveNumericSignal { .. }
+            | NumericAuthoringError::NonScalarEffectiveNumericSignal { .. }
             | NumericAuthoringError::IntegerOutOfRange { .. } => {
                 unreachable!("numeric replacement started from validated DecimalNumber state")
             }
@@ -1043,6 +1079,41 @@ mod tests {
         assert!((left_edge_center(&store, after).unwrap().0 - before.0).abs() < 1e-9);
         assert!((left_edge_center(&store, after).unwrap().1 - before.1).abs() < 1e-9);
         assert!((effective_font_size(&store, after).unwrap() - font).abs() < 1e-9);
+    }
+
+    #[test]
+    fn live_decimal_value_reads_bound_signal_without_mutating_authored_metadata() {
+        let mut backend = RuleBackend;
+        let scene = crate::Scene::new();
+        let tracker = scene.value_tracker(1.25).unwrap();
+        let mut number = DecimalNumber::new(
+            Rc::clone(scene.integration_store()),
+            &mut backend,
+            1.25,
+            DecimalFormat::default(),
+        )
+        .unwrap();
+        number.bind_to_tracker(&mut backend, &tracker).unwrap();
+        scene.add(number.mobject()).unwrap();
+
+        let mut execution = scene.execution_session().unwrap();
+        assert_eq!(
+            scene.live(&mut execution).decimal_value(&number).unwrap(),
+            1.25
+        );
+
+        execution
+            .set_reactive_input(tracker.node_id(), 7.5)
+            .unwrap();
+        assert_eq!(
+            scene.live(&mut execution).decimal_value(&number).unwrap(),
+            7.5
+        );
+        assert_eq!(
+            integer_value(scene.live(&mut execution).decimal_value(&number).unwrap()).unwrap(),
+            8
+        );
+        assert_eq!(number.value().unwrap(), 1.25);
     }
 
     #[test]

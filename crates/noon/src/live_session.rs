@@ -740,6 +740,16 @@ impl<'a> LiveSession<'a> {
         .map_err(crate::variable_authoring::variable_live_error)
     }
 
+    /// Read DecimalNumber's current runtime value through its declared tracker binding.
+    /// Unbound numbers retain their authored/base value.
+    #[cfg(feature = "latex")]
+    pub fn decimal_value(&self, number: &crate::DecimalNumber) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        number
+            .current_value(self.session)
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
     /// Read DecimalNumber font size from the current effective publication.
     #[cfg(feature = "latex")]
     pub fn decimal_font_size(

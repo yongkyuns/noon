@@ -37,6 +37,7 @@ class VariableLifecycle(Scene):
         variable.tracker.set_value(7.5)
         assert variable.tracker.get_value() == 7.5
         await self.wait(0.05)
+        assert variable.value.get_value() == 7.5
 `;
     const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1, 0.15]);
     assert.equal(result.rendererBackend, expectedBackend);

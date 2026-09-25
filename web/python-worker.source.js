@@ -232,11 +232,13 @@ async function initializePyodide() {
   const numericHandle = (handle) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
     return {
-      value: () => handle.value,
+      // A detached number exposes its retained authored value. An attached
+      // number is queried through the current canonical execution session.
+      value: (context) => context == null ? handle.value : context.queryMobjectDecimalValue(handle.mobject()),
       text: () => handle.text,
       fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
       mobject: () => handle.mobject(),
-      integerValue: () => handle.integerValue(),
+      integerValue: (context) => context == null ? handle.integerValue() : context.queryMobjectIntegerValue(handle.mobject()),
       setValue: (value) => handle.setValue(latexCompiler, value),
       incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
       setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),

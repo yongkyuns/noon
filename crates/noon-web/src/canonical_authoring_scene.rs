@@ -2624,6 +2624,16 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn live_decimal_value(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?.live_decimal_value(&number)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn live_decimal_font_size(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
             return Err(noon::AuthoringError::ForeignStore.into());
@@ -6088,6 +6098,27 @@ mod wasm {
             self.inner
                 .mobject_color(handle.semantic_mobject())
                 .map(crate::WasmManimColor::from_color)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectDecimalValue)]
+        pub fn query_mobject_decimal_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectIntegerValue)]
+        pub fn query_mobject_integer_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<i64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .and_then(|value| noon::integer_value(value).map_err(AuthoringFailure::from))
                 .map_err(typed_js_error)
         }
 

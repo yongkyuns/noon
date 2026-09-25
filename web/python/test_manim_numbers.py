@@ -26,10 +26,12 @@ class ManimNumberWrapperTests(unittest.TestCase):
             class Number:
                 def __init__(self, value): self._value = value; self.semantic = Semantic()
                 def mobject(self): return self.semantic
-                def value(self): return self._value
+                def value(self, context=None):
+                    return context.queryMobjectDecimalValue(self.semantic) if context is not None else self._value
                 def text(self): return f"{self._value:.2f}"
                 def fontSize(self, context): return 96.0 if context is not None else 48.0
-                def integerValue(self): return round(self._value)
+                def integerValue(self, context=None):
+                    return context.queryMobjectIntegerValue(self.semantic) if context is not None else round(self._value)
                 def setValue(self, value): calls.append(("set", value)); self._value = value
                 def incrementValue(self, delta): calls.append(("increment", delta)); self._value += delta
                 def setValueLive(self, context, value): context.liveSetDecimalValue(self.semantic, value); self._value = value
@@ -66,6 +68,10 @@ class ManimNumberWrapperTests(unittest.TestCase):
                     calls.append(("live-set", semantic, value))
                 def liveIncrementDecimalValue(self, semantic, value):
                     calls.append(("live-increment", semantic, value))
+                def queryMobjectDecimalValue(self, semantic):
+                    calls.append(("live-value", semantic)); return 7.5
+                def queryMobjectIntegerValue(self, semantic):
+                    calls.append(("live-integer-value", semantic)); return 8
 
             context = Context()
             numbers._live_text_context = lambda: context
@@ -76,6 +82,13 @@ class ManimNumberWrapperTests(unittest.TestCase):
             assert calls[-3][1][-1] is context
             assert live.get_value() == 2
             assert live.font_size == 48.0
+            live._scene = object()
+            assert live.get_value() == 8
+            assert calls[-1][0] == "live-integer-value"
+            decimal_live = noon.DecimalNumber(2.5)
+            decimal_live._scene = object()
+            assert decimal_live.get_value() == 7.5
+            assert calls[-1][0] == "live-value"
             live.set_value(5).increment_value(2)
             assert [entry[0] for entry in calls if entry[0] in {"live-set", "live-increment"}] == [
                 "live-set", "live-increment",

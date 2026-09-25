@@ -43,6 +43,13 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.increment_decimal_value(number, backend, delta))
     }
 
+    pub(crate) fn live_decimal_value(
+        &mut self,
+        number: &noon::DecimalNumber,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.decimal_value(number))
+    }
+
     pub(crate) fn live_decimal_font_size(
         &mut self,
         number: &noon::DecimalNumber,
