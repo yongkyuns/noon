@@ -53,6 +53,15 @@ pub fn format_decimal(value: f64, options: &DecimalFormat) -> Result<String, Num
     }
     let precision = options.decimal_places as usize;
     let mut text = format!("{value:.precision$}");
+    // Match Manim's display semantics: values that round to zero are shown
+    // without a negative sign, so include_sign can produce `+0`.
+    if text.starts_with('-')
+        && text[1..]
+            .chars()
+            .all(|character| character == '0' || character == '.')
+    {
+        text.remove(0);
+    }
     if options.group_with_commas {
         let sign_len = usize::from(matches!(text.as_bytes().first(), Some(b'-' | b'+')));
         let decimal = text[sign_len..]

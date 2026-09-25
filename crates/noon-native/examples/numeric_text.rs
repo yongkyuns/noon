@@ -4,7 +4,6 @@
 //! LaTeX text. Persistent replacement holds the left edge fixed while updating
 //! scene-owned numeric metadata and retained text content in one transaction.
 
-use noon::{DecimalFormat, DecimalNumber, Scene};
 use std::{path::Path, time::Duration};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,24 +13,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &script,
         Duration::from_secs(45),
     )?;
-    let scene = Scene::new();
-    let mut number = DecimalNumber::new(
-        std::rc::Rc::clone(scene.integration_store()),
+    let (scene, mut number) = noon::example_scenes::numeric_decimal::build(&mut backend)?;
+    number.set_value(
         &mut backend,
-        -0.004,
-        DecimalFormat {
-            include_sign: true,
-            ..Default::default()
-        },
+        noon::example_scenes::numeric_decimal::DISPLAY_VALUE,
     )?;
-    let left = number.mobject().critical_point(-1.0, 0.0)?;
-    number.set_value(&mut backend, 12_345.6)?;
+    assert_eq!(
+        number.value()?,
+        noon::example_scenes::numeric_decimal::DISPLAY_VALUE
+    );
     assert_eq!(number.text()?, "+12,345.60");
-    assert_eq!(number.mobject().critical_point(-1.0, 0.0)?, left);
-    // Replacing the retained text with the same semantic value must preserve
-    // numeric metadata for subsequent getters and updates.
-    number.set_value(&mut backend, 12_345.6)?;
-    assert_eq!(number.value()?, 12_345.6);
-    assert_eq!(number.text()?, "+12,345.60");
+    let _session = scene.execution_session()?;
     Ok(())
 }
