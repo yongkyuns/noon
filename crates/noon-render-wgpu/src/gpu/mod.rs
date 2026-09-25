@@ -581,7 +581,12 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../analytic.wgsl"));
+        let polygon_coverage = include_str!("../polygon_coverage.wgsl");
+        let analytic_source = format!("{}\n{}", include_str!("../analytic.wgsl"), polygon_coverage);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon analytic shader"),
+            source: wgpu::ShaderSource::Wgsl(analytic_source.into()),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout)],
@@ -665,7 +670,11 @@ impl GpuRenderer {
                 instance_layout: line_instance_layout(),
             },
         );
-        let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
+        let path_source = format!("{}\n{}", include_str!("../path.wgsl"), polygon_coverage);
+        let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon path shader"),
+            source: wgpu::ShaderSource::Wgsl(path_source.into()),
+        });
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let full_path_pipeline =

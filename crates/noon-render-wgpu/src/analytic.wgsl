@@ -47,6 +47,21 @@ struct VertexOutput {
     @location(7) line_stroke_enabled: f32,
 };
 
+struct RectangleVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) geometry: vec2<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) stroke: vec4<f32>,
+    @location(4) metrics: vec2<f32>,
+    @location(5) @interpolate(flat) flags: vec2<f32>,
+    @location(6) object_scale: vec2<f32>,
+    @location(7) @interpolate(flat) polygon_a: vec2<f32>,
+    @location(8) @interpolate(flat) polygon_b: vec2<f32>,
+    @location(9) @interpolate(flat) polygon_c: vec2<f32>,
+    @location(10) @interpolate(flat) polygon_d: vec2<f32>,
+};
+
 fn rotate_vector(local: vec2<f32>, rotation: f32) -> vec2<f32> {
     let c = cos(rotation);
     let s = sin(rotation);
@@ -161,7 +176,7 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
 }
 
 @vertex
-fn vs_rectangle(input: VertexInput) -> VertexOutput {
+fn vs_rectangle(input: VertexInput) -> RectangleVertexOutput {
     let half_size = abs(input.geometry) * 0.5;
     let padding = local_axis_padding(input.scale, input.rotation);
     let half_width = max(input.metrics.x, 0.0) * 0.5;
@@ -178,7 +193,21 @@ fn vs_rectangle(input: VertexInput) -> VertexOutput {
         stroke_is_enabled(input.flags),
     );
     let local = input.unit * (half_size + outline_padding + padding);
-    return make_output(input, local);
+    var output: RectangleVertexOutput;
+    let world = transform_point(local, input.translation, input.scale, input.rotation);
+    output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+    output.local = local;
+    output.geometry = input.geometry;
+    output.fill = input.fill;
+    output.stroke = input.stroke;
+    output.metrics = input.metrics;
+    output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
+    output.object_scale = input.scale;
+    output.polygon_a = world_to_pixel(transform_point(vec2<f32>(-half_size.x, -half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_b = world_to_pixel(transform_point(vec2<f32>(half_size.x, -half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_c = world_to_pixel(transform_point(vec2<f32>(half_size.x, half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_d = world_to_pixel(transform_point(vec2<f32>(-half_size.x, half_size.y), input.translation, input.scale, input.rotation));
+    return output;
 }
 
 @vertex
@@ -348,16 +377,23 @@ fn rectangle_signed_distance(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
     return length(max(offset, vec2<f32>(0.0))) + min(max(offset.x, offset.y), 0.0);
 }
 
-fn rectangle_fill_coverage(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
-    // A nearest-edge SDF is a good edge AA approximation while opposite sides are
-    // separated by at least a pixel. Once a rectangle becomes subpixel, however,
-    // both sides of an axis occupy the same filter footprint and the SDF overcounts
-    // the covered area. Cairo rasterizes the box area instead. Independent axis masks
-    // preserve the existing large-rectangle edge profile and naturally collapse a
-    // tiny box toward its projected area without a geometry-size cutoff.
-    let x_coverage = inside_coverage(abs(position.x) - half_size.x);
-    let y_coverage = inside_coverage(abs(position.y) - half_size.y);
-    return x_coverage * y_coverage;
+fn world_to_pixel(world: vec2<f32>) -> vec2<f32> {
+    let clip = (world - camera.center) * camera.clip_scale;
+    return vec2<f32>(
+        (clip.x + 1.0) * camera.viewport_size.x * 0.5,
+        (1.0 - clip.y) * camera.viewport_size.y * 0.5,
+    );
+}
+
+fn rectangle_fill_coverage(input: RectangleVertexOutput) -> f32 {
+    let pixel_minimum = floor(input.position.xy);
+    return polygon_pixel_coverage(
+        input.polygon_a - pixel_minimum,
+        input.polygon_b - pixel_minimum,
+        input.polygon_c - pixel_minimum,
+        input.polygon_d - pixel_minimum,
+        4u,
+    );
 }
 
 fn rectangle_local_normal(position: vec2<f32>, half_size: vec2<f32>) -> vec2<f32> {
@@ -468,10 +504,10 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_rectangle(input: RectangleVertexOutput) -> @location(0) vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
-    let fill_coverage = rectangle_fill_coverage(input.local, half_size);
+    let fill_coverage = rectangle_fill_coverage(input);
     let stroke_flags = u32(input.flags.y);
     let stroke_width = local_stroke_width_for_normal(
         input.metrics.x,
