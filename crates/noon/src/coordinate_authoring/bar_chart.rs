@@ -520,10 +520,12 @@ fn prepare_chart(
     for (index, &value) in options.values.iter().enumerate() {
         let (translation, scale, rotation_z) =
             bar_transform(frame, index, options.bar_width, value)?;
-        let mut style = SemanticStyle::default();
-        style.stroke_width = stroke_width;
-        style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
-        style.fill_opacity = options.bar_fill_opacity;
+        let mut style = SemanticStyle {
+            stroke_width,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            fill_opacity: options.bar_fill_opacity,
+            ..Default::default()
+        };
         set_bar_color(&mut style, colors[index]);
         let mut state = noon_core::SemanticObjectState::new(StoredGeometry::Rectangle {
             size: noon_core::Vec2::new(1.0, 1.0),

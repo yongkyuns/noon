@@ -670,6 +670,7 @@ fn numeric_resource_error(error: NumericTextResourceError) -> TextAuthoringError
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Stages one decimal content/state replacement transaction.
 fn decimal_replacement_transaction(
     store: &SemanticStore,
     node: noon_core::SemanticNodeId,

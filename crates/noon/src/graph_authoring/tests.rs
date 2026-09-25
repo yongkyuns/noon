@@ -830,7 +830,6 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
     drop(declaration);
     live.add_many(&[crate::MobjectTarget::Family(copied.family())])
         .unwrap();
-    drop(live);
     let store = scene.integration_store();
     let source_path =
         crate::path_queries::effective_path_query(store, &session, source_arrow.shaft()).unwrap();
@@ -889,8 +888,7 @@ fn graph_live_copy_rejects_active_reveal_on_dependency_rows() {
         &dependency_row,
         true,
     )
-    .err()
-    .expect("active graph reveal must remain unsupported for copy capture");
+    .expect_err("active graph reveal must remain unsupported for copy capture");
     assert!(
         matches!(
             error,

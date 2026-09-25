@@ -34,7 +34,7 @@ impl ManimPolarPlaneOptions {
 
     pub fn faded_line_style_mut(&mut self) -> &mut SemanticStyle {
         self.faded_line_style
-            .get_or_insert_with(|| ManimNumberPlaneOptions::default_faded_line_style())
+            .get_or_insert_with(ManimNumberPlaneOptions::default_faded_line_style)
     }
 }
 

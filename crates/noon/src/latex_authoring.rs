@@ -17,6 +17,15 @@ use noon_core::{
     TextSourceSpan, Transform2D, Vec2, WHITE,
 };
 
+type PublishedTextParts<T> = (
+    T,
+    noon_core::SemanticLocalNodeToken,
+    Vec<noon_core::SemanticLocalNodeToken>,
+    Arc<str>,
+    Vec<TextPart>,
+    f64,
+);
+
 #[derive(Clone)]
 pub struct LatexParts {
     family: crate::MobjectFamily,
@@ -308,17 +317,7 @@ impl LatexAdmission {
             &mut noon_core::SemanticStore,
             SemanticMutationTransaction,
         ) -> Result<T, TextAuthoringError>,
-    ) -> Result<
-        (
-            T,
-            noon_core::SemanticLocalNodeToken,
-            Vec<noon_core::SemanticLocalNodeToken>,
-            Arc<str>,
-            Vec<TextPart>,
-            f64,
-        ),
-        TextAuthoringError,
-    > {
+    ) -> Result<PublishedTextParts<T>, TextAuthoringError> {
         let Self {
             identity,
             resource,

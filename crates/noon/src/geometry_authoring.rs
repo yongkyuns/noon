@@ -241,7 +241,9 @@ fn brace_options_with_tip(
     })
 }
 
-fn brace_tip_and_direction(path: &VectorPath) -> Result<((f64, f64), (f64, f64)), AuthoringError> {
+type BraceTipAndDirection = ((f64, f64), (f64, f64));
+
+fn brace_tip_and_direction(path: &VectorPath) -> Result<BraceTipAndDirection, AuthoringError> {
     let mut anchors = Vec::new();
     let mut current = None;
     for command in path.commands() {

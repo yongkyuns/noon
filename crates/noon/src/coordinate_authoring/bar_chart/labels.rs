@@ -60,7 +60,7 @@ impl PreparedBarLabels {
                 state.content,
                 state.transform,
             )?;
-            let color = options.color.unwrap_or_else(|| match state.style.fill {
+            let color = options.color.unwrap_or(match state.style.fill {
                 Some(SemanticPaint::Solid(color)) => color,
                 _ => Color::WHITE,
             });

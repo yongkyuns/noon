@@ -84,13 +84,13 @@ impl FamilyTranslation {
     ) -> Result<(), AuthoringError> {
         let mut translations = BTreeMap::new();
         for (leaf, x, y) in self.into_shifts() {
-            if !translations.contains_key(&leaf) {
+            if let std::collections::btree_map::Entry::Vacant(entry) = translations.entry(leaf) {
                 let translation = store
                     .semantic_object_state_checked(leaf)
                     .map_err(AuthoringError::from)?
                     .transform
                     .translation;
-                translations.insert(leaf, translation);
+                entry.insert(translation);
             }
             let translation = translations.get_mut(&leaf).expect("inserted above");
             translation.x += x;

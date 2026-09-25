@@ -91,6 +91,7 @@ struct PublishedVariable {
 
 /// Compile, arrange, and publish every Variable component through one resource
 /// rollback scope and one semantic transaction.
+#[allow(clippy::too_many_arguments)] // One resource and semantic-transaction admission boundary.
 pub(crate) fn construct_variable(
     store: &Rc<RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
@@ -280,7 +281,7 @@ pub(crate) fn construct_variable(
                     .with_decimal_number(value, metadata)
                     .map_err(AuthoringError::from)
                     .map_err(TextAuthoringError::Semantic)?;
-                let result = match execution.as_deref_mut() {
+                let result = match execution {
                     Some(execution) => execution
                         .publish_prepared_scoped_value_tracker(prepared, root, signal, initial)
                         .map_err(AuthoringError::from)

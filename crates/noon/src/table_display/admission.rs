@@ -498,7 +498,6 @@ fn authored_bounds(objects: &[Mobject]) -> Result<Vec<Bounds2D64>, TableAuthorin
             object
                 .layout_bounds()?
                 .ok_or(TableAuthoringError::InvalidStructure)
-                .map_err(Into::into)
         })
         .collect()
 }
@@ -799,6 +798,7 @@ pub(super) fn publish_native_text_table(
     publish_prepared_text_table(publisher, prepared, shape, rows, columns, options)
 }
 #[cfg(feature = "latex")]
+#[allow(clippy::too_many_arguments)] // Numeric resource admission and topology publish one transaction.
 pub(super) fn publish_numeric_table(
     publisher: TablePublisher<'_, '_>,
     backend: &mut impl LatexBackend,
@@ -1127,6 +1127,7 @@ pub(super) fn highlighted_cell_in_publisher(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // One atomic rectangle creation plus retained highlight membership.
 pub(super) fn highlight_in_publisher(
     publisher: TablePublisher<'_, '_>,
     family: &MobjectFamily,
@@ -1149,6 +1150,7 @@ pub(super) fn highlight_in_publisher(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // One atomic rectangle creation plus optional family membership.
 fn highlight_with_membership(
     publisher: TablePublisher<'_, '_>,
     family: &MobjectFamily,
@@ -1166,11 +1168,13 @@ fn highlight_with_membership(
         });
     }
     let bounds = selected_cell_bounds(&publisher, family, options, row, column)?;
-    let mut style = SemanticStyle::default();
-    style.fill = Some(noon_core::SemanticPaint::Solid(color));
-    style.fill_opacity = opacity;
-    style.stroke = None;
-    style.stroke_width = 0.0;
+    let style = SemanticStyle {
+        fill: Some(noon_core::SemanticPaint::Solid(color)),
+        fill_opacity: opacity,
+        stroke: None,
+        stroke_width: 0.0,
+        ..Default::default()
+    };
     if let Some(highlights) = highlights {
         highlights.validate()?;
         if !Rc::ptr_eq(family.integration_store(), highlights.integration_store()) {
