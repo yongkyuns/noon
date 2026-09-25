@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { CASES, TIMES, assertWitnesses, validateReport } from "./foreground-matching-checks.mjs";
+import { CASES, DURATION, TIMES, assertWitnesses, validateReport } from "./foreground-matching-checks.mjs";
 
 const manifest = JSON.parse(await readFile(new URL(
   "../parity/manim-v0.21/foreground-matching-manifest.json", import.meta.url), "utf8"));
 function report() {
   return { reference: structuredClone(manifest.reference), fixtures: manifest.fixtures.map(f => ({
-    id: f.id, scene: f.scene, expectedDuration: 2.4,
+    id: f.id, scene: f.scene, expectedDuration: DURATION,
     backends: Object.fromEntries(["webgpu", "webgl"].map(backend => [backend, {
-      noonDuration: 2.4, durationDelta: 0,
+      noonDuration: DURATION, durationDelta: 0,
       samples: TIMES.map((time, i) => ({ time, frameIndex: i,
         debugFrame: { engine: "noon", time } })),
     }])),
@@ -103,4 +103,21 @@ test("reference version, incomplete fixture reports and worker errors stay block
   assert.throws(() => validateReport(manifest, missing), /incomplete report/);
   const crashed = report(); crashed.fixtures[0].backends.webgpu.error = "worker crashed";
   assert.throws(() => validateReport(manifest, crashed), /worker crashed/);
+});
+
+// Keep the terminal drive precise without moving any captured PNG sample.
+test("terminal duration uses ordered source additions, not a rounded decimal", () => {
+  assert.equal(DURATION, 2.4000000000000004);
+  assert.ok(DURATION > 2.4);
+  const bad = structuredClone(manifest);
+  bad.fixtures[0].expected_duration = 2.4;
+  assert.throws(() => validateReport(bad, report()));
+  assert.deepEqual(TIMES, [0, 0.5, 1, 1.5, 2, 2.2]);
+});
+test("missing or rounded completion cannot substitute for the exact source endpoint", () => {
+  for (const duration of [undefined, null, NaN, Infinity, 2.4, DURATION + Number.EPSILON * 2]) {
+    const bad = report();
+    bad.fixtures[0].backends.webgpu.noonDuration = duration;
+    assert.throws(() => validateReport(manifest, bad), /exact endpoint/);
+  }
 });

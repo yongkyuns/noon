@@ -14,7 +14,7 @@
       "id": "matching-ordinary-foreground",
       "scene": "MatchingOrdinaryForeground",
       "source": "parity/manim-v0.21/core-examples/foreground_matching.py",
-      "expected_duration": 2.4,
+      "expected_duration": 2.4000000000000004,
       "sample_times": [
         0,
         0.5,
@@ -34,7 +34,7 @@
       "id": "matching-foreground-source",
       "scene": "MatchingForegroundSource",
       "source": "parity/manim-v0.21/core-examples/foreground_matching.py",
-      "expected_duration": 2.4,
+      "expected_duration": 2.4000000000000004,
       "sample_times": [
         0,
         0.5,
@@ -54,7 +54,7 @@
       "id": "matching-foreground-only-layer",
       "scene": "MatchingForegroundOnlyLayer",
       "source": "parity/manim-v0.21/core-examples/foreground_matching.py",
-      "expected_duration": 2.4,
+      "expected_duration": 2.4000000000000004,
       "sample_times": [
         0,
         0.5,

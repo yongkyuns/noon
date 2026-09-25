@@ -8,6 +8,9 @@ export const CASES = [
   ["matching-foreground-source", "MatchingForegroundSource"],
   ["matching-foreground-only-layer", "MatchingForegroundOnlyLayer"],
 ];
+// Match the ordered f64 additions in play(2), wait(0.2), wait(0.2).
+// The decimal literal 2.4 is one ULP before the shared execution endpoint.
+export const DURATION = 2 + 0.2 + 0.2;
 export const TIMES = [0, 0.5, 1, 1.5, 2, 2.2];
 const BACKENDS = ["webgpu", "webgl"];
 
@@ -21,15 +24,15 @@ export function validateReport(manifest, report) {
   assert.deepEqual(manifest.fixtures.map(f => [f.id, f.scene]), CASES, "corpus changed");
   assert.deepEqual(report.fixtures.map(f => [f.id, f.scene]), CASES, "incomplete report");
   for (const [index, fixture] of report.fixtures.entries()) {
-    assert.equal(manifest.fixtures[index].expected_duration, 2.4);
+    assert.equal(manifest.fixtures[index].expected_duration, DURATION);
     assert.deepEqual(manifest.fixtures[index].sample_times, TIMES);
-    assert.equal(fixture.expectedDuration, 2.4);
+    assert.equal(fixture.expectedDuration, DURATION);
     assert.deepEqual(Object.keys(fixture.backends).sort(), [...BACKENDS].sort(), "missing backend");
     for (const backend of BACKENDS) {
       const entry = fixture.backends[backend];
       assert.ok(!entry.error, `${fixture.id}/${backend}: ${entry.error}`);
-      assert.ok(Math.abs(entry.noonDuration - 2.4) < 1e-9, "source did not complete");
-      assert.ok(Math.abs(entry.durationDelta) < 1e-9, "logical duration differs");
+      assert.equal(entry.noonDuration, DURATION, "source did not complete at its exact endpoint");
+      assert.equal(entry.durationDelta, 0, "logical duration differs");
       assert.equal(entry.samples.length, TIMES.length, "missing/extra samples");
       assert.equal(new Set(entry.samples.map(s => s.frameIndex)).size, TIMES.length, "duplicate frames");
       for (const [i, sample] of entry.samples.entries()) {
