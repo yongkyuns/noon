@@ -95,6 +95,24 @@ class _GraphBase(_compat.Group):
     def _context(self):
         return self._canonical_live_target_context
 
+    def __getitem__(self, key):
+        """Resolve a vertex key to its existing shared semantic Mobject."""
+        handle = engine_call(self._graph_handle.vertex, self._graph_key_ids[key])
+        if handle is None:
+            raise KeyError(key)
+        identity = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+        member = self._semantic_member_wrappers.get(identity)
+        if member is None:
+            member = object.__new__(_compat.VMobject)
+            _shared._attach_shared_handle(member, handle)
+            member._canonical_live_target_context = self._context()
+            self._semantic_member_wrappers[identity] = member
+        return member
+
+    @property
+    def vertices(self):
+        return {key: self[key] for key in self._graph_key_ids}
+
     def add_vertices(self, vertices):
         if not isinstance(vertices, Mapping):
             raise TypeError("Graph vertices must be a mapping of hashable keys to positions")

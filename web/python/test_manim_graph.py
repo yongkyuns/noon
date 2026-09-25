@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import _manim_graph as graph
@@ -96,3 +97,15 @@ class GraphFacadeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             graph.Graph(["a"], [], layout_scale=float("nan"))
         self.assertEqual(self.context.creation_calls, [])
+
+    def test_vertex_access_reuses_retained_identity_and_rejects_unknown_keys(self):
+        value = graph.Graph(["a"], [])
+        handle = SimpleNamespace(semanticSlot=7, semanticGeneration=2)
+        value._graph_handle.vertex = lambda key: handle if key == 0 else None
+        first = value["a"]
+        self.assertIs(value["a"], first)
+        self.assertIs(value.vertices["a"], first)
+        self.assertIs(first._semantic_handle, handle)
+        self.assertIs(first._canonical_live_target_context, self.context)
+        with self.assertRaises(KeyError):
+            value["missing"]

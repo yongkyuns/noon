@@ -214,6 +214,17 @@ impl WasmGraphHandle {
     pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
         crate::WasmAuthoringFamilyHandle::from_semantic_family(self.inner.family().clone())
     }
+
+    /// Resolve one language key without traversing or copying the graph family.
+    pub fn vertex(&self, key: u32) -> Option<crate::WasmAuthoringMobjectHandle> {
+        let vertex = match &self.inner {
+            NativeGraph::Undirected(graph) => graph.vertex(&key),
+            NativeGraph::Directed(graph) => graph.vertex(&key),
+        }?;
+        Some(crate::WasmAuthoringMobjectHandle::from_semantic_mobject(
+            vertex.clone(),
+        ))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
