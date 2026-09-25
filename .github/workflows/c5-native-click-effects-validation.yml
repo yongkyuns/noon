@@ -1,0 +1,174 @@
+name: C5 native click effect qualification
+
+on:
+  push:
+    branches: [validation/c5-native-click-effects-20260925]
+    paths:
+      - crates/**
+      - scripts/validation/c5-native*
+      - .github/workflows/c5-native-click-effects-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: c5-native-click-effects
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      BASE_SHA: 1245e6841af2f5ddab02481a4a1e833566a29baa
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Reconstruct exact clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/c5-native-click-proof
+          python3 scripts/validation/c5-native-click-effects.py
+          rustup install
+          rustc --version --verbose > /tmp/c5-native-click-proof/rust-version.txt
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          git read-tree "$BASE_SHA"
+          while IFS= read -r file; do git add "$file"; done < /tmp/c5-native-click-proof/paths.txt
+          git diff --cached --name-only "$BASE_SHA" | diff -u /tmp/c5-native-click-proof/paths.txt -
+          git write-tree > /tmp/c5-native-click-proof/tree.txt
+          git diff --cached --binary "$BASE_SHA" > /tmp/c5-native-click-proof/source.patch
+          git diff --cached --stat "$BASE_SHA" > /tmp/c5-native-click-proof/source.stat
+          git archive "$(cat /tmp/c5-native-click-proof/tree.txt)" | gzip > /tmp/c5-native-click-proof/source.tar.gz
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          candidate=$(git commit-tree "$(cat /tmp/c5-native-click-proof/tree.txt)" -p "$BASE_SHA" -m 'C5: native click dispatch and independent effect-time delivery')
+          printf '%s\n' "$candidate" > /tmp/c5-native-click-proof/commit.txt
+          git read-tree "$GITHUB_SHA"
+          git checkout --detach --force "$candidate"
+          test ! -e .github/workflows/c5-native-click-effects-validation.yml
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-native-click-proof/tree.txt)"
+          git diff --exit-code
+      - name: Shared action timing and native delivery regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --lib live_session::pointer_actions::tests -- --nocapture 2>&1 | tee /tmp/c5-native-click-proof/actions.log
+          cargo test -p noon --no-default-features --lib live_program::property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-native-click-proof/program.log
+          cargo test -p noon-native --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-native-click-proof/native-effects.log
+      - name: Omitted action dispatch negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=crates/noon/src/live_session/pointer_actions.rs
+          cp "$file" /tmp/c5-native-click-good-actions.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/live_session/pointer_actions.rs')
+          s = p.read_text()
+          old = 'elapsed_result.and_then(|()| self.dispatch_pointer_click(&receipt))'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'elapsed_result.map(|()| PointerClickActionOutcome::None)'))
+          PY
+          set +e
+          cargo test -p noon --no-default-features --lib live_session::pointer_actions::tests::accepted_click_activates_real_indicate_without_selection_or_authored_time -- --exact --nocapture > /tmp/c5-native-click-proof/negative-dispatch.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-native-click-good-actions.rs "$file"
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-native-click-proof/negative-dispatch.log
+          cargo test -p noon --no-default-features --lib live_session::pointer_actions::tests -- --nocapture 2>&1 | tee /tmp/c5-native-click-proof/restored-actions.log
+      - name: Omitted native elapsed delivery negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=crates/noon-native/src/property_animation.rs
+          cp "$file" /tmp/c5-native-click-good-clock.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-native/src/property_animation.rs')
+          s = p.read_text()
+          old = 'let elapsed = self.property_animation_delta(now)?;'
+          assert s.count(old) == 2
+          p.write_text(s.replace(old, 'let elapsed = 0.0;', 1))
+          PY
+          set +e
+          cargo test -p noon-native --lib property_animation::tests::native_collector_starts_and_restores_after_source_finishes_without_authored_time -- --exact --nocapture > /tmp/c5-native-click-proof/negative-clock.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/c5-native-click-good-clock.rs "$file"
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/c5-native-click-proof/negative-clock.log
+          cargo test -p noon-native --lib property_animation::tests -- --nocapture 2>&1 | tee /tmp/c5-native-click-proof/restored-native.log
+      - name: Existing Rust, WASM and repository fast gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-native --lib 2>&1 | tee /tmp/c5-native-click-proof/native.log
+          cargo test -p noon --no-default-features --lib 2>&1 | tee /tmp/c5-native-click-proof/noon.log
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/c5-native-click-proof/wasm.log
+          node --test web/*.test.mjs scripts/*contract*.test.mjs .github/ci/*.test.mjs 2>&1 | tee /tmp/c5-native-click-proof/node.log
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/c5-native-click-proof/fast.log
+      - name: Install virtual display and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+      - name: Actual native click, zoom and restored presentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 90s xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native native_surface_smoke_presents_click_effect_zoom_and_retrigger -- --ignored --nocapture --test-threads=1 2>&1 | tee /tmp/c5-native-click-proof/surface-effects.log
+          timeout 90s xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native native_surface_smoke_presents_inspection_zoom_and_recovery -- --ignored --nocapture --test-threads=1 2>&1 | tee /tmp/c5-native-click-proof/surface-inspection.log
+          timeout 90s xvfb-run -a -s '-screen 0 1280x720x24' cargo test -p noon-native native_surface_smoke_presents_callback_continuation_endpoint -- --ignored --nocapture --test-threads=1 2>&1 | tee /tmp/c5-native-click-proof/surface-callback.log
+      - name: Publish tested code without requiring workflow-write permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/c5-native-click-proof/tree.txt)"
+          git read-tree HEAD
+          git restore --source="$BASE_SHA" --staged -- .github/workflows/native-host-smoke.yml
+          code_tree=$(git write-tree)
+          code_commit=$(git commit-tree "$code_tree" -p "$BASE_SHA" -m 'C5: qualified native click-effect product code')
+          printf '%s\n' "$code_tree" > /tmp/c5-native-click-proof/published-code-tree.txt
+          printf '%s\n' "$code_commit" > /tmp/c5-native-click-proof/published-code-commit.txt
+          branch="staging/c5-native-click-effects-tested-${GITHUB_RUN_ID}"
+          test -z "$(git ls-remote --heads origin "refs/heads/$branch")"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$code_commit:refs/heads/$branch"
+          git read-tree HEAD
+          git diff --exit-code
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c5-native-click-effects-proof
+          path: /tmp/c5-native-click-proof
+          retention-days: 7
+          if-no-files-found: error
