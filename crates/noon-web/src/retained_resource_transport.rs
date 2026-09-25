@@ -667,7 +667,7 @@ impl InstalledRetainedResources {
         let mut fonts = FontResourceArena::new();
         let mut font_arenas = HashSet::new();
         let mut texts = TextResourceArena::new();
-        let mut staged_texts = self.texts.replacement_staging();
+        let mut staged_texts = StagedTextReplacements::default();
         let mut staged_text_arenas = HashSet::new();
         let mut text_handle_remap = HashMap::with_capacity(bundle.texts.len());
         let mut superseded_text_handles = Vec::new();
@@ -702,10 +702,13 @@ impl InstalledRetainedResources {
                 .get(&key)
                 .and_then(|previous| self.text_handles.get(previous))
                 .copied()
-                .filter(|previous| self.texts.get(*previous).is_some());
+                .and_then(|previous| {
+                    self.text_arena_for_handle(previous)
+                        .map(|(owner, arena)| (owner, previous, arena))
+                });
             let local = match previous {
-                Some(previous) => staged_texts
-                    .replace(&self.texts, previous, resource)
+                Some((owner, previous, arena)) => staged_texts
+                    .replace(owner, arena, previous, resource)
                     .map_err(|error| {
                         RetainedResourceTransportError::InvalidText(error.to_string())
                     }),
@@ -758,7 +761,8 @@ impl InstalledRetainedResources {
             text_handle_remap,
             superseded_text_handles: _,
         } = additions;
-        self.texts.commit_replacement_staging(staged_texts);
+        self.commit_staged_text_replacements(staged_texts)
+            .expect("prepared retained text replacements must remain current until commit");
         let layer = self.additions.len();
         for content in installed.image_handles.values() {
             self.image_layers.insert(content.resource().arena, layer);
@@ -812,9 +816,78 @@ impl InstalledRetainedResources {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InstalledTextArena {
+    Base,
+    Addition(usize),
+}
+
+#[derive(Default)]
+struct StagedTextReplacements {
+    stages: HashMap<u64, TextResourceReplacementStaging>,
+    owners: HashMap<u64, InstalledTextArena>,
+}
+
+impl StagedTextReplacements {
+    fn replace(
+        &mut self,
+        owner: InstalledTextArena,
+        arena: &TextResourceArena,
+        expected: TextResourceHandle,
+        resource: TextResource,
+    ) -> Result<TextResourceHandle, noon_core::TextResourceError> {
+        if let Some(staging) = self.stages.get_mut(&expected.arena) {
+            return staging.replace(arena, expected, resource);
+        }
+        let mut staging = arena.replacement_staging();
+        let next = staging.replace(arena, expected, resource)?;
+        self.owners.insert(expected.arena, owner);
+        self.stages.insert(expected.arena, staging);
+        Ok(next)
+    }
+
+    fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.stages.get(&handle.arena)?.get(handle)
+    }
+
+    fn len(&self) -> usize {
+        self.stages
+            .values()
+            .map(TextResourceReplacementStaging::len)
+            .sum()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (InstalledTextArena, &TextResourceReplacementStaging)> {
+        self.stages.iter().map(|(&arena, staging)| {
+            (
+                *self
+                    .owners
+                    .get(&arena)
+                    .expect("each staged text arena has one owner"),
+                staging,
+            )
+        })
+    }
+
+    fn into_iter(
+        self,
+    ) -> impl Iterator<Item = (InstalledTextArena, TextResourceReplacementStaging)> {
+        let Self { stages, owners } = self;
+        stages.into_iter().map(move |(arena, staging)| {
+            (
+                owners
+                    .get(&arena)
+                    .copied()
+                    .expect("each staged text arena has one owner"),
+                staging,
+            )
+        })
+    }
+}
+
 pub(crate) struct PreparedRetainedResourceAdditions {
     installed: InstalledRetainedResources,
-    staged_texts: TextResourceReplacementStaging,
+    staged_texts: StagedTextReplacements,
     staged_text_arenas: HashSet<u64>,
     text_handle_remap: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     superseded_text_handles: Vec<TransportTextResourceHandle>,
@@ -846,7 +919,7 @@ impl PreparedRetainedResourceAdditions {
 pub(crate) struct InstalledTextResourceOverlay<'a> {
     existing: &'a InstalledRetainedResources,
     additions: &'a InstalledRetainedResources,
-    staged_texts: &'a TextResourceReplacementStaging,
+    staged_texts: &'a StagedTextReplacements,
 }
 
 impl TextResourceLookup for InstalledTextResourceOverlay<'_> {
@@ -859,6 +932,48 @@ impl TextResourceLookup for InstalledTextResourceOverlay<'_> {
 }
 
 impl InstalledRetainedResources {
+    fn text_arena_for_handle(
+        &self,
+        handle: TextResourceHandle,
+    ) -> Option<(InstalledTextArena, &TextResourceArena)> {
+        if self.texts.get(handle).is_some() {
+            return Some((InstalledTextArena::Base, &self.texts));
+        }
+        let layer = *self.text_layers.get(&handle.arena)?;
+        let arena = &self.additions.get(layer)?.texts;
+        arena.get(handle)?;
+        Some((InstalledTextArena::Addition(layer), arena))
+    }
+
+    fn text_arena(&self, owner: InstalledTextArena) -> &TextResourceArena {
+        match owner {
+            InstalledTextArena::Base => &self.texts,
+            InstalledTextArena::Addition(layer) => &self.additions[layer].texts,
+        }
+    }
+
+    fn text_arena_mut(&mut self, owner: InstalledTextArena) -> &mut TextResourceArena {
+        match owner {
+            InstalledTextArena::Base => &mut self.texts,
+            InstalledTextArena::Addition(layer) => &mut self.additions[layer].texts,
+        }
+    }
+
+    fn commit_staged_text_replacements(
+        &mut self,
+        staged: StagedTextReplacements,
+    ) -> Result<(), noon_core::TextResourceReplacementStagingError> {
+        for (owner, staging) in staged.iter() {
+            self.text_arena(owner)
+                .validate_replacement_staging(staging)?;
+        }
+        for (owner, staging) in staged.into_iter() {
+            self.text_arena_mut(owner)
+                .commit_replacement_staging(staging)?;
+        }
+        Ok(())
+    }
+
     fn get_text(&self, handle: TextResourceHandle) -> Option<&TextResource> {
         self.texts.get(handle).or_else(|| {
             self.text_layers
@@ -1863,6 +1978,81 @@ mod tests {
             assert!(installed.additions.is_empty());
             assert_eq!(installed.inventory.texts.len(), 1);
             assert_eq!(installed.text_handles.len(), 1);
+        }
+    }
+
+    #[test]
+    fn versioned_addition_text_reuses_its_original_layer_slot() {
+        fn resource(source: &str) -> TextResource {
+            TextResource {
+                source: Arc::from(source),
+                kind: TextSourceKind::MathTex,
+                runs: Arc::from([]),
+                vector_items: Arc::from([]),
+                render_items: Arc::from([]),
+                parts: Arc::from([]),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                baseline: 0.0,
+                layout_artifact: None,
+            }
+        }
+
+        let mut source = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let base = RetainedResourceBundle::capture([], &source, &geometries, &fonts).unwrap();
+        let mut inventory = base.inventory();
+        let mut installed = base.install().unwrap();
+        let first = source.insert(resource("1")).unwrap();
+        let first_transport = TransportTextResourceHandle::from_source_handle(first);
+        let mut addition = RetainedResourceBundle::capture_additions(
+            [first],
+            &source,
+            &geometries,
+            &fonts,
+            &inventory,
+        )
+        .unwrap();
+        addition.retain_additions(&mut inventory);
+        let prepared = installed.prepare_additions(addition).unwrap();
+        let first_local = prepared.text_handle_remap()[&first_transport];
+        installed.commit_additions(prepared);
+        assert!(installed.texts.is_empty());
+        assert_eq!(installed.additions.len(), 1);
+        assert_eq!(installed.additions[0].texts.slot_capacity(), 1);
+
+        for value in 2..=32 {
+            let next = source
+                .replace(first.id, resource(&value.to_string()))
+                .unwrap();
+            let next_transport = TransportTextResourceHandle::from_source_handle(next);
+            let mut addition = RetainedResourceBundle::capture_additions(
+                [next],
+                &source,
+                &geometries,
+                &fonts,
+                &inventory,
+            )
+            .unwrap();
+            addition.retain_additions(&mut inventory);
+            let prepared = installed.prepare_additions(addition).unwrap();
+            assert_eq!(prepared.staged_texts.len(), 1);
+            let local = prepared.text_handle_remap()[&next_transport];
+            installed.commit_additions(prepared);
+
+            assert_eq!(local.id, first_local.id);
+            assert_eq!(local.version, (value - 1) as u64);
+            assert_eq!(installed.resolve_text_handle(next_transport), Some(local));
+            assert!(installed.resolve_text_handle(first_transport).is_none());
+            assert_eq!(installed.additions.len(), 1);
+            assert_eq!(installed.additions[0].texts.len(), 1);
+            assert_eq!(installed.additions[0].texts.slot_capacity(), 1);
+            assert_eq!(installed.text_handles.len(), 1);
+            assert_eq!(installed.inventory.texts.len(), 1);
+            assert_eq!(
+                installed.get_text(local).unwrap().source.as_ref(),
+                value.to_string()
+            );
         }
     }
 
