@@ -1,22 +1,34 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
-use crate::{ExecutionSession, MobjectTarget, Scene};
+use crate::{ExecutionSession, GraphOptions, MobjectTarget, Scene, BLUE, GREEN, RED};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
 
-    let mut graph = scene.graph(
+    let options = GraphOptions {
+        vertex_radius: 0.21,
+        vertex_fill: RED,
+        vertex_fill_opacity: 0.35,
+        vertex_stroke: BLUE,
+        vertex_stroke_width: 0.03,
+        edge_color: GREEN,
+        edge_stroke_width: 0.06,
+        ..GraphOptions::default()
+    };
+    let mut graph = scene.graph_with_options(
         [("a", (-5.0, -1.0)), ("b", (-3.5, 1.2)), ("c", (-2.0, -1.0))],
         [("a", "b"), ("b", "c"), ("c", "a")],
+        options.clone(),
     )?;
 
     graph.change_layout_positions(&mut scene, &[(-5.0, -1.0), (-3.5, 1.2), (-2.0, -1.0)])?;
     graph.add_vertices(&mut scene, [("d", (-3.5, -2.4))])?;
     graph.add_edges(&mut scene, [("a", "d")])?;
 
-    let mut digraph = scene.digraph(
+    let mut digraph = scene.digraph_with_options(
         [("u", (2.0, -1.0)), ("v", (3.5, 1.2)), ("w", (5.0, -1.0))],
         [("u", "v"), ("v", "w"), ("w", "u")],
+        options,
     )?;
 
     digraph.change_layout(
