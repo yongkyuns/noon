@@ -244,6 +244,7 @@ mod tests {
     #[test]
     fn binary_round_trip_preserves_opaque_ids_versions_and_object_identity() {
         let expected = TransportTextResourceHandle {
+            arena: 0,
             id: 0xfedc_ba98_7654_3210,
             version: u64::MAX - 7,
         };
@@ -279,7 +280,11 @@ mod tests {
             1,
             0,
             ObjectId::new(7),
-            TransportTextResourceHandle { id: 9, version: 2 },
+            TransportTextResourceHandle {
+                arena: 0,
+                id: 9,
+                version: 2,
+            },
         );
         envelope.channel = "wrong.channel".to_owned();
         assert_eq!(
@@ -292,7 +297,11 @@ mod tests {
 
     #[test]
     fn sequence_guard_drops_stale_and_rejects_gaps() {
-        let expected = TransportTextResourceHandle { id: 9, version: 2 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 9,
+            version: 2,
+        };
         let mut guard = RetainedResourceMutationSequenceGuard::default();
         let first = RetainedResourceMutationEnvelope::remove(5, 0, ObjectId::new(7), expected);
         assert_eq!(
@@ -318,7 +327,11 @@ mod tests {
 
     #[test]
     fn new_session_requires_sequence_zero() {
-        let expected = TransportTextResourceHandle { id: 1, version: 0 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 1,
+            version: 0,
+        };
         let mut guard = RetainedResourceMutationSequenceGuard::default();
         guard
             .accept(&RetainedResourceMutationEnvelope::remove(
@@ -347,7 +360,11 @@ mod tests {
 
     #[test]
     fn sequence_exhaustion_leaves_guard_unchanged() {
-        let expected = TransportTextResourceHandle { id: 2, version: 4 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 2,
+            version: 4,
+        };
         let mut guard = RetainedResourceMutationSequenceGuard {
             session: Some(9),
             next_sequence: u64::MAX,

@@ -19,10 +19,11 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 7;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
+    pub arena: u64,
     pub id: u64,
     pub version: u64,
 }
@@ -30,6 +31,7 @@ pub struct TransportTextResourceHandle {
 impl TransportTextResourceHandle {
     pub(crate) const fn from_source_handle(value: TextResourceHandle) -> Self {
         Self {
+            arena: value.arena,
             id: value.id.get(),
             version: value.version,
         }

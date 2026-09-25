@@ -148,6 +148,10 @@ impl PreparedRetainedResourceAdditionsWithRender {
         self.ordinary.text_handle_remap()
     }
 
+    pub(crate) fn superseded_text_handles(&self) -> &[crate::TransportTextResourceHandle] {
+        self.ordinary.superseded_text_handles()
+    }
+
     pub(crate) fn text_lookup<'a>(
         &'a self,
         existing: &'a InstalledRetainedResources,

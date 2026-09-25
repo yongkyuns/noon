@@ -115,7 +115,11 @@ mod tests {
 
     #[test]
     fn encoder_assigns_one_monotonic_sequence_across_operation_kinds() {
-        let expected = TransportTextResourceHandle { id: 7, version: 3 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 7,
+            version: 3,
+        };
         let (replacement, resources) = replacement_bundle();
         let mut encoder = RetainedResourceMutationEncoder::new(23);
 
@@ -143,7 +147,11 @@ mod tests {
 
     #[test]
     fn encoder_output_is_accepted_by_the_matching_sequence_guard() {
-        let expected = TransportTextResourceHandle { id: 9, version: 1 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 9,
+            version: 1,
+        };
         let mut encoder = RetainedResourceMutationEncoder::new(5);
         let mut guard = crate::RetainedResourceMutationSequenceGuard::default();
 
@@ -159,7 +167,11 @@ mod tests {
 
     #[test]
     fn sequence_exhaustion_leaves_encoder_unchanged() {
-        let expected = TransportTextResourceHandle { id: 2, version: 4 };
+        let expected = TransportTextResourceHandle {
+            arena: 0,
+            id: 2,
+            version: 4,
+        };
         let mut encoder = RetainedResourceMutationEncoder {
             session: 9,
             next_sequence: u64::MAX,

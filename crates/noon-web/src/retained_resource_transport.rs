@@ -28,7 +28,7 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 6;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 7;
 
 /// Immutable compiled render geometry at the genuine cross-worker boundary.
 /// Indices are scoped to the player session and this installed resource bundle.
@@ -176,7 +176,7 @@ pub struct RetainedResourceBundle {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RetainedResourceInventory {
     images: HashSet<TransportImageResourceHandle>,
-    texts: HashSet<TransportTextResourceHandle>,
+    texts: HashMap<(u64, u64), TransportTextResourceHandle>,
     geometries: BTreeSet<TransportGeometryResourceHandle>,
     fonts: BTreeSet<(String, u32)>,
 }
@@ -186,7 +186,9 @@ impl RetainedResourceInventory {
         self.images.contains(&handle)
     }
     pub(crate) fn contains_text(&self, handle: TransportTextResourceHandle) -> bool {
-        self.texts.contains(&handle)
+        self.texts
+            .get(&(handle.arena, handle.id))
+            .is_some_and(|installed| *installed == handle)
     }
 }
 
@@ -194,7 +196,11 @@ impl RetainedResourceBundle {
     pub(crate) fn inventory(&self) -> RetainedResourceInventory {
         RetainedResourceInventory {
             images: self.images.iter().map(|entry| entry.handle).collect(),
-            texts: self.texts.iter().map(|entry| entry.handle).collect(),
+            texts: self
+                .texts
+                .iter()
+                .map(|entry| ((entry.handle.arena, entry.handle.id), entry.handle))
+                .collect(),
             geometries: self.geometries.iter().map(|entry| entry.handle).collect(),
             fonts: self
                 .fonts
@@ -207,8 +213,15 @@ impl RetainedResourceBundle {
     pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
         self.images
             .retain(|entry| installed.images.insert(entry.handle));
-        self.texts
-            .retain(|entry| installed.texts.insert(entry.handle));
+        self.texts.retain(|entry| {
+            let key = (entry.handle.arena, entry.handle.id);
+            if installed.texts.get(&key) == Some(&entry.handle) {
+                false
+            } else {
+                installed.texts.insert(key, entry.handle);
+                true
+            }
+        });
         self.geometries
             .retain(|entry| installed.geometries.insert(entry.handle));
         self.fonts.retain(|entry| {
@@ -445,7 +458,11 @@ impl RetainedResourceBundle {
 
         let inventory = RetainedResourceInventory {
             images: image_handles.keys().copied().collect(),
-            texts: text_handles.keys().copied().collect(),
+            texts: text_handles
+                .keys()
+                .copied()
+                .map(|handle| ((handle.arena, handle.id), handle))
+                .collect(),
             geometries: geometry_handles.keys().copied().collect(),
             fonts: font_bytes.keys().cloned().collect(),
         };
@@ -587,7 +604,11 @@ impl InstalledRetainedResources {
         if let Some(handle) = inventory.images.intersection(&self.inventory.images).next() {
             return Err(RetainedResourceTransportError::DuplicateImage(*handle));
         }
-        if let Some(handle) = inventory.texts.intersection(&self.inventory.texts).next() {
+        if let Some(handle) = inventory
+            .texts
+            .values()
+            .find(|handle| self.inventory.contains_text(**handle))
+        {
             return Err(RetainedResourceTransportError::DuplicateText(*handle));
         }
         if let Some(handle) = inventory
@@ -645,10 +666,11 @@ impl InstalledRetainedResources {
         }
         let mut fonts = FontResourceArena::new();
         let mut font_arenas = HashSet::new();
-        let mut texts = TextResourceArena::new();
-        let mut text_handles = HashMap::with_capacity(bundle.texts.len());
+        let mut staged_texts = self.texts.clone();
+        let mut text_handle_remap = HashMap::with_capacity(bundle.texts.len());
+        let mut superseded_text_handles = Vec::new();
         for entry in bundle.texts {
-            if text_handles.contains_key(&entry.handle) {
+            if text_handle_remap.contains_key(&entry.handle) {
                 return Err(RetainedResourceTransportError::DuplicateText(entry.handle));
             }
             let resource = entry.resource.into_core(&geometry_handles)?;
@@ -668,19 +690,37 @@ impl InstalledRetainedResources {
                     });
                 }
             }
-            let local = texts
-                .insert(resource)
-                .map_err(|error| RetainedResourceTransportError::InvalidText(error.to_string()))?;
-            text_handles.insert(entry.handle, local);
+            let key = (entry.handle.arena, entry.handle.id);
+            if let Some(previous) = self.inventory.texts.get(&key) {
+                superseded_text_handles.push(*previous);
+            }
+            let previous = self
+                .inventory
+                .texts
+                .get(&key)
+                .and_then(|previous| self.text_handles.get(previous))
+                .copied()
+                .filter(|previous| staged_texts.get(*previous).is_some());
+            let local = match previous {
+                Some(previous) => staged_texts
+                    .replace(previous.id, resource)
+                    .map_err(|error| {
+                        RetainedResourceTransportError::InvalidText(error.to_string())
+                    }),
+                None => staged_texts.insert(resource).map_err(|error| {
+                    RetainedResourceTransportError::InvalidText(error.to_string())
+                }),
+            }?;
+            text_handle_remap.insert(entry.handle, local);
         }
         let installed = InstalledRetainedResources {
             images,
             image_handles,
             image_layers: HashMap::new(),
-            texts,
+            texts: TextResourceArena::new(),
             geometries,
             fonts,
-            text_handles,
+            text_handles: HashMap::new(),
             geometry_handles: geometry_handles
                 .into_iter()
                 .filter(|(transport, _)| inventory.geometries.contains(transport))
@@ -696,72 +736,87 @@ impl InstalledRetainedResources {
             font_arenas,
             inventory,
         };
-        Ok(PreparedRetainedResourceAdditions { installed })
+        Ok(PreparedRetainedResourceAdditions {
+            installed,
+            staged_texts,
+            text_handle_remap,
+            superseded_text_handles,
+        })
     }
 
     pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
+        let PreparedRetainedResourceAdditions {
+            installed,
+            staged_texts,
+            text_handle_remap,
+            superseded_text_handles: _,
+        } = additions;
+        self.texts = staged_texts;
         let layer = self.additions.len();
-        for content in additions.installed.image_handles.values() {
+        for content in installed.image_handles.values() {
             self.image_layers.insert(content.resource().arena, layer);
         }
         self.inventory
             .images
-            .extend(additions.installed.inventory.images.iter().copied());
+            .extend(installed.inventory.images.iter().copied());
         self.image_handles.extend(
-            additions
-                .installed
+            installed
                 .image_handles
                 .iter()
                 .map(|(&key, &value)| (key, value)),
         );
-        for handle in additions.installed.text_handles.values() {
-            self.text_layers.insert(handle.arena, layer);
-        }
-        for handle in additions.installed.geometry_handles.values() {
+        for handle in installed.geometry_handles.values() {
             self.geometry_layers.insert(handle.arena, layer);
         }
-        for &arena in &additions.installed.font_arenas {
+        for &arena in &installed.font_arenas {
             self.font_layers.insert(arena, layer);
         }
-        for face in &additions.installed.inventory.fonts {
+        for face in &installed.inventory.fonts {
             self.font_layers_by_face.insert(face.clone(), layer);
         }
-        self.inventory
-            .texts
-            .extend(additions.installed.inventory.texts.iter().copied());
+        for (&key, &handle) in &installed.inventory.texts {
+            if let Some(previous) = self.inventory.texts.insert(key, handle) {
+                self.text_handles.remove(&previous);
+            }
+        }
         self.inventory
             .geometries
-            .extend(additions.installed.inventory.geometries.iter().copied());
+            .extend(installed.inventory.geometries.iter().copied());
         self.inventory
             .fonts
-            .extend(additions.installed.inventory.fonts.iter().cloned());
-        self.text_handles.extend(
-            additions
-                .installed
-                .text_handles
-                .iter()
-                .map(|(&key, &value)| (key, value)),
-        );
+            .extend(installed.inventory.fonts.iter().cloned());
+        self.text_handles.extend(text_handle_remap);
         self.geometry_handles.extend(
-            additions
-                .installed
+            installed
                 .geometry_handles
                 .iter()
                 .map(|(&key, &value)| (key, value)),
         );
-        self.additions.push(additions.installed);
+        if !installed.images.is_empty()
+            || !installed.geometries.is_empty()
+            || !installed.font_arenas.is_empty()
+        {
+            self.additions.push(installed);
+        }
     }
 }
 
 pub(crate) struct PreparedRetainedResourceAdditions {
     installed: InstalledRetainedResources,
+    staged_texts: TextResourceArena,
+    text_handle_remap: HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    superseded_text_handles: Vec<TransportTextResourceHandle>,
 }
 
 impl PreparedRetainedResourceAdditions {
     pub(crate) fn text_handle_remap(
         &self,
     ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
-        self.installed.text_handle_remap()
+        self.text_handle_remap.clone()
+    }
+
+    pub(crate) fn superseded_text_handles(&self) -> &[TransportTextResourceHandle] {
+        &self.superseded_text_handles
     }
 
     pub(crate) fn text_lookup<'a>(
@@ -771,6 +826,7 @@ impl PreparedRetainedResourceAdditions {
         InstalledTextResourceOverlay {
             existing,
             additions: &self.installed,
+            staged_texts: &self.staged_texts,
         }
     }
 }
@@ -778,12 +834,14 @@ impl PreparedRetainedResourceAdditions {
 pub(crate) struct InstalledTextResourceOverlay<'a> {
     existing: &'a InstalledRetainedResources,
     additions: &'a InstalledRetainedResources,
+    staged_texts: &'a TextResourceArena,
 }
 
 impl TextResourceLookup for InstalledTextResourceOverlay<'_> {
     fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
-        self.additions
-            .get_text(handle)
+        self.staged_texts
+            .get(handle)
+            .or_else(|| self.additions.get_text(handle))
             .or_else(|| self.existing.get_text(handle))
     }
 }
@@ -1732,6 +1790,67 @@ mod tests {
             repeated.is_empty(),
             "installed resources must not be resent"
         );
+    }
+
+    #[test]
+    fn versioned_text_additions_replace_one_installed_slot_and_lookup_entry() {
+        fn resource(source: &str) -> TextResource {
+            TextResource {
+                source: Arc::from(source),
+                kind: TextSourceKind::MathTex,
+                runs: Arc::from([]),
+                vector_items: Arc::from([]),
+                render_items: Arc::from([]),
+                parts: Arc::from([]),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                baseline: 0.0,
+                layout_artifact: None,
+            }
+        }
+
+        let mut source = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let first = source.insert(resource("1")).unwrap();
+        let base = RetainedResourceBundle::capture([first], &source, &geometries, &fonts).unwrap();
+        let mut inventory = base.inventory();
+        let mut installed = base.install().unwrap();
+        let first_transport = TransportTextResourceHandle::from_source_handle(first);
+        let first_local = installed.resolve_text_handle(first_transport).unwrap();
+
+        for value in 2..=32 {
+            let next = source
+                .replace(first.id, resource(&value.to_string()))
+                .unwrap();
+            let next_transport = TransportTextResourceHandle::from_source_handle(next);
+            let mut addition = RetainedResourceBundle::capture_additions(
+                [next],
+                &source,
+                &geometries,
+                &fonts,
+                &inventory,
+            )
+            .unwrap();
+            addition.retain_additions(&mut inventory);
+            let prepared = installed.prepare_additions(addition).unwrap();
+            assert_eq!(prepared.superseded_text_handles().len(), 1);
+            let local = prepared.text_handle_remap()[&next_transport];
+            installed.commit_additions(prepared);
+
+            assert_eq!(local.id, first_local.id);
+            assert_eq!(local.version, (value - 1) as u64);
+            assert_eq!(installed.resolve_text_handle(next_transport), Some(local));
+            assert!(installed.resolve_text_handle(first_transport).is_none());
+            assert_eq!(
+                installed.texts.get(local).unwrap().source.as_ref(),
+                value.to_string()
+            );
+            assert_eq!(installed.texts.len(), 1);
+            assert_eq!(installed.texts.slot_capacity(), 1);
+            assert!(installed.additions.is_empty());
+            assert_eq!(installed.inventory.texts.len(), 1);
+            assert_eq!(installed.text_handles.len(), 1);
+        }
     }
 
     #[test]

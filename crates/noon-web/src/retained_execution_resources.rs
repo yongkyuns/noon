@@ -187,6 +187,7 @@ impl InstalledRetainedExecutionMirror {
         let image_handles = additions.image_handle_remap();
         self.wire.extend_installed_image_handles(&image_handles);
         let text_handles = additions.text_handle_remap();
+        let superseded_text_handles = additions.superseded_text_handles().to_vec();
         self.wire.extend_installed_text_handles(&text_handles);
 
         let render_rollback = match (
@@ -260,6 +261,8 @@ impl InstalledRetainedExecutionMirror {
         }
 
         self.resources.commit_additions_with_render(additions);
+        self.wire
+            .remove_installed_text_handles(superseded_text_handles.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -871,6 +874,7 @@ mod tests {
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
         initial.objects[0].content = TransportObjectContent::Text {
             text: crate::TransportTextResourceHandle {
+                arena: 0,
                 id: u64::MAX,
                 version: 0,
             },
