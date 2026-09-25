@@ -8,9 +8,15 @@ use wasm_bindgen::prelude::*;
 fn text_rows(rows: js_sys::Array) -> Result<Vec<Vec<String>>, JsValue> {
     rows.iter()
         .map(|row| {
-            let row: js_sys::Array = row.dyn_into().map_err(|_| js_error("Table rows must be arrays"))?;
+            let row: js_sys::Array = row
+                .dyn_into()
+                .map_err(|_| js_error("Table rows must be arrays"))?;
             row.iter()
-                .map(|entry| entry.as_string().ok_or_else(|| js_error("Table entries must be strings")))
+                .map(|entry| {
+                    entry
+                        .as_string()
+                        .ok_or_else(|| js_error("Table entries must be strings"))
+                })
                 .collect()
         })
         .collect()
@@ -18,9 +24,16 @@ fn text_rows(rows: js_sys::Array) -> Result<Vec<Vec<String>>, JsValue> {
 fn number_rows(rows: js_sys::Array) -> Result<Vec<Vec<f64>>, JsValue> {
     rows.iter()
         .map(|row| {
-            let row: js_sys::Array = row.dyn_into().map_err(|_| js_error("Table rows must be arrays"))?;
+            let row: js_sys::Array = row
+                .dyn_into()
+                .map_err(|_| js_error("Table rows must be arrays"))?;
             row.iter()
-                .map(|entry| entry.as_f64().filter(|value| value.is_finite()).ok_or_else(|| js_error("Table entries must be finite numbers")))
+                .map(|entry| {
+                    entry
+                        .as_f64()
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| js_error("Table entries must be finite numbers"))
+                })
                 .collect()
         })
         .collect()
@@ -29,48 +42,135 @@ fn number_rows(rows: js_sys::Array) -> Result<Vec<Vec<f64>>, JsValue> {
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveCreateTable)]
-    pub fn live_create_table(&mut self, rows: js_sys::Array, options: WasmTableOptions, compiler: &mut WasmLatexCompiler) -> Result<WasmTableHandle, JsValue> {
+    pub fn live_create_table(
+        &mut self,
+        rows: js_sys::Array,
+        options: WasmTableOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_options(&mut self.inner.scene, compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            noon::Table::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
+            .map(WasmTableHandle::new)
+            .map_err(js_error)
         } else {
-            self.inner.active_live_player().map_err(js_error)?.live_create_table(compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_table(compiler, rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         }
     }
     #[wasm_bindgen(js_name = liveCreateMathTable)]
-    pub fn live_create_math_table(&mut self, rows: js_sys::Array, options: WasmTableOptions, compiler: &mut WasmLatexCompiler) -> Result<WasmTableHandle, JsValue> {
+    pub fn live_create_math_table(
+        &mut self,
+        rows: js_sys::Array,
+        options: WasmTableOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_options(&mut self.inner.scene, compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            noon::Table::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
+            .map(WasmTableHandle::new)
+            .map_err(js_error)
         } else {
-            self.inner.active_live_player().map_err(js_error)?.live_create_math_table(compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_math_table(compiler, rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         }
     }
     #[wasm_bindgen(js_name = liveCreateIntegerTable)]
-    pub fn live_create_integer_table(&mut self, rows: js_sys::Array, options: WasmTableOptions, compiler: &mut WasmLatexCompiler) -> Result<WasmTableHandle, JsValue> {
+    pub fn live_create_integer_table(
+        &mut self,
+        rows: js_sys::Array,
+        options: WasmTableOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmTableHandle, JsValue> {
         let rows = number_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::IntegerTable::from_rows_with_options(&mut self.inner.scene, compiler, rows, options.options).map(|value| WasmTableHandle::new(value.into_table())).map_err(js_error)
+            noon::IntegerTable::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
+            .map(|value| WasmTableHandle::new(value.into_table()))
+            .map_err(js_error)
         } else {
-            self.inner.active_live_player().map_err(js_error)?.live_create_integer_table(compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_integer_table(compiler, rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         }
     }
     #[wasm_bindgen(js_name = liveCreateDecimalTable)]
-    pub fn live_create_decimal_table(&mut self, rows: js_sys::Array, options: WasmTableOptions, compiler: &mut WasmLatexCompiler) -> Result<WasmTableHandle, JsValue> {
+    pub fn live_create_decimal_table(
+        &mut self,
+        rows: js_sys::Array,
+        options: WasmTableOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmTableHandle, JsValue> {
         let rows = number_rows(rows)?;
         if self.inner.player_ownership.is_unstarted() {
-            noon::DecimalTable::from_rows_with_options(&mut self.inner.scene, compiler, rows, noon::DecimalFormat { decimal_places: 1, ..Default::default() }, options.options).map(|value| WasmTableHandle::new(value.into_table())).map_err(js_error)
+            noon::DecimalTable::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                noon::DecimalFormat {
+                    decimal_places: 1,
+                    ..Default::default()
+                },
+                options.options,
+            )
+            .map(|value| WasmTableHandle::new(value.into_table()))
+            .map_err(js_error)
         } else {
-            self.inner.active_live_player().map_err(js_error)?.live_create_decimal_table(compiler, rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_decimal_table(compiler, rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         }
     }
     #[wasm_bindgen(js_name = liveCreateMobjectTable)]
-    pub fn live_create_mobject_table(&mut self, rows: &WasmMobjectTableRows, options: WasmTableOptions) -> Result<WasmTableHandle, JsValue> {
+    pub fn live_create_mobject_table(
+        &mut self,
+        rows: &WasmMobjectTableRows,
+        options: WasmTableOptions,
+    ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
         if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectTable::from_target_rows_with_options(&mut self.inner.scene, rows, options.options).map(|value| WasmTableHandle::new(value.into_table())).map_err(js_error)
+            noon::MobjectTable::from_target_rows_with_options(
+                &mut self.inner.scene,
+                rows,
+                options.options,
+            )
+            .map(|value| WasmTableHandle::new(value.into_table()))
+            .map_err(js_error)
         } else {
-            self.inner.active_live_player().map_err(js_error)?.live_create_mobject_table(rows, options.options).map(WasmTableHandle::new).map_err(js_error)
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_mobject_table(rows, options.options)
+                .map(WasmTableHandle::new)
+                .map_err(js_error)
         }
     }
 }

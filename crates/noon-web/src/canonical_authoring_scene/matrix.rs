@@ -130,9 +130,9 @@ impl CanonicalAuthoringSceneContext {
         options: WasmMatrixOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmMatrixHandle, JsValue> {
-        let rows = rows.entries();
+        let rows = rows.targets();
         if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectMatrix::from_rows_with_options(
+            noon::MobjectMatrix::from_target_rows_with_options(
                 &mut self.inner.scene,
                 compiler,
                 rows,

@@ -129,6 +129,39 @@ pub struct DecimalTable(Table);
 pub struct MobjectTable(Table);
 
 impl Table {
+    /// Rehydrate a retained table from its durable semantic-family topology.
+    pub fn from_family(family: MobjectFamily) -> Result<Self, TableAuthoringError> {
+        family.validate()?;
+        let store = Rc::clone(family.integration_store());
+        let members = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(AuthoringError::from)?;
+        let [entries, lines, highlights, labels @ ..] = members.as_slice() else {
+            return Err(TableAuthoringError::InvalidStructure);
+        };
+        if labels.len() > 2 {
+            return Err(TableAuthoringError::InvalidStructure);
+        }
+        let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
+        let table = Self {
+            family,
+            line_family: MobjectFamily::from_node(Rc::clone(&store), *lines)?,
+            highlight_family: MobjectFamily::from_node(Rc::clone(&store), *highlights)?,
+            row_label_family: labels
+                .first()
+                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
+                .transpose()?,
+            column_label_family: labels
+                .get(1)
+                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
+                .transpose()?,
+            entry_family,
+            options: TableOptions::default(),
+        };
+        table.shape()?;
+        Ok(table)
+    }
     pub fn from_rows<I, J, S>(
         scene: &mut Scene,
         backend: &mut impl LatexBackend,

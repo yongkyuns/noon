@@ -49,14 +49,14 @@ impl SemanticExecutionPlayer {
         })?
         .map_err(AuthoringFailure::from)
     }
-    pub(crate) fn live_create_mobject_matrix(
+    pub(crate) fn live_create_mobject_matrix<'a>(
         &mut self,
         backend: &mut impl noon::LatexBackend,
-        rows: Vec<Vec<noon::Mobject>>,
+        rows: Vec<Vec<noon::MobjectTarget<'a>>>,
         options: noon::MatrixOptions,
     ) -> Result<noon::MobjectMatrix, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(noon::MobjectMatrix::from_rows_in_live_session(
+            Ok(noon::MobjectMatrix::from_target_rows_in_live_session(
                 live, backend, rows, options,
             ))
         })?

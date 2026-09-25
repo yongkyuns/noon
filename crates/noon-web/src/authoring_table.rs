@@ -163,7 +163,11 @@ impl WasmTableHandle {
         Ok(result)
     }
     #[wasm_bindgen(js_name = getCell)]
-    pub fn get_cell(&self, row: usize, column: usize) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+    pub fn get_cell(
+        &self,
+        row: usize,
+        column: usize,
+    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.table
             .get_cell(row, column)
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)

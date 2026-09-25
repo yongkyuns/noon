@@ -37,7 +37,21 @@ pub struct WasmMatrixHandle {
 /// A validated set of existing Mobject entries for one Matrix admission.
 #[wasm_bindgen]
 pub struct WasmMobjectMatrixRows {
-    rows: Vec<Vec<noon::Mobject>>,
+    rows: Vec<Vec<MatrixEntryRoot>>,
+}
+
+#[derive(Clone)]
+enum MatrixEntryRoot {
+    Mobject(noon::Mobject),
+    Family(noon::MobjectFamily),
+}
+impl MatrixEntryRoot {
+    fn target(&self) -> noon::MobjectTarget<'_> {
+        match self {
+            Self::Mobject(object) => object.into(),
+            Self::Family(family) => family.into(),
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -58,19 +72,44 @@ impl WasmMobjectMatrixRows {
             .rows
             .last_mut()
             .ok_or_else(|| js_error("MobjectMatrix rows require beginRow before appendEntry"))?;
-        row.push(entry.semantic_mobject().clone());
+        row.push(MatrixEntryRoot::Mobject(entry.semantic_mobject().clone()));
+        Ok(())
+    }
+    #[wasm_bindgen(js_name = appendFamilyEntry)]
+    pub fn append_family_entry(
+        &mut self,
+        entry: &WasmAuthoringFamilyHandle,
+    ) -> Result<(), JsValue> {
+        let row = self.rows.last_mut().ok_or_else(|| {
+            js_error("MobjectMatrix rows require beginRow before appendFamilyEntry")
+        })?;
+        row.push(MatrixEntryRoot::Family(entry.semantic_family()?));
         Ok(())
     }
 }
 
 impl WasmMobjectMatrixRows {
-    pub(crate) fn entries(&self) -> Vec<Vec<noon::Mobject>> {
-        self.rows.clone()
+    pub(crate) fn targets(&self) -> Vec<Vec<noon::MobjectTarget<'_>>> {
+        self.rows
+            .iter()
+            .map(|row| row.iter().map(MatrixEntryRoot::target).collect())
+            .collect()
     }
 }
 impl WasmMatrixHandle {
     pub(crate) fn new(matrix: noon::Matrix) -> Self {
         Self { matrix }
+    }
+}
+
+fn entry_handle(entry: noon::CompositeEntryHandle) -> JsValue {
+    match entry {
+        noon::CompositeEntryHandle::Mobject(object) => {
+            WasmAuthoringMobjectHandle::from_semantic_mobject(object).into()
+        }
+        noon::CompositeEntryHandle::Family(family) => {
+            WasmAuthoringFamilyHandle::from_semantic_family(family).into()
+        }
     }
 }
 
@@ -99,7 +138,7 @@ impl WasmMatrixHandle {
     pub fn entries(&self) -> Result<js_sys::Array, JsValue> {
         let result = js_sys::Array::new();
         for entry in self.matrix.entries().map_err(js_error)? {
-            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(entry).into());
+            result.push(&entry_handle(entry));
         }
         Ok(result)
     }

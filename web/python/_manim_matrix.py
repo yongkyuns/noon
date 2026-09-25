@@ -2,7 +2,12 @@
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
-from _manim_semantic_handles import _attach_shared_family, _family_wrapper_key, _live_constructor_context
+from _manim_semantic_handles import (
+    _attach_shared_family,
+    _family_wrapper_key,
+    _handle_for,
+    _live_constructor_context,
+)
 
 try:
     from js import noonCreateAuthoringMatrixHandle as _create_matrix
@@ -119,6 +124,12 @@ class MobjectMatrix(Matrix):
 
     @staticmethod
     def _mobject_handle(value):
-        if not isinstance(value, _base.Mobject) or not hasattr(value, "_semantic_handle"):
-            raise TypeError("MobjectMatrix entries must be shared Mobjects")
-        return value._semantic_handle
+        if not isinstance(value, _base.Mobject):
+            raise TypeError("MobjectMatrix entries must be shared Mobjects or Groups")
+        family = getattr(value, "_semantic_family_handle", None)
+        if family is not None:
+            return family
+        handle = _handle_for(value)
+        if handle is None:
+            raise TypeError("MobjectMatrix entries require current shared semantic identities")
+        return handle
