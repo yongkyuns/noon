@@ -543,17 +543,33 @@ class BarChart(_compat.Group):
             options.free()
             raise
         bars = engine_call(self._bar_chart_handle.bars)
-        self.bars = _family(object.__new__(_compat.VGroup), bars,
-                            [_leaf(handle, _compat.Rectangle) for handle in engine_call(bars.directMobjects)])
+        self.bars = _shared._attach_shared_family(
+            object.__new__(_compat.VGroup), bars, self._bar_chart_context, _compat.Rectangle
+        )
         axes = engine_call(self._bar_chart_handle.axes)
-        self.axes = _family(object.__new__(_compat.Group), axes, [])
-        _family(self, engine_call(self._bar_chart_handle.family), [self.axes, self.bars])
+        self.axes = _shared._attach_shared_family(
+            object.__new__(_compat.Group), axes, self._bar_chart_context
+        )
+        _family(self, engine_call(self._bar_chart_handle.family), [self.bars, self.axes])
+        _shared._attach_shared_family(
+            self, self._semantic_family_handle, self._bar_chart_context
+        )
 
     def change_bar_values(self, values, update_colors=True):
         values = tuple(float(value) for value in values)
         engine_call(
             self._bar_chart_context.liveChangeBarValues if self._bar_chart_context is not None else self._bar_chart_handle.changeBarValues,
             *( (self._bar_chart_handle, _array(values), bool(update_colors)) if self._bar_chart_context is not None else (_array(values), bool(update_colors)) ),
+        )
+        _shared._attach_shared_family(
+            self.bars, engine_call(self._bar_chart_handle.bars), self._bar_chart_context,
+            _compat.Rectangle,
+        )
+        _shared._attach_shared_family(
+            self.axes, engine_call(self._bar_chart_handle.axes), self._bar_chart_context
+        )
+        _shared._attach_shared_family(
+            self, engine_call(self._bar_chart_handle.family), self._bar_chart_context
         )
         return self
 
