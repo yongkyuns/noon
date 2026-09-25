@@ -1885,7 +1885,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle",
-            "_bar_chart_handle", "_bar_chart_context",
+            "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps
             # the authoritative family and every leaf below; there is no valid
@@ -1927,6 +1927,14 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
     for source, target in pairs:
+        latex = getattr(source, "_semantic_latex_handle", None)
+        if latex is not None:
+            target._semantic_latex_handle = engine_call(latex.rebindFamily, target._semantic_family_handle)
+            target._part_views()
+        if not isinstance(target, _compat.Group):
+            rebind = getattr(target, "_rebind_copied_semantic_handle", None)
+            if rebind is not None:
+                rebind()
         aggregate = getattr(source, "_semantic_arrow_handle", None)
         if aggregate is not None:
             index = getattr(source, "_semantic_arrow_index", None)

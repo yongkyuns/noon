@@ -263,6 +263,7 @@ class RawList:
     def free(self): pass
 class Member:
     semanticSlot=7; semanticGeneration=3
+    def textSource(self): return "x"
     def textParts(self): return RawList()
 class Parts:
     source="x"

@@ -198,14 +198,7 @@ class _TexBase(_compat.VGroup):
     def copy(self):
         import _manim_semantic_handles as semantic
 
-        clone = semantic._group_copy(self)
-        clone._semantic_latex_handle = engine_call(
-            self._semantic_latex_handle.rebindFamily,
-            clone._semantic_family_handle,
-        )
-        clone._semantic_member_wrappers = {}
-        clone._part_views()
-        return clone
+        return semantic._group_copy(self)
 
     def _set_part_view_colors(self, selections):
         views = self._part_views()
