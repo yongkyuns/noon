@@ -1,4 +1,4 @@
-//! Numeric constructors share the current canonical live player.
+//! Numeric constructors use the canonical cold scene or its active live player.
 use super::CanonicalAuthoringSceneContext;
 use crate::{authoring_error::js_error, WasmDecimalNumberHandle, WasmVariableHandle};
 use wasm_bindgen::prelude::*;
@@ -22,24 +22,26 @@ impl CanonicalAuthoringSceneContext {
         let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
             .map_err(js_error)?;
         let store = std::rc::Rc::clone(self.inner.scene.integration_store());
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_create_variable(
-                compiler,
-                label,
-                value,
-                noon::DecimalFormat {
-                    decimal_places,
-                    include_sign,
-                    group_with_commas,
-                    show_ellipsis,
-                    unit,
-                },
-                font_size,
-            )
-            .map(|variable| WasmVariableHandle::new(variable, store))
-            .map_err(js_error)
+        let format = noon::DecimalFormat {
+            decimal_places,
+            include_sign,
+            group_with_commas,
+            show_ellipsis,
+            unit,
+        };
+        let variable = if self.inner.player_ownership.is_unstarted() {
+            self.inner
+                .scene
+                .variable(compiler, label, value, format, font_size)
+                .map_err(js_error)?
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_variable(compiler, label, value, format, font_size)
+                .map_err(js_error)?
+        };
+        Ok(WasmVariableHandle::new(variable, store))
     }
 
     #[wasm_bindgen(js_name = liveCreateDecimalNumber)]
