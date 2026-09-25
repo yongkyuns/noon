@@ -261,7 +261,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Existing(id)
                 if self.preflight.removed_existing.contains(&id) =>
             {
-                return Err(SemanticTransactionReadError::RemovedExistingNode(id))
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id));
             }
             SemanticTransactionNodeRef::Pending(token) => {
                 self.validate_read_token(token)?;
@@ -288,7 +288,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     Some(SemanticNodeCreation::Family { .. })
                 ) =>
             {
-                return Ok(0.0)
+                return Ok(0.0);
             }
             _ => {}
         }
@@ -646,6 +646,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     set_object_content(store, object, content);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
+                }
+                SemanticMutation::SetBarMetadata { object, metadata } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object must remain valid while transaction owns the semantic store")
+                        .set_bar_metadata(metadata);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::BarMetadata { object });
                 }
                 SemanticMutation::SetInset2DView {
                     object,

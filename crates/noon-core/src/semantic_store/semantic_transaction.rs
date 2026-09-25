@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::semantic_animations::{normalize_text_reveal_options, normalize_text_write_options};
 use super::semantic_declarations::{
@@ -9,7 +10,7 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint,
+    SemanticBarMetadata, SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint,
     SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
     SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticObjectTrackProperty,
     SemanticObjectTrackValues, SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry,
@@ -98,6 +99,12 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         baseline: Option<TextPresentationBaseline>,
     },
+    /// Replace optional retained BarChart source metadata without changing the
+    /// object's ordinary semantic role or visual state.
+    SetBarMetadata {
+        object: SemanticTransactionNodeRef,
+        metadata: Option<Arc<SemanticBarMetadata>>,
+    },
     SetZIndex {
         node: SemanticTransactionNodeRef,
         value: f64,
@@ -182,6 +189,7 @@ impl SemanticMutation {
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
+            | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
             Self::SetInset2DView {
@@ -244,6 +252,7 @@ impl SemanticMutation {
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
+            | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::SetInset2DView { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
@@ -274,6 +283,9 @@ impl SemanticMutation {
             }),
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
+            }
+            Self::SetBarMetadata { object, .. } => {
+                Some(SemanticMutationKey::ObjectBarMetadata(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::ReplaceDecimalNumber { object, .. } => {
@@ -323,6 +335,7 @@ pub(super) enum SemanticMutationKey {
         property: SemanticObjectProperty,
     },
     ObjectContent(SemanticTransactionNodeRef),
+    ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
     DecimalNumber(SemanticTransactionNodeRef),
     TextPresentationBaseline(SemanticTransactionNodeRef),
@@ -365,6 +378,10 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    /// Retained BarChart source metadata changed without changing render data.
+    BarMetadata {
         object: SemanticNodeId,
     },
     ObjectRole {
@@ -589,6 +606,23 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ReplaceDecimalNumber {
             object: object.into(),
             number,
+        });
+        self
+    }
+
+    /// Replace the optional BarChart source metadata for one ordinary object.
+    ///
+    /// The payload is pointer-sized and validated before publication. Passing
+    /// `None` removes chart ownership while retaining the object's geometry,
+    /// style, role, and identity.
+    pub fn set_bar_metadata(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        metadata: Option<Arc<SemanticBarMetadata>>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetBarMetadata {
+            object: object.into(),
+            metadata,
         });
         self
     }
@@ -1792,6 +1826,28 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetBarMetadata { object, metadata } => {
+                    if metadata
+                        .as_ref()
+                        .is_some_and(|metadata| !metadata.is_valid())
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidBarMetadata {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.bar_metadata() != metadata.as_deref();
+                    if did_change {
+                        state.set_bar_metadata(metadata.clone());
+                    }
+                    changed.push(did_change);
+                }
                 SemanticMutation::SetInset2DView {
                     object,
                     camera_frame,
@@ -2940,6 +2996,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticNodeId,
     },
+    DuplicateBarMetadata {
+        index: usize,
+        object: SemanticNodeId,
+    },
     DuplicateStyle {
         index: usize,
         object: SemanticNodeId,
@@ -3105,6 +3165,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticNodeId,
     },
+    InvalidBarMetadata {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
     InvalidGeometryResource {
         index: usize,
         resource: crate::GeometryResourceHandle,
@@ -3170,15 +3234,28 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 "semantic transaction mutation {index} has invalid Graph declaration for {scope:?}: {reason}"
             ),
             Self::DuplicateForegroundScope { index, scope } => write!(
-                formatter, "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
+                formatter,
+                "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
             ),
-            Self::InvalidForegroundMember { index, scope, member } => write!(
-                formatter, "semantic transaction mutation {index} has duplicate or self foreground reference {member:?} under {scope:?}"
+            Self::InvalidForegroundMember {
+                index,
+                scope,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} has duplicate or self foreground reference {member:?} under {scope:?}"
             ),
-            Self::ForegroundUsesRemovedNode { index, scope, member } => write!(
-                formatter, "semantic transaction mutation {index} declares removed foreground member {member:?} under {scope:?}"
+            Self::ForegroundUsesRemovedNode {
+                index,
+                scope,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} declares removed foreground member {member:?} under {scope:?}"
             ),
-            Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
+            Self::SceneRevisionExhausted => {
+                write!(formatter, "Noon scene revision space exhausted")
+            }
             Self::InsertionOrderExhausted => {
                 write!(formatter, "Noon semantic insertion-order space exhausted")
             }
@@ -3194,7 +3271,11 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} uses unknown pending node {token:?}"
             ),
-            Self::PendingNodeKindMismatch { index, token, expected } => write!(
+            Self::PendingNodeKindMismatch {
+                index,
+                token,
+                expected,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} requires pending node {token:?} to be {expected:?}"
             ),
@@ -3210,31 +3291,62 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} mixes full and scalar style mutation on pending object {object:?}"
             ),
-            Self::PendingFamilyCycle { index, family, member } => write!(
+            Self::PendingFamilyCycle {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} creates a family cycle {family:?} -> {member:?}"
             ),
-            Self::PendingNotFamilyMember { index, family, member } => write!(
+            Self::PendingNotFamilyMember {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot reorder non-member {member:?} in family {family:?}"
             ),
-            Self::PendingSubscriptionUsesRemovedSignal { index, object, property, signal } => write!(
+            Self::PendingSubscriptionUsesRemovedSignal {
+                index,
+                object,
+                property,
+                signal,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot bind removed signal {signal:?} to {property:?} on pending object {object:?}"
             ),
-            Self::PendingFamilyEdgeUsesRemovedNode { index, family, member } => write!(
+            Self::PendingFamilyEdgeUsesRemovedNode {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot use removed node {member:?} in pending family edge for {family:?}"
             ),
-            Self::PendingFamilyOrderUsesRemovedNode { index, family, node } => write!(
+            Self::PendingFamilyOrderUsesRemovedNode {
+                index,
+                family,
+                node,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot use removed node {node:?} in pending family order for {family:?}"
             ),
-            Self::PendingNonFinitePropertyValue { index, object, property } => write!(
+            Self::PendingNonFinitePropertyValue {
+                index,
+                object,
+                property,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} to a non-finite value"
             ),
-            Self::PendingPropertyTypeMismatch { index, object, property, expected, actual } => write!(
+            Self::PendingPropertyTypeMismatch {
+                index,
+                object,
+                property,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} requiring {expected} to {actual}"
             ),
@@ -3250,7 +3362,14 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot set a non-finite style on pending object {object:?}"
             ),
-            Self::PendingSubscriptionTypeMismatch { index, object, property, signal, expected, actual } => write!(
+            Self::PendingSubscriptionTypeMismatch {
+                index,
+                object,
+                property,
+                signal,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot bind {actual} signal {signal:?} to {property:?} on pending object {object:?} requiring {expected}"
             ),
@@ -3281,8 +3400,20 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
-            Self::NonFiniteZIndex { index, node } => write!(formatter, "mutation {index} has non-finite z-index for {node:?}"),
-            Self::DuplicateZIndex { index, node } => write!(formatter, "mutation {index} duplicates z-index for {node:?}"),
+            Self::DuplicateBarMetadata { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats BarChart metadata replacement on object {}:{}",
+                object.slot(),
+                object.generation()
+            ),
+            Self::NonFiniteZIndex { index, node } => write!(
+                formatter,
+                "mutation {index} has non-finite z-index for {node:?}"
+            ),
+            Self::DuplicateZIndex { index, node } => write!(
+                formatter,
+                "mutation {index} duplicates z-index for {node:?}"
+            ),
             Self::DuplicateStyle { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats style replacement on object {}:{}",
@@ -3404,7 +3535,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
-            Self::InvalidObjectContent { index } => write!(formatter, "semantic transaction mutation {index}: object geometry contains non-finite values"),
+            Self::InvalidObjectContent { index } => write!(
+                formatter,
+                "semantic transaction mutation {index}: object geometry contains non-finite values"
+            ),
             Self::InvalidNodeObjectState { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an object with non-finite authored transform/style values"
@@ -3547,6 +3681,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::InvalidBarMetadata { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign invalid BarChart metadata to object {object:?}"
+            ),
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,
                 "semantic transaction mutation {index} references unavailable geometry resource {:?}",
@@ -3625,6 +3763,9 @@ mod base_tests;
 
 #[cfg(test)]
 mod content_tests;
+
+#[cfg(test)]
+mod bar_metadata_tests;
 
 #[cfg(test)]
 mod style_tests;

@@ -4,10 +4,10 @@
 //! the next explicit update; coordinate mapping, family traversal and mutation
 //! publication remain shared Rust operations.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use noon_core::{
-    Color, SemanticBarRole, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole,
+    Color, SemanticBarMetadata, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticObjectState, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry,
 };
 
@@ -119,7 +119,7 @@ impl ManimBarChart {
         direct_bar_nodes(&self.bars)?
             .into_iter()
             .map(|node| {
-                Ok(bar_role(
+                Ok(bar_metadata(
                     store
                         .semantic_object_state_checked(node)
                         .map_err(AuthoringError::from)?,
@@ -191,11 +191,13 @@ impl ManimBarChart {
     }
 }
 
-fn bar_role(state: &SemanticObjectState) -> Result<SemanticBarRole, CoordinateAuthoringError> {
-    match state.role() {
-        SemanticObjectRole::Bar(role) => Ok(role),
-        _ => Err(CoordinateAuthoringError::InvalidTopology),
-    }
+fn bar_metadata(
+    state: &SemanticObjectState,
+) -> Result<SemanticBarMetadata, CoordinateAuthoringError> {
+    state
+        .bar_metadata()
+        .copied()
+        .ok_or(CoordinateAuthoringError::InvalidTopology)
 }
 
 /// Prepare only the requested bars, plus all paint when explicitly recoloring.
@@ -233,13 +235,13 @@ fn prepare_value_update(
             .semantic_object_state_checked(node)
             .map_err(AuthoringError::from)?;
         let mut state = capture(node)?;
-        let mut role = bar_role(authored)?;
+        let mut metadata = bar_metadata(authored)?;
         let mut target = noon_core::SemanticTransactionNodeRef::from(node);
         let mut path = None;
         if let Some(&value) = values.get(index) {
-            if role.value == 0.0 {
+            if metadata.value == 0.0 {
                 // Manim admits a fresh leaf when the previous authored value was zero.
-                state = fresh_bar(frame, index, value, role)?;
+                state = fresh_bar(frame, index, value, metadata)?;
                 let fresh = transaction.create_node(SemanticNodeCreation::object(state.clone()));
                 transaction.remove_member(bars.node_id(), node);
                 transaction.add_member(bars.node_id(), fresh);
@@ -259,19 +261,19 @@ fn prepare_value_update(
                     (bounds.min_x + bounds.max_x) * 0.5,
                     (bounds.min_y + bounds.max_y) * 0.5,
                 );
-                let factor = (value / role.value).abs();
-                let old_edge = if role.value > 0.0 {
+                let factor = (value / metadata.value).abs();
+                let old_edge = if metadata.value > 0.0 {
                     bounds.min_y
                 } else {
                     bounds.max_y
                 };
-                let edge = if value / role.value < 0.0 {
-                    if role.value > 0.0 {
+                let edge = if value / metadata.value < 0.0 {
+                    if metadata.value > 0.0 {
                         1.0
                     } else {
                         -1.0
                     }
-                } else if role.value > 0.0 {
+                } else if metadata.value > 0.0 {
                     -1.0
                 } else {
                     1.0
@@ -298,11 +300,11 @@ fn prepare_value_update(
                     }
                 }
             }
-            role.value = value;
-            transaction.replace_role(target, SemanticObjectRole::Bar(role));
+            metadata.value = value;
+            transaction.set_bar_metadata(target, Some(Arc::new(metadata)));
         }
         if update_colors {
-            set_bar_color(&mut state.style, role.original_color);
+            set_bar_color(&mut state.style, metadata.original_color);
         }
         if target == noon_core::SemanticTransactionNodeRef::from(node) {
             if let Some(path) = path {
@@ -324,20 +326,20 @@ fn fresh_bar(
     frame: noon_geometry::AxesFrame,
     index: usize,
     value: f64,
-    role: SemanticBarRole,
+    metadata: SemanticBarMetadata,
 ) -> Result<SemanticObjectState, CoordinateAuthoringError> {
-    let (translation, scale, rotation) = bar_transform(frame, index, role.width, value)?;
+    let (translation, scale, rotation) = bar_transform(frame, index, metadata.width, value)?;
     let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
         size: noon_core::Vec2::new(1.0, 1.0),
     });
     state.transform.translation = translation;
     state.transform.scale = scale;
     state.transform.rotation_z = rotation;
-    state.style.fill_opacity = role.fill_opacity;
-    state.style.stroke_width = role.stroke_width;
+    state.style.fill_opacity = metadata.fill_opacity;
+    state.style.stroke_width = metadata.stroke_width;
     state.style.stroke = Some(SemanticPaint::Solid(noon_core::WHITE));
     state.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
-    state.set_role(SemanticObjectRole::Bar(SemanticBarRole { value, ..role }));
+    state.set_bar_metadata(Some(Arc::new(SemanticBarMetadata { value, ..metadata })));
     Ok(state)
 }
 
@@ -449,13 +451,13 @@ pub(crate) fn prepare(
         state.transform.scale = scale;
         state.transform.rotation_z = rotation_z;
         state.style = style;
-        state.set_role(SemanticObjectRole::Bar(SemanticBarRole {
+        state.set_bar_metadata(Some(Arc::new(SemanticBarMetadata {
             value,
             original_color: colors[index],
             width: options.bar_width,
             fill_opacity: options.bar_fill_opacity,
             stroke_width: options.bar_stroke_width,
-        }));
+        })));
         let bar = transaction.create_node(SemanticNodeCreation::object(state));
         transaction.add_member(bars, bar);
     }

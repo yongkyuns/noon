@@ -8,11 +8,11 @@ use noon_core::{
 };
 
 use super::{
-    lower_content, lower_semantic_geometry_value, lower_semantic_style, lower_semantic_style_value,
-    lower_semantic_transform, lower_semantic_transform_value, semantic_execution_object_id,
     SemanticCompiledSceneError, SemanticExecutionIndex, SemanticExecutionReachability,
     SemanticExecutionReachabilityUpdate, SemanticExecutionValueError, SemanticGeometryValueError,
-    SemanticLoweringError,
+    SemanticLoweringError, lower_content, lower_semantic_geometry_value, lower_semantic_style,
+    lower_semantic_style_value, lower_semantic_transform, lower_semantic_transform_value,
+    semantic_execution_object_id,
 };
 use crate::{CompiledObject, CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
 
@@ -70,10 +70,12 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
                 "semantic mutation {index} has no incremental live publication contract"
             ),
             Self::UpdaterTargetNotIndexed { target } => write!(
-                f, "live updater target {target:?} requires callback preorder enrollment before execution"
+                f,
+                "live updater target {target:?} requires callback preorder enrollment before execution"
             ),
             Self::RetroactiveUpdaterMutation { index } => write!(
-                f, "updater mutation {index} precedes the current live frame"
+                f,
+                "updater mutation {index} precedes the current live frame"
             ),
             Self::UnsupportedReactiveMembership { object } => write!(
                 f,
@@ -94,14 +96,20 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
                 node.generation()
             ),
             Self::PreparedValue { object, error } => {
-                write!(f, "semantic object {object:?} cannot lower for publication: {error}")
+                write!(
+                    f,
+                    "semantic object {object:?} cannot lower for publication: {error}"
+                )
             }
             Self::PreparedGeometry { object, error } => write!(
                 f,
                 "semantic object {object:?} geometry cannot lower for publication: {error}"
             ),
             Self::PreparedContent { object, error } => {
-                write!(f, "semantic object {object:?} content cannot lower for publication: {error}")
+                write!(
+                    f,
+                    "semantic object {object:?} content cannot lower for publication: {error}"
+                )
             }
             Self::PainterOrderRootRequired { family } => write!(
                 f,
@@ -312,6 +320,7 @@ fn validate_mutations(
             mutation,
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
+                | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
@@ -635,6 +644,7 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().1 = true;
                 }
             }
+            SemanticMutation::SetBarMetadata { .. } => {}
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::ReorderMember { .. }

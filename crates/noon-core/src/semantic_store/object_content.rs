@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{GeometryRef, SemanticImageContent, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
@@ -37,9 +39,12 @@ mod decimal_number;
 pub use decimal_number::SemanticDecimalNumber;
 
 /// Authored numeric input and constructor paint for an ordinary chart rectangle.
-/// These values cannot be recovered from geometry after user transforms/styles.
+///
+/// This is optional object metadata rather than a [`SemanticObjectRole`] variant:
+/// bar values cannot be recovered from geometry after user transforms/styles, but
+/// they must not enlarge the role carried by every ordinary semantic object.
 #[derive(Clone, Copy, Debug)]
-pub struct SemanticBarRole {
+pub struct SemanticBarMetadata {
     pub value: f64,
     pub original_color: crate::Color,
     pub width: f64,
@@ -47,18 +52,18 @@ pub struct SemanticBarRole {
     pub stroke_width: f64,
 }
 
-impl PartialEq for SemanticBarRole {
+impl PartialEq for SemanticBarMetadata {
     fn eq(&self, other: &Self) -> bool {
         self.bits() == other.bits()
     }
 }
-impl Eq for SemanticBarRole {}
-impl std::hash::Hash for SemanticBarRole {
+impl Eq for SemanticBarMetadata {}
+impl std::hash::Hash for SemanticBarMetadata {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.bits().hash(state);
     }
 }
-impl SemanticBarRole {
+impl SemanticBarMetadata {
     fn bits(&self) -> [u64; 8] {
         [
             self.value,
@@ -258,7 +263,6 @@ pub enum SemanticObjectRole {
     SampleSpaceHorizontalPart,
     /// Identifies an ordinary retained rectangle in a Manim SampleSpace vertical partition.
     SampleSpaceVerticalPart,
-    Bar(SemanticBarRole),
 }
 
 impl SemanticObjectRole {
@@ -267,7 +271,6 @@ impl SemanticObjectRole {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
             Self::FunctionPlot(range) => range.is_valid(),
-            Self::Bar(bar) => bar.is_valid(),
             Self::Ordinary
             | Self::Camera2D
             | Self::Inset2DView(_)
@@ -359,6 +362,10 @@ pub struct SemanticObjectState {
     // metadata payload in every authored object state.
     decimal_number: Option<Arc<SemanticDecimalNumber>>,
     text_presentation_baseline: Option<TextPresentationBaseline>,
+    /// Optional, pointer-sized BarChart source metadata. The immutable payload
+    /// is allocated only for retained chart bars, so ordinary scene objects do
+    /// not carry a BarChart-sized role variant.
+    bar_metadata: Option<Arc<SemanticBarMetadata>>,
     signal_bindings: Vec<SemanticSignalBinding>,
 }
 
@@ -372,14 +379,16 @@ impl SemanticObjectState {
             role: SemanticObjectRole::default(),
             decimal_number: None,
             text_presentation_baseline: None,
+            bar_metadata: None,
             signal_bindings: Vec::new(),
         }
     }
 
     /// Return receiver-owned state with target visual state.
     ///
-    /// Persistent `become` keeps painter provenance, role, bindings and identity
-    /// on the receiver while copying the target's content, transform and style.
+    /// Persistent `become` keeps painter provenance, role, BarChart metadata,
+    /// bindings and identity on the receiver while copying the target's content,
+    /// transform and style.
     /// Keep this as an exhaustive struct literal: adding a new authored-state field
     /// must fail to compile until its ownership is explicitly classified here.
     pub fn with_visual_state_from(&self, target: &Self) -> Self {
@@ -393,6 +402,7 @@ impl SemanticObjectState {
             // number or formatting inputs. Explicit set_value changes those.
             decimal_number: self.decimal_number.clone(),
             text_presentation_baseline: self.text_presentation_baseline,
+            bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
         }
     }
@@ -441,6 +451,17 @@ impl SemanticObjectState {
 
     pub fn set_decimal_number(&mut self, value: Option<SemanticDecimalNumber>) {
         self.decimal_number = value.map(Arc::new);
+    }
+
+    /// Authored BarChart source values for an ordinary retained rectangle.
+    pub fn bar_metadata(&self) -> Option<&SemanticBarMetadata> {
+        self.bar_metadata.as_deref()
+    }
+
+    /// Assign BarChart metadata through a semantic transaction when the object
+    /// is published. This setter exists for detached construction only.
+    pub fn set_bar_metadata(&mut self, metadata: Option<Arc<SemanticBarMetadata>>) {
+        self.bar_metadata = metadata;
     }
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {
@@ -516,7 +537,7 @@ impl From<TextResourceHandle> for ObjectContentRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
+    use crate::{Color, GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
 
     #[test]
     fn numeric_metadata_is_an_optional_shared_pointer() {
@@ -557,6 +578,13 @@ mod tests {
         receiver.set_role(SemanticObjectRole::Camera2D);
         let receiver_baseline = TextPresentationBaseline::new(36.0, 1.25).unwrap();
         receiver.set_text_presentation_baseline(receiver_baseline);
+        receiver.set_bar_metadata(Some(Arc::new(SemanticBarMetadata {
+            value: 3.0,
+            original_color: Color::RED,
+            width: 0.6,
+            fill_opacity: 0.7,
+            stroke_width: 3.0,
+        })));
         let mut target = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
         target.transform.translation = SemanticVec3::new(3.0, -2.0, 0.0);
         target.style.object_opacity = 0.25;
@@ -564,6 +592,13 @@ mod tests {
         target.assign_insertion_order(99);
         target.set_role(SemanticObjectRole::ArrowEndTip);
         target.set_text_presentation_baseline(TextPresentationBaseline::new(72.0, 3.0).unwrap());
+        target.set_bar_metadata(Some(Arc::new(SemanticBarMetadata {
+            value: 9.0,
+            original_color: Color::BLUE,
+            width: 0.4,
+            fill_opacity: 0.5,
+            stroke_width: 1.0,
+        })));
 
         let copied = receiver.with_visual_state_from(&target);
 
@@ -573,7 +608,19 @@ mod tests {
         assert_eq!(copied.presentation(), receiver.presentation());
         assert_eq!(copied.role(), receiver.role());
         assert_eq!(copied.text_presentation_baseline(), Some(receiver_baseline));
+        assert_eq!(copied.bar_metadata(), receiver.bar_metadata());
         assert_eq!(copied.signal_bindings(), receiver.signal_bindings());
+    }
+
+    #[test]
+    fn optional_bar_metadata_is_pointer_sized_and_does_not_enlarge_object_roles() {
+        use std::mem::size_of;
+
+        assert_eq!(
+            size_of::<Option<Arc<SemanticBarMetadata>>>(),
+            size_of::<usize>()
+        );
+        assert!(size_of::<SemanticObjectRole>() <= 3 * size_of::<usize>());
     }
 
     #[test]
