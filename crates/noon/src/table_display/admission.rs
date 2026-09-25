@@ -69,9 +69,10 @@ impl TablePublisher<'_, '_> {
         match self {
             Self::Store(store) => {
                 let mut store = store.borrow_mut();
-                let mut publish = |store: &mut noon_core::SemanticStore, tx| {
-                    tx.apply(store).map_err(AuthoringError::from)
-                };
+                let mut publish =
+                    |store: &mut noon_core::SemanticStore, tx: SemanticMutationTransaction| {
+                        tx.apply(store).map_err(AuthoringError::from)
+                    };
                 operation(&mut store, &mut publish).map_err(Into::into)
             }
             Self::Scene(scene) => scene
@@ -167,8 +168,8 @@ impl GridLayout {
     ) -> Result<Self, TableAuthoringError> {
         let row_offset = usize::from(column_labels.is_some());
         let column_offset = usize::from(row_labels.is_some());
-        let mut widths = vec![0.0; shape.columns + column_offset];
-        let mut heights = vec![0.0; shape.rows + row_offset];
+        let mut widths: Vec<f64> = vec![0.0; shape.columns + column_offset];
+        let mut heights: Vec<f64> = vec![0.0; shape.rows + row_offset];
         for (index, bounds) in entry_bounds.iter().enumerate() {
             widths[index % shape.columns + column_offset] =
                 widths[index % shape.columns + column_offset].max(bounds.width());
@@ -318,10 +319,10 @@ impl GridLayout {
                 } else {
                     ys[row - 1] - self.heights[row - 1] / 2.0 - self.options.v_buff / 2.0
                 };
-                let mut s = SemanticObjectState::new(GeometryRef::line(
-                    noon_core::Vec2::new(min_x as f32, y as f32),
-                    noon_core::Vec2::new(max_x as f32, y as f32),
-                ));
+                let mut s = SemanticObjectState::new(noon_core::StoredGeometry::Line {
+                    start: noon_core::Vec2::new(min_x as f32, y as f32),
+                    end: noon_core::Vec2::new(max_x as f32, y as f32),
+                });
                 s.style = line_style();
                 output.push(s)
             }
@@ -335,10 +336,10 @@ impl GridLayout {
                 } else {
                     xs[column - 1] + self.widths[column - 1] / 2.0 + self.options.h_buff / 2.0
                 };
-                let mut s = SemanticObjectState::new(GeometryRef::line(
-                    noon_core::Vec2::new(x as f32, min_y as f32),
-                    noon_core::Vec2::new(x as f32, max_y as f32),
-                ));
+                let mut s = SemanticObjectState::new(noon_core::StoredGeometry::Line {
+                    start: noon_core::Vec2::new(x as f32, min_y as f32),
+                    end: noon_core::Vec2::new(x as f32, max_y as f32),
+                });
                 s.style = line_style();
                 output.push(s)
             }
@@ -357,7 +358,6 @@ fn line_style() -> SemanticStyle {
         stroke_join: noon_core::StrokeJoin::Miter,
         stroke_cap: noon_core::StrokeCap::Butt,
         object_opacity: 1.0,
-        intrinsic_text: Default::default(),
     }
 }
 
@@ -409,18 +409,28 @@ fn make_table(
         highlight_family: MobjectFamily::from_node(Rc::clone(&store), resolve(value.highlights)?)?,
         row_label_family: value
             .row_labels
-            .map(|t| MobjectFamily::from_node(Rc::clone(&store), resolve(t)?))
+            .map(|t| {
+                MobjectFamily::from_node(
+                    Rc::clone(&store),
+                    resolve(t).map_err(AuthoringError::from)?,
+                )
+            })
             .transpose()?,
         column_label_family: value
             .column_labels
-            .map(|t| MobjectFamily::from_node(Rc::clone(&store), resolve(t)?))
+            .map(|t| {
+                MobjectFamily::from_node(
+                    Rc::clone(&store),
+                    resolve(t).map_err(AuthoringError::from)?,
+                )
+            })
             .transpose()?,
         options,
     })
 }
 fn stage(
     tx: &mut SemanticMutationTransaction,
-    entries: Vec<noon_core::SemanticLocalNodeToken>,
+    entries: Vec<noon_core::SemanticTransactionNodeRef>,
     shape: TableShape,
     lines: Vec<SemanticObjectState>,
     rows: Option<&[Mobject]>,
@@ -430,39 +440,39 @@ fn stage(
     for group in entries.chunks(shape.columns) {
         let row = tx.create_node(SemanticNodeCreation::family());
         for node in group {
-            tx.add_member(row, *node)
+            tx.add_member(row, *node);
         }
-        tx.add_member(entries_root, row)
+        tx.add_member(entries_root, row);
     }
     let lines_root = tx.create_node(SemanticNodeCreation::family());
     for state in lines {
         let node = tx.create_node(SemanticNodeCreation::object(state));
-        tx.add_member(lines_root, node)
+        tx.add_member(lines_root, node);
     }
     let highlights = tx.create_node(SemanticNodeCreation::family());
     let row_labels = rows.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
-            tx.add_member(family, item.node_id())
+            tx.add_member(family, item.node_id());
         }
         family
     });
     let column_labels = columns.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
-            tx.add_member(family, item.node_id())
+            tx.add_member(family, item.node_id());
         }
         family
     });
     let root = tx.create_node(SemanticNodeCreation::family());
     for member in [entries_root, lines_root, highlights] {
-        tx.add_member(root, member)
+        tx.add_member(root, member);
     }
     if let Some(member) = row_labels {
-        tx.add_member(root, member)
+        tx.add_member(root, member);
     }
     if let Some(member) = column_labels {
-        tx.add_member(root, member)
+        tx.add_member(root, member);
     }
     StagedTable {
         root,
@@ -609,11 +619,11 @@ fn commit_existing(
                 placement.object.node_id(),
                 SemanticObjectProperty::Translation,
                 placement.translation,
-            )
+            );
         }
         let value = stage(
             &mut tx,
-            entries.iter().map(|item| item.node_id()).collect(),
+            entries.iter().map(|item| item.node_id().into()).collect(),
             shape,
             lines,
             rows.as_deref(),
@@ -847,10 +857,11 @@ pub(super) fn entries(family: &MobjectFamily) -> Result<Vec<Mobject>, TableAutho
 pub(super) fn rows(family: &MobjectFamily) -> Result<Vec<Vec<Mobject>>, TableAuthoringError> {
     let store = Rc::clone(family.integration_store());
     family.validate()?;
-    store
+    let row_nodes = store
         .borrow()
         .semantic_family_members_checked(family.node_id())
-        .map_err(AuthoringError::from)?
+        .map_err(AuthoringError::from)?;
+    row_nodes
         .into_iter()
         .map(|row| {
             store
