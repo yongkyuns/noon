@@ -70,8 +70,17 @@ fn assert_matching_foreground_order(source_is_foreground: bool) {
         .unwrap();
     assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
     let activated = store.scene_revision();
-    for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-        session.advance_segment_to(segment, time).unwrap();
+    // Revisit earlier effective frames before committing segment completion.
+    // Temporary matching occurrences must not accumulate or change membership.
+    for (index, time) in [0.0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.0, 0.75, 1.0]
+        .into_iter()
+        .enumerate()
+    {
+        if index < 5 {
+            session.advance_segment_to(segment, time).unwrap();
+        } else {
+            session.seek(time).unwrap();
+        }
         let ids = session
             .painter_order()
             .iter()
