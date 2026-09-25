@@ -63,7 +63,7 @@ pub(crate) fn publish_path_family(
                 .require_resource_creation_at_root(&store, root)
                 .map_err(AuthoringError::from)?;
         }
-        let family = crate::coordinate_authoring::area::publish_path_family_with(
+        let family = crate::family_authoring::publish_path_family_with(
             &mut store_rc.borrow_mut(),
             paths,
             |store, transaction| {
@@ -74,7 +74,7 @@ pub(crate) fn publish_path_family(
         )?;
         return MobjectFamily::from_node(store_rc, family);
     }
-    let family = crate::coordinate_authoring::area::publish_path_family_with(
+    let family = crate::family_authoring::publish_path_family_with(
         &mut store_rc.borrow_mut(),
         paths,
         |store, transaction| transaction.apply(store).map_err(AuthoringError::from),

@@ -3,6 +3,14 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn live_create_path_family(
+        &mut self,
+        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.active_live_player()?.live_create_path_family(paths)
+    }
+
     pub(super) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,

@@ -815,7 +815,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<MobjectFamily, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let family = crate::coordinate_authoring::area::publish_path_family_with(
+        let family = crate::family_authoring::publish_path_family_with(
             &mut self.store.borrow_mut(),
             paths,
             |store, transaction| {

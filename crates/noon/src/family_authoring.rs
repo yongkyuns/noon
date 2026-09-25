@@ -1,5 +1,8 @@
 //! Typed handle for authoritative semantic family membership.
 
+mod path_admission;
+pub(crate) use path_admission::publish_path_family_with;
+
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
