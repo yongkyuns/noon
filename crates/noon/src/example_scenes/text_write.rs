@@ -83,7 +83,7 @@ impl LiveContinuation for TextWrite {
 }
 
 pub fn program() -> Result<LiveProgram<TextWrite>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut moving = scene.text("MOVE").map_err(|error| error.to_string())?;
     moving
         .set_translation(-2.0, -1.0)

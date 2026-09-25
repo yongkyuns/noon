@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn markup_source_parts_use_decoded_utf8_ranges() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let text = scene
             .text(MarkupText::new("<b>é</b> &amp; <i>é</i>"))
             .unwrap();
@@ -343,8 +343,8 @@ mod tests {
 
     #[test]
     fn malformed_markup_does_not_import_resources_or_allocate_objects() {
-        let scene = crate::Scene::new();
-        let store = scene.integration_store();
+        let mut scene = crate::Scene::new();
+        let store = std::rc::Rc::clone(scene.integration_store());
         let before = store.borrow().text_resources().stats();
         for source in [
             "<b>unclosed",

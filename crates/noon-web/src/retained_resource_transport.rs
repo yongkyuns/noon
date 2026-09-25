@@ -1579,39 +1579,37 @@ impl TransportTextLayoutBackendKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon::integration::RetainedScene;
-    use noon::{MathTypst, Typst};
+    use noon::{MathTypst, Scene, Typst};
     use noon_core::TextSourceKind;
 
-    fn text_handles(scene: &RetainedScene) -> Vec<TextResourceHandle> {
-        scene
-            .objects()
+    fn text_handles(objects: &[noon::Mobject]) -> Vec<TextResourceHandle> {
+        objects
             .iter()
-            .filter_map(|object| object.content.text())
+            .map(|object| object.state().unwrap().content.text().unwrap())
             .collect()
     }
 
     #[test]
     fn typst_resource_bundle_round_trips_without_python_or_placeholder_geometry() {
-        let mut scene = RetainedScene::new();
-        scene
-            .add_typst(Typst::new("*Hello* from _Typst!_"))
-            .unwrap();
-        scene
-            .add_math_typst(MathTypst::new("frac(x, 2)").with_font_size(72.0))
-            .unwrap();
-        scene
-            .add_typst(Typst::new(
-                "#line(length: 20pt, stroke: (paint: red, thickness: 2pt, cap: \"round\", join: \"bevel\"))",
-            ))
-            .unwrap();
-
-        let original_handles = text_handles(&scene);
+        let mut scene = Scene::new();
+        let objects = vec![
+            scene.typst(Typst::new("*Hello* from _Typst!_")).unwrap(),
+            scene
+                .math_typst(MathTypst::new("frac(x, 2)").with_font_size(72.0))
+                .unwrap(),
+            scene
+                .typst(Typst::new(
+                    "#line(length: 20pt, stroke: (paint: red, thickness: 2pt, cap: \"round\", join: \"bevel\"))",
+                ))
+                .unwrap(),
+        ];
+        let original_handles = text_handles(&objects);
+        let source = scene.integration_store().borrow();
         let bundle = RetainedResourceBundle::capture(
             original_handles.iter().copied(),
-            scene.texts(),
-            scene.geometries(),
-            scene.fonts(),
+            source.text_resources(),
+            source.geometry_resources(),
+            source.font_resources(),
         )
         .unwrap();
         assert_eq!(bundle.text_count(), 3);
@@ -1629,7 +1627,7 @@ mod tests {
             assert_ne!(original.arena, local.arena);
             assert!(installed.texts().get(original).is_none());
             let resource = installed.texts().get(local).unwrap();
-            let original_resource = scene.texts().get(original).unwrap();
+            let original_resource = source.text_resources().get(original).unwrap();
             assert_eq!(
                 resource.vector_items.len(),
                 original_resource.vector_items.len()
@@ -1654,16 +1652,19 @@ mod tests {
 
     #[test]
     fn capture_is_dependency_closed_and_deduplicates_shared_font_bytes() {
-        let mut scene = RetainedScene::new();
-        scene.add_typst(Typst::new("A")).unwrap();
-        scene.add_typst(Typst::new("B")).unwrap();
-        let handles = text_handles(&scene);
+        let mut scene = Scene::new();
+        let objects = vec![
+            scene.typst(Typst::new("A")).unwrap(),
+            scene.typst(Typst::new("B")).unwrap(),
+        ];
+        let handles = text_handles(&objects);
+        let source = scene.integration_store().borrow();
 
         let bundle = RetainedResourceBundle::capture(
             handles.iter().copied(),
-            scene.texts(),
-            scene.geometries(),
-            scene.fonts(),
+            source.text_resources(),
+            source.geometry_resources(),
+            source.font_resources(),
         )
         .unwrap();
 
@@ -1673,15 +1674,18 @@ mod tests {
 
     #[test]
     fn sparse_addition_reuses_installed_dependencies_and_preserves_handles() {
-        let mut scene = RetainedScene::new();
-        scene.add_typst(Typst::new("A")).unwrap();
-        scene.add_typst(Typst::new("B")).unwrap();
-        let handles = text_handles(&scene);
+        let mut scene = Scene::new();
+        let objects = vec![
+            scene.typst(Typst::new("A")).unwrap(),
+            scene.typst(Typst::new("B")).unwrap(),
+        ];
+        let handles = text_handles(&objects);
+        let source = scene.integration_store().borrow();
         let base = RetainedResourceBundle::capture(
             [handles[0]],
-            scene.texts(),
-            scene.geometries(),
-            scene.fonts(),
+            source.text_resources(),
+            source.geometry_resources(),
+            source.font_resources(),
         )
         .unwrap();
         let mut inventory = base.inventory();
@@ -1691,9 +1695,9 @@ mod tests {
         let first_local = installed.resolve_text_handle(first_transport).unwrap();
         let mut addition = RetainedResourceBundle::capture_additions(
             handles.iter().copied(),
-            scene.texts(),
-            scene.geometries(),
-            scene.fonts(),
+            source.text_resources(),
+            source.geometry_resources(),
+            source.font_resources(),
             &inventory,
         )
         .unwrap();
@@ -1718,9 +1722,9 @@ mod tests {
 
         let repeated = RetainedResourceBundle::capture_additions(
             handles,
-            scene.texts(),
-            scene.geometries(),
-            scene.fonts(),
+            source.text_resources(),
+            source.geometry_resources(),
+            source.font_resources(),
             &inventory,
         )
         .unwrap();

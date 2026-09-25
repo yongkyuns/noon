@@ -172,6 +172,64 @@ pub async fn create_direct_math_typst_text_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Build a direct Rust/WASM canvas from one canonical Scene containing Typst
+/// and MathTypst. JavaScript supplies only the source strings and canvas.
+#[wasm_bindgen(js_name = createDirectTypstCanvasRenderer)]
+pub async fn create_direct_typst_canvas_renderer(
+    canvas: OffscreenCanvas,
+    typst_source: &str,
+    math_typst_source: &str,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let mut scene = noon::Scene::new();
+    if !typst_source.is_empty() {
+        let label = scene
+            .typst(
+                noon::Typst::new(typst_source)
+                    .with_font_size(64.0)
+                    .move_to(Vec2::new(0.0, 1.15)),
+            )
+            .map_err(js_error)?;
+        scene.add(&label).map_err(js_error)?;
+    }
+    if !math_typst_source.is_empty() {
+        let equation = scene
+            .math_typst(
+                noon::MathTypst::new(math_typst_source)
+                    .with_font_size(72.0)
+                    .move_to(Vec2::new(0.0, -1.0)),
+            )
+            .map_err(js_error)?;
+        scene.add(&equation).map_err(js_error)?;
+    }
+    if typst_source.is_empty() && math_typst_source.is_empty() {
+        return Err(js_message(
+            "direct Typst canvas requires at least one text object",
+        ));
+    }
+    let session = scene.execution_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Build one centered canonical Typst object for raster-differential fixtures.
+#[wasm_bindgen(js_name = createDirectSingleTypstCanvasRenderer)]
+pub async fn create_direct_single_typst_canvas_renderer(
+    canvas: OffscreenCanvas,
+    source: &str,
+    math: bool,
+    font_size: f32,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let mut scene = noon::Scene::new();
+    let object = if math {
+        scene.math_typst(noon::MathTypst::new(source).with_font_size(font_size))
+    } else {
+        scene.typst(noon::Typst::new(source).with_font_size(font_size))
+    }
+    .map_err(js_error)?;
+    scene.add(&object).map_err(js_error)?;
+    let session = scene.execution_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that typed Rust semantic animation, camera, and canonical text
 /// reach the direct mixed renderer without a scene document or execution mirror.
 #[wasm_bindgen(js_name = createDirectExecutionSmokeRenderer)]

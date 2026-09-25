@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn semantic_text_parts_reuse_resource_identity_across_object_presentation_edits() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut label = scene.text(Text::new("Noon Noon")).unwrap();
         let resource = label.state().unwrap().content.text().unwrap();
         let before = label.text_source_parts_for("Noon").unwrap();

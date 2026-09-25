@@ -1145,9 +1145,9 @@ impl<'a> LiveSession<'a> {
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state =
-            crate::text_authoring::typst_state(self.store, text).map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
     /// Compile and publish one detached MathTypst object through this live session.
@@ -1158,21 +1158,34 @@ impl<'a> LiveSession<'a> {
     ) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::math_typst_state(self.store, text)
-            .map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_math_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
     #[cfg(feature = "typst")]
-    fn create_detached_mobject(
+    fn create_compiled_text(
         &mut self,
-        state: SemanticObjectState,
+        admission: crate::text_authoring::TypstAdmission,
     ) -> Result<Mobject, LiveSessionError> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
-        let result = self.apply(transaction)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one detached primitive creation has one exact semantic impact")
+            unreachable!("one Typst admission creates one detached semantic node")
         };
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }

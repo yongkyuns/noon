@@ -920,6 +920,13 @@ impl Scene {
             .expect("scene execution component is not initialized")
     }
 
+    /// Borrow the Scene-owned execution component when this Scene has crossed
+    /// the execution boundary. Feature admissions use this to publish their
+    /// prepared resources through the same atomic root transaction as geometry.
+    pub(crate) fn running_execution_mut(&mut self) -> Option<&mut ExecutionSession> {
+        self.execution.as_mut()
+    }
+
     pub(crate) fn owned_live(&mut self) -> LiveSession<'_> {
         let root = self.root;
         let store = &self.store;

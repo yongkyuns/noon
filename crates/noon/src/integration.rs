@@ -20,8 +20,6 @@
 //! If raw edits have already invalidated a session, explicitly discard/rebuild it
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
-//! The retained text adapter below is still needed by explicit transport callers
-//! and is deletion-owned by #959. It is not the ordinary Scene authoring API.
 
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
@@ -56,8 +54,6 @@ pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_m
 pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;
 #[cfg(feature = "typst")]
 pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
-#[cfg(any(feature = "native-text", feature = "typst"))]
-pub use crate::text_authoring::{RetainedMobject, RetainedScene};
 pub use crate::z_index::{effective_z_index, publish_z_index};
 pub use noon_core::{
     GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,

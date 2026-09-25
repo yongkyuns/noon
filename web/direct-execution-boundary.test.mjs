@@ -36,6 +36,8 @@ for (const required of [
   "session.camera()",
   "ExecutionSession::from_semantic_store",
   "create_from_execution_session",
+  "createDirectTypstCanvasRenderer",
+  "createDirectSingleTypstCanvasRenderer",
   "activate_animation",
   "Mobject::from_text",
   "Text::new(\"Noon\")",
