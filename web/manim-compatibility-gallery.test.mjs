@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 28);
+assert.equal(gallery.examples.length, 29);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -45,6 +45,7 @@ assert.deepEqual(
     "noon-sample-space",
     "noon-polar-plane",
     "noon-zoomed-scene",
+    "noon-styled-graphs",
   ],
 );
 

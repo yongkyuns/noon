@@ -451,6 +451,29 @@
       "thumbnail_alt": "A focused point shown with a zoom camera frame",
       "thumbnail_time": 0.5,
       "order": 1260
+    },
+    {
+      "id": "noon-styled-graphs",
+      "title": "StyledGraphs",
+      "summary": "Compare directed and undirected graphs with shared vertex fills, outlines, edge colors and explicit layouts.",
+      "status": "ready",
+      "path": "python/examples/styled_graph.py",
+      "category": "manim-compatible/graphs",
+      "features": [
+        "Graph",
+        "DiGraph",
+        "vertex_config",
+        "edge_config",
+        "explicit layout",
+        "Manim-compatible"
+      ],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "graph-style",
+      "thumbnail": "thumbnails/manim/styled-graphs.png",
+      "thumbnail_alt": "Two green triangular graphs with translucent red vertices and blue outlines",
+      "thumbnail_time": 0,
+      "order": 1270
     }
   ]
 }
