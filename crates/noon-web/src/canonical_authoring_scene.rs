@@ -8,10 +8,10 @@ mod coordinates;
 mod graph;
 #[cfg(target_arch = "wasm32")]
 mod matrix;
-#[cfg(target_arch = "wasm32")]
-mod table;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
+#[cfg(target_arch = "wasm32")]
+mod table;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]

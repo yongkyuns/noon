@@ -179,3 +179,21 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
 
   return report;
 }
+
+// Drive feature assertions through the ordinary Python continuation/player path.
+// Scene source owns its assertions; this helper only owns browser lifetime.
+export async function qualifyPythonPlayback(context, baseUrl, source, frameTimes) {
+  assert.ok(frameTimes.length > 1 && frameTimes.at(-1) > 0);
+  const page = await context.newPage();
+  try {
+    page.setDefaultTimeout(90_000);
+    await page.goto(`${baseUrl}/web/manim-raster-host.html`);
+    await page.waitForFunction(() => window.noonHostRaster);
+    return await page.evaluate(async ({ source, frameTimes }) => {
+      await window.noonHostRaster.load(source, frameTimes.at(-1));
+      return window.noonHostRaster.renderThrough(frameTimes.length - 1, frameTimes);
+    }, { source, frameTimes });
+  } finally {
+    await page.close();
+  }
+}

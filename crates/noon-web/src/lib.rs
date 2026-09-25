@@ -27,8 +27,6 @@ mod authoring_latex;
 pub use authoring_latex::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_matrix;
-#[cfg(target_arch = "wasm32")]
-mod authoring_table;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
@@ -47,6 +45,8 @@ mod authoring_sample_space;
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
 mod authoring_synchronized_plotting;
+#[cfg(target_arch = "wasm32")]
+mod authoring_table;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -138,8 +138,6 @@ pub use authoring_options::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plot_presentation::*;
 #[cfg(target_arch = "wasm32")]
-pub use authoring_table::*;
-#[cfg(target_arch = "wasm32")]
 pub use authoring_plotting::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_polar_plane::*;
@@ -147,6 +145,8 @@ pub use authoring_polar_plane::*;
 pub use authoring_sample_space::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_synchronized_plotting::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_table::*;
 pub use canonical_authoring_scene::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use determinism::*;

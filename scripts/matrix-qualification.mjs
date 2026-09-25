@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
+import { qualifyPairedAuthoring, qualifyPythonPlayback } from "./paired-authoring-qualification.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_MATRIX_ARTIFACTS ?? "matrix-artifacts",
@@ -9,12 +9,7 @@ await qualifyPairedAuthoring({
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
-    const page = await context.newPage();
-    try {
-      page.setDefaultTimeout(90_000);
-      await page.goto(`${baseUrl}/web/manim-raster-host.html`);
-      await page.waitForFunction(() => window.noonHostRaster);
-      const source = `from noon import *
+    const source = `from noon import *
 
 class MatrixLifecycle(Scene):
     async def construct(self):
@@ -56,17 +51,11 @@ class MatrixLifecycle(Scene):
         self.wait(0.05)
 
 `;
-      const result = await page.evaluate(async source => {
-        await window.noonHostRaster.load(source, 0.1);
-        return window.noonHostRaster.renderThrough(2, [0, 0.05, 0.1]);
-      }, source);
-      assert.equal(result.rendererBackend, expectedBackend);
-      assert.equal(result.presented, true);
-      assert.equal(result.objectCount, 12);
-      assert.ok(Math.abs(result.authoredDuration - 0.1) < 1e-6);
-      return result;
-    } finally {
-      await page.close();
-    }
+    const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1]);
+    assert.equal(result.rendererBackend, expectedBackend);
+    assert.equal(result.presented, true);
+    assert.equal(result.objectCount, 12);
+    assert.ok(Math.abs(result.authoredDuration - 0.1) < 1e-6);
+    return result;
   },
 });
