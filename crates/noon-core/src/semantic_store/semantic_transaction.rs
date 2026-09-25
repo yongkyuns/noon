@@ -2045,14 +2045,7 @@ impl SemanticMutationTransaction {
                         .or_insert_with(|| catalog.updater_registrations(*target));
                     insert_updater_registration(registrations, registration, *position)
                         .map_err(|error| updater_edit_error(index, *target, error))?;
-                    changed.push(match scope {
-                        SemanticTransactionNodeRef::Existing(scope) => {
-                            store.semantic_table_layout(*scope).map_err(|error| {
-                                SemanticMutationTransactionError::Node { index, error }
-                            })? != Some(*layout)
-                        }
-                        SemanticTransactionNodeRef::Pending(_) => true,
-                    });
+                    changed.push(true);
                 }
                 SemanticMutation::AddScalarSignalTrack {
                     signal,
