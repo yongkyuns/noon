@@ -1,7 +1,7 @@
 use super::wasm::CanonicalAuthoringSceneContext;
 use crate::{
-    WasmLatexCompiler, WasmMatrixHandle, WasmMatrixOptions, WasmMobjectMatrixRows,
-    authoring_error::js_error,
+    authoring_error::js_error, WasmLatexCompiler, WasmMatrixHandle, WasmMatrixOptions,
+    WasmMobjectMatrixRows,
 };
 use wasm_bindgen::prelude::*;
 
@@ -48,12 +48,24 @@ impl CanonicalAuthoringSceneContext {
         options: WasmMatrixOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmMatrixHandle, JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_create_matrix(compiler, text_rows(rows)?, options.options)
+        let rows = text_rows(rows)?;
+        if self.inner.player_ownership.is_unstarted() {
+            noon::Matrix::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
             .map(WasmMatrixHandle::new)
             .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_matrix(compiler, rows, options.options)
+                .map(WasmMatrixHandle::new)
+                .map_err(js_error)
+        }
     }
     #[wasm_bindgen(js_name = liveCreateIntegerMatrix)]
     pub fn live_create_integer_matrix(
@@ -62,12 +74,24 @@ impl CanonicalAuthoringSceneContext {
         options: WasmMatrixOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmMatrixHandle, JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_create_integer_matrix(compiler, number_rows(rows)?, options.options)
+        let rows = number_rows(rows)?;
+        if self.inner.player_ownership.is_unstarted() {
+            noon::IntegerMatrix::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
             .map(|value| WasmMatrixHandle::new(value.into_matrix()))
             .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_integer_matrix(compiler, rows, options.options)
+                .map(|value| WasmMatrixHandle::new(value.into_matrix()))
+                .map_err(js_error)
+        }
     }
     #[wasm_bindgen(js_name = liveCreateDecimalMatrix)]
     pub fn live_create_decimal_matrix(
@@ -76,12 +100,28 @@ impl CanonicalAuthoringSceneContext {
         options: WasmMatrixOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmMatrixHandle, JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_create_decimal_matrix(compiler, number_rows(rows)?, options.options)
+        let rows = number_rows(rows)?;
+        if self.inner.player_ownership.is_unstarted() {
+            noon::DecimalMatrix::from_rows_with_format_and_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                noon::DecimalFormat {
+                    decimal_places: 1,
+                    ..Default::default()
+                },
+                options.options,
+            )
             .map(|value| WasmMatrixHandle::new(value.into_matrix()))
             .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_decimal_matrix(compiler, rows, options.options)
+                .map(|value| WasmMatrixHandle::new(value.into_matrix()))
+                .map_err(js_error)
+        }
     }
     #[wasm_bindgen(js_name = liveCreateMobjectMatrix)]
     pub fn live_create_mobject_matrix(
@@ -90,11 +130,23 @@ impl CanonicalAuthoringSceneContext {
         options: WasmMatrixOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmMatrixHandle, JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_create_mobject_matrix(compiler, rows.entries(), options.options)
+        let rows = rows.entries();
+        if self.inner.player_ownership.is_unstarted() {
+            noon::MobjectMatrix::from_rows_with_options(
+                &mut self.inner.scene,
+                compiler,
+                rows,
+                options.options,
+            )
             .map(|value| WasmMatrixHandle::new(value.into_matrix()))
             .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_mobject_matrix(compiler, rows, options.options)
+                .map(|value| WasmMatrixHandle::new(value.into_matrix()))
+                .map_err(js_error)
+        }
     }
 }

@@ -354,9 +354,15 @@ impl DecimalMatrix {
         I: IntoIterator<Item = J>,
         J: IntoIterator<Item = f64>,
     {
-        Self::publish_scene(scene, backend, rows, format, MatrixOptions::default())
+        Self::from_rows_with_format_and_options(
+            scene,
+            backend,
+            rows,
+            format,
+            MatrixOptions::default(),
+        )
     }
-    fn publish_scene<I, J>(
+    pub fn from_rows_with_format_and_options<I, J>(
         scene: &mut Scene,
         backend: &mut impl LatexBackend,
         rows: I,
@@ -458,6 +464,18 @@ impl IntegerMatrix {
         I: IntoIterator<Item = J>,
         J: IntoIterator<Item = f64>,
     {
+        Self::from_rows_with_options(scene, backend, rows, MatrixOptions::default())
+    }
+    pub fn from_rows_with_options<I, J>(
+        scene: &mut Scene,
+        backend: &mut impl LatexBackend,
+        rows: I,
+        options: MatrixOptions,
+    ) -> Result<Self, MatrixAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = f64>,
+    {
         let rows = collect_numeric_rows(rows);
         let shape = matrix_shape(&rows)?;
         Ok(Self(publish_numeric_matrix(
@@ -466,7 +484,7 @@ impl IntegerMatrix {
             rows.into_iter().flatten().collect(),
             shape,
             integer_format(),
-            MatrixOptions::default(),
+            options,
         )?))
     }
     pub fn from_rows_in_store<I, J>(
