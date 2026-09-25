@@ -1220,6 +1220,18 @@ impl CompiledScene {
             .is_some_and(|object| object.live)
     }
 
+    /// Return the retained execution slot for a live or retired object identity.
+    ///
+    /// Structural publication uses this during preflight so a re-entering object
+    /// can stage sparse runtime state against the slot that `CreateObject` will
+    /// reactivate, without scanning or mutating the compiled scene.
+    pub fn retained_object_index(&self, id: ObjectId) -> Option<u32> {
+        self.object_indices
+            .get(&id)
+            .copied()
+            .or_else(|| self.retired_object_indices.get(&id).copied())
+    }
+
     pub fn object_id_at_slot(&self, object_index: u32) -> Option<ObjectId> {
         let object = self.objects.get(object_index as usize)?;
         object.live.then_some(object.id)

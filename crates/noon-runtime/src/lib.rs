@@ -7,6 +7,7 @@ mod execution_slots;
 mod frame;
 mod graph_endpoints;
 mod numeric_text;
+pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
 mod reactive;
 mod renderer_publication;

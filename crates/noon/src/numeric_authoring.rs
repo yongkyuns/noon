@@ -259,6 +259,38 @@ impl DecimalNumber {
         backend: &mut impl LatexBackend,
         tracker: &ValueTracker,
     ) -> Result<&mut Self, NumericAuthoringError> {
+        self.bind_to_tracker_with(backend, tracker, |store, transaction| {
+            transaction
+                .apply(store)
+                .map_err(crate::AuthoringError::from)
+                .map_err(TextAuthoringError::Semantic)
+        })?;
+        Ok(self)
+    }
+
+    pub(crate) fn bind_to_tracker_live(
+        &self,
+        backend: &mut impl LatexBackend,
+        tracker: &ValueTracker,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            SemanticMutationTransaction,
+        )
+            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
+    ) -> Result<(), NumericAuthoringError> {
+        self.bind_to_tracker_with(backend, tracker, publish)
+    }
+
+    fn bind_to_tracker_with(
+        &self,
+        backend: &mut impl LatexBackend,
+        tracker: &ValueTracker,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            SemanticMutationTransaction,
+        )
+            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
+    ) -> Result<(), NumericAuthoringError> {
         tracker.require_store(self.object.integration_store())?;
         let metadata = self.metadata()?;
         let format = self.format()?;
@@ -304,14 +336,10 @@ impl DecimalNumber {
                     debug_assert_eq!(number.value(), metadata.value());
                     let mut transaction = SemanticMutationTransaction::new();
                     transaction.replace_decimal_number(node, number);
-                    transaction
-                        .apply(store)
-                        .map(|_| ())
-                        .map_err(crate::AuthoringError::from)
-                        .map_err(TextAuthoringError::Semantic)
+                    publish(store, transaction).map(|_| ())
                 },
             )?;
-        Ok(self)
+        Ok(())
     }
 
     pub(crate) fn set_value_live(
@@ -1067,6 +1095,135 @@ mod tests {
                 .source
                 .as_ref(),
             "+63.25...m"
+        );
+    }
+
+    #[test]
+    fn live_binding_survives_detach_reentry_and_reuses_effective_slot() {
+        use noon_core::TextResourceLookup;
+
+        let mut backend = RuleBackend;
+        let mut scene = crate::Scene::new();
+        let tracker = scene.value_tracker(1.25).unwrap();
+        let number = DecimalNumber::new(
+            Rc::clone(scene.integration_store()),
+            &mut backend,
+            0.0,
+            DecimalFormat::default(),
+        )
+        .unwrap();
+        scene.add(number.mobject()).unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        scene
+            .live(&mut session)
+            .bind_decimal_to_tracker(&number, &mut backend, &tracker)
+            .unwrap();
+        let bound = session.frame().objects[0].text().unwrap();
+        assert_eq!(
+            session.text_resources().get(bound).unwrap().source.as_ref(),
+            "1.25"
+        );
+        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+
+        session
+            .set_reactive_input(tracker.node_id(), 7.5_f32)
+            .unwrap();
+        assert_eq!(
+            session
+                .text_resources()
+                .get(session.frame().objects[0].text().unwrap())
+                .unwrap()
+                .source
+                .as_ref(),
+            "7.50"
+        );
+
+        scene.live(&mut session).remove(number.mobject()).unwrap();
+        assert_eq!(session.effective_text_resource_stats().live_resources, 0);
+        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+
+        scene.live(&mut session).add(number.mobject()).unwrap();
+        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+        assert_eq!(
+            session
+                .text_resources()
+                .get(session.frame().objects[0].text().unwrap())
+                .unwrap()
+                .source
+                .as_ref(),
+            "7.50"
+        );
+    }
+
+    #[test]
+    fn shared_tracker_bindings_retire_and_reenter_without_resource_growth() {
+        use noon_core::TextResourceLookup;
+
+        const DISPLAY_COUNT: usize = 32;
+        let mut backend = RuleBackend;
+        let mut scene = crate::Scene::new();
+        let tracker = scene.value_tracker(2.5).unwrap();
+        let mut numbers = Vec::with_capacity(DISPLAY_COUNT);
+        for _ in 0..DISPLAY_COUNT {
+            let mut number = DecimalNumber::new(
+                Rc::clone(scene.integration_store()),
+                &mut backend,
+                0.0,
+                DecimalFormat::default(),
+            )
+            .unwrap();
+            number.bind_to_tracker(&mut backend, &tracker).unwrap();
+            scene.add(number.mobject()).unwrap();
+            numbers.push(number);
+        }
+
+        let mut session = scene.execution_session().unwrap();
+        assert_eq!(
+            session.effective_text_resource_stats().live_resources,
+            DISPLAY_COUNT
+        );
+        assert_eq!(
+            session.effective_text_resource_slot_capacity(),
+            DISPLAY_COUNT
+        );
+        session
+            .set_reactive_input(tracker.node_id(), 9.75_f32)
+            .unwrap();
+        for object in &session.frame().objects {
+            let handle = object.text().unwrap();
+            assert_eq!(
+                session
+                    .text_resources()
+                    .get(handle)
+                    .unwrap()
+                    .source
+                    .as_ref(),
+                "9.75"
+            );
+        }
+
+        for number in &numbers {
+            scene.live(&mut session).remove(number.mobject()).unwrap();
+        }
+        assert_eq!(session.effective_text_resource_stats().live_resources, 0);
+        assert_eq!(
+            session.effective_text_resource_slot_capacity(),
+            DISPLAY_COUNT
+        );
+
+        for number in &numbers {
+            scene.live(&mut session).add(number.mobject()).unwrap();
+        }
+        assert_eq!(
+            session.effective_text_resource_stats().live_resources,
+            DISPLAY_COUNT
+        );
+        assert_eq!(
+            session.effective_text_resource_slot_capacity(),
+            DISPLAY_COUNT
         );
     }
 }

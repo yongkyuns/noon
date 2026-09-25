@@ -693,6 +693,30 @@ impl<'a> LiveSession<'a> {
         self.set_decimal_value(number, backend, value + delta)
     }
 
+    /// Bind one existing DecimalNumber to a canonical scalar tracker through
+    /// the current live publication. Glyph dependencies, semantic metadata and
+    /// the runtime driver revision are prepared before either layer commits.
+    #[cfg(feature = "latex")]
+    pub fn bind_decimal_to_tracker(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        tracker: &ValueTracker,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        tracker.require_store(self.store)?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        number
+            .bind_to_tracker_live(backend, tracker, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
     /// Read DecimalNumber font size from the current effective publication.
     #[cfg(feature = "latex")]
     pub fn decimal_font_size(

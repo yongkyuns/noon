@@ -712,6 +712,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
                 Self::unclassified("runtime.publication", &cause),
             ),
+            E::NumericText(cause) => Self::caused_by(
+                "publication.numeric_text",
+                message,
+                Self::unclassified("runtime.numeric_text", &cause),
+            ),
             E::ExecutionSlot(cause) => Self::caused_by(
                 "publication.execution_slot",
                 message,

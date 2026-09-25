@@ -18,8 +18,15 @@ use super::{
 };
 use crate::{
     CompiledGraphArrowPolicy, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
-    CompiledObject, CompiledResources, ExecutionMutationTransaction, ExecutionPatch,
+    CompiledNumericTextDriver, CompiledObject, CompiledResources, ExecutionMutationTransaction,
+    ExecutionPatch,
 };
+
+#[derive(Clone, Debug)]
+pub struct CompiledNumericTextDriverRevisionEntry {
+    pub object: ObjectId,
+    pub declaration: Option<CompiledNumericTextDriver>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
@@ -160,6 +167,7 @@ pub struct SemanticPublicationPreparationStats {
 struct PreparedEntry {
     object: SemanticTransactionNodeRef,
     compiled: CompiledObject,
+    numeric_text: Option<CompiledNumericTextDriver>,
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +185,7 @@ pub struct PreparedSemanticPublication {
     entries: Vec<PreparedEntry>,
     possible_exits: Vec<ObjectId>,
     graph_updates: Vec<PreparedGraphUpdate>,
+    numeric_text: Vec<CompiledNumericTextDriverRevisionEntry>,
     stats: SemanticPublicationPreparationStats,
 }
 
@@ -226,6 +235,30 @@ impl PreparedSemanticPublication {
             .collect()
     }
 
+    /// Candidate-local numeric driver changes for runtime preflight. Exact
+    /// membership is selected after semantic commit from this already-validated
+    /// set, so aliases never trigger a second lowering pass.
+    pub fn conservative_numeric_text(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> Vec<CompiledNumericTextDriverRevisionEntry> {
+        let mut revisions = self.numeric_text.clone();
+        revisions.extend(self.entries.iter().filter_map(|entry| {
+            let semantic = prepared.planned_node_id(entry.object)?;
+            Some(CompiledNumericTextDriverRevisionEntry {
+                object: semantic_execution_object_id(semantic),
+                declaration: entry.numeric_text.clone(),
+            })
+        }));
+        revisions.extend(self.possible_exits.iter().copied().map(|object| {
+            CompiledNumericTextDriverRevisionEntry {
+                object,
+                declaration: None,
+            }
+        }));
+        revisions
+    }
+
     pub const fn stats(&self) -> SemanticPublicationPreparationStats {
         self.stats
     }
@@ -247,6 +280,7 @@ impl PreparedSemanticPublication {
                 .exited_execution_objects()
                 .map(ExecutionPatch::RemoveObject),
         );
+        let mut numeric_text = self.numeric_text;
         for mut entry in self.entries {
             let semantic = match entry.object {
                 SemanticTransactionNodeRef::Existing(node) => node,
@@ -258,6 +292,10 @@ impl PreparedSemanticPublication {
                 continue;
             }
             entry.compiled.id = semantic_execution_object_id(semantic);
+            numeric_text.push(CompiledNumericTextDriverRevisionEntry {
+                object: entry.compiled.id,
+                declaration: entry.numeric_text,
+            });
             patches.push(ExecutionPatch::CreateObject(entry.compiled));
         }
         let mut active_graphs = membership
@@ -287,9 +325,16 @@ impl PreparedSemanticPublication {
                     dependencies: Vec::new(),
                 }),
         );
+        numeric_text.extend(membership.exited_execution_objects().map(|object| {
+            CompiledNumericTextDriverRevisionEntry {
+                object,
+                declaration: None,
+            }
+        }));
         BoundSemanticPublication {
             transaction: ExecutionMutationTransaction::from_mutations(patches),
             resource_additions: self.resource_additions,
+            numeric_text,
         }
     }
 }
@@ -298,6 +343,7 @@ impl PreparedSemanticPublication {
 pub struct BoundSemanticPublication {
     transaction: ExecutionMutationTransaction,
     resource_additions: CompiledResources,
+    numeric_text: Vec<CompiledNumericTextDriverRevisionEntry>,
 }
 
 impl BoundSemanticPublication {
@@ -311,6 +357,20 @@ impl BoundSemanticPublication {
 
     pub fn into_parts(self) -> (ExecutionMutationTransaction, CompiledResources) {
         (self.transaction, self.resource_additions)
+    }
+
+    pub fn numeric_text(&self) -> &[CompiledNumericTextDriverRevisionEntry] {
+        &self.numeric_text
+    }
+
+    pub fn into_parts_with_numeric_text(
+        self,
+    ) -> (
+        ExecutionMutationTransaction,
+        CompiledResources,
+        Vec<CompiledNumericTextDriverRevisionEntry>,
+    ) {
+        (self.transaction, self.resource_additions, self.numeric_text)
     }
 }
 
@@ -350,6 +410,7 @@ pub fn prepare_semantic_updater_publication(
             entries: Vec::new(),
             possible_exits: Vec::new(),
             graph_updates: Vec::new(),
+            numeric_text: Vec::new(),
             stats: SemanticPublicationPreparationStats::default(),
         },
         revised,
@@ -433,7 +494,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations(), handled_scalar_signals)?;
-    let (values, mut resource_additions) =
+    let (values, mut resource_additions, numeric_text) =
         lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
@@ -519,6 +580,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         entries,
         possible_exits,
         graph_updates,
+        numeric_text,
         stats,
     })
 }
@@ -931,7 +993,12 @@ fn lower_prepared_entry(
     let mut compiled = CompiledObject::new(ObjectId::new(0), content, transform, style);
     compiled.text_bounds = text_bounds;
     compiled.base_z_index = state.z_index();
-    Ok(PreparedEntry { object, compiled })
+    let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
+    Ok(PreparedEntry {
+        object,
+        compiled,
+        numeric_text,
+    })
 }
 
 /// Lower only changed content/transform/style values already in this execution domain.
@@ -940,9 +1007,16 @@ fn lower_semantic_publication(
     index: &SemanticExecutionIndex,
     reachability: &SemanticExecutionReachability,
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
-) -> Result<(ExecutionMutationTransaction, CompiledResources), SemanticPublicationLoweringError> {
+) -> Result<
+    (
+        ExecutionMutationTransaction,
+        CompiledResources,
+        Vec<CompiledNumericTextDriverRevisionEntry>,
+    ),
+    SemanticPublicationLoweringError,
+> {
     validate_mutations(prepared.mutations(), handled_scalar_signals)?;
-    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool, bool)> = HashMap::new();
+    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool, bool, bool)> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
             SemanticMutation::SetProperty {
@@ -964,8 +1038,12 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().2 = true;
                 }
             }
-            SemanticMutation::ReplaceDecimalNumber { .. }
-            | SemanticMutation::ReplaceTextPresentationBaseline { .. } => {}
+            SemanticMutation::ReplaceDecimalNumber { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().4 = true;
+                }
+            }
+            SemanticMutation::ReplaceTextPresentationBaseline { .. } => {}
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().3 = true;
@@ -994,6 +1072,7 @@ fn lower_semantic_publication(
     }
     let mut mutations = Vec::with_capacity(domains.len() * 3);
     let mut resource_additions = CompiledResources::default();
+    let mut numeric_text = Vec::new();
     for (node, state) in prepared.object_updates() {
         if !reachability.is_reachable(node) {
             continue;
@@ -1001,7 +1080,17 @@ fn lower_semantic_publication(
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };
-        let (transform, style, content, z_index) = domains[&node];
+        let (transform, style, content, z_index, numeric) = domains[&node];
+        if numeric {
+            numeric_text.push(CompiledNumericTextDriverRevisionEntry {
+                object,
+                declaration: lower_numeric_text_driver(
+                    &state,
+                    prepared.store(),
+                    &mut resource_additions,
+                )?,
+            });
+        }
         if z_index {
             mutations.push(ExecutionPatch::SetZIndex {
                 object,
@@ -1041,7 +1130,40 @@ fn lower_semantic_publication(
     Ok((
         ExecutionMutationTransaction::from_mutations(mutations),
         resource_additions,
+        numeric_text,
     ))
+}
+
+fn lower_numeric_text_driver(
+    state: &noon_core::SemanticObjectState,
+    store: &noon_core::SemanticStore,
+    resources: &mut CompiledResources,
+) -> Result<Option<CompiledNumericTextDriver>, SemanticPublicationLoweringError> {
+    let Some(number) = state.decimal_number() else {
+        return Ok(None);
+    };
+    let Some(binding) = number.binding() else {
+        return Ok(None);
+    };
+    for (_, handle) in binding.token_resources() {
+        resources
+            .capture_text(store, *handle)
+            .map_err(SemanticPublicationLoweringError::Resource)?;
+    }
+    Ok(Some(CompiledNumericTextDriver {
+        signal: super::semantic_execution_signal_id(binding.signal()),
+        object_index: 0,
+        format: noon_core::DecimalFormat {
+            decimal_places: number.decimal_places(),
+            include_sign: number.include_sign(),
+            group_with_commas: number.group_with_commas(),
+            show_ellipsis: number.show_ellipsis(),
+            unit: number.unit().map(str::to_owned),
+        },
+        font_size: number.font_size(),
+        point_to_scene_scale: binding.point_to_scene_scale(),
+        token_resources: binding.token_resources().to_vec().into(),
+    }))
 }
 
 #[cfg(test)]
