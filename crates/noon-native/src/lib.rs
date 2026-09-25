@@ -9,6 +9,7 @@
 
 mod execution_source;
 mod pointer_input;
+mod property_animation;
 mod selection_overlay;
 
 use std::sync::Arc;
@@ -77,6 +78,7 @@ pub enum NativeHostError {
     Program(String),
     PointerFrame(noon::integration::PointerFrameError),
     Inspection(noon::InspectionNavigationError),
+    Effect(noon::ExecutionSessionAnimationError),
 }
 
 impl std::fmt::Display for NativeHostError {
@@ -90,6 +92,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Input(error) => error.fmt(formatter),
             Self::PointerFrame(error) => error.fmt(formatter),
             Self::Inspection(error) => error.fmt(formatter),
+            Self::Effect(error) => error.fmt(formatter),
             Self::Program(message) => write!(formatter, "native live program error: {message}"),
         }
     }
@@ -278,6 +281,7 @@ struct NativeApp {
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
     realtime_clock: Option<RealtimeClock>,
+    effect_previous_tick: Option<Instant>,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
@@ -324,6 +328,7 @@ impl NativeApp {
             window: None,
             gpu: None,
             realtime_clock: None,
+            effect_previous_tick: None,
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
@@ -472,6 +477,8 @@ impl NativeApp {
         // completion instant so callback latency is never charged to the scene.
         let post_advance_now = if completed_callback_phase {
             let completed_at = Instant::now();
+            // Required callback latency is not an admitted effect interval.
+            self.effect_previous_tick = None;
             self.realtime_clock = Some(RealtimeClock::new(
                 completed_at,
                 self.execution.frame_time(),
@@ -492,10 +499,13 @@ impl NativeApp {
             return Ok(());
         };
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
+            self.effect_previous_tick = None;
             return Ok(());
         }
 
-        self.advance_realtime_timeline(Instant::now())?;
+        let now = Instant::now();
+        self.advance_realtime_property_animations(now)?;
+        self.advance_realtime_timeline(now)?;
         if !self.publication_pending() {
             return Ok(());
         }
@@ -654,6 +664,7 @@ impl NativeApp {
 
 impl ApplicationHandler for NativeApp {
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.effect_previous_tick = None;
         if let Err(error) = self
             .pointer_focus_lost()
             .and_then(|()| self.rebind_pointer_view())
@@ -822,6 +833,7 @@ impl ApplicationHandler for NativeApp {
             return;
         };
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
+            self.effect_previous_tick = None;
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         }
@@ -844,6 +856,14 @@ impl ApplicationHandler for NativeApp {
         let timeline = self.execution.timeline();
         let now = Instant::now();
         let clock = self.realtime_clock_for_timeline(timeline, now);
+        if self.execution.property_animation_pending() {
+            // Reuse the same event-loop/frame delivery; do not resume authored
+            // time just because an independent runtime operation needs a sample.
+            window.request_redraw();
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
+        self.effect_previous_tick = None;
         match timeline {
             TimelineWakeState::Continuous => {
                 window.request_redraw();

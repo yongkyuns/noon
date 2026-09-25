@@ -87,9 +87,7 @@ impl NativeApp {
             },
             kind,
         );
-        self.execution.submit_native_pointer_input(token, input)?;
-        self.next_input_sequence = next;
-        Ok(())
+        self.submit_pointer_occurrence_at(token, input, next, std::time::Instant::now())
     }
 
     pub(super) fn capture_pointer_presentation(

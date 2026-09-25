@@ -27,11 +27,24 @@ impl<C: LiveContinuation> LiveProgram<C> {
         token: &crate::integration::NativePointerInputToken,
         input: noon_core::NativePointerInput,
     ) -> Result<crate::PointerActionPublication, LiveProgramError<C::Error>> {
+        self.submit_pointer_input_with_actions_after_elapsed(token, input, 0.0)
+    }
+
+    /// Deliver an accepted click's preceding effect interval without advancing
+    /// authored time or bypassing the program's endpoint/publication ownership.
+    /// See `LiveSession::submit_pointer_input_with_actions_after_elapsed` for the
+    /// distinction between admission failure and a post-admission action error.
+    pub fn submit_pointer_input_with_actions_after_elapsed(
+        &mut self,
+        token: &crate::integration::NativePointerInputToken,
+        input: noon_core::NativePointerInput,
+        elapsed: f64,
+    ) -> Result<crate::PointerActionPublication, LiveProgramError<C::Error>> {
         self.ensure_host_input_available("dispatch pointer input actions")?;
         let publication = self
             .scene
             .owned_live()
-            .submit_pointer_input_with_actions(token, input)
+            .submit_pointer_input_with_actions_after_elapsed(token, input, elapsed)
             .map_err(LiveProgramError::Effect)?;
         self.refresh_pending_publication();
         Ok(publication)
