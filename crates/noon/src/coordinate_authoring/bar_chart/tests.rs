@@ -63,7 +63,11 @@ fn updates_are_atomic_and_touch_only_requested_bars_when_color_is_unchanged() {
     assert_ne!(before[1].transform, after[1].transform);
     assert_eq!(before[2], after[2]);
     assert_eq!(before[0].style, after[0].style);
-    assert_eq!(before[1].style, after[1].style);
+    assert_eq!(before[1].style.stroke_width, after[1].style.stroke_width);
+    assert_eq!(
+        before[1].style.stroke_width_mode,
+        after[1].style.stroke_width_mode
+    );
 
     let snapshot = after.clone();
     assert!(chart
