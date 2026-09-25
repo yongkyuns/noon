@@ -60,11 +60,12 @@ use noon_compile::{
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, ObjectId, RateFunction, ReactiveError, ReactiveValue, Rect,
-    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticFamilyTransformMode,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    AnimationOptions, Camera2DState, ObjectId, PreparedSemanticMutationTransaction, RateFunction,
+    ReactiveError, ReactiveValue, Rect, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticFamilyTransformMode, SemanticLocalNodeToken, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
     SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
 };
 use noon_runtime::{
@@ -1585,6 +1586,42 @@ impl ExecutionSession {
             self.publication_context().scene_revision()
         );
         Ok(signal)
+    }
+
+    /// Publish one already-prepared composite that creates and scopes a fresh
+    /// scalar input. Reactive enrollment and any numeric driver referencing the
+    /// transaction-local signal share the same preflight and semantic commit.
+    pub(crate) fn publish_prepared_scoped_value_tracker(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        root: SemanticNodeId,
+        signal_token: SemanticLocalNodeToken,
+        initial: f64,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionAnimationError> {
+        let semantic_signal = prepared
+            .planned_node_id(signal_token)
+            .expect("surviving fresh signal owns one planned semantic identity");
+        let runtime_value = ReactiveValue::Scalar(lower_live_scalar_value(initial)?);
+        let projection = self
+            .reactive_projection
+            .prepare_input_signal_enrollment(semantic_signal, runtime_value.clone())?
+            .expect("fresh transaction-local signal is not already enrolled");
+        let runtime_enrollment = self.runtime.prepare_reactive_signal_enrollment_batch(&[(
+            projection.execution_signal(),
+            runtime_value,
+        )])?;
+        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+            prepared,
+            Vec::new(),
+            Some(root),
+            publication::SemanticPublicationPurpose::AuthoredMutation,
+            Some(publication::PreparedReactiveEnrollmentBatch {
+                projection_enrollments: vec![projection],
+                runtime_enrollment,
+            }),
+            [semantic_signal].into_iter().collect(),
+        )
+        .map_err(ExecutionSessionAnimationError::AuthoredPublication)
     }
 
     /// Atomically associate and, when necessary, sparsely enroll one existing

@@ -232,6 +232,7 @@ impl SceneInstance {
         transaction: &ExecutionMutationTransaction,
         entries: Vec<NumericTextDriverRevisionEntry>,
         authored: &dyn TextResourceLookup,
+        pending_signals: &BTreeMap<SignalId, ReactiveValue>,
     ) -> Result<PreparedNumericTextDriverRevision, NumericTextResourceError> {
         let mut appended = BTreeMap::new();
         let mut next_index = self.compiled.objects().len();
@@ -269,6 +270,7 @@ impl SceneInstance {
                     .ok_or(NumericTextResourceError::InvalidSourceSpan)?;
                 let value = reactive
                     .state_value(declaration.signal)
+                    .or_else(|| pending_signals.get(&declaration.signal))
                     .ok_or(NumericTextResourceError::InvalidSourceSpan)?;
                 let temporary = NumericTextDriverState {
                     tokens: declaration.token_resources.iter().cloned().collect(),

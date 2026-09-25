@@ -420,12 +420,13 @@ pub fn prepare_semantic_updater_publication(
 pub fn validate_semantic_publication(
     transaction: &SemanticMutationTransaction,
 ) -> Result<(), SemanticPublicationLoweringError> {
-    validate_mutations(transaction.mutations(), None)
+    validate_mutations(transaction.mutations(), None, None)
 }
 
 fn validate_mutations(
     mutations: &[SemanticMutation],
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
+    prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
         let ordinary = matches!(
@@ -453,6 +454,7 @@ fn validate_mutations(
             | SemanticMutation::SetScalarSignalAt { signal, .. } => signals.contains(signal),
             SemanticMutation::ScopeSignal { signal, .. } => signal
                 .existing()
+                .or_else(|| prepared.and_then(|prepared| prepared.planned_node_id(*signal)))
                 .is_some_and(|signal| signals.contains(&signal)),
             _ => false,
         });
@@ -494,7 +496,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     reachability: &SemanticExecutionReachability,
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
-    validate_mutations(prepared.mutations(), handled_scalar_signals)?;
+    validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
     let (values, mut resource_additions, numeric_text) =
         lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
     let mut possible_entry_refs = Vec::new();
@@ -1016,7 +1018,7 @@ fn lower_semantic_publication(
     ),
     SemanticPublicationLoweringError,
 > {
-    validate_mutations(prepared.mutations(), handled_scalar_signals)?;
+    validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
     let mut domains: HashMap<SemanticNodeId, (bool, bool, bool, bool, bool)> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
@@ -1192,11 +1194,14 @@ mod tests {
             Err(SemanticPublicationLoweringError::UnsupportedMutation { index: 0 })
         ));
         assert!(matches!(
-            validate_mutations(transaction.mutations(), Some(&HashSet::from([other]))),
+            validate_mutations(transaction.mutations(), Some(&HashSet::from([other])), None),
             Err(SemanticPublicationLoweringError::UnsupportedMutation { index: 0 })
         ));
-        assert!(
-            validate_mutations(transaction.mutations(), Some(&HashSet::from([signal]))).is_ok()
-        );
+        assert!(validate_mutations(
+            transaction.mutations(),
+            Some(&HashSet::from([signal])),
+            None
+        )
+        .is_ok());
     }
 }

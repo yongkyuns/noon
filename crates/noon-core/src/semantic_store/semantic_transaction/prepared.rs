@@ -138,6 +138,27 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Self::new(transaction, store)
     }
 
+    /// Re-preflight this unpublished batch after resolving metadata against a
+    /// transaction-local allocator identity.
+    ///
+    /// Composite resource authors use this narrow extension when a newly
+    /// created DecimalNumber binds to a signal created by the same transaction.
+    /// The allocator remains exclusively borrowed, so the planned signal id is
+    /// stable across this second preflight and still cannot escape publication.
+    pub fn with_decimal_number(
+        self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        number: crate::SemanticDecimalNumber,
+    ) -> Result<Self, SemanticMutationTransactionError> {
+        let Self {
+            store,
+            mut transaction,
+            ..
+        } = self;
+        transaction.replace_decimal_number(object, number);
+        Self::new(transaction, store)
+    }
+
     /// All submitted mutations, preserving original indices and exact no-ops.
     pub fn mutations(&self) -> &[SemanticMutation] {
         self.transaction.mutations()

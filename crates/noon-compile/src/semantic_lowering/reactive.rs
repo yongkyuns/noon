@@ -46,6 +46,10 @@ impl PreparedSemanticInputSignalEnrollment {
     pub const fn execution_signal(&self) -> SignalId {
         self.execution
     }
+
+    pub fn value(&self) -> &ReactiveValue {
+        &self.value
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
