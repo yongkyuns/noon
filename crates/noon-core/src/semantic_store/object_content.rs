@@ -8,6 +8,8 @@ mod coordinate_role;
 pub use coordinate_role::SemanticNumberLineRole;
 mod function_plot_role;
 pub use function_plot_role::SemanticFunctionPlotRole;
+mod decimal_number;
+pub use decimal_number::SemanticDecimalNumber;
 
 /// Target authored content carried by one semantic object.
 ///
@@ -270,6 +272,7 @@ pub struct SemanticObjectState {
     pub style: SemanticStyle,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
+    decimal_number: Option<SemanticDecimalNumber>,
     signal_bindings: Vec<SemanticSignalBinding>,
 }
 
@@ -281,6 +284,7 @@ impl SemanticObjectState {
             style: SemanticStyle::default(),
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
+            decimal_number: None,
             signal_bindings: Vec::new(),
         }
     }
@@ -298,6 +302,7 @@ impl SemanticObjectState {
             style: target.style.clone(),
             presentation: self.presentation,
             role: self.role,
+            decimal_number: self.decimal_number.clone(),
             signal_bindings: self.signal_bindings.clone(),
         }
     }
@@ -324,6 +329,16 @@ impl SemanticObjectState {
 
     pub fn set_role(&mut self, role: SemanticObjectRole) {
         self.role = role;
+    }
+
+    /// Reconstructible DecimalNumber inputs. A present value is valid only on
+    /// text content; transaction preflight enforces that relationship.
+    pub fn decimal_number(&self) -> Option<&SemanticDecimalNumber> {
+        self.decimal_number.as_ref()
+    }
+
+    pub fn set_decimal_number(&mut self, value: Option<SemanticDecimalNumber>) {
+        self.decimal_number = value;
     }
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {

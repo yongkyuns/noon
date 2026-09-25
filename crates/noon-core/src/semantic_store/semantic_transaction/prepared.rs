@@ -194,7 +194,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::SetZIndex { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
-                | SemanticMutation::ReplaceContent { object, .. } => Some(*object),
+                | SemanticMutation::ReplaceContent { object, .. }
+                | SemanticMutation::ReplaceDecimalNumber { object, .. } => Some(*object),
                 _ => None,
             })
             .collect();
@@ -663,6 +664,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     store.replace_semantic_object_role(object, role);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectRole { object });
+                }
+                SemanticMutation::ReplaceDecimalNumber { object, number } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state")
+                        .set_decimal_number(Some(number));
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::DecimalNumber { object });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);

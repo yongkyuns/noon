@@ -9,7 +9,7 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
     SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
     SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
     SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
@@ -86,6 +86,12 @@ pub enum SemanticMutation {
     ReplaceContent {
         object: SemanticTransactionNodeRef,
         content: SemanticObjectContent,
+    },
+    /// Replace retained DecimalNumber inputs together with a normal text-content
+    /// mutation. This deliberately does not generalize object roles.
+    ReplaceDecimalNumber {
+        object: SemanticTransactionNodeRef,
+        number: SemanticDecimalNumber,
     },
     SetZIndex {
         node: SemanticTransactionNodeRef,
@@ -169,6 +175,7 @@ impl SemanticMutation {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
+            | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
             Self::SetInset2DView {
@@ -229,6 +236,7 @@ impl SemanticMutation {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
+            | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::SetInset2DView { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
@@ -261,6 +269,9 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
+            Self::ReplaceDecimalNumber { object, .. } => {
+                Some(SemanticMutationKey::DecimalNumber(*object))
+            }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -303,6 +314,7 @@ pub(super) enum SemanticMutationKey {
     },
     ObjectContent(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
+    DecimalNumber(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
@@ -345,6 +357,9 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     ObjectRole {
+        object: SemanticNodeId,
+    },
+    DecimalNumber {
         object: SemanticNodeId,
     },
     ObjectStyle {
@@ -545,6 +560,21 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ReplaceContent {
             object: object.into(),
             content: content.into(),
+        });
+        self
+    }
+
+    /// Replace one object's typed numeric metadata. The mutation is valid only
+    /// when the staged object content is text, so a bad late mutation rolls the
+    /// complete transaction back before resources or scene state are committed.
+    pub fn replace_decimal_number(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        number: SemanticDecimalNumber,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ReplaceDecimalNumber {
+            object: object.into(),
+            number,
         });
         self
     }
@@ -1782,6 +1812,24 @@ impl SemanticMutationTransaction {
                     } else {
                         state.set_role(SemanticObjectRole::Ordinary);
                     }
+                }
+                SemanticMutation::ReplaceDecimalNumber { object, number } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if !number.is_valid() || state.content.text().is_none() {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let did_change = state.decimal_number() != Some(number);
+                    if did_change {
+                        state.set_decimal_number(Some(number.clone()));
+                    }
+                    changed.push(did_change);
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;

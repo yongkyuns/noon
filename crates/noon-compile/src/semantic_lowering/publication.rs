@@ -313,6 +313,7 @@ fn validate_mutations(
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
@@ -621,6 +622,7 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().2 = true;
                 }
             }
+            SemanticMutation::ReplaceDecimalNumber { .. } => {}
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().3 = true;

@@ -561,6 +561,7 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectContent(object)
         | SemanticMutationKey::ObjectRole(object)
+        | SemanticMutationKey::DecimalNumber(object)
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
@@ -597,6 +598,9 @@ pub(super) fn duplicate_mutation_error(
         }
         SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
+                }
+        SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateContent { index, object }
         }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }
