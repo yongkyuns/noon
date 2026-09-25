@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     mem::{size_of, size_of_val},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -974,6 +975,45 @@ impl TextResourceArena {
         })
     }
 
+    /// Start a rollback-safe sparse replacement stage without cloning this arena.
+    ///
+    /// The stage owns only replacement payloads for changed slots. Call
+    /// [`TextResourceReplacementStaging::replace`] to validate and reserve each
+    /// next handle, then commit it once the surrounding transaction succeeds.
+    pub fn replacement_staging(&self) -> TextResourceReplacementStaging {
+        TextResourceReplacementStaging {
+            namespace: self.namespace,
+            replacements: Vec::new(),
+            targets: HashSet::new(),
+        }
+    }
+
+    /// Commit a stage prepared against this exact arena.
+    ///
+    /// Staging validates every target and payload before publication. This method
+    /// therefore cannot fail while it exclusively owns the arena.
+    pub fn commit_replacement_staging(&mut self, staging: TextResourceReplacementStaging) {
+        assert_eq!(
+            self.namespace, staging.namespace,
+            "text replacement stage belongs to a different arena"
+        );
+        for replacement in staging.replacements {
+            let current = self.current_handle(replacement.expected.id);
+            assert_eq!(
+                current,
+                Some(replacement.expected),
+                "text replacement stage became stale before commit"
+            );
+            let handle = self
+                .replace(replacement.expected.id, replacement.resource)
+                .expect("preflighted text replacement must remain valid while committing");
+            assert_eq!(
+                handle, replacement.next,
+                "text replacement stage must commit its reserved handle"
+            );
+        }
+    }
+
     pub fn remove(&mut self, id: TextResourceId) -> Result<Arc<TextResource>, TextResourceError> {
         let index = text_resource_slot(id);
         let (resource, next_generation) = {
@@ -1054,6 +1094,77 @@ impl TextResourceArena {
     }
 }
 
+/// Sparse, rollback-safe replacements prepared against one text arena.
+///
+/// This is intentionally not an arena snapshot: it retains only dirty slots and
+/// their new immutable payloads until the caller commits the surrounding work.
+#[derive(Debug)]
+pub struct TextResourceReplacementStaging {
+    namespace: u64,
+    replacements: Vec<StagedTextResourceReplacement>,
+    targets: HashSet<TextResourceId>,
+}
+
+#[derive(Debug)]
+struct StagedTextResourceReplacement {
+    expected: TextResourceHandle,
+    next: TextResourceHandle,
+    resource: TextResource,
+}
+
+impl TextResourceReplacementStaging {
+    /// Validate and reserve one versioned replacement without modifying `arena`.
+    pub fn replace(
+        &mut self,
+        arena: &TextResourceArena,
+        expected: TextResourceHandle,
+        resource: TextResource,
+    ) -> Result<TextResourceHandle, TextResourceError> {
+        if arena.namespace != self.namespace || arena.current_handle(expected.id) != Some(expected)
+        {
+            return Err(TextResourceError::UnknownResource(expected.id));
+        }
+        if !self.targets.insert(expected.id) {
+            return Err(TextResourceError::DuplicateStagedResource(expected.id));
+        }
+        let version = expected
+            .version
+            .checked_add(1)
+            .ok_or(TextResourceError::VersionExhausted(expected.id))?;
+        resource
+            .validate()
+            .map_err(TextResourceError::InvalidResource)?;
+        let next = TextResourceHandle {
+            arena: self.namespace,
+            id: expected.id,
+            version,
+        };
+        self.replacements.push(StagedTextResourceReplacement {
+            expected,
+            next,
+            resource,
+        });
+        Ok(next)
+    }
+
+    /// Return a payload staged for the exact next handle.
+    pub fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.replacements
+            .iter()
+            .find(|replacement| replacement.next == handle)
+            .map(|replacement| &replacement.resource)
+    }
+
+    /// Number of physical text slots staged for replacement.
+    pub fn len(&self) -> usize {
+        self.replacements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.replacements.is_empty()
+    }
+}
+
 fn text_resource_id(slot: usize, generation: u32) -> TextResourceId {
     let slot = u32::try_from(slot).expect("Noon text resource slot space exhausted");
     TextResourceId::new((u64::from(generation) << TEXT_RESOURCE_SLOT_BITS) | u64::from(slot))
@@ -1066,6 +1177,7 @@ fn text_resource_slot(id: TextResourceId) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextResourceError {
     UnknownResource(TextResourceId),
+    DuplicateStagedResource(TextResourceId),
     VersionExhausted(TextResourceId),
     InvalidResource(TextResourceValidationError),
 }
@@ -1074,6 +1186,11 @@ impl std::fmt::Display for TextResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownResource(id) => write!(formatter, "unknown text resource {}", id.get()),
+            Self::DuplicateStagedResource(id) => write!(
+                formatter,
+                "text resource {} is staged more than once",
+                id.get()
+            ),
             Self::VersionExhausted(id) => {
                 write!(
                     formatter,
