@@ -53,7 +53,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         options: &noon::ManimBarChartOptions,
         labels: &noon::plot_presentation::NumberLabelOptions,
-        compiler: &mut crate::WasmLatexCompiler,
+        compiler: &mut impl noon::LatexBackend,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(live.bar_chart_with_axis_labels(options, labels, compiler))
@@ -66,7 +66,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
-        compiler: &mut crate::WasmLatexCompiler,
+        compiler: &mut impl noon::LatexBackend,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         self.with_live_session(|live| Ok(live.bar_labels(chart, compiler, options)))?

@@ -33,7 +33,7 @@ impl CanonicalAuthoringScene {
             return self
                 .scene
                 .bar_chart(options)
-                .map_err(crate::authoring_plotting::coordinate_failure);
+                .map_err(crate::plot_error::coordinate_failure);
         }
         self.active_live_player()?.live_create_bar_chart(options)
     }
@@ -52,7 +52,7 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: &noon::ManimBarChartOptions,
         labels: &noon::plot_presentation::NumberLabelOptions,
-        compiler: &mut crate::WasmLatexCompiler,
+        compiler: &mut impl noon::LatexBackend,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
         if self.player_ownership.is_unstarted() {
             return self
@@ -67,7 +67,7 @@ impl CanonicalAuthoringScene {
     pub(crate) fn live_bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
-        compiler: &mut crate::WasmLatexCompiler,
+        compiler: &mut impl noon::LatexBackend,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.player_ownership.is_unstarted() {

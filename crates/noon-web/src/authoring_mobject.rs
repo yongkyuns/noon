@@ -437,12 +437,6 @@ mod wasm {
         family: noon::MobjectFamily,
     }
 
-    impl WasmAuthoringFamilyHandle {
-        pub(crate) fn semantic_family(&self) -> noon::MobjectFamily {
-            self.family.clone()
-        }
-    }
-
     /// Host-normalized options for one shared arrangement transaction.
     #[wasm_bindgen]
     pub struct WasmFamilyArrangeOptions {

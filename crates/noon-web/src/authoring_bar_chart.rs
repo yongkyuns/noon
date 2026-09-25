@@ -158,7 +158,7 @@ impl WasmAuthoringFamilyHandle {
     /// rather than deep-copying a host-side chart model.
     #[wasm_bindgen(js_name = barChart)]
     pub fn bar_chart(&self) -> Result<WasmBarChartHandle, JsValue> {
-        noon::ManimBarChart::from_family(self.semantic_family())
+        noon::ManimBarChart::from_family(self.semantic_family()?)
             .map(|chart| WasmBarChartHandle { chart })
             .map_err(crate::authoring_plotting::coordinate_failure)
             .map_err(crate::authoring_error::js_error)
