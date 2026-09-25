@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 29);
+assert.equal(gallery.examples.length, 28);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -44,7 +44,6 @@ assert.deepEqual(
     "noon-brace-text",
     "noon-sample-space",
     "noon-polar-plane",
-    "noon-complex-plane",
     "noon-zoomed-scene",
   ],
 );
@@ -269,7 +268,6 @@ const breadthCases = [
   ["noon-brace-text", /BraceText\(/, "BraceText"],
   ["noon-sample-space", /SampleSpace\(/, "SampleSpace"],
   ["noon-polar-plane", /PolarPlane\(/, "PolarPlane"],
-  ["noon-complex-plane", /ComplexPlane\(/, "ComplexPlane"],
   ["noon-zoomed-scene", /ZoomedScene/, "ZoomedScene"],
 ];
 for (const [id, pattern, label] of breadthCases) {

@@ -402,7 +402,7 @@
       "features": ["BraceText", "Brace", "native Text", "label placement", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
+      "thumbnail": "thumbnails/manim/brace-text.png",
       "thumbnail_alt": "Retained brace labels around a square and rectangle",
       "thumbnail_time": 0,
       "order": 1220
@@ -417,7 +417,7 @@
       "features": ["SampleSpace", "probability partitions", "color gradients", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/compatible-arrow-vector-field-static.svg",
+      "thumbnail": "thumbnails/manim/sample-space.png",
       "thumbnail_alt": "Two proportional colored probability partitions",
       "thumbnail_time": 0,
       "order": 1230
@@ -432,25 +432,10 @@
       "features": ["PolarPlane", "polar_to_point", "point_to_polar", "faded grid", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/coordinate-plotting.svg",
+      "thumbnail": "thumbnails/manim/polar-plane.png",
       "thumbnail_alt": "A point on a polar coordinate grid",
       "thumbnail_time": 0,
       "order": 1240
-    },
-    {
-      "id": "noon-complex-plane",
-      "title": "ComplexCoordinates",
-      "summary": "Plot a curve and verify complex coordinate conversion on a shared retained Cartesian plane.",
-      "status": "ready",
-      "path": "python/examples/complex_plane.py",
-      "category": "manim-compatible/coordinates",
-      "features": ["ComplexPlane", "complex coordinates", "plot", "n2p", "p2n", "Manim-compatible"],
-      "reuse": "manim-compatible-parity-v0.21",
-      "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/coordinate-plotting.svg",
-      "thumbnail_alt": "A plotted curve and marked point on a complex coordinate plane",
-      "thumbnail_time": 0,
-      "order": 1250
     },
     {
       "id": "noon-zoomed-scene",
@@ -462,9 +447,9 @@
       "features": ["ZoomedScene", "zoomed_camera", "zooming", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/focus-on-point.webp",
+      "thumbnail": "thumbnails/manim/zoomed-scene.png",
       "thumbnail_alt": "A focused point shown with a zoom camera frame",
-      "thumbnail_time": 0,
+      "thumbnail_time": 0.5,
       "order": 1260
     }
   ]
