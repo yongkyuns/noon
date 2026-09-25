@@ -490,6 +490,18 @@ mod tests {
         state
     }
 
+    fn rendered_line(instance: &SceneInstance, index: usize) -> (Vec2, Vec2) {
+        let GeometryRef::Line { start, end } = instance.frame().render_geometry(index).unwrap()
+        else {
+            panic!("graph shaft keeps an ordinary compiled Line resource");
+        };
+        let transform = instance.frame().render_transform(index);
+        (
+            transform.transform_point(*start),
+            transform.transform_point(*end),
+        )
+    }
+
     struct LineGraphFixture {
         store: SemanticStore,
         a: noon_core::SemanticNodeId,
@@ -600,11 +612,8 @@ mod tests {
         assert_eq!(changed, expected);
         assert!(!changed.contains(&b_index));
         assert_eq!(
-            instance.frame().render_geometry(line_index),
-            Some(&GeometryRef::line(
-                Vec2::new(-2.0, 1.0),
-                Vec2::new(1.0, 0.0),
-            ))
+            rendered_line(&instance, line_index),
+            (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 0.0))
         );
     }
 
@@ -809,11 +818,8 @@ mod tests {
         assert_eq!(fixture.store.scene_revision(), revision);
         let line_index = instance.frame_index_for_object(line_object).unwrap();
         assert_eq!(
-            instance.frame().render_geometry(line_index),
-            Some(&GeometryRef::line(
-                Vec2::new(-4.0, 2.0),
-                Vec2::new(1.0, 0.0),
-            ))
+            rendered_line(&instance, line_index),
+            (Vec2::new(-4.0, 2.0), Vec2::new(1.0, 0.0))
         );
         let changed = instance.take_frame_changes().object_indices().to_vec();
         assert!(changed.contains(&instance.frame_index_for_object(a_object).unwrap()));
@@ -855,11 +861,8 @@ mod tests {
         assert_eq!(instance.take_frame_changes().object_indices(), expected);
 
         assert_eq!(
-            instance.frame().render_geometry(line_index),
-            Some(&GeometryRef::line(
-                Vec2::new(-2.0, 1.0),
-                Vec2::new(1.0, 0.0),
-            ))
+            rendered_line(&instance, line_index),
+            (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 0.0))
         );
     }
 }
