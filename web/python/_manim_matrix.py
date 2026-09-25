@@ -106,12 +106,13 @@ class MobjectMatrix(Matrix):
     def __init__(self, matrix, **kwargs):
         if _create_mobject_matrix is None:
             raise RuntimeError("MobjectMatrix requires Noon's shared Rust authoring runtime")
-        supplied = _matrix_rows(matrix, self._mobject_handle)
+        source_rows = [list(row) for row in matrix]
+        supplied = _matrix_rows(source_rows, self._mobject_handle)
         context = _live_constructor_context("MobjectMatrix", allow_unstarted=True)
         self._initialize_matrix(
             engine_call(_create_mobject_matrix, supplied, *_matrix_options(kwargs), context), context
         )
-        for row_group, row in zip(self._entry_family().submobjects, matrix):
+        for row_group, row in zip(self._entry_family().submobjects, source_rows):
             row_group._semantic_member_wrappers = {
                 _family_wrapper_key(value): value for value in row
             }
