@@ -143,7 +143,7 @@ impl CanonicalAuthoringSceneContext {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_create_integer_table(compiler, rows, options.options)
-                .map(WasmTableHandle::new)
+                .map(|value| WasmTableHandle::new(value.into_table()))
                 .map_err(js_error)
         }
     }
@@ -173,7 +173,7 @@ impl CanonicalAuthoringSceneContext {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_create_decimal_table(compiler, rows, options.options)
-                .map(WasmTableHandle::new)
+                .map(|value| WasmTableHandle::new(value.into_table()))
                 .map_err(js_error)
         }
     }
@@ -197,7 +197,7 @@ impl CanonicalAuthoringSceneContext {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_create_mobject_table(rows, options.options)
-                .map(WasmTableHandle::new)
+                .map(|value| WasmTableHandle::new(value.into_table()))
                 .map_err(js_error)
         }
     }
