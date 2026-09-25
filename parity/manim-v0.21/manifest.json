@@ -728,6 +728,12 @@
       "expected_duration": 1.0
     },
     {
+      "id": "zoomed-scene",
+      "scene": "RetainedZoom",
+      "source": "parity/manim-v0.21/core-examples/zoomed_scene.py",
+      "expected_duration": 1.0
+    },
+    {
       "id": "sample-space",
       "scene": "SampleSpaceExample",
       "source": "parity/manim-v0.21/core-examples/sample_space.py",
