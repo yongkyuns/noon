@@ -16,6 +16,12 @@ pub fn session() -> Result<ExecutionSession, String> {
             YELLOW.blue.into(),
             1.0,
         )?;
+        focus_options.set_fill(
+            YELLOW.red.into(),
+            YELLOW.green.into(),
+            YELLOW.blue.into(),
+            1.0,
+        )?;
         focus_options.set_stroke_width(0.0)?;
         let mut focus = scene.geometry(focus_options)?;
         focus.shift(0.45, 0.15)?;
