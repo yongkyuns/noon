@@ -6,7 +6,7 @@ use crate::{
 };
 use noon_core::{
     Rect, SemanticDecimalNumber, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, TextAffineTransform,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticTransform2_5D, TextAffineTransform,
     TextPart, TextPresentationBaseline, TextRenderItem, TextResource, TextSourceKind,
     TextSourceSpan, Vec2, WHITE,
 };
@@ -90,7 +90,7 @@ pub struct DecimalNumber {
 /// One DecimalNumber display prepared from individually compiled MathTex parts.
 /// The immutable glyph dependencies can be admitted once and composed through
 /// the same transaction owner for cold and live authoring.
-struct PreparedDecimalValue {
+pub(crate) struct PreparedDecimalValue {
     source: Arc<str>,
     tokens: Vec<NumericLayoutToken>,
     dependencies: Vec<NumericCompiledDependency>,
@@ -99,7 +99,7 @@ struct PreparedDecimalValue {
     font_size: f32,
 }
 
-type NumericCompiledDependency = (
+pub(crate) type NumericCompiledDependency = (
     noon_core::TextCompilationIdentity,
     TextResource,
     noon_core::FontResourceArena,
@@ -319,6 +319,84 @@ impl DecimalNumber {
 }
 
 impl PreparedDecimalValue {
+    /// Prepare a DecimalNumber resource without mutating semantic state.  Composite
+    /// authors use [`publish_batch`] to admit a complete set through one
+    /// resource/transaction rollback boundary.
+    pub(crate) fn prepare(
+        backend: &mut impl LatexBackend,
+        value: f64,
+        format: DecimalFormat,
+        font_size: f32,
+    ) -> Result<Self, NumericAuthoringError> {
+        prepare_numeric_value(backend, value, format, font_size)
+    }
+
+    pub(crate) fn dependencies(&self) -> &[NumericCompiledDependency] {
+        &self.dependencies
+    }
+
+    pub(crate) fn compose_resource(
+        &self,
+        store: &SemanticStore,
+        handles: &[noon_core::TextResourceHandle],
+    ) -> Result<TextResource, TextAuthoringError> {
+        compose_numeric_text_resource(store, Arc::clone(&self.source), &self.tokens, handles, self.font_size)
+    }
+
+    pub(crate) fn decimal_state(
+        &self,
+        store: &SemanticStore,
+        handle: noon_core::TextResourceHandle,
+        transform: SemanticTransform2_5D,
+    ) -> Result<SemanticObjectState, TextAuthoringError> {
+        let mut state = SemanticObjectState::new(handle);
+        state.transform = transform;
+        state.style.fill = Some(SemanticPaint::Solid(WHITE));
+        state.set_decimal_number(Some(decimal_metadata(self.value, &self.format, self.font_size)));
+        state.set_text_presentation_baseline(numeric_presentation_baseline(store, handle, self.font_size)?);
+        Ok(state)
+    }
+
+    /// Admit a batch of independently prepared numeric displays and let the
+    /// caller publish their one semantic transaction.  Compiler dependencies,
+    /// composed number resources, and the caller transaction share one rollback
+    /// scope for both cold and live authoring.
+    pub(crate) fn publish_batch<E, T>(
+        store: &mut SemanticStore,
+        prepared: Vec<Self>,
+        publish: impl FnOnce(
+            &mut SemanticStore,
+            &[noon_core::TextResourceHandle],
+            &[PreparedDecimalValue],
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<TextAuthoringError>
+            + From<noon_core::SemanticTextImportError>
+            + From<std::collections::TryReserveError>
+            + From<noon_core::GeometryResourceError>,
+    {
+        let mut dependencies = Vec::new();
+        let mut ranges = Vec::with_capacity(prepared.len());
+        for value in &prepared {
+            let start = dependencies.len();
+            dependencies.extend(value.dependencies.iter().cloned());
+            ranges.push(start..dependencies.len());
+        }
+        store.with_compiled_text_dependency_batch::<E, _>(
+            dependencies,
+            |store, handles| {
+                prepared
+                    .iter()
+                    .zip(&ranges)
+                    .map(|(value, range)| value.compose_resource(store, &handles[range.clone()]))
+                    .collect::<Result<Vec<_>, TextAuthoringError>>()
+                    .map_err(E::from)
+            },
+            |store, handles| publish(store, handles, &prepared),
+        )
+    }
+
     fn publish<T>(
         self,
         store: &mut SemanticStore,
