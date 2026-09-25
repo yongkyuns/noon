@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{AuthoringFailure, WasmAuthoringMobjectHandle};
 
-fn text_part_js_error(error: noon::TextPartAuthoringError) -> JsValue {
+pub(crate) fn text_part_js_error(error: noon::TextPartAuthoringError) -> JsValue {
     let failure = match error {
         noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
         noon::TextPartAuthoringError::NotText(_) => {

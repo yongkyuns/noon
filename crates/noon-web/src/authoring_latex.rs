@@ -142,7 +142,7 @@ impl WasmLatexPartsHandle {
         self.parts
             .current_member_indices_for(needle)
             .map(|indices| indices.into_iter().map(|index| index as u32).collect())
-            .map_err(js_error)
+            .map_err(crate::text_parts::text_part_js_error)
     }
 
     /// One RGBA tuple per current member. NaN in the first channel preserves
