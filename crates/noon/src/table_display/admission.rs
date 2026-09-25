@@ -407,24 +407,20 @@ fn make_table(
         entry_family: MobjectFamily::from_node(Rc::clone(&store), resolve(value.entries)?)?,
         line_family: MobjectFamily::from_node(Rc::clone(&store), resolve(value.lines)?)?,
         highlight_family: MobjectFamily::from_node(Rc::clone(&store), resolve(value.highlights)?)?,
-        row_label_family: value
-            .row_labels
-            .map(|t| {
-                MobjectFamily::from_node(
-                    Rc::clone(&store),
-                    resolve(t).map_err(AuthoringError::from)?,
-                )
-            })
-            .transpose()?,
-        column_label_family: value
-            .column_labels
-            .map(|t| {
-                MobjectFamily::from_node(
-                    Rc::clone(&store),
-                    resolve(t).map_err(AuthoringError::from)?,
-                )
-            })
-            .transpose()?,
+        row_label_family: match value.row_labels {
+            Some(token) => Some(MobjectFamily::from_node(
+                Rc::clone(&store),
+                resolve(token)?,
+            )?),
+            None => None,
+        },
+        column_label_family: match value.column_labels {
+            Some(token) => Some(MobjectFamily::from_node(
+                Rc::clone(&store),
+                resolve(token)?,
+            )?),
+            None => None,
+        },
         options,
     })
 }
@@ -561,7 +557,7 @@ fn commit_existing(
         .iter()
         .map(|entry| publisher.entry_state(entry))
         .collect::<Result<Vec<_>, _>>()?;
-    let row_states = rows
+    let row_states: Option<Vec<SemanticObjectState>> = rows
         .as_deref()
         .map(|items| {
             items
@@ -570,7 +566,7 @@ fn commit_existing(
                 .collect()
         })
         .transpose()?;
-    let column_states = columns
+    let column_states: Option<Vec<SemanticObjectState>> = columns
         .as_deref()
         .map(|items| {
             items
@@ -719,6 +715,7 @@ pub(super) fn publish_text_table(
                             state.style = item.style.clone();
                             tx.create_node(SemanticNodeCreation::object(state))
                         })
+                        .map(Into::into)
                         .collect();
                     let value = stage(
                         &mut tx,
@@ -805,7 +802,10 @@ pub(super) fn publish_numeric_table(
                         let state = item.decimal_state(semantic, *handle, transform)?;
                         Ok(tx.create_node(SemanticNodeCreation::object(state)))
                     })
-                    .collect::<Result<Vec<_>, TextAuthoringError>>()?;
+                    .collect::<Result<Vec<_>, TextAuthoringError>>()?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
                 let value = stage(
                     &mut tx,
                     leaves,
