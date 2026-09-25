@@ -3307,6 +3307,8 @@ impl GpuRenderer {
             self.inset_camera_buffers.push(buffer);
             self.inset_camera_bind_groups.push(bind_group);
         }
+        self.inset_camera_buffers.truncate(views.len());
+        self.inset_camera_bind_groups.truncate(views.len());
         for (index, (view, camera)) in views.iter().zip(cameras.iter()).enumerate() {
             if self.inset_views.get(index).copied() != Some(*view) {
                 let viewport = [
@@ -3324,6 +3326,19 @@ impl GpuRenderer {
         text_state
             .glyphs
             .set_inset_cameras(device, queue, &text_cameras);
+        if self.inset_views.len() != views.len()
+            || self
+                .inset_views
+                .iter()
+                .zip(&views)
+                .any(|(old, new)| old.state.display != new.state.display)
+        {
+            self.inset_camera_by_display = views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| (view.state.display, index))
+                .collect();
+        }
         self.inset_views = views;
         Ok(())
     }
@@ -3755,14 +3770,10 @@ impl GpuRenderer {
         display: ObjectId,
         rendered_insets: &mut HashSet<ObjectId>,
     ) -> Result<RetainedDrawStats, RetainedDrawError> {
-        let Some((camera_index, inset)) = self
-            .inset_views
-            .iter()
-            .enumerate()
-            .find(|(_, inset)| inset.state.display == display)
-        else {
+        let Some(&camera_index) = self.inset_camera_by_display.get(&display) else {
             return Ok(RetainedDrawStats::default());
         };
+        let inset = &self.inset_views[camera_index];
         if !rendered_insets.insert(display) {
             return Ok(RetainedDrawStats::default());
         }

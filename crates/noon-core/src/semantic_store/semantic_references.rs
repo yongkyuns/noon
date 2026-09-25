@@ -67,6 +67,19 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Derived reverse references keep inset validation local to an edited frame.
+    pub(crate) fn inset_displays_for_camera(
+        &self,
+        camera: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.incoming_references
+            .get(&camera)
+            .into_iter()
+            .flatten()
+            .filter(|reference| reference.kind == SemanticReferenceKind::Inset2DCameraFrame)
+            .map(|reference| reference.owner)
+    }
+
     /// Whether this signal participates in any scene execution scope.
     ///
     /// Work is proportional to the signal's direct incoming references; scene

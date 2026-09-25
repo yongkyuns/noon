@@ -128,7 +128,10 @@ pub(super) fn preflight_add_node(
     validate_object_content_resource(store, state.content, index)?;
 
     if let SemanticObjectRole::Inset2DView(view) = state.role() {
-        if removed_nodes.contains(&view.camera_frame)
+        if !matches!(
+            state.content.geometry(),
+            Some(StoredGeometry::Rectangle { .. })
+        ) || removed_nodes.contains(&view.camera_frame)
             || !store
                 .semantic_object_state_checked(view.camera_frame)
                 .ok()

@@ -1,3 +1,5 @@
+#[cfg(any(target_arch = "wasm32", test))]
+mod zoomed_view;
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;

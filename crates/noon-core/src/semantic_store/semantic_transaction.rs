@@ -21,6 +21,7 @@ use crate::{
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
+mod inset_view;
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
 
@@ -77,9 +78,10 @@ pub enum SemanticMutation {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
-    ReplaceRole {
+    SetInset2DView {
         object: SemanticTransactionNodeRef,
-        role: SemanticObjectRole,
+        camera_frame: Option<SemanticTransactionNodeRef>,
+        capture_own_display: bool,
     },
     ReplaceContent {
         object: SemanticTransactionNodeRef,
@@ -168,15 +170,14 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
-            | Self::ReplaceRole { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
-            Self::ReplaceRole { object, role } => {
-                let mut references = vec![*object];
-                if let SemanticObjectRole::Inset2DView(view) = role {
-                    references.push(view.camera_frame.into());
-                }
-                references
-            }
+            Self::SetInset2DView {
+                object,
+                camera_frame,
+                ..
+            } => std::iter::once(*object)
+                .chain(camera_frame.iter().copied())
+                .collect(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
@@ -229,6 +230,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
+            | Self::SetInset2DView { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
@@ -258,7 +260,7 @@ impl SemanticMutation {
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
-            Self::ReplaceRole { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
+            Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -507,19 +509,34 @@ impl SemanticMutationTransaction {
         self
     }
 
-    /// Replace only the authored content reference/value of one semantic object.
-    pub fn replace_role(
+    /// Bind ordinary rectangles as an inset display and camera in one publication.
+    pub fn set_inset_2d_view(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
-        role: SemanticObjectRole,
+        camera_frame: impl Into<SemanticTransactionNodeRef>,
+        capture_own_display: bool,
     ) -> &mut Self {
-        self.mutations.push(SemanticMutation::ReplaceRole {
+        self.mutations.push(SemanticMutation::SetInset2DView {
             object: object.into(),
-            role,
+            camera_frame: Some(camera_frame.into()),
+            capture_own_display,
         });
         self
     }
 
+    pub fn clear_inset_2d_view(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetInset2DView {
+            object: object.into(),
+            camera_frame: None,
+            capture_own_display: false,
+        });
+        self
+    }
+
+    /// Replace only the authored content reference/value of one semantic object.
     pub fn replace_content(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
@@ -1716,25 +1733,14 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
-                SemanticMutation::ReplaceRole { object, role } => {
-                    if let SemanticObjectRole::Inset2DView(view) = role {
-                        if object.existing() == Some(view.camera_frame)
-                            || removed_nodes.contains(&view.camera_frame)
-                        {
-                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
-                                index,
-                            });
-                        }
-                        let frame = catalog.staged_object_state(
-                            &mut staged_objects,
-                            &mut staged_object_order,
-                            view.camera_frame.into(),
-                            index,
-                        )?;
-                        if !matches!(
-                            frame.content.geometry(),
-                            Some(StoredGeometry::Rectangle { .. })
-                        ) {
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
+                    if let Some(camera) = camera_frame {
+                        catalog.ensure_object(*camera, index)?;
+                        if camera == object {
                             return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
                                 index,
                             });
@@ -1746,41 +1752,36 @@ impl SemanticMutationTransaction {
                         *object,
                         index,
                     )?;
-                    // Inset activation is the only mutable role domain currently
-                    // admitted. Camera and Arrow/coordinate declarations retain
-                    // their existing dedicated construction invariants.
                     if !matches!(
-                        role,
-                        SemanticObjectRole::Ordinary | SemanticObjectRole::Inset2DView(_)
-                    ) || !matches!(
                         state.role(),
                         SemanticObjectRole::Ordinary | SemanticObjectRole::Inset2DView(_)
-                    ) || !role.is_valid()
-                        || object.existing().is_some_and(|object| {
-                            !store
-                                .semantic_graph_owners_for_invariant_target(object)
-                                .is_empty()
-                        })
-                    {
+                    ) || object.existing().is_some_and(|object| {
+                        !store
+                            .semantic_graph_owners_for_invariant_target(object)
+                            .is_empty()
+                    }) {
                         return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
                             index,
                         });
                     }
-                    if matches!(role, SemanticObjectRole::Inset2DView(_))
-                        && !matches!(
-                            state.content.geometry(),
-                            Some(StoredGeometry::Rectangle { .. })
-                        )
-                    {
-                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
-                            index,
-                        });
+                    let current = match state.role() {
+                        SemanticObjectRole::Inset2DView(view) => {
+                            Some((view.camera_frame.into(), view.capture_own_display))
+                        }
+                        _ => None,
+                    };
+                    let requested = camera_frame.map(|camera| (camera, *capture_own_display));
+                    changed.push(current != requested);
+                    // Pending camera identities exist only inside the transaction.
+                    // Commit resolves them before publishing the semantic role.
+                    if let Some(camera) = camera_frame.and_then(|camera| camera.existing()) {
+                        state.set_role(SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(camera)
+                                .capture_own_display(*capture_own_display),
+                        ));
+                    } else {
+                        state.set_role(SemanticObjectRole::Ordinary);
                     }
-                    let did_change = state.role() != *role;
-                    if did_change {
-                        state.set_role(role.clone());
-                    }
-                    changed.push(did_change);
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -2152,6 +2153,7 @@ impl SemanticMutationTransaction {
             removed_existing: removed_nodes,
             removed_pending,
         };
+        inset_view::validate(self, &preflight, store)?;
         // New graph declarations validate their complete final construction
         // overlay. Existing graphs use only dependency-local checks below: a
         // one-edge edit must never clone or scan the whole graph.

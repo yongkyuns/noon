@@ -1112,6 +1112,11 @@ impl ExecutionSession {
     ) -> Result<Vec<noon_core::Inset2DViewState>, ExecutionSessionInset2DError> {
         self.inset_2d_views
             .iter()
+            .filter(|binding| {
+                self.runtime
+                    .frame_index_for_object(binding.display)
+                    .is_some_and(|index| self.runtime.frame().is_present(index))
+            })
             .map(|binding| {
                 let camera_object = self.runtime.effective_object(binding.camera_frame).ok_or(
                     ExecutionSessionInset2DError::MissingCameraFrame {
@@ -1163,12 +1168,15 @@ impl ExecutionSession {
                     display_center: display.transform.translation,
                     display_size: size,
                     display_stroke_width: display.style.stroke_width
-                        * display
-                            .transform
-                            .scale
-                            .x
-                            .abs()
-                            .max(display.transform.scale.y.abs()),
+                        * match display.style.stroke_width_mode {
+                            noon_core::StrokeWidthMode::ScreenSpace => 1.0,
+                            noon_core::StrokeWidthMode::ScaleWithObject => display
+                                .transform
+                                .scale
+                                .x
+                                .abs()
+                                .max(display.transform.scale.y.abs()),
+                        },
                     capture_own_display: binding.capture_own_display,
                 })
             })
@@ -1178,6 +1186,10 @@ impl ExecutionSession {
     fn sync_inset_2d_view_bindings(&mut self, store: &SemanticStore) {
         self.inset_2d_views = store
             .inset_2d_views()
+            .filter(|(display, role)| {
+                self.reachability.is_reachable(*display)
+                    && self.reachability.is_reachable(role.camera_frame)
+            })
             .filter_map(|(display, role)| {
                 Some(Inset2DExecutionBinding {
                     camera_frame: self

@@ -363,6 +363,8 @@ impl TextGlyphGpuRenderer {
             self.inset_camera_buffers.push(buffer);
             self.inset_camera_bind_groups.push(bind_group);
         }
+        self.inset_camera_buffers.truncate(cameras.len());
+        self.inset_camera_bind_groups.truncate(cameras.len());
         for (index, camera) in cameras.iter().copied().enumerate() {
             if self.inset_cameras.get(index).copied() != Some(camera) {
                 queue.write_buffer(

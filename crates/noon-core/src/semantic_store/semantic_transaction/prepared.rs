@@ -645,9 +645,22 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
-                SemanticMutation::ReplaceRole { object, role } => {
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
                     let object = resolve_node_ref(object, &committed_nodes);
-                    store.replace_semantic_object_role(object, role.clone());
+                    let role = camera_frame.map_or(SemanticObjectRole::Ordinary, |camera| {
+                        SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(resolve_node_ref(
+                                camera,
+                                &committed_nodes,
+                            ))
+                            .capture_own_display(capture_own_display),
+                        )
+                    });
+                    store.replace_semantic_object_role(object, role);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectRole { object });
                 }

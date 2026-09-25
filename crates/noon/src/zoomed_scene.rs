@@ -7,10 +7,9 @@
 use std::rc::Rc;
 
 use noon_core::{
-    Color, SemanticInset2DViewRole, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, StoredGeometry, Vec2, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
-    DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
+    SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, Vec2, DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
 };
 
 use crate::{AuthoringError, Mobject, MobjectTarget, Scene, SceneMembershipRequest};
@@ -179,6 +178,7 @@ impl Scene {
             fill: None,
             stroke: Some(SemanticPaint::Solid(Color::WHITE)),
             stroke_width: options.camera_frame_stroke_width * MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
             ..SemanticStyle::default()
         };
 
@@ -191,6 +191,7 @@ impl Scene {
             fill_opacity: 1.0,
             stroke: Some(SemanticPaint::Solid(Color::WHITE)),
             stroke_width: options.image_frame_stroke_width * MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
             ..SemanticStyle::default()
         };
 
@@ -241,12 +242,10 @@ impl Scene {
             self.root(),
             SceneMembershipRequest::AddForeground(&targets),
         )?;
-        transaction.replace_role(
+        transaction.set_inset_2d_view(
             view.display.node_id(),
-            SemanticObjectRole::Inset2DView(
-                SemanticInset2DViewRole::new(view.camera_frame.node_id())
-                    .capture_own_display(view.capture_own_display),
-            ),
+            view.camera_frame.node_id(),
+            view.capture_own_display,
         );
         Ok(transaction)
     }
@@ -256,6 +255,7 @@ impl Scene {
 mod tests {
     use super::*;
     use crate::{AnimationOptions, RateFunction};
+    use noon_core::SemanticObjectRole;
 
     #[test]
     fn declaration_is_detached_and_activation_is_one_atomic_foreground_publication() {
@@ -273,7 +273,12 @@ mod tests {
         scene.activate_zooming(&view).unwrap();
         assert_eq!(scene.revision().get(), before.get() + 1);
         assert_eq!(
-            scene.foreground_mobjects().unwrap(),
+            scene
+                .integration_store()
+                .borrow()
+                .node(scene.root())
+                .unwrap()
+                .foreground_members(),
             [view.camera_frame().node_id(), view.display().node_id()]
         );
         let views = scene
@@ -357,10 +362,7 @@ mod tests {
         scene.activate_zooming(&view).unwrap();
         let before = scene.revision();
         let mut invalid = SemanticMutationTransaction::new();
-        invalid.replace_role(
-            view.display().node_id(),
-            SemanticObjectRole::Inset2DView(SemanticInset2DViewRole::new(view.display().node_id())),
-        );
+        invalid.set_inset_2d_view(view.display().node_id(), view.display().node_id(), false);
         assert!(scene.apply_semantic_transaction(invalid).is_err());
         assert_eq!(scene.revision(), before);
         assert_eq!(
@@ -379,6 +381,92 @@ mod tests {
                 .unwrap()
                 .role(),
             SemanticObjectRole::Ordinary
+        );
+    }
+    #[test]
+    fn detached_inset_stops_capturing_and_scaled_display_preserves_screen_stroke() {
+        let mut scene = Scene::new();
+        let view = scene.zoomed_view(ZoomedSceneOptions::default()).unwrap();
+        scene.activate_zooming(&view).unwrap();
+        let mut display = view.display().clone();
+        display.scale(2.0, 2.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let captured = session.inset_2d_views().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!((captured[0].display_stroke_width - 0.03).abs() < 1e-6);
+        scene.live(&mut session).remove(view.display()).unwrap();
+        assert!(session.inset_2d_views().unwrap().is_empty());
+        scene.live(&mut session).add(view.display()).unwrap();
+        assert_eq!(session.inset_2d_views().unwrap().len(), 1);
+    }
+    #[test]
+    fn copied_inset_pair_uses_copied_camera_and_survives_original_retirement() {
+        let mut scene = Scene::new();
+        let view = scene.zoomed_view(ZoomedSceneOptions::default()).unwrap();
+        scene.activate_zooming(&view).unwrap();
+        let family = scene
+            .family(&[view.display().into(), view.camera_frame().into()])
+            .unwrap();
+        let copied = family.copy_family().unwrap();
+        let copied_frame = copied.mobject(view.camera_frame()).unwrap();
+        let copied_display = copied.mobject(view.display()).unwrap();
+        let SemanticObjectRole::Inset2DView(role) = copied_display.state().unwrap().role() else {
+            panic!("copied display must retain its inset declaration");
+        };
+        assert_eq!(role.camera_frame, copied_frame.node_id());
+        let mut retire = SemanticMutationTransaction::new();
+        retire.remove_node(view.camera_frame().node_id());
+        scene.apply_semantic_transaction(retire).unwrap();
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .inset_2d_views()
+                .collect::<Vec<_>>(),
+            vec![(copied_display.node_id(), role)]
+        );
+    }
+
+    #[test]
+    fn inset_geometry_edits_validate_final_overlay_and_roll_back_atomically() {
+        let mut scene = Scene::new();
+        let view = scene.zoomed_view(ZoomedSceneOptions::default()).unwrap();
+        scene.activate_zooming(&view).unwrap();
+        for object in [view.display(), view.camera_frame()] {
+            let before = scene.revision();
+            let mut transaction = SemanticMutationTransaction::new();
+            transaction
+                .set_property(
+                    object.node_id(),
+                    noon_core::SemanticObjectProperty::RotationZ,
+                    0.2,
+                )
+                .replace_content(object.node_id(), StoredGeometry::Circle { radius: 1.0 });
+            assert!(scene.apply_semantic_transaction(transaction).is_err());
+            assert_eq!(scene.revision(), before);
+            assert_eq!(object.state().unwrap().transform.rotation_z, 0.0);
+        }
+        // Direct node construction must also see a frame edited later in the batch.
+        let mut add_and_break = SemanticMutationTransaction::new();
+        add_and_break.add_node(SemanticNodeCreation::object(
+            view.display().state().unwrap(),
+        ));
+        add_and_break.replace_content(
+            view.camera_frame().node_id(),
+            StoredGeometry::Circle { radius: 1.0 },
+        );
+        assert!(scene.apply_semantic_transaction(add_and_break).is_err());
+        let mut clear = SemanticMutationTransaction::new();
+        clear
+            .replace_content(
+                view.display().node_id(),
+                StoredGeometry::Circle { radius: 1.0 },
+            )
+            .clear_inset_2d_view(view.display().node_id());
+        scene.apply_semantic_transaction(clear).unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().inset_2d_views().count(),
+            0
         );
     }
 }
