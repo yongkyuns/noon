@@ -587,7 +587,10 @@ pub async fn create_animated_number_line_renderer(
     crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
-#[cfg(all(feature = "renderer", any(debug_assertions, feature = "renderer-smoke")))]
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 #[wasm_bindgen(js_name = createAreaHelpersRenderer)]
 pub async fn create_area_helpers_renderer(
     canvas: web_sys::OffscreenCanvas,
