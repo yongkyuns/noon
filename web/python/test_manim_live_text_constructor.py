@@ -34,7 +34,10 @@ assert live._canonical_live_target_context is context
 assert calls[-1][0:2] == ("raw % source", False)
 assert calls[-1][-1] is context
 before = len(calls)
-for kwargs in ({"font_size": 0}, {"opacity": 2}, {"unknown_option": 1}):
+for kwargs in (
+    {"font_size": 0}, {"opacity": 2}, {"unknown_option": 1},
+    {"substrings_to_isolate": ("x",)},
+):
     try: noon.Tex("invalid", **kwargs)
     except (ValueError, NotImplementedError): pass
     else: raise AssertionError("invalid options accepted")

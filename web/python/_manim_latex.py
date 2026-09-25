@@ -98,6 +98,10 @@ class _TexBase(_compat.VGroup):
             substrings = ()
         if isinstance(substrings, str) or not all(isinstance(value, str) for value in substrings):
             raise TypeError("substrings_to_isolate must be an iterable of strings")
+        if substrings:
+            raise NotImplementedError(
+                "substrings_to_isolate requires compiler-authored retained part publication"
+            )
         color_map = kwargs.pop("tex_to_color_map", None)
         if color_map is not None and not hasattr(color_map, "items"):
             raise TypeError("tex_to_color_map must be a mapping")
@@ -142,7 +146,6 @@ class _TexBase(_compat.VGroup):
             _semantic._family_wrapper_key(member): member for member in members
         }
         self._part_members = tuple(members)
-        self._substrings_to_isolate = tuple(substrings)
         if color_map:
             self.set_color_by_tex_to_color_map(color_map)
 
@@ -256,4 +259,3 @@ class MathTex(SingleStringMathTex):
 
 class Tex(MathTex):
     _math_mode = False
-
