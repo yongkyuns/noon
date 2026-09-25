@@ -64,6 +64,17 @@ impl CanonicalAuthoringSceneContext {
         self.shift_live_brace_label(&mut brace.inner, &target.anchor)
             .map_err(js_error)
     }
+
+    #[wasm_bindgen(js_name = liveChangeBraceLabel)]
+    pub fn live_change_brace_label(
+        &mut self,
+        brace: &mut WasmBraceLabelHandle,
+        target: &WasmLayoutAnchor,
+        label: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        self.change_live_brace_label(&mut brace.inner, &target.anchor, label.anchor.clone())
+            .map_err(js_error)
+    }
 }
 
 #[wasm_bindgen]

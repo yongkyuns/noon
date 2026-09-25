@@ -47,4 +47,28 @@ impl SemanticExecutionPlayer {
             )
             .map_err(|error| AuthoringFailure::unclassified("brace.shift", &error))
     }
+
+    pub(crate) fn live_change_brace_label(
+        &mut self,
+        brace: &mut noon::BraceLabel,
+        target: &noon::LayoutAnchor,
+        label: noon::LayoutAnchor,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        brace
+            .change_brace_label_live(
+                &mut noon::LiveSession::new(
+                    &semantics,
+                    self.semantic_root
+                        .expect("live semantic store has one scene root"),
+                    &mut self.session,
+                ),
+                target,
+                label,
+            )
+            .map_err(|error| AuthoringFailure::unclassified("brace.change", &error))
+    }
 }
