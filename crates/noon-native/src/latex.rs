@@ -255,6 +255,9 @@ fn run_bounded(
     output: &Path,
     max_output: u64,
 ) -> Result<ExitStatus, String> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or("native LaTeX deadline is too large")?;
     let stdout = fs::File::create(output)
         .map_err(|error| format!("cannot create native LaTeX diagnostic file: {error}"))?;
     let mut child = command
@@ -263,9 +266,6 @@ fn run_bounded(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot start native LaTeX process: {error}"))?;
-    let deadline = std::time::Instant::now()
-        .checked_add(timeout)
-        .ok_or("native LaTeX deadline is too large")?;
     loop {
         if fs::metadata(output).map(|value| value.len()).unwrap_or(0) > max_output {
             let _ = child.kill();

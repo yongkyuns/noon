@@ -146,6 +146,10 @@ pub enum SemanticObjectRole {
     NumberLine(SemanticNumberLineRole),
     /// Parameter interval of an ordinary sampled graph path.
     FunctionPlot(SemanticFunctionPlotRole),
+    /// Identifies an ordinary retained rectangle in a Manim SampleSpace horizontal partition.
+    SampleSpaceHorizontalPart,
+    /// Identifies an ordinary retained rectangle in a Manim SampleSpace vertical partition.
+    SampleSpaceVerticalPart,
 }
 
 impl SemanticObjectRole {
@@ -154,7 +158,12 @@ impl SemanticObjectRole {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
             Self::FunctionPlot(range) => range.is_valid(),
-            Self::Ordinary | Self::Camera2D | Self::ArrowEndTip | Self::ArrowStartTip => true,
+            Self::Ordinary
+            | Self::Camera2D
+            | Self::ArrowEndTip
+            | Self::ArrowStartTip
+            | Self::SampleSpaceHorizontalPart
+            | Self::SampleSpaceVerticalPart => true,
         }
     }
 }
