@@ -1052,6 +1052,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cells_use_selected_row_and_column_extrema_with_copied_custom_buffers() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let table = MobjectTable::from_rows_with_options(
+            &mut scene,
+            vec![
+                vec![circle(&store, 0.2), circle(&store, 1.5)],
+                vec![circle(&store, 2.0), circle(&store, 0.3)],
+            ],
+            TableOptions {
+                h_buff: 1.75,
+                v_buff: 0.6,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_table();
+        let copy =
+            Table::from_family(table.family().copy_family().unwrap().root().clone()).unwrap();
+        table.entry_family().shift(2.0, -1.0).unwrap();
+        copy.entry_family().shift(2.0, -1.0).unwrap();
+        let entries = table.rows().unwrap();
+        let bounds = |entry: &TableEntry| match entry {
+            TableEntry::Mobject(value) => value.layout_bounds().unwrap().unwrap(),
+            TableEntry::Family(value) => value.layout().unwrap().bounds().unwrap(),
+        };
+        let column = [bounds(&entries[0][0]), bounds(&entries[1][0])];
+        let row = [bounds(&entries[1][0]), bounds(&entries[1][1])];
+        let cell = table.get_cell(1, 0).unwrap().layout_bounds().unwrap();
+        assert_eq!(cell.min_x, column.iter().map(|bound| bound.min_x).fold(f64::INFINITY, f64::min) - .875);
+        assert_eq!(cell.max_x, column.iter().map(|bound| bound.max_x).fold(f64::NEG_INFINITY, f64::max) + .875);
+        assert_eq!(cell.min_y, row.iter().map(|bound| bound.min_y).fold(f64::INFINITY, f64::min) - .3);
+        assert_eq!(cell.max_y, row.iter().map(|bound| bound.max_y).fold(f64::NEG_INFINITY, f64::max) + .3);
+        assert_eq!(copy.get_cell(1, 0).unwrap().layout_bounds().unwrap(), cell);
+    }
+
+    #[test]
+    fn stale_live_table_publication_rolls_back_every_staged_node() {
+        let mut scene = Scene::new();
+        let mut sentinel = scene.circle(0.25).unwrap();
+        scene.add(&sentinel).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        sentinel.shift(1.0, 0.0).unwrap();
+        let revision = scene.revision();
+        let nodes = scene.integration_store().borrow().len();
+        let result = MobjectTable::from_rows(&mut scene, vec![vec![sentinel.clone()]]);
+        assert!(matches!(
+            result,
+            Err(TableAuthoringError::Semantic(
+                AuthoringError::ExecutionPublication(
+                    crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                )
+            ))
+        ));
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(scene.integration_store().borrow().len(), nodes);
+    }
+
     #[cfg(feature = "native-text")]
     #[test]
     fn plain_table_admits_native_text_without_a_latex_backend() {
