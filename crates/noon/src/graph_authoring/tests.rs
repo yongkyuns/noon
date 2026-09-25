@@ -277,7 +277,24 @@ fn assert_vertex_style(vertex: &Mobject) {
 fn assert_edge_style(edge: &GraphEdgeMobject) {
     let state = edge.line().state().unwrap();
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(GREEN)));
-    assert_eq!(state.style.stroke_width, 0.09);
+    if let Some(arrow) = edge.arrow() {
+        // Directed edges retain Arrow's length cap, including after graph copy
+        // and topology edits. The requested width stays in its semantic policy.
+        assert_eq!(
+            state.role(),
+            noon_core::SemanticObjectRole::ArrowShaft(noon_core::SemanticArrowShaftRole::new(
+                0.09,
+                crate::DEFAULT_ARROW_STROKE_WIDTH_RATIO
+            ))
+        );
+        let endpoints = arrow.shaft().manim_line_endpoints().unwrap();
+        let shaft_length =
+            (endpoints.end.0 - endpoints.start.0).hypot(endpoints.end.1 - endpoints.start.1);
+        let expected = 0.09_f64.min(crate::DEFAULT_ARROW_STROKE_WIDTH_RATIO * shaft_length);
+        assert!((state.style.stroke_width - expected).abs() < 1e-7);
+    } else {
+        assert_eq!(state.style.stroke_width, 0.09);
+    }
 }
 
 #[test]
