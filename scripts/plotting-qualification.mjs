@@ -6,6 +6,7 @@ await qualifyPairedAuthoring({
   cases: [
     { id: "coordinates", file: "coordinate_plotting_static.py", factory: "createCoordinatePlottingRenderer", objectCount: 17 },
     { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
+    { id: "complex-plane", file: "complex_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
     { id: "area", file: "area_helpers.py", factory: "createAreaHelpersRenderer", objectCount: 26 },
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
