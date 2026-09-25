@@ -82,6 +82,12 @@ try {
   });
   const ready = await Promise.race([attached, sourceFailure]);
   const initialExecutionReadyMs = performance.now() - authorStarted;
+  if (!continuation && (await execution.state()).time > 0) {
+    // Predeclared deterministic sources may hand off an already-completed
+    // session. Its ordinary seek API validates replay eligibility; opaque
+    // callback programs still fail explicitly instead of being replayed.
+    await execution.seek(0);
+  }
   await advanceSample(0);
 
   // Continue forward through warmup: arbitrary host callbacks cannot be
