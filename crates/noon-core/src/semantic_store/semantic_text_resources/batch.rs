@@ -30,7 +30,7 @@ impl SemanticStore {
                 transaction.add_node(crate::SemanticNodeCreation::object(build_state(handle)));
                 return publish(self, transaction);
             }
-            self.compiled_text_resources.remove(&identity);
+            self.forget_compiled_text_resource(&identity);
         }
 
         let installed = std::cell::Cell::new(None);
@@ -288,6 +288,13 @@ mod tests {
         )
     }
 
+    fn identity() -> crate::TextCompilationIdentity {
+        crate::TextCompilationIdentity {
+            descriptor: Arc::from(&b"compiled-glyph"[..]),
+            font_contents: Arc::from([Arc::<[u8]>::from([1, 2, 3])]),
+        }
+    }
+
     #[test]
     fn rejected_detached_publication_releases_provisional_text_and_stages_fonts() {
         let (resource, fonts) = glyph_resource();
@@ -325,5 +332,48 @@ mod tests {
         assert!(store.text_resources().get(handle).is_none());
         assert_eq!(store.text_resources().stats(), before_text);
         assert_eq!(store.font_resources().stats(), before_fonts);
+    }
+
+    #[test]
+    fn compiled_glyph_republication_replaces_stale_cache_accounting() {
+        let mut store = SemanticStore::new();
+        let identity = identity();
+        let expected_bytes = identity.descriptor.len()
+            + identity
+                .font_contents
+                .iter()
+                .map(|font| font.len())
+                .sum::<usize>();
+        let publish = |store: &mut SemanticStore| {
+            let (resource, fonts) = glyph_resource();
+            let result = store
+                .publish_compiled_glyph_detached_text(
+                    identity.clone(),
+                    resource,
+                    fonts,
+                    SemanticObjectState::new,
+                    |store, transaction| transaction.apply(store).map_err(Error::Transaction),
+                )
+                .unwrap();
+            let node = match result.impacts() {
+                [crate::SemanticMutationImpact::NodeAdded { node }] => *node,
+                _ => panic!("one detached text node"),
+            };
+            store
+                .semantic_object_state_checked(node)
+                .unwrap()
+                .content
+                .text()
+                .unwrap()
+        };
+
+        let mut handle = publish(&mut store);
+        for _ in 0..3 {
+            store.text_resources.remove(handle.id).unwrap();
+            handle = publish(&mut store);
+            assert_eq!(store.compiled_text_resources.get(&identity), Some(&handle));
+            assert_eq!(store.compiled_text_resource_order.len(), 1);
+            assert_eq!(store.compiled_text_resource_retained_bytes, expected_bytes);
+        }
     }
 }
