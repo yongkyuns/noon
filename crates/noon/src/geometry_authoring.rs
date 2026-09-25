@@ -35,9 +35,7 @@ impl ManimGeometryOptions {
         buff: f64,
         sharpness: f64,
     ) -> Result<Self, AuthoringError> {
-        let angle = brace_angle(direction)?;
-        let projected = projected_layout_bounds(target, -angle)?;
-        brace_options(projected, angle, buff, sharpness)
+        Ok(prepare_brace_geometry(target, direction, buff, sharpness)?.options)
     }
 
     /// Construct ManimCE v0.21 BraceBetweenPoints without allocating a temporary Line.
@@ -66,6 +64,28 @@ impl ManimGeometryOptions {
         };
         brace_options(projected, angle, buff, sharpness)
     }
+}
+
+/// Prepared retained Brace geometry for composite authoring.
+///
+/// The path, its tip, and its outward direction are derived together from the
+/// same immutable target observation.  Composite wrappers use this request to
+/// place a label without a temporary published Brace identity.
+pub(crate) struct PreparedBraceGeometry {
+    pub(crate) options: ManimGeometryOptions,
+    pub(crate) tip: (f64, f64),
+    pub(crate) direction: (f64, f64),
+}
+
+pub(crate) fn prepare_brace_geometry(
+    target: &LayoutAnchor,
+    direction: (f64, f64),
+    buff: f64,
+    sharpness: f64,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
+    let angle = brace_angle(direction)?;
+    let projected = projected_layout_bounds(target, -angle)?;
+    brace_options_with_tip(projected, angle, buff, sharpness)
 }
 
 impl Scene {
@@ -106,6 +126,15 @@ fn brace_options(
     buff: f64,
     sharpness: f64,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
+    Ok(brace_options_with_tip(projected_target, angle, buff, sharpness)?.options)
+}
+
+fn brace_options_with_tip(
+    projected_target: Bounds2D64,
+    angle: f64,
+    buff: f64,
+    sharpness: f64,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
     let buff = authoring_render_f64("brace buff", buff)?;
     let sharpness = authoring_render_f64("brace sharpness", sharpness)?;
     let target_width = authoring_render_f64("brace target width", projected_target.width())?;
@@ -182,10 +211,56 @@ fn brace_options(
         };
     }
 
+    let (tip, direction) = brace_tip_and_direction(&path)?;
     let mut options = ManimGeometryOptions::path(path)?;
     options.set_fill_opacity(1.0)?;
     options.set_stroke_width(0.0)?;
-    Ok(options)
+    Ok(PreparedBraceGeometry {
+        options,
+        tip,
+        direction,
+    })
+}
+
+fn brace_tip_and_direction(path: &VectorPath) -> Result<((f64, f64), (f64, f64)), AuthoringError> {
+    let mut anchors = Vec::new();
+    let mut current = None;
+    for command in path.commands() {
+        match *command {
+            noon_core::PathCommand::MoveTo { to } => current = Some(to),
+            noon_core::PathCommand::LineTo { to }
+            | noon_core::PathCommand::QuadraticTo { to, .. }
+            | noon_core::PathCommand::CubicTo { to, .. } => {
+                let from = current.ok_or(AuthoringError::NonFiniteGeometry)?;
+                anchors.extend([from, to]);
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {}
+        }
+    }
+    let tip = anchors
+        .get(7)
+        .copied()
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    let bounds = path
+        .conservative_bounds()
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    let center = (
+        (bounds.min.x + bounds.max.x) * 0.5,
+        (bounds.min.y + bounds.max.y) * 0.5,
+    );
+    let direction = (
+        f64::from(tip.x) - f64::from(center.0),
+        f64::from(tip.y) - f64::from(center.1),
+    );
+    let length = direction.0.hypot(direction.1);
+    if length == 0.0 || !length.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok((
+        (f64::from(tip.x), f64::from(tip.y)),
+        (direction.0 / length, direction.1 / length),
+    ))
 }
 
 fn lower_brace_point(

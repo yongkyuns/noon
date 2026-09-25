@@ -64,6 +64,7 @@ mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
 mod boolean_authoring;
+mod brace_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
 mod coordinate_authoring;
@@ -168,6 +169,7 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
