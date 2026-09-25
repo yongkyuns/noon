@@ -189,6 +189,7 @@ impl LatexAdmission {
             transform,
             style,
         } = self;
+        let part_fonts = fonts.clone();
         store.publish_compiled_text_resource(
             identity,
             resource,
@@ -213,7 +214,7 @@ impl LatexAdmission {
                     .iter()
                     .map(|part| resource.projected_part(part, store.geometry_resources()))
                     .collect::<Result<Vec<_>, _>>()?;
-                store.with_derived_text_resources(projections, |store, handles| {
+                store.with_derived_text_resources(projections, &part_fonts, |store, handles| {
                     let mut transaction = SemanticMutationTransaction::new();
                     let family = transaction.create_node(SemanticNodeCreation::family());
                     let members = handles

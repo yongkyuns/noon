@@ -15,12 +15,14 @@ use std::{
 type PreparedGlyphFonts = BTreeMap<FontResourceKey, (FontFaceIdentity, Arc<[u8]>)>;
 
 impl SemanticStore {
-    /// Publish several derived views of already-admitted text in one semantic
-    /// transaction. The derived resources are validated and installed together;
-    /// a rejected publication retires every provisional handle.
+    /// Publish derived text views with their compiler font dependencies in one
+    /// semantic transaction. Fonts can still be staged by an enclosing resource
+    /// admission; a rejection retires every provisional view without publishing
+    /// those fonts.
     pub fn with_derived_text_resources<T, E>(
         &mut self,
         resources: Vec<TextResource>,
+        fonts: &FontResourceArena,
         publish: impl FnOnce(&mut Self, &[TextResourceHandle]) -> Result<T, E>,
     ) -> Result<T, E>
     where
@@ -30,14 +32,6 @@ impl SemanticStore {
             resource
                 .validate()
                 .map_err(SemanticTextImportError::Validation)?;
-            for run in resource.runs.iter() {
-                if self.font_resources.get_for_face(&run.font).is_none() {
-                    return Err(SemanticTextImportError::MissingFont(
-                        crate::FontResourceKey::from_face(&run.font),
-                    )
-                    .into());
-                }
-            }
             for vector in resource.vector_items.iter() {
                 let crate::GeometryResource::VectorPath(path) = self
                     .geometry_resources
@@ -49,24 +43,16 @@ impl SemanticStore {
             }
         }
 
-        let mut handles = Vec::new();
-        handles.try_reserve_exact(resources.len())?;
-        for resource in resources {
-            handles.push(
-                self.text_resources
-                    .insert(resource)
-                    .map_err(SemanticTextImportError::Validation)?,
-            );
-        }
-        let result = publish(self, &handles);
-        if result.is_err() {
-            for handle in handles {
-                self.text_resources
-                    .remove(handle.id)
-                    .expect("fresh unpublished derived text is removable");
-            }
-        }
-        result
+        let staged_fonts =
+            self.stage_text_fonts(resources.iter().map(|resource| (resource, fonts)))?;
+        self.with_preflighted_text_resources(
+            resources
+                .into_iter()
+                .map(|resource| (resource, FontResourceArena::new()))
+                .collect(),
+            staged_fonts,
+            publish,
+        )
     }
 
     /// Cold/live admission for a compiler-identified glyph resource. A live
@@ -349,7 +335,7 @@ impl SemanticStore {
                 return Err(SemanticTextImportError::MissingGeometry(vector.geometry));
             }
         }
-        self.stage_text_fonts(inputs)
+        self.stage_text_fonts(inputs.iter().map(|(resource, fonts)| (resource, fonts)))
     }
 
     fn preflight_text_fonts(
@@ -357,7 +343,7 @@ impl SemanticStore {
         inputs: &[(TextResource, FontResourceArena)],
     ) -> Result<PreparedGlyphFonts, SemanticTextImportError> {
         self.validate_text_resources(inputs)?;
-        self.stage_text_fonts(inputs)
+        self.stage_text_fonts(inputs.iter().map(|(resource, fonts)| (resource, fonts)))
     }
 
     fn validate_text_resources(
@@ -372,9 +358,9 @@ impl SemanticStore {
         Ok(())
     }
 
-    fn stage_text_fonts(
+    fn stage_text_fonts<'a>(
         &self,
-        inputs: &[(TextResource, FontResourceArena)],
+        inputs: impl IntoIterator<Item = (&'a TextResource, &'a FontResourceArena)>,
     ) -> Result<PreparedGlyphFonts, SemanticTextImportError> {
         let mut fonts = BTreeMap::new();
         for (resource, source) in inputs {
@@ -410,9 +396,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        Color, FontFaceIdentity, GlyphRun, PositionedGlyph, Rect, SemanticObjectState,
-        SemanticStyle, TextAffineTransform, TextClusterIdentity, TextDirection, TextPart,
-        TextRenderItem, TextSourceKind, TextSourceSpan, Vec2,
+        Color, FontFaceIdentity, GlyphRun, PositionedGlyph, Rect, SemanticNodeCreation,
+        SemanticObjectState, SemanticStyle, TextAffineTransform, TextClusterIdentity,
+        TextDirection, TextPart, TextRenderItem, TextSourceKind, TextSourceSpan, Vec2,
     };
 
     #[derive(Debug)]
@@ -555,6 +541,65 @@ mod tests {
         crate::TextCompilationIdentity {
             descriptor: Arc::from(label.as_bytes()),
             font_contents: Arc::from([Arc::<[u8]>::from([1, 2, 3])]),
+        }
+    }
+
+    #[test]
+    fn derived_text_parts_share_staged_fonts_and_parent_rollback() {
+        for reject in [true, false] {
+            let (resource, fonts, geometry) = glyph_vector_resource();
+            let part_fonts = fonts.clone();
+            let mut store = SemanticStore::new();
+            let before = (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+                store.scene_revision(),
+            );
+            let result = store.publish_compiled_text_resource(
+                identity("derived-parts"),
+                resource,
+                fonts,
+                &geometry,
+                |store, base| {
+                    // The enclosing compiler admission has validated these fonts,
+                    // but neither it nor the derived admission may publish them early.
+                    assert!(store.font_resources().is_empty());
+                    let resource = store.text_resources().get(base).unwrap();
+                    let part = resource
+                        .projected_part(&resource.parts[0], store.geometry_resources())
+                        .unwrap();
+                    store.with_derived_text_resources(vec![part], &part_fonts, |store, handles| {
+                        assert!(store.font_resources().is_empty());
+                        let mut transaction = SemanticMutationTransaction::new();
+                        let mut state = SemanticObjectState::new(handles[0]);
+                        if reject {
+                            state.style.object_opacity = f64::NAN;
+                        }
+                        transaction.add_node(SemanticNodeCreation::object(state));
+                        transaction.apply(store).map_err(Error::Transaction)
+                    })
+                },
+            );
+            if reject {
+                assert!(matches!(result, Err(Error::Transaction(_))));
+                assert_eq!(
+                    (
+                        store.text_resources().stats(),
+                        store.font_resources().stats(),
+                        store.geometry_resources().stats(),
+                        store.scene_revision(),
+                    ),
+                    before
+                );
+                assert!(store.compiled_text_resources.is_empty());
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.impacts().len(), 1);
+                assert_eq!(store.font_resources().len(), 1);
+                assert_eq!(store.text_resources().len(), 2);
+                assert_eq!(store.geometry_resources().len(), 1);
+            }
         }
     }
 
