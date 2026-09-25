@@ -1,0 +1,75 @@
+name: Isolated glyph repair validation
+on:
+  push:
+    branches: [work/1718-glyph-repair-validation]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Preserve exact repair recipes
+        run: cp .github/proposals/glyph-packing-*.patch "$RUNNER_TEMP/"
+      - uses: actions/checkout@v7
+        with:
+          ref: a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9
+          persist-credentials: false
+      - name: Apply and format candidate on exact PR source
+        run: |
+          git apply --check "$RUNNER_TEMP/glyph-packing-callers.patch"
+          git apply "$RUNNER_TEMP/glyph-packing-callers.patch"
+          git apply --check "$RUNNER_TEMP/glyph-packing-parent.patch" "$RUNNER_TEMP/glyph-packing-child.patch"
+          git apply "$RUNNER_TEMP/glyph-packing-parent.patch" "$RUNNER_TEMP/glyph-packing-child.patch"
+          rustup install
+          rustfmt --edition 2021 --config skip_children=true crates/noon-render-wgpu/src/text/preparation.rs crates/noon-render-wgpu/src/text/gpu.rs crates/noon-render-wgpu/src/gpu/retained_text.rs crates/noon-render-wgpu/tests/text_live_atlas_pages.rs
+          git diff --check
+      - name: Qualify native correctness and locality
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/glyph-repair-evidence
+          cargo test -p noon-render-wgpu --lib 2>&1 | tee /tmp/glyph-repair-evidence/unit.log
+          cargo test -p noon-render-wgpu --test text_retained_object_update_locality --test retained_scratch_reuse --test text_live_atlas_pages --test glyph_atlas_residency_churn 2>&1 | tee /tmp/glyph-repair-evidence/locality.log
+          cargo clippy -p noon-render-wgpu --lib -- -D warnings 2>&1 | tee /tmp/glyph-repair-evidence/clippy.log
+      - name: Store validated Git blobs without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          paths = ['crates/noon-render-wgpu/src/text/preparation.rs', 'crates/noon-render-wgpu/src/text/gpu.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs', 'crates/noon-render-wgpu/tests/text_live_atlas_pages.rs']
+          changed = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
+          assert sorted(changed) == sorted(paths), changed
+          assert subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() == 'a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9'
+          records = []
+          out = pathlib.Path('/tmp/glyph-repair-evidence')
+          for path in paths:
+              content = pathlib.Path(path).read_bytes()
+              expected = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+              body = json.dumps({'encoding':'base64','content':base64.b64encode(content).decode()}).encode()
+              request = urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs', body, {'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'}, method='POST')
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  actual = json.load(response)['sha']
+              assert actual == expected, (path, actual, expected)
+              dest = out / path
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(content)
+              records.append({'path':path,'gitBlobSha':actual,'sha256':hashlib.sha256(content).hexdigest(),'bytes':len(content)})
+          (out/'validated-files.json').write_text(json.dumps({'base':'a239ea5e25dc6a5f12ca971fd16f8d9afcbd2ef9','trigger':os.environ['GITHUB_SHA'],'files':records},indent=2)+'\n')
+          (out/'renderer-repair.patch').write_bytes(subprocess.check_output(['git','diff','--binary']))
+          print(json.dumps(records, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: glyph-repair-native-evidence
+          path: /tmp/glyph-repair-evidence
+          retention-days: 7
