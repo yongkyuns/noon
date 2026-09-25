@@ -28,5 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     number.set_value(&mut backend, 12_345.6)?;
     assert_eq!(number.text()?, "+12,345.60");
     assert_eq!(number.mobject().critical_point(-1.0, 0.0)?, left);
+    // Replacing the retained text with the same semantic value must preserve
+    // numeric metadata for subsequent getters and updates.
+    number.set_value(&mut backend, 12_345.6)?;
+    assert_eq!(number.value()?, 12_345.6);
+    assert_eq!(number.text()?, "+12,345.60");
     Ok(())
 }

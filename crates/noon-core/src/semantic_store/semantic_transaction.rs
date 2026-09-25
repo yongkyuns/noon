@@ -1760,6 +1760,12 @@ impl SemanticMutationTransaction {
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
+                        // A generic visual replacement has no numeric source
+                        // contract. Keep staged state consistent with commit,
+                        // which clears stale DecimalNumber metadata. A
+                        // following ReplaceDecimalNumber in the same
+                        // transaction must therefore be observed as a change.
+                        state.set_decimal_number(None);
                     }
                     changed.push(did_change);
                 }
