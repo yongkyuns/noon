@@ -3,6 +3,8 @@
 mod zoomed_view;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
+#[cfg(target_arch = "wasm32")]
+mod graph;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
 #[cfg(any(target_arch = "wasm32", test))]

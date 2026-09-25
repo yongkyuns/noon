@@ -55,7 +55,7 @@ impl GraphPublication for Scene {
 
 impl GraphPublication for LiveSession<'_> {
     fn graph_store(&self) -> Rc<RefCell<SemanticStore>> {
-        Rc::clone(self.store())
+        Rc::clone(self.integration_store())
     }
 
     fn with_graph_publication<T>(

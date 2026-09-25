@@ -4,6 +4,8 @@ use crate::authoring_error::AuthoringFailure;
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
+#[cfg(target_arch = "wasm32")]
+mod graph;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -2955,7 +2957,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
-        inner: CanonicalAuthoringScene,
+        pub(super) inner: CanonicalAuthoringScene,
     }
 
     #[wasm_bindgen]
