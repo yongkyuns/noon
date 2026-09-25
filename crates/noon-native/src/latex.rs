@@ -1,4 +1,4 @@
-//! Optional, cancellable host for the same pinned TeX engine used in browsers.
+//! Native system-TeX and optional pinned browser-engine compiler adapters.
 //!
 //! Compilation is authoring work in a separate process. Rendering never uses
 //! this protocol or keeps a compiler alive on its behalf.
@@ -7,7 +7,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     sync::mpsc,
     thread::{self, JoinHandle},
@@ -37,6 +37,7 @@ pub struct NativeLatexConfig {
     pub kpsewhich: PathBuf,
     pub font_directory: PathBuf,
     pub resource_identity: String,
+    pub timeout: Duration,
 }
 
 impl NativeLatexConfig {
@@ -51,7 +52,13 @@ impl NativeLatexConfig {
             kpsewhich: kpsewhich.into(),
             font_directory: font_directory.into(),
             resource_identity: resource_identity.into(),
+            timeout: Duration::from_secs(45),
         }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
@@ -72,32 +79,32 @@ impl NativeLatexBackend {
                 "native LaTeX resource identity must be non-empty and at most 4096 bytes".into(),
             );
         }
+        if config.timeout.is_zero() {
+            return Err("native LaTeX deadline must be positive".into());
+        }
         if !config.font_directory.is_dir() {
             return Err(format!(
                 "native LaTeX font directory does not exist: {}",
                 config.font_directory.display()
             ));
         }
-        let version = Command::new(&config.latex)
-            .arg("--version")
-            .output()
-            .map_err(|error| format!("cannot start native LaTeX compiler: {error}"))?;
-        if !version.status.success() {
+        let probe_directory = unique_latex_directory("probe")?;
+        let probe_cleanup = TempLatexDirectory(probe_directory.clone());
+        let mut probe = Command::new(&config.latex);
+        probe.arg("--version");
+        let version = run_bounded(
+            &mut probe,
+            config.timeout,
+            &probe_directory.join("version.log"),
+        )?;
+        drop(probe_cleanup);
+        if !version.success() {
             return Err(format!(
                 "native LaTeX compiler version probe failed with {}",
-                version.status
+                version
             ));
         }
-        let first_line = String::from_utf8_lossy(&version.stdout)
-            .lines()
-            .next()
-            .unwrap_or("unknown")
-            .trim()
-            .to_owned();
-        let identity = format!(
-            "native-latex-v1:{}:{}",
-            config.resource_identity, first_line
-        );
+        let identity = format!("native-latex-v1:{}", config.resource_identity);
         Ok(Self {
             config,
             identity,
@@ -131,31 +138,30 @@ impl LatexBackend for NativeLatexBackend {
         if document.len() > MAX_DOCUMENT {
             return Err("LaTeX document exceeds 1 MiB".into());
         }
-        let nonce = LATEX_JOB_NONCE.fetch_add(1, Ordering::Relaxed);
-        let directory =
-            std::env::temp_dir().join(format!("noon-native-latex-{}-{nonce}", std::process::id()));
-        fs::create_dir(&directory)
-            .map_err(|error| format!("cannot create native LaTeX work directory: {error}"))?;
+        let directory = unique_latex_directory("compile")?;
         let cleanup = TempLatexDirectory(directory.clone());
         let source = directory.join("noon.tex");
         fs::write(&source, document)
             .map_err(|error| format!("cannot write native LaTeX source: {error}"))?;
-        let output = Command::new(&self.config.latex)
+        let mut command = Command::new(&self.config.latex);
+        command
             .arg("-interaction=nonstopmode")
             .arg("-halt-on-error")
             .arg("-no-shell-escape")
             .arg("-output-directory")
             .arg(&directory)
-            .arg(&source)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| format!("cannot start native LaTeX compiler: {error}"))?;
-        if !output.status.success() {
-            let diagnostic = String::from_utf8_lossy(&output.stdout);
+            .arg(&source);
+        let output = run_bounded(
+            &mut command,
+            self.config.timeout,
+            &directory.join("console.log"),
+        )?;
+        if !output.success() {
+            let diagnostic = bounded_file_tail(&directory.join("noon.log"), 64 * 1024);
             let tail = diagnostic.lines().rev().take(12).collect::<Vec<_>>();
             return Err(format!(
                 "native LaTeX compilation failed with {}: {}",
-                output.status,
+                output,
                 tail.into_iter().rev().collect::<Vec<_>>().join("\n")
             ));
         }
@@ -176,11 +182,17 @@ impl LatexBackend for NativeLatexBackend {
         if self.fonts.len() >= 256 {
             return Err("LaTeX font resource limit exceeded".into());
         }
-        let tfm_path = Command::new(&self.config.kpsewhich)
-            .arg(format!("{name}.tfm"))
-            .output()
-            .map_err(|error| format!("cannot start kpsewhich for {name}.tfm: {error}"))?;
-        let tfm_path = String::from_utf8_lossy(&tfm_path.stdout).trim().to_owned();
+        let directory = unique_latex_directory("kpsewhich")?;
+        let cleanup = TempLatexDirectory(directory.clone());
+        let output_path = directory.join("path.txt");
+        let mut command = Command::new(&self.config.kpsewhich);
+        command.arg(format!("{name}.tfm"));
+        let status = run_bounded(&mut command, self.config.timeout, &output_path)?;
+        if !status.success() {
+            return Err(format!("kpsewhich failed for {name}.tfm with {status}"));
+        }
+        let tfm_path = bounded_file_tail(&output_path, 4096).trim().to_owned();
+        drop(cleanup);
         if !tfm_path.is_empty() && !Path::new(&tfm_path).is_file() {
             return Err(format!(
                 "kpsewhich returned a missing TFM for {name}: {tfm_path}"
@@ -214,6 +226,58 @@ impl LatexBackend for NativeLatexBackend {
 }
 
 struct TempLatexDirectory(PathBuf);
+
+fn unique_latex_directory(purpose: &str) -> Result<PathBuf, String> {
+    let nonce = LATEX_JOB_NONCE.fetch_add(1, Ordering::Relaxed);
+    let directory = std::env::temp_dir().join(format!(
+        "noon-native-latex-{purpose}-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory)
+        .map_err(|error| format!("cannot create native LaTeX work directory: {error}"))?;
+    Ok(directory)
+}
+
+fn run_bounded(
+    command: &mut Command,
+    timeout: Duration,
+    output: &Path,
+) -> Result<ExitStatus, String> {
+    let stdout = fs::File::create(output)
+        .map_err(|error| format!("cannot create native LaTeX diagnostic file: {error}"))?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start native LaTeX process: {error}"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Ok(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("native LaTeX process exceeded its deadline and was terminated".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn bounded_file_tail(path: &Path, maximum: usize) -> String {
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
+    };
+    let length = file.metadata().map(|value| value.len()).unwrap_or(0);
+    if length > maximum as u64 {
+        use std::io::Seek;
+        let _ = file.seek(std::io::SeekFrom::End(-(maximum as i64)));
+    }
+    let mut bytes = Vec::with_capacity(maximum.min(length as usize));
+    let _ = file.take(maximum as u64).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
 
 impl Drop for TempLatexDirectory {
     fn drop(&mut self) {
@@ -507,6 +571,25 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
         assert!(error.contains("explicit outline asset"), "{error}");
         assert!(error.contains("cmr10.ttf"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_process_deadline_kills_and_reaps_child() {
+        let directory = unique_latex_directory("deadline-test").unwrap();
+        let cleanup = TempLatexDirectory(directory.clone());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let started = std::time::Instant::now();
+        let error = run_bounded(
+            &mut command,
+            Duration::from_millis(40),
+            &directory.join("output.log"),
+        )
+        .unwrap_err();
+        drop(cleanup);
+        assert!(error.contains("deadline"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
