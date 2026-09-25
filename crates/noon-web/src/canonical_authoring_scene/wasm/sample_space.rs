@@ -1,8 +1,10 @@
 //! SampleSpace bindings use the same private canonical context as other live edits.
-use super::*;
+use super::CanonicalAuthoringSceneContext;
 use crate::authoring_sample_space::{
     colors_from_rgba, WasmSampleSpaceHandle, WasmSampleSpaceOptions,
 };
+use crate::WasmAuthoringFamilyHandle;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
