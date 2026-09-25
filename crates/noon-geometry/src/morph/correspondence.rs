@@ -54,15 +54,13 @@ pub(crate) fn plan_with_authored_progress(
             let start_progress = (global_curve + curve) as f32 / total_curves as f32;
             let end_progress = (global_curve + curve + 1) as f32 / total_curves as f32;
             flatten_pair(
-                a,
-                b,
+                [a, b],
                 options.flatten_tolerance,
                 minimum_depth,
                 0,
                 &mut result,
                 &mut point_progress,
-                start_progress,
-                end_progress,
+                start_progress..end_progress,
             );
         }
         let end_progress = (global_curve + curve_count) as f32 / total_curves as f32;
@@ -208,46 +206,40 @@ fn flat(p: [Vec2; 4], tolerance: f32) -> bool {
 }
 
 fn flatten_pair(
-    a: [Vec2; 4],
-    b: [Vec2; 4],
+    [a, b]: [[Vec2; 4]; 2],
     tolerance: f32,
     minimum: u32,
     depth: u32,
     output: &mut MorphContourPlan,
     point_progress: &mut Vec<f32>,
-    start_progress: f32,
-    end_progress: f32,
+    progress: std::ops::Range<f32>,
 ) {
     if depth == 16 || (depth >= minimum && flat(a, tolerance) && flat(b, tolerance)) {
         output.source_points.push(a[0]);
         output.target_points.push(b[0]);
-        point_progress.push(start_progress);
+        point_progress.push(progress.start);
         return;
     }
     let (a0, a1) = split(a);
     let (b0, b1) = split(b);
-    let middle_progress = (start_progress + end_progress) * 0.5;
+    let middle_progress = (progress.start + progress.end) * 0.5;
     flatten_pair(
-        a0,
-        b0,
+        [a0, b0],
         tolerance,
         minimum,
         depth + 1,
         output,
         point_progress,
-        start_progress,
-        middle_progress,
+        progress.start..middle_progress,
     );
     flatten_pair(
-        a1,
-        b1,
+        [a1, b1],
         tolerance,
         minimum,
         depth + 1,
         output,
         point_progress,
-        middle_progress,
-        end_progress,
+        middle_progress..progress.end,
     );
 }
 
