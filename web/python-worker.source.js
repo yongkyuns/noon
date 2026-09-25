@@ -168,7 +168,8 @@ async function initializePyodide() {
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
   self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
   self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
-  self.noonAuthoringBarChartOptions = WasmBarChartOptions;
+  self.noonAuthoringBarChartOptions = (values, range, width, height) =>
+    new WasmBarChartOptions(values, range, width, height);
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
   self.noonCreateAuthoringCoordinateHandle = (options) =>
     authoringStore.createCoordinates(options);
