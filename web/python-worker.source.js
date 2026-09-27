@@ -14,9 +14,8 @@ import initNoonWeb, {
   WasmLatexCompiler,
   WasmLatexOptions,
   WasmMatrixOptions,
-  WasmMobjectMatrixRows,
+  WasmCompositeRows,
   WasmTableOptions,
-  WasmMobjectTableRows,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -251,8 +250,18 @@ async function initializePyodide() {
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
       : context.liveCreateDecimalNumber(...args));
   };
+  const compositeRows = (rows) => {
+    const entries = new WasmCompositeRows();
+    for (const row of rows) {
+      entries.beginRow();
+      for (const entry of row) {
+        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        else entries.appendEntry(entry);
+      }
+    }
+    return entries;
+  };
   self.noonTableOptions = (...args) => new WasmTableOptions(...args);
-  self.noonMobjectTableRows = (...args) => new WasmMobjectTableRows(...args);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
     context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
@@ -275,14 +284,7 @@ async function initializePyodide() {
     return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
   };
   self.noonCreateAuthoringMobjectTableHandle = (rows, v, h, outer, context) => {
-    const entries = new WasmMobjectTableRows();
-    for (const row of Array.from(rows, row => Array.from(row))) {
-      entries.beginRow();
-      for (const entry of row) {
-        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
-        else entries.appendEntry(entry);
-      }
-    }
+    const entries = compositeRows(rows);
     return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
@@ -298,7 +300,6 @@ async function initializePyodide() {
     };
   };
   self.noonMatrixOptions = WasmMatrixOptions;
-  self.noonMobjectMatrixRows = WasmMobjectMatrixRows;
   self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
@@ -314,14 +315,7 @@ async function initializePyodide() {
   };
   self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
-    const entries = new WasmMobjectMatrixRows();
-    for (const row of Array.from(rows, row => Array.from(row))) {
-      entries.beginRow();
-      for (const entry of row) {
-        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
-        else entries.appendEntry(entry);
-      }
-    }
+    const entries = compositeRows(rows);
     return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));

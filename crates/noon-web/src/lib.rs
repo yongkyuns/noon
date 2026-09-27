@@ -11,7 +11,11 @@ mod authoring_bar_chart;
 #[cfg(target_arch = "wasm32")]
 mod authoring_brace;
 #[cfg(target_arch = "wasm32")]
+mod authoring_composite;
+#[cfg(target_arch = "wasm32")]
 mod authoring_coordinates;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_composite::WasmCompositeRows;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;

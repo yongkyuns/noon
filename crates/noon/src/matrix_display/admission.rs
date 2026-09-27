@@ -1,4 +1,5 @@
 use super::*;
+use crate::semantic_mobject::transformed_rect_layout_bounds;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
     SemanticObjectState, SemanticTransform2_5D, TextResource,
@@ -147,32 +148,7 @@ fn brackets(
         prepare_text(backend, format!("\\left.{}\\right]", empty))?,
     ])
 }
-fn text_bounds(resource: &TextResource, transform: SemanticTransform2_5D) -> Bounds2D64 {
-    let mut bounds = Bounds2D64::point(0.0, 0.0);
-    for (index, point) in [
-        resource.bounds.min,
-        noon_core::Vec2::new(resource.bounds.min.x, resource.bounds.max.y),
-        noon_core::Vec2::new(resource.bounds.max.x, resource.bounds.min.y),
-        resource.bounds.max,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let x = f64::from(point.x) * transform.scale.x;
-        let y = f64::from(point.y) * transform.scale.y;
-        let (sin, cos) = transform.rotation_z.sin_cos();
-        let (x, y) = (
-            x * cos - y * sin + transform.translation.x,
-            x * sin + y * cos + transform.translation.y,
-        );
-        if index == 0 {
-            bounds = Bounds2D64::point(x, y);
-        } else {
-            bounds.include(x, y);
-        }
-    }
-    bounds
-}
+
 fn include(bounds: &mut Option<Bounds2D64>, next: Bounds2D64) {
     if let Some(bounds) = bounds {
         bounds.include(next.min_x, next.min_y);
@@ -189,10 +165,13 @@ fn layout_text(
 ) -> Result<(Bounds2D64, usize), MatrixAuthoringError> {
     let mut bounds = None;
     for (index, (resource, transform)) in resources.iter().zip(transforms.iter_mut()).enumerate() {
-        let raw = text_bounds(resource, *transform);
+        let raw = transformed_rect_layout_bounds(resource.bounds, *transform);
         transform.translation.x += (index % shape.columns) as f64 * options.h_buff - raw.max_x;
         transform.translation.y += -((index / shape.columns) as f64) * options.v_buff - raw.min_y;
-        include(&mut bounds, text_bounds(resource, *transform));
+        include(
+            &mut bounds,
+            transformed_rect_layout_bounds(resource.bounds, *transform),
+        );
     }
     let bounds = bounds.ok_or(MatrixAuthoringError::EmptyMatrix)?;
     Ok((
@@ -209,11 +188,11 @@ fn place_brackets(
 ) {
     let target_height = entry_bounds.height() + 2.0 * options.bracket_v_buff;
     for (index, item) in bracket.iter_mut().enumerate() {
-        let natural = text_bounds(&item.dependency.1, item.transform);
+        let natural = transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform);
         if options.stretch_brackets && natural.height() > 0.0 {
             item.transform.scale.y *= target_height / natural.height();
         }
-        let placed = text_bounds(&item.dependency.1, item.transform);
+        let placed = transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform);
         item.transform.translation.y +=
             (entry_bounds.min_y + entry_bounds.max_y - placed.min_y - placed.max_y) * 0.5;
         item.transform.translation.x += if index == 0 {
@@ -224,10 +203,16 @@ fn place_brackets(
     }
     let mut all = None;
     for (resource, transform) in entry_resources.iter().zip(entry_transforms.iter()) {
-        include(&mut all, text_bounds(resource, *transform));
+        include(
+            &mut all,
+            transformed_rect_layout_bounds(resource.bounds, *transform),
+        );
     }
     for item in bracket.iter() {
-        include(&mut all, text_bounds(&item.dependency.1, item.transform));
+        include(
+            &mut all,
+            transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform),
+        );
     }
     let all = all.expect("matrix has entries and brackets");
     let (x, y) = ((all.min_x + all.max_x) * 0.5, (all.min_y + all.max_y) * 0.5);
@@ -544,11 +529,11 @@ pub(super) fn publish_target_mobject_matrix(
     )?;
     let target_height = bounds.height() + 2.0 * options.bracket_v_buff;
     for (index, item) in bracket.iter_mut().enumerate() {
-        let natural = text_bounds(&item.dependency.1, item.transform);
+        let natural = transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform);
         if options.stretch_brackets && natural.height() > 0.0 {
             item.transform.scale.y *= target_height / natural.height();
         }
-        let placed = text_bounds(&item.dependency.1, item.transform);
+        let placed = transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform);
         item.transform.translation.y +=
             (bounds.min_y + bounds.max_y - placed.min_y - placed.max_y) * 0.5;
         item.transform.translation.x += if index == 0 {
@@ -559,7 +544,10 @@ pub(super) fn publish_target_mobject_matrix(
     }
     let mut all = Some(bounds);
     for item in &bracket {
-        include(&mut all, text_bounds(&item.dependency.1, item.transform));
+        include(
+            &mut all,
+            transformed_rect_layout_bounds(item.dependency.1.bounds, item.transform),
+        );
     }
     let all = all.expect("existing Matrix has bounds");
     let center = ((all.min_x + all.max_x) * 0.5, (all.min_y + all.max_y) * 0.5);

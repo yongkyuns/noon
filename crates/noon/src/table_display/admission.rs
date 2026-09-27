@@ -1,4 +1,5 @@
 use super::*;
+use crate::semantic_mobject::transformed_rect_layout_bounds;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
     SemanticObjectState, SemanticStyle, SemanticTransform2_5D, StoredGeometry, TextResource,
@@ -159,32 +160,6 @@ fn prepare_native_text(source: String) -> Result<PreparedTextCell, TableAuthorin
         style,
         presentation_baseline: None,
     })
-}
-fn text_bounds(resource: &TextResource, transform: SemanticTransform2_5D) -> Bounds2D64 {
-    let mut result = Bounds2D64::point(0.0, 0.0);
-    for (index, point) in [
-        resource.bounds.min,
-        noon_core::Vec2::new(resource.bounds.min.x, resource.bounds.max.y),
-        noon_core::Vec2::new(resource.bounds.max.x, resource.bounds.min.y),
-        resource.bounds.max,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let x = f64::from(point.x) * transform.scale.x;
-        let y = f64::from(point.y) * transform.scale.y;
-        let (sin, cos) = transform.rotation_z.sin_cos();
-        let (x, y) = (
-            x * cos - y * sin + transform.translation.x,
-            x * sin + y * cos + transform.translation.y,
-        );
-        if index == 0 {
-            result = Bounds2D64::point(x, y);
-        } else {
-            result.include(x, y);
-        }
-    }
-    result
 }
 
 struct GridLayout {
@@ -683,7 +658,9 @@ fn publish_prepared_text_table(
     let entry_bounds: Vec<_> = prepared
         .iter()
         .zip(&transforms)
-        .map(|(item, transform)| text_bounds(&item.dependency.1, *transform))
+        .map(|(item, transform)| {
+            transformed_rect_layout_bounds(item.dependency.1.bounds, *transform)
+        })
         .collect();
     let store = publisher.store();
     preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
@@ -836,7 +813,12 @@ pub(super) fn publish_numeric_table(
                         semantic
                             .text_resources()
                             .get(*handle)
-                            .map(|resource| text_bounds(resource, SemanticTransform2_5D::default()))
+                            .map(|resource| {
+                                transformed_rect_layout_bounds(
+                                    resource.bounds,
+                                    SemanticTransform2_5D::default(),
+                                )
+                            })
                             .ok_or(TextAuthoringError::MissingGeometryResource)
                     })
                     .collect::<Result<_, _>>()?;

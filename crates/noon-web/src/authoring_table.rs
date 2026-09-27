@@ -1,5 +1,7 @@
 //! Thin WASM handles for retained shared Table families.
 
+use crate::authoring_composite::entry_handle;
+
 use crate::{authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle};
 use wasm_bindgen::prelude::*;
 
@@ -20,57 +22,6 @@ impl WasmTableOptions {
                 ..Default::default()
             },
         }
-    }
-}
-
-/// Validated existing roots for one MobjectTable admission.
-#[wasm_bindgen]
-pub struct WasmMobjectTableRows {
-    rows: Vec<Vec<noon::CompositeEntryHandle>>,
-}
-
-#[wasm_bindgen]
-impl WasmMobjectTableRows {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        Self { rows: Vec::new() }
-    }
-    #[wasm_bindgen(js_name = beginRow)]
-    pub fn begin_row(&mut self) {
-        self.rows.push(Vec::new());
-    }
-    #[wasm_bindgen(js_name = appendEntry)]
-    pub fn append_entry(&mut self, entry: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
-        self.rows
-            .last_mut()
-            .ok_or_else(|| js_error("MobjectTable rows require beginRow before appendEntry"))?
-            .push(noon::CompositeEntryHandle::Mobject(
-                entry.semantic_mobject().clone(),
-            ));
-        Ok(())
-    }
-    #[wasm_bindgen(js_name = appendFamilyEntry)]
-    pub fn append_family_entry(
-        &mut self,
-        entry: &WasmAuthoringFamilyHandle,
-    ) -> Result<(), JsValue> {
-        self.rows
-            .last_mut()
-            .ok_or_else(|| js_error("MobjectTable rows require beginRow before appendFamilyEntry"))?
-            .push(noon::CompositeEntryHandle::Family(entry.semantic_family()?));
-        Ok(())
-    }
-}
-impl WasmMobjectTableRows {
-    pub(crate) fn targets(&self) -> Vec<Vec<noon::MobjectTarget<'_>>> {
-        self.rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(noon::CompositeEntryHandle::as_target)
-                    .collect()
-            })
-            .collect()
     }
 }
 
@@ -98,17 +49,6 @@ pub async fn create_table_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::session(compiler).map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
-}
-
-fn entry_handle(entry: noon::CompositeEntryHandle) -> JsValue {
-    match entry {
-        noon::CompositeEntryHandle::Mobject(object) => {
-            WasmAuthoringMobjectHandle::from_semantic_mobject(object).into()
-        }
-        noon::CompositeEntryHandle::Family(family) => {
-            WasmAuthoringFamilyHandle::from_semantic_family(family).into()
-        }
-    }
 }
 
 #[wasm_bindgen]

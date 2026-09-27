@@ -21,6 +21,23 @@ pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f
     )
 }
 
+/// Bounds of a retained text rectangle under the shared semantic transform.
+pub(crate) fn transformed_rect_layout_bounds(
+    local: noon_core::Rect,
+    transform: SemanticTransform2_5D,
+) -> Bounds2D64 {
+    let mut bounds = None;
+    for point in [
+        local.min,
+        Vec2::new(local.min.x, local.max.y),
+        Vec2::new(local.max.x, local.min.y),
+        local.max,
+    ] {
+        include_layout_point(&mut bounds, transform_layout_point(transform, point));
+    }
+    bounds.expect("a rectangle has four corners")
+}
+
 fn canonical_circle_layout_bounds(
     radius: f32,
     transform: SemanticTransform2_5D,
@@ -236,16 +253,7 @@ fn measure_content(
                 .get(handle)
                 .ok_or(AuthoringError::MissingTextResource(handle))?
                 .bounds;
-            let mut bounds = None;
-            for point in [
-                local.min,
-                Vec2::new(local.min.x, local.max.y),
-                local.max,
-                Vec2::new(local.max.x, local.min.y),
-            ] {
-                include_layout_point(&mut bounds, transform_layout_point(transform, point));
-            }
-            return Ok(bounds);
+            return Ok(Some(transformed_rect_layout_bounds(local, transform)));
         }
     };
     Ok(match geometry {
@@ -270,4 +278,28 @@ fn measure_content(
             }
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transformed_text_rectangle_preserves_offset_rotation_and_reflection() {
+        let rect = noon_core::Rect::new(Vec2::new(-1.0, 2.0), Vec2::new(3.0, 5.0));
+        let transform = SemanticTransform2_5D {
+            translation: noon_core::SemanticVec3::new(7.0, -4.0, 0.0),
+            scale: noon_core::SemanticVec3::new(-2.0, 3.0, 1.0),
+            rotation_z: std::f64::consts::FRAC_PI_2,
+        };
+        let bounds = transformed_rect_layout_bounds(rect, transform);
+        for (actual, expected) in [
+            (bounds.min_x, -8.0),
+            (bounds.max_x, 1.0),
+            (bounds.min_y, -10.0),
+            (bounds.max_y, -2.0),
+        ] {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
 }

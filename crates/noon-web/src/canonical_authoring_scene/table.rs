@@ -1,43 +1,10 @@
 use super::wasm::CanonicalAuthoringSceneContext;
+use crate::authoring_composite::{number_rows, text_rows};
 use crate::{
-    authoring_error::js_error, WasmLatexCompiler, WasmMobjectTableRows, WasmTableHandle,
+    authoring_error::js_error, WasmCompositeRows, WasmLatexCompiler, WasmTableHandle,
     WasmTableOptions,
 };
 use wasm_bindgen::prelude::*;
-
-fn text_rows(rows: js_sys::Array) -> Result<Vec<Vec<String>>, JsValue> {
-    rows.iter()
-        .map(|row| {
-            let row: js_sys::Array = row
-                .dyn_into()
-                .map_err(|_| js_error("Table rows must be arrays"))?;
-            row.iter()
-                .map(|entry| {
-                    entry
-                        .as_string()
-                        .ok_or_else(|| js_error("Table entries must be strings"))
-                })
-                .collect()
-        })
-        .collect()
-}
-fn number_rows(rows: js_sys::Array) -> Result<Vec<Vec<f64>>, JsValue> {
-    rows.iter()
-        .map(|row| {
-            let row: js_sys::Array = row
-                .dyn_into()
-                .map_err(|_| js_error("Table rows must be arrays"))?;
-            row.iter()
-                .map(|entry| {
-                    entry
-                        .as_f64()
-                        .filter(|value| value.is_finite())
-                        .ok_or_else(|| js_error("Table entries must be finite numbers"))
-                })
-                .collect()
-        })
-        .collect()
-}
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
@@ -125,7 +92,7 @@ impl CanonicalAuthoringSceneContext {
         rows: js_sys::Array,
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
-        let rows = text_rows(rows)?;
+        let rows = text_rows(rows, "Table")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::Table::from_rows_with_options(&mut self.inner.scene, rows, options.options)
                 .map(WasmTableHandle::new)
@@ -146,7 +113,7 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
-        let rows = text_rows(rows)?;
+        let rows = text_rows(rows, "Table")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::MathTable::from_rows_with_options(
                 &mut self.inner.scene,
@@ -172,7 +139,7 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
-        let rows = number_rows(rows)?;
+        let rows = number_rows(rows, "Table")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::IntegerTable::from_rows_with_options(
                 &mut self.inner.scene,
@@ -198,7 +165,7 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
-        let rows = number_rows(rows)?;
+        let rows = number_rows(rows, "Table")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::DecimalTable::from_rows_with_options(
                 &mut self.inner.scene,
@@ -224,7 +191,7 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveCreateMobjectTable)]
     pub fn live_create_mobject_table(
         &mut self,
-        rows: &WasmMobjectTableRows,
+        rows: &WasmCompositeRows,
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
