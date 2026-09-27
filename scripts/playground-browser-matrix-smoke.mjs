@@ -430,6 +430,8 @@ try {
 
   if (!runtimeSupported) {
     const reasons = missingBase.length > 0 ? missingBase.join(", ") : selectionError;
+    assert.notEqual(process.env.NOON_PLAYGROUND_REQUIRE_RUNTIME, "1",
+      `${browserName}/${profileName}: required runtime is unavailable: ${reasons}`);
     console.log(
       `↷ ${browserName}/${profileName}: runtime unsupported by production render-host selection (${reasons})`,
     );
