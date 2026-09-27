@@ -491,7 +491,7 @@ async function start() {
     const context = authoring.createSceneContext();
     const circle = authoring.createManimCircle(0.75);
     context.beginLiveExecution(2);
-    context.liveAdd("context-loss-circle", circle);
+    context.liveAdd("1", circle);
     const player = context.createExecutionPlayer(2, 17);
     const resourceBundle = player.resourceBundleBytes();
     const initialDelta = player.initialDeltaJson();

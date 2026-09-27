@@ -850,3 +850,29 @@ test("an incomplete WebGL recovery keeps the renderer suspended", async () => {
   assert.equal(vm.runInContext('webglContextLost', harness.context), false);
   assert.equal(harness.createdRenderer.renderCalls, presents + 1);
 });
+
+test("WebGL recovery waits for later restoration listeners, beyond a microtask checkpoint", async () => {
+  const harness = await createManagedWakeHarness();
+  let restorationRecorded = false;
+  let recoveries = 0;
+  harness.createdRenderer.recoverWebGlContext = async () => {
+    assert.equal(restorationRecorded, true, "Rust restoration listener has not run yet");
+    recoveries += 1;
+    return true;
+  };
+  harness.context.queueMicrotask = queueMicrotask;
+  vm.runInContext(`
+    suspendForWebGlContextLoss({preventDefault() {}});
+    wakeAfterWebGlContextRestored();
+  `, harness.context);
+  await flushTasks();
+  assert.equal(recoveries, 0, "recovery must not run at an inter-listener microtask checkpoint");
+  restorationRecorded = true;
+  assert.equal(harness.timers.size, 1);
+  const [timerId, timer] = [...harness.timers][0];
+  harness.timers.delete(timerId);
+  timer.callback();
+  await flushTasks();
+  assert.equal(recoveries, 1);
+  assert.equal(vm.runInContext('webglContextLost', harness.context), false);
+});

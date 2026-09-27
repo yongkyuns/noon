@@ -191,10 +191,10 @@ export function createAuthoringRenderController(host) {
 
   function wakeAfterWebGlContextRestored() {
     invalidatePointerReceipt();
-    // Rust records context restoration synchronously. Defer the platform wake
-    // until every restore listener has run, then rebuild before presenting even
-    // when the execution owner has settled to idle.
-    queueMicrotask(() => void recoverAndPresentWebGlContext());
+    // Browsers can checkpoint microtasks between event listeners. Use a new
+    // task so Rust's later-registered restoration listener has recorded the
+    // loss/restoration before recovery checks it, including while idle.
+    setTimeout(() => void recoverAndPresentWebGlContext(), 0);
   }
 
   async function recoverAndPresentWebGlContext() {
