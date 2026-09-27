@@ -3247,7 +3247,7 @@ mod tests {
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
-        SemanticStore, StoredGeometry, TextResourceLookup,
+        SemanticStore, StoredGeometry,
     };
 
     struct NumericRuleBackend;
@@ -4521,13 +4521,15 @@ mod tests {
         }
 
         let variable = player
-            .live_create_variable(
-                &mut backend,
-                "x".into(),
-                1.25,
-                noon::DecimalFormat::default(),
-                48.0,
-            )
+            .with_live_session(|live| {
+                live.create_variable(
+                    &mut backend,
+                    "x".into(),
+                    1.25,
+                    noon::DecimalFormat::default(),
+                    48.0,
+                )
+            })
             .unwrap();
         player
             .with_live_session(|live| {
