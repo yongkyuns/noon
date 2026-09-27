@@ -558,6 +558,13 @@ mod wasm {
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+            // Assigning equal OffscreenCanvas dimensions resets its backing
+            // store. Renderer transitions always reconcile the current CSS
+            // size after bootstrap, so this must be a no-op when the backing
+            // dimensions are already current.
+            if self.canvas.width() == width && self.canvas.height() == height {
+                return Ok(());
+            }
             self.canvas.set_width(width);
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
