@@ -15,6 +15,7 @@ import { posterEvidence } from "./showcase-posters.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { seekPausedGallery, qualifyPlayheadEndpoints } from "./showcase-playback.mjs";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
+import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
 const { PNG } = pngjs;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -33,6 +34,16 @@ const report = {
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
 const escape = (text) => String(text).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+
+async function withCanvasPointerEvents(canvas, value, action) {
+  await canvas.evaluate((element, pointerEvents) =>
+    element.style.setProperty("pointer-events", pointerEvents, "important"), value);
+  try {
+    return await action();
+  } finally {
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
+  }
+}
 
 function validateImage(bytes, label) {
   const image = PNG.sync.read(bytes);
@@ -181,17 +192,21 @@ async function captureSelection(context, entry, result) {
     await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
     await page.addStyleTag({ content: ".workspace{grid-template-columns:300px 1fr}.canvas-frame{width:960px;max-width:none}" });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    const canvas = page.locator("#scene");
+    await layoutReplayViewport(canvas, report.viewport);
+    await replayViewport(canvas, report.viewport);
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
+    await replayViewport(canvas, report.viewport);
     stage = "pause and seek to the authored endpoint";
-    const requestedTime = await seekPausedGallery(page, entry.duration);
+    const requestedTime = await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
     assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.equal(actualBackend, expectedBackend, "pointer capture must use the requested backend too");
     assertCaptureTime(entry, { requestedTime, publishedTime: metrics.metrics.time }, requestedTime);
-    const canvas = page.locator("#scene");
     const before = await canvas.screenshot();
     const baseImage = validateImage(before, `${entry.id}: unselected base`);
     // Preserve comparison inputs as they are captured, including on failure.
@@ -222,8 +237,10 @@ async function captureSelection(context, entry, result) {
     if (lastClear) await writeFile(path.join(output, `${entry.id}-${cleared ? "cleared" : "clear-last"}.png`), lastClear);
     assert.ok(cleared, "background click did not restore the base pixels exactly");
     stage = "restart and restore the same resolved frame";
-    await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
-    await seekPausedGallery(page, entry.duration);
+    await withCanvasPointerEvents(canvas, "none", () =>
+      page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click());
+    await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
+    await replayViewport(canvas, report.viewport);
     const restarted = await canvas.screenshot();
     await writeFile(path.join(output, `${entry.id}-restarted.png`), restarted);
     assert.ok(samePixels(before, restarted), "restart/seek did not restore the base pixels exactly");

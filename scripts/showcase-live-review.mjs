@@ -9,6 +9,18 @@ import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-
 import { waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
 
+const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
+
+async function withCanvasPointerEvents(canvas, value, action) {
+  await canvas.evaluate((element, pointerEvents) =>
+    element.style.setProperty("pointer-events", pointerEvents, "important"), value);
+  try {
+    return await action();
+  } finally {
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
+  }
+}
+
 // First execution and replay are distinct engine capabilities. Keep both results,
 // but do not count a successful first pass as a replacement for failed replay.
 export function assertFirstPass(entry, observed, expectedBackend) {
@@ -204,13 +216,20 @@ async function main() {
         const editorSource = await page.locator("#python-scene-source").inputValue();
         assert.equal(editorSource, source, "live review must run the exact checked-in source");
         result.sourceSha256 = hash(source);
+        const canvas = page.locator("#scene");
+        // Compare ordinary execution and replay against the same backing pixels.
+        // Keep the real canvas and renderer; the shared helper only aligns its
+        // review layout and replayViewport waits for the host resize to land.
+        await layoutReplayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
+        await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
+        await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
         result.stage = "ordinary first pass";
         result.firstPassOutcome = "fail";
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
         result.firstPassWallMsIncludingAuthoring = await runOrdinaryGallery(page);
+        await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
         // Preserve first-pass evidence; the manifest below distinguishes expected denial from replay failure.
         result.firstPass = await readLiveState(page);
-        const canvas = page.locator("#scene");
         const firstPass = PNG.sync.read(await canvas.screenshot({
           path: path.join(output, `${entry.id}-first-pass.png`),
         }));
@@ -226,7 +245,11 @@ async function main() {
           result.intermediateReplayOutcome = "not-applicable";
           result.stage = "fresh Run after expected replay denial";
           result.nonreplayableRerunOutcome = "fail";
+          await layoutReplayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
+          await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
+          await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
           result.nonreplayableRerunWallMsIncludingAuthoring = await runOrdinaryGallery(page);
+          await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
           const rerunState = await readLiveState(page);
           assertNonreplayableHostCallbacks(entry, rerunState, expectedBackend);
           const rerunImage = PNG.sync.read(await canvas.screenshot({
@@ -245,7 +268,7 @@ async function main() {
         result.replayOutcome = "fail";
         assertReplayAvailable(result.firstPass);
         result.stage = "replay seek to resolved endpoint";
-        const requestedTime = await seekPausedGallery(page, entry.duration);
+        const requestedTime = await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
         const metrics = await waitForPublishedGalleryFrame(page, requestedTime, entry.duration);
         const observed = await page.evaluate(() => ({
           selectedExampleId: window.__noonExampleGallery.selectedExampleId,
@@ -269,8 +292,9 @@ async function main() {
         assertLivePixels(firstPass, endpoint);
         result.endpointMatchesFirstPass = true;
         result.stage = "restart and recover endpoint";
-        await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
-        const replayTime = await seekPausedGallery(page, entry.duration);
+        await withCanvasPointerEvents(canvas, "none", () =>
+          page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click());
+        const replayTime = await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
         const replayMetrics = await waitForPublishedGalleryFrame(page, replayTime, entry.duration);
         assertLiveEndpoint(entry, Number(observed.duration), replayTime, replayMetrics.metrics.time);
         const replay = PNG.sync.read(await canvas.screenshot({
@@ -291,7 +315,7 @@ async function main() {
         // gallery size. Only this additional comparison resizes the actual
         // canvas to the forward oracle's viewport; never rescale/crop PNGs.
         await layoutReplayViewport(canvas, captureReport.viewport);
-        await seekPausedGallery(page, entry.duration, 0);
+        await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration, 0));
         await waitForPublishedGalleryFrame(page, 0, entry.duration);
         result.intermediateViewport = await replayViewport(canvas, captureReport.viewport);
         result.intermediateSamples = [];
@@ -305,7 +329,8 @@ async function main() {
               const firstBytes = await readFile(path.join(output, "..", checkpoint.filename));
               const firstImage = PNG.sync.read(firstBytes);
               assertOracleImage(checkpoint, firstBytes, firstImage);
-              const time = await seekPausedGallery(page, entry.duration, checkpoint.completionProbe ? null : checkpoint.replayTime);
+              const time = await withCanvasPointerEvents(canvas, "none", () =>
+                seekPausedGallery(page, entry.duration, checkpoint.completionProbe ? null : checkpoint.replayTime));
               const replayMetrics = await waitForPublishedGalleryFrame(page, time, entry.duration);
               comparison.publishedTime = replayMetrics.metrics.time;
               comparison.backend = replayMetrics.metrics.backend;
