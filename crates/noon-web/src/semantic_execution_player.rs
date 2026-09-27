@@ -4524,7 +4524,7 @@ mod tests {
             .with_live_session(|live| {
                 live.create_variable(
                     &mut backend,
-                    "x".into(),
+                    "x",
                     1.25,
                     noon::DecimalFormat::default(),
                     48.0,
