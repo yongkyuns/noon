@@ -55,6 +55,43 @@ export function summarizeLiveReview(results) {
   };
 }
 
+export async function runOrdinaryGallery(page, deadlineMs = 360000) {
+  const started = performance.now();
+  let timer;
+  try {
+    await Promise.race([
+      page.evaluate(() => window.__noonExampleGallery.run()),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("ordinary gallery Run exceeded its review deadline")), deadlineMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  return performance.now() - started;
+}
+
+export async function readLiveState(page) {
+  return page.evaluate(async () => {
+    const metrics = await window.__noonExampleGallery.executionMetrics();
+    return {
+      selectedExampleId: window.__noonExampleGallery.selectedExampleId,
+      runInFlight: window.__noonExampleGallery.runInFlight,
+      patchState: document.querySelector("#patch-status")?.dataset.state,
+      patch: document.querySelector("#patch-status")?.value,
+      backend: document.querySelector("#status")?.dataset.rendererBackend,
+      controls: { ...document.querySelector(".playback-controls")?.dataset },
+      replayReason: document.querySelector(".playback-controls")?.title,
+      disabledReplayControls: {
+        play: document.querySelector(".playback-toggle")?.disabled === true,
+        restart: document.querySelector(".playback-restart")?.disabled === true,
+        scrubber: document.querySelector(".playback-scrubber")?.disabled === true,
+      },
+      objectCount: metrics?.metrics?.objectCount,
+    };
+  });
+}
+
 export function assertLiveOutcome(entry, observed, expectedBackend) {
   assert.equal(observed.selectedExampleId, entry.id, "wrong live lesson");
   assert.equal(observed.patchState, "applied", "source did not finish successfully");
@@ -170,43 +207,15 @@ async function main() {
         result.sourceSha256 = hash(source);
         result.stage = "ordinary first pass";
         result.firstPassOutcome = "fail";
-        const started = performance.now();
-        let timer;
-        try {
-          // Closing the page in finally retires its workers on timeout; no stuck run survives.
-          await Promise.race([
-            page.evaluate(() => window.__noonExampleGallery.run()),
-            new Promise((_, reject) => {
-              timer = setTimeout(() => reject(new Error("ordinary first pass exceeded its review deadline")), 360000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
-        result.firstPassWallMsIncludingAuthoring = performance.now() - started;
-        // Preserve the unseeked result even when the runtime refuses replay.
-        // An unavailable replay remains a gate failure, not a successful fallback.
-        result.firstPass = await page.evaluate(() => ({
-          selectedExampleId: window.__noonExampleGallery.selectedExampleId,
-          runInFlight: window.__noonExampleGallery.runInFlight,
-          patchState: document.querySelector("#patch-status")?.dataset.state,
-          patch: document.querySelector("#patch-status")?.value,
-          backend: document.querySelector("#status")?.dataset.rendererBackend,
-          controls: { ...document.querySelector(".playback-controls")?.dataset },
-          replayReason: document.querySelector(".playback-controls")?.title,
-          disabledReplayControls: {
-            play: document.querySelector(".playback-toggle")?.disabled === true,
-            restart: document.querySelector(".playback-restart")?.disabled === true,
-            scrubber: document.querySelector(".playback-scrubber")?.disabled === true,
-          },
-        }));
+        // Closing the page in finally retires its workers on timeout; no stuck run survives.
+        result.firstPassWallMsIncludingAuthoring = await runOrdinaryGallery(page);
+        // Preserve first-pass evidence; the manifest below distinguishes expected denial from replay failure.
+        result.firstPass = await readLiveState(page);
         const canvas = page.locator("#scene");
         const firstPass = PNG.sync.read(await canvas.screenshot({
           path: path.join(output, `${entry.id}-first-pass.png`),
         }));
         result.firstPassPixelSha256 = hash(firstPass.data);
-        const firstMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-        result.firstPass.objectCount = firstMetrics.metrics.objectCount;
         assertFirstPass(entry, result.firstPass, expectedBackend);
         assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
         result.firstPassOutcome = "pass";
@@ -218,25 +227,8 @@ async function main() {
           result.intermediateReplayOutcome = "not-applicable";
           result.stage = "fresh Run after expected replay denial";
           result.nonreplayableRerunOutcome = "fail";
-          const rerunStarted = performance.now();
-          await page.evaluate(() => window.__noonExampleGallery.run());
-          result.nonreplayableRerunWallMsIncludingAuthoring = performance.now() - rerunStarted;
-          const rerunState = await page.evaluate(() => ({
-            selectedExampleId: window.__noonExampleGallery.selectedExampleId,
-            runInFlight: window.__noonExampleGallery.runInFlight,
-            patchState: document.querySelector("#patch-status")?.dataset.state,
-            patch: document.querySelector("#patch-status")?.value,
-            backend: document.querySelector("#status")?.dataset.rendererBackend,
-            controls: { ...document.querySelector(".playback-controls")?.dataset },
-            replayReason: document.querySelector(".playback-controls")?.title,
-            disabledReplayControls: {
-              play: document.querySelector(".playback-toggle")?.disabled === true,
-              restart: document.querySelector(".playback-restart")?.disabled === true,
-              scrubber: document.querySelector(".playback-scrubber")?.disabled === true,
-            },
-          }));
-          const rerunMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-          rerunState.objectCount = rerunMetrics.metrics.objectCount;
+          result.nonreplayableRerunWallMsIncludingAuthoring = await runOrdinaryGallery(page);
+          const rerunState = await readLiveState(page);
           assertNonreplayableHostCallbacks(entry, rerunState, expectedBackend);
           const rerunImage = PNG.sync.read(await canvas.screenshot({
             path: path.join(output, `${entry.id}-nonreplayable-rerun.png`),

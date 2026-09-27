@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFirstPass, assertReplayAvailable, assertNonreplayableHostCallbacks, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableHostCallbacks, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -152,6 +152,19 @@ test("unexpected denial stays fatal and expected nonreplayable reruns have separ
     firstPassPassed: 3, replayPassed: 1, expectedNonreplayableDenials: 1,
     nonreplayableRerunsPassed: 1, unexpectedReplayDenials: 1, failed: 1,
   });
+});
+
+test("ordinary Run helper applies the same deadline and state snapshot to each execution", async () => {
+  let calls = 0;
+  const page = { evaluate: async () => { calls += 1; } };
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  await assert.rejects(runOrdinaryGallery({ evaluate: () => new Promise(() => {}) }, 5), /review deadline/);
+  assert.equal(calls, 1);
+
+  const state = { selectedExampleId: entry.id, controls: { controllable: "true" }, objectCount: 3 };
+  let stateCalls = 0;
+  assert.deepEqual(await readLiveState({ evaluate: async () => { stateCalls += 1; return state; } }), state);
+  assert.equal(stateCalls, 1);
 });
 
 test("first-pass errors and incomplete execution fail before replay is attempted", () => {
