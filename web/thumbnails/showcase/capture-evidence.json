@@ -1,30 +1,30 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "8ea2a4c0604f4925e4c24eeaf14c6040f2027654",
+  "captureRevision": "90da4d4546b5be89e664435b7501c616974eb201",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "8ea2a4c0604f4925e4c24eeaf14c6040f2027654",
+    "sourceRevision": "90da4d4546b5be89e664435b7501c616974eb201",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "a81a73fc0bd43d0a13f1b2db9472b7f46cf965db9c7519cc57d1418f8d54e079"
+        "sha256": "41479047da48b0e00dafe5c24f8b31d82018e6055fdfd44ab02f119def45da83"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "d5853955500f1cc8e3619c8a09a566291e40b35c3b206a8ed50dc89f89cb74c9"
+        "sha256": "d7dd621792ea99c4cf89d7e998dd6355d67396cc7e43f400701b042474ef673c"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "4a0cb1430658ac30c43bb4452cb6daf02c32b3d811e1599708ad8ae553d96b93"
+        "sha256": "f13f954c40b0ef00e02a64118d2b9198b5bd70bedcda9fb127a6ae8752c20423"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "715b8e56d05236398f63514f70795a3fe2d63b9d974531a7c261c47f371ee0a3"
+    "buildId": "c50d8194795809b6cffa26bfa578b140f0eec2c16924efab4e28fa05f6304f37"
   },
   "posters": [
     {
@@ -34,9 +34,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 24624,
-        "pngSha256": "9116b09a26ae4c4589a75073e98d30155bab544090d14eee0ea81b03d2cca056",
-        "pixelSha256": "7d6f11fc52bdc892095591eaba4ec82614ed21c78f9abf88c3e18db799e34a5f"
+        "foregroundPixels": 24751,
+        "pngSha256": "73497a506cd70a5071aacc41f4b8caa09931997ded209b336cfe08c076a94975",
+        "pixelSha256": "fab8bdbf1e977f756cddfbf83b9800da77c75642343ee135e6b96e094a2835e7"
       },
       "sample": {
         "requestedTime": 8.000000001,
@@ -54,9 +54,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 83439,
-        "pngSha256": "7cfa29fc9f4f0ec365172a8cefe7d4c6b28fa93a217cdec525f1bed2e8b630e1",
-        "pixelSha256": "441446041d9a0957faa209124491ebc3bd6f1d012ac6ea87d8fe148cbeeb85f3"
+        "foregroundPixels": 83559,
+        "pngSha256": "13f277409414bb9419c06070db6a51f61b724c9379ce0f348fbe187de4088c3f",
+        "pixelSha256": "83bc0ea3aa816ecc9c32e6810f05484948983720362e48f7031bd2903df2bf6f"
       },
       "sample": {
         "requestedTime": 15.3,
@@ -72,9 +72,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 41170,
-        "pngSha256": "4103ccb55d65b2bb3979e857a8b83b679e190b6eb7c253fe5c1e6ed30db1275e",
-        "pixelSha256": "49accaf15f46d2d95b78383d0d52d73fda5efea1a3b01c128337a5f65ad6cf5b"
+        "foregroundPixels": 41108,
+        "pngSha256": "8245f02e027e48832f9a6ae5e50b962e39e870687eb53e8a8fbf74a1ada5ba4a",
+        "pixelSha256": "0d4b7cc9ba370ab1ed57a3fb35490311a14e567886b7a05d9acdcb9cef3335c6"
       },
       "sample": {
         "requestedTime": 2.9,
@@ -90,9 +90,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 40635,
-        "pngSha256": "ba5ea5ed1b947815bb53eedd95859aa30de0386380e04ad9b5a65bb8e8526daf",
-        "pixelSha256": "41c081ed6100294e3d519ed7b725f5c10d0b767d24b8a5696e4475dbbe7a25e3"
+        "foregroundPixels": 40498,
+        "pngSha256": "029565673dad0b47dc709ae0ae49922e592049026c75bb700093bf4ad2c533d4",
+        "pixelSha256": "f93b158f2e48a7901b55f0a6a2cf70070492b1fff9aea7de9d5733954ad6e434"
       },
       "sample": {
         "requestedTime": 7.9,
@@ -108,9 +108,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 22877,
-        "pngSha256": "8f13ac94eb70c5d78f5bb6e13c68b902fd77a319ccc8ae243c43417fa2c8b1e9",
-        "pixelSha256": "2bf13cfc0165c31d26ef1eeaa44e49acfb1ce29ae70312a2e0a289c40d8bfe08"
+        "foregroundPixels": 22775,
+        "pngSha256": "6687b63ab56f9ca6258c0433d1bba24517d8c88814d8edf5a8f7a66fda3a984e",
+        "pixelSha256": "114c1d1d41692c0da6a1bcfb8a0602c0f00408e3e27ec26e2a88662c1ffe8698"
       },
       "sample": {
         "requestedTime": 4.8,
@@ -126,9 +126,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 9210,
-        "pngSha256": "6c67e87279982338f0246808f631cfa9f1e8a31e1260d80958eb30d3c258a3a4",
-        "pixelSha256": "fa1d3bdcafa55ac1888e1b5d4e37702fbcef05d4559a01cca37cd473e8f9f01e"
+        "foregroundPixels": 9209,
+        "pngSha256": "4b02149622860063fa03f8a96a2bd92d0ef5f53bcb2bbcc83a7b9b07cd8d0a65",
+        "pixelSha256": "b7c2025ebed9c8d86305ccfe64d1d8cd1c710b5385b526d1d2c073cdcfcb9be5"
       },
       "sample": {
         "requestedTime": 7.3,
@@ -144,9 +144,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 21888,
-        "pngSha256": "6888d21bbaf1161acef1f5e2a268298d8d626e202d4930b2c27ac797b3ed34c5",
-        "pixelSha256": "2d475bca8241d8b34351ccc3edad82a8f7b48b16e42908ab76cdcf6452e8eea3"
+        "foregroundPixels": 21977,
+        "pngSha256": "4692619bfdcfd4042148779072f41a89425f0965cd39eaf212d9e9b8b16aaf86",
+        "pixelSha256": "63abeea578d5be340af3a21c0f771147fd674101742f1f0928fad83dff2946e1"
       },
       "sample": {
         "requestedTime": 7.2,
@@ -162,9 +162,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 13592,
-        "pngSha256": "9c9a17067148bffd582a9a1099961a0db343886ddabe016f26faf8c35bbaa847",
-        "pixelSha256": "5473e7dd93867f72715dcbe6c08f038610565f131441ca0de94a95404deaa4e5"
+        "foregroundPixels": 13674,
+        "pngSha256": "efa977a705abe0c81e8a28ee33fcd0a42577085d3ee206f07c8ccb4c13ba6ea2",
+        "pixelSha256": "a8467e1562148b3796933191791e58893be84dc488d9f7f98da59aebeddb2026"
       },
       "sample": {
         "requestedTime": 8.300000001,
@@ -182,9 +182,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 19701,
-        "pngSha256": "ae6bea1ba7f1039e37783cdbb785b46662f8f4720872685ef01258efcbc28d60",
-        "pixelSha256": "f88fcf90bbcf4c5cfa7c2dcc7c8fbce376a50056a2b60b5590b6d547f8b03efe"
+        "foregroundPixels": 19669,
+        "pngSha256": "bff954a6a24ac314c9745a344bee130e0e334ef41d38b63f6f273c76ea5480dd",
+        "pixelSha256": "33e03cf9d157d80ad29003ee032896915e299d9e8c14db46f140be36e7fd953d"
       },
       "sample": {
         "requestedTime": 6.9,
@@ -200,9 +200,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 13861,
-        "pngSha256": "593f5bb2900a5502a394a89f90053cf5102a8c4c665da2fccf2c1e0fcd97004d",
-        "pixelSha256": "6613e99d0def33c1c1cb314ad25315d9f148d77e035eb977b9964fb9054d9fa8"
+        "foregroundPixels": 13801,
+        "pngSha256": "dd6d8135065c719896b729a32c6500faa500d03ba94b2d5ffc580d05fcaeca8a",
+        "pixelSha256": "72825c9445bc11c9a320bce7f7ff2e1ebc1543161422637055809d8de9a7d65a"
       },
       "sample": {
         "requestedTime": 5,
@@ -218,9 +218,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 14256,
-        "pngSha256": "fb5d5e8092a4d5b06fb4045c2fe67ab8a5725b9681674b863dab9d361450dc89",
-        "pixelSha256": "7f6e51250d9885885048a4f16f3238c5c62f4e707280f1a60a5fec5e40f1c4af"
+        "foregroundPixels": 14339,
+        "pngSha256": "553c33505e3722db3df1748f8491a932cad03152a3ad592f801be56b44920fbc",
+        "pixelSha256": "26e30f5d7a853192b3f41a5e9b1abca44c156c92844f80ce725fc257cf05e4d4"
       },
       "sample": {
         "requestedTime": 5.65,
@@ -236,9 +236,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 9948,
-        "pngSha256": "652d67f69dc5c0c67e359ed2f2d032eb721ac6a64013a20eade65065fe3daaf3",
-        "pixelSha256": "b1eb5ddaff73da420192bfc2e557c2c2110e0d66b7e22a0659da703ddcd907c0"
+        "foregroundPixels": 9831,
+        "pngSha256": "724ceebfdf2ae7e6a9f2ece311c2b302946fae3939da2eccab2e0178db13d615",
+        "pixelSha256": "dc4a1408adb89eb2306c08088d401d7bcc4c12d9a2a881771e6fc4bc3d1482ff"
       },
       "sample": {
         "requestedTime": 4.6,
@@ -254,9 +254,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 76521,
-        "pngSha256": "6ffbf637b2f288efe3337133c8cc8ea76b967f2cd052eae5e603b00a1a5903ad",
-        "pixelSha256": "c1626f056a3634352200962fc868a761c5a180ae5bcd1a428715a5994ea3c52e"
+        "foregroundPixels": 76711,
+        "pngSha256": "2d32355109a797fa81c4a15664551205b6ea5323d81a45069f6fd810724cc423",
+        "pixelSha256": "5f8d3d0f61638e693be112cdd45dabbf2754d377e79c4dc2c2378aec5df6a551"
       },
       "sample": {
         "requestedTime": 6.35,
@@ -271,10 +271,10 @@
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
-        "height": 541,
-        "foregroundPixels": 38523,
-        "pngSha256": "d7787404bda2d991ade577b28b86d085e439b4e997cf719aaee8db276a344981",
-        "pixelSha256": "2cc6189e42db36395dd557649b3b19d014ee4be2ca2a9002e6812db28e139814"
+        "height": 540,
+        "foregroundPixels": 34760,
+        "pngSha256": "81bc66f53c8e633a622656f747416422142414b6cbbbfb822960792365e1a47a",
+        "pixelSha256": "2c94577b5f40fcff14ad5ca8650d84bcbba2520dcf479e9b979f00843ef2c34d"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -294,7 +294,7 @@
         "baseMetrics": {
           "channel": "noon.render",
           "protocolVersion": 1,
-          "requestId": 9,
+          "requestId": 8,
           "type": "metrics",
           "metrics": {
             "ready": true,
@@ -302,11 +302,11 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 110,
+            "presentedFrames": 34,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
             "transitionMode": null,
-            "lastFrameTimestamp": 5915.600000000093,
+            "lastFrameTimestamp": 7105.100000023842,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGPU",
@@ -314,8 +314,8 @@
             "time": 2.5999999999999996,
             "objectCount": 4,
             "drawCalls": 4,
-            "instancesDrawn": 77,
-            "bytesUploaded": 4376,
+            "instancesDrawn": 79,
+            "bytesUploaded": 4488,
             "geometryCacheMisses": 0,
             "outlineCacheMisses": "0",
             "resourceBundlePending": false,
@@ -334,24 +334,24 @@
         },
         "baseImage": {
           "width": 960,
-          "height": 541,
-          "foregroundPixels": 38523,
-          "pngSha256": "cd82a1419544d6fd85656d7a5f960a495294ad43fad5d6700267e1be8bd44ea4",
-          "pixelSha256": "d40629dca792a93bdcbcda5fc0b8a98955b985a2a3d3af4bd7c6565ca37d3d16"
+          "height": 540,
+          "foregroundPixels": 34760,
+          "pngSha256": "0301614d935b19fe111dbfca4d06940123ff196522132c5c05eb84be4ac49f96",
+          "pixelSha256": "935adce5a9f9fdf53ed0e9962612af4adc32d40f7853f0df5c736ef639354405"
         },
         "selectedImage": {
           "width": 960,
-          "height": 541,
-          "foregroundPixels": 38523,
-          "pngSha256": "d7787404bda2d991ade577b28b86d085e439b4e997cf719aaee8db276a344981",
-          "pixelSha256": "2cc6189e42db36395dd557649b3b19d014ee4be2ca2a9002e6812db28e139814"
+          "height": 540,
+          "foregroundPixels": 34760,
+          "pngSha256": "81bc66f53c8e633a622656f747416422142414b6cbbbfb822960792365e1a47a",
+          "pixelSha256": "2c94577b5f40fcff14ad5ca8650d84bcbba2520dcf479e9b979f00843ef2c34d"
         },
         "clearedImage": {
           "width": 960,
-          "height": 541,
-          "foregroundPixels": 38523,
-          "pngSha256": "cd82a1419544d6fd85656d7a5f960a495294ad43fad5d6700267e1be8bd44ea4",
-          "pixelSha256": "d40629dca792a93bdcbcda5fc0b8a98955b985a2a3d3af4bd7c6565ca37d3d16"
+          "height": 540,
+          "foregroundPixels": 34760,
+          "pngSha256": "0301614d935b19fe111dbfca4d06940123ff196522132c5c05eb84be4ac49f96",
+          "pixelSha256": "935adce5a9f9fdf53ed0e9962612af4adc32d40f7853f0df5c736ef639354405"
         }
       }
     }
