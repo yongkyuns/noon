@@ -410,6 +410,14 @@ const expectedTypeSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 
+// Replay qualification is independent of renderer fixture availability.
+if (process.env.NOON_WASM_PROFILE === "dev"
+    || process.env.NOON_REPLAY_SMOKE === "1"
+    || javascript.includes("export function verifyDirectExecutionReplay(")) {
+  expectedJavascriptSurface.push("export function verifyDirectExecutionReplay(");
+  expectedTypeSurface.push("export function verifyDirectExecutionReplay(");
+}
+
 // Direct example factories are compiled in development and explicit renderer
 // qualifications. Detect an existing factory too when checking a package built
 // outside this script's environment.
@@ -417,7 +425,6 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
-    "export function verifyDirectExecutionReplay(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectTypstCanvasRenderer(",
@@ -487,7 +494,6 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
-    "export function verifyDirectExecutionReplay(",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -563,7 +569,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
 }
 
 // Recovery qualification also runs with release optimizations. Its explicit
-// fixture feature does not enable the rest of the debug example surface.
+// fixture feature includes direct renderer examples, independently of replay.
 if (process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
   expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");
