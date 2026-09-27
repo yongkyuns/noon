@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
+import { sampleRendererFps } from "./playground-product-fps.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -98,8 +99,14 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
           });
         }
         return {
+          phase: "source",
           frames: Number(probe.latest?.frames ?? 0),
+          time: Number(probe.latest?.time ?? Number.NaN),
+          ready: probe.latest?.ready === true,
+          needsPresent: probe.latest?.needsPresent === true,
+          bufferedDeltas: Number(probe.latest?.bufferedDeltas ?? Number.NaN),
           metricAt: Number(probe.latest?.at ?? Number.NaN),
+          metricReply: Number(probe.latest?.reply ?? Number.NaN),
           now: performance.now(),
           runInFlight: gallery?.runInFlight ?? false,
           playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
@@ -112,7 +119,28 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
   try {
     await page.locator("#replace-scene").click();
     const state = await waitForApplied(page);
-    return { milliseconds: performance.now() - started, state, frameSamples };
+    const milliseconds = performance.now() - started;
+    if (captureFrames) {
+      // This is the final observation for this exact run, after its renderer
+      // has presented the authored endpoint and before any warm/edit rerun.
+      const endpoint = await page.evaluate(async () => {
+        const report = await window.__noonExampleGallery?.executionMetrics();
+        const metrics = report?.metrics;
+        return {
+          phase: "endpoint",
+          frames: Number(metrics?.presentedFrames ?? Number.NaN),
+          time: Number(metrics?.time ?? Number.NaN),
+          ready: metrics?.ready === true,
+          needsPresent: metrics?.needsPresent === true,
+          bufferedDeltas: Number(metrics?.bufferedDeltas ?? Number.NaN),
+          metricAt: performance.now(),
+          metricReply: Number(window.__noonProductRenderProbe?.metricsReplies ?? Number.NaN),
+          now: performance.now(),
+        };
+      });
+      frameSamples.push(endpoint);
+    }
+    return { milliseconds, state, frameSamples };
   } finally {
     sampling = false;
     await sampleFrames;
@@ -132,39 +160,6 @@ function changedPixelStats(buffer) {
     if (distance >= 32) changed += 1;
   }
   return { width: png.width, height: png.height, changedPixels: changed };
-}
-
-function sampleRendererFps(frameSamples) {
-  // Measure render-worker presentation only while the Python continuation owns
-  // the deliberately long, identical first pass used by both baseline and candidate.
-  // The renderer metric is derived telemetry and does not wait on the suspended
-  // authoring continuation or model scene/runtime state in the frontend.
-  const sourceOwned = frameSamples.filter(
-    (sample) =>
-      sample.runInFlight &&
-      sample.playbackControls === "unavailable" &&
-      Number.isFinite(sample.metricAt),
-  );
-  assert.ok(sourceOwned.length >= 10, "source-owned product run did not expose enough presentation samples");
-  const measurementMs = sourceOwned.at(-1).now - sourceOwned[0].now;
-  assert.ok(
-    measurementMs >= MIN_PRODUCT_MEASUREMENT_MS,
-    `source-owned presentation window was too short (${measurementMs.toFixed(0)} ms)`,
-  );
-  const changes = sourceOwned.filter((sample, index) => index > 0 &&
-    sample.frames > sourceOwned[index - 1].frames);
-  assert.ok(changes.length >= 2, "first authored pass did not expose enough presentation samples");
-  const start = changes[0];
-  const end = changes.at(-1);
-  const elapsedSeconds = Math.max((end.now - start.now) / 1000, 0.001);
-  return {
-    startFrames: start.frames,
-    endFrames: end.frames,
-    sampleCount: sourceOwned.length,
-    measurementMs,
-    elapsedMs: end.now - start.now,
-    effectiveFps: Math.max(0, end.frames - start.frames) / elapsedSeconds,
-  };
 }
 
 async function waitForRenderedEndpoint(page, seconds) {
@@ -292,6 +287,7 @@ try {
             needsPresent: message.metrics.needsPresent === true,
             bufferedDeltas: Number(message.metrics.bufferedDeltas),
             at: performance.now(),
+            reply: probe.metricsReplies + 1,
           };
           probe.metricsReplies += 1;
           probe.pending = false;
@@ -344,7 +340,9 @@ try {
 
   const cold = await runAndMeasure(page, { captureFrames: true });
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
-  const fps = sampleRendererFps(cold.frameSamples);
+  const fps = sampleRendererFps(cold.frameSamples, PRODUCT_FIRST_PASS_SECONDS, {
+    minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS,
+  });
 
   const warm = await runAndMeasure(page);
 

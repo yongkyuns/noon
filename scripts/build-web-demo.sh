@@ -62,6 +62,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
+  node --check scripts/playground-product-e2e.mjs
+  node --check scripts/playground-product-fps.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
@@ -87,6 +89,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/perf-corpus-budget.test.mjs
   node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
+  node --test scripts/playground-product-fps.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"
