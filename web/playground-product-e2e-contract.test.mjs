@@ -21,9 +21,10 @@ assert.match(source, /await synchronizeFinalFrame\(page, PRODUCT_FIRST_PASS_SECO
 assert.match(source, /const screenshotName = "frame-final\.png"/);
 assert.match(source, /authoredEndpointSeconds: PRODUCT_FIRST_PASS_SECONDS/);
 assert.doesNotMatch(source, /frame-0\.5\.png/);
-assert.match(source, /measurementMs >= MIN_PRODUCT_MEASUREMENT_MS/);
-assert.match(source, /sourceOwned\.length >= 10/);
-assert.match(source, /sample\.frames > sourceOwned\[index - 1\]\.frames/);
+// Counter/clock reset behavior is exercised by playground-product-fps.test.mjs;
+// this contract only checks that the real browser harness uses that scorer.
+assert.match(source, /sampleRendererFps\(cold\.frameSamples, PRODUCT_FIRST_PASS_SECONDS/);
+assert.match(source, /minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS/);
 assert.doesNotMatch(source, /editor\.dispatchEvent/);
 
 console.log("✓ product gate observes the same rendered authored endpoint after one long first-pass fixture");
