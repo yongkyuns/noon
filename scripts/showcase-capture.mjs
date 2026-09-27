@@ -180,7 +180,6 @@ async function captureSelection(context, entry, result) {
   try {
     await page.setViewportSize({ width: 1800, height: 1100 });
     await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
-    await page.addStyleTag({ content: ".workspace{grid-template-columns:300px 1fr}.canvas-frame{width:960px;max-width:none}" });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     const canvas = page.locator("#scene");
     await layoutReplayViewport(canvas, report.viewport);
