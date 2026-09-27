@@ -118,6 +118,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
+        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
         self.prepare_canonical_mixed_baseline(
             device,
             queue,
@@ -186,7 +187,7 @@ impl RetainedFramePreparer {
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };
-        Ok(PreparedRetainedGpuFrame {
+        let mut prepared = PreparedRetainedGpuFrame {
             images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
@@ -206,7 +207,9 @@ impl RetainedFramePreparer {
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
-        })
+        };
+        prepared.commit_images(images, None);
+        Ok(prepared)
     }
 
     pub(super) fn apply_family_draw_border_then_fill_to_scratch(

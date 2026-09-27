@@ -602,6 +602,10 @@ pub struct FramePreparer {
     path_mesh_clock: u64,
     path_mesh_cache_generation: u64,
     packed_path_mesh_cache_generation: u64,
+    // A unique incremental replacement can relocate its mesh into the transient
+    // arena. Cache identities still match after that edit, but the arena no
+    // longer has the dense batch layout a later full rebuild can reuse.
+    transient_path_groups_packed: bool,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
     slot_presences: Vec<bool>,
@@ -775,6 +779,11 @@ impl FramePreparer {
             path_vertices_repacked += appended.path_vertices_repacked;
             path_indices_repacked += appended.path_indices_repacked;
             self.active_instance_count += appended.instances_repacked;
+            // Once a prior painter change has enabled chunked submission, the
+            // flat append above is no longer the draw source. Rebuild only the
+            // new object's painter partition so a forward structural append is
+            // submitted without waiting for a seek or unrelated reorder.
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
         }
 
         let materialized_indices = changes
@@ -1378,6 +1387,7 @@ impl FramePreparer {
             (packed_vertices.len(), local_indices.len())
         };
         self.path_batch_cache_indices[batch] = cache_index;
+        self.transient_path_groups_packed = false;
         self.path_batches[batch].polygon_coverage =
             single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh).is_some();
         if let PreparedSlot::Path {
@@ -1570,6 +1580,7 @@ impl FramePreparer {
 
         let (group_offsets, path_vertices_repacked, path_indices_repacked) =
             if self.resident_vertex_count != 0 || self.resident_index_count != 0 {
+                self.transient_path_groups_packed = false;
                 self.pack_resident_path_groups(path_groups)
             } else {
                 self.pack_transient_path_groups(path_groups, &previous_path_batch_cache_indices)
@@ -1631,6 +1642,7 @@ impl FramePreparer {
     ) -> (Vec<usize>, usize, usize) {
         let reuse_packed_path_geometry = self.packed_path_mesh_cache_generation
             == self.path_mesh_cache_generation
+            && self.transient_path_groups_packed
             && previous_path_batch_cache_indices.len() == path_groups.len()
             && previous_path_batch_cache_indices
                 .iter()
@@ -1702,6 +1714,7 @@ impl FramePreparer {
             self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
             repacked
         };
+        self.transient_path_groups_packed = true;
         (group_offsets, path_vertices_repacked, path_indices_repacked)
     }
 
@@ -4152,6 +4165,61 @@ mod tests {
     }
 
     #[test]
+    fn forward_path_append_rebuilds_only_its_active_painter_chunk() {
+        const INITIAL_OBJECTS: usize = FramePreparer::RENDER_ORDER_CHUNK_SIZE;
+        let mut frame = frame(
+            (0..INITIAL_OBJECTS)
+                .map(|index| object(index as u64, GeometryRef::circle(1.0)))
+                .collect(),
+        );
+        let mut preparer = FramePreparer::new();
+        let initial_order = (0..INITIAL_OBJECTS as u32).collect::<Vec<_>>();
+        preparer.set_painter_order(&frame, &initial_order);
+        preparer.prepare(&frame);
+
+        // Activate chunked submissions with a local painter change before the
+        // later structural publication adds the plotted path.
+        let mut active_order = initial_order;
+        active_order.swap(0, 1);
+        preparer.set_painter_order_range(&frame, &active_order, 0..2);
+        preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..2));
+
+        let mut curve = object(
+            INITIAL_OBJECTS as u64,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, -0.5))
+                    .quadratic_to(Vec2::new(0.0, 1.0), Vec2::new(1.0, -0.5)),
+            ),
+        );
+        curve.style.fill = None;
+        curve.style.stroke = Some(Color::WHITE);
+        curve.style.stroke_width = 0.02;
+        frame.objects.push(curve);
+        frame.presences.push(true);
+        frame.reveals.push(0.734_193_44);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+
+        active_order.push(INITIAL_OBJECTS as u32);
+        preparer.set_painter_order_range(&frame, &active_order, 0..active_order.len());
+        let prepared = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::structural(vec![INITIAL_OBJECTS], Vec::new()),
+        );
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(prepared.stats.render_order_positions_visited, 1);
+        assert!(prepared.stats.path_vertices_repacked > 0);
+        assert!(prepared
+            .ordered_render_batches()
+            .any(|entry| { matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. }) }));
+    }
+
+    #[test]
     fn ordinary_presence_churn_keeps_path_geometry_resident() {
         let retained_path = VectorPath::new()
             .move_to(Vec2::new(-1.0, -1.0))
@@ -4619,6 +4687,62 @@ mod tests {
         assert_eq!(compacted.stats.mega_path_detached_count, 0);
         assert_eq!(compacted.stats.mega_path_count, OBJECT_COUNT);
         assert_eq!(compacted.stats.mega_path_batch_count, 1);
+    }
+
+    #[test]
+    fn full_rebuild_repacks_transient_arena_after_unique_path_relocation() {
+        let make_path = |id: u64, y: f32| {
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.02;
+            state
+        };
+        let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.5)]);
+        let mut preparer = FramePreparer::for_individual_path_draws();
+        preparer.prepare(&frame);
+
+        // This larger replacement cannot fit in the old second path range, so
+        // the incremental path arena releases that range and appends a new one.
+        frame.objects[1].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.5))
+                .cubic_to(
+                    Vec2::new(-0.5, 1.5),
+                    Vec2::new(0.5, -0.5),
+                    Vec2::new(0.5, 0.5),
+                )
+                .cubic_to(
+                    Vec2::new(0.5, 1.5),
+                    Vec2::new(-0.5, -0.5),
+                    Vec2::new(-0.5, 0.5),
+                ),
+        ));
+        let incremental = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert!(incremental.stats.path_vertices_repacked > 0);
+        assert!(incremental.stats.path_indices_repacked > 0);
+
+        let mut fresh = FramePreparer::for_individual_path_draws();
+        let (expected_vertices, expected_indices) = {
+            let expected = fresh.prepare(&frame);
+            (
+                expected.path_vertices.to_vec(),
+                expected.path_indices.to_vec(),
+            )
+        };
+        let rebuilt = preparer.prepare(&frame);
+
+        assert_eq!(rebuilt.path_vertices, expected_vertices);
+        assert_eq!(rebuilt.path_indices, expected_indices);
+        assert!(rebuilt.stats.path_vertices_repacked > 0);
+        assert!(rebuilt.stats.path_indices_repacked > 0);
     }
 
     #[test]

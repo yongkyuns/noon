@@ -26,6 +26,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
   let frame = 0;
   let capture = 0;
   const canvas = {
+    evaluate: async (fn) => fn({ style: { setProperty() {} } }),
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
     screenshot: async () => {
       const name = names[capture];
@@ -63,6 +64,8 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
         close: async () => events.push("browser:close"),
       }) } },
       createPyodideResourceCache: () => ({ install: async () => {} }),
+      layoutReplayViewport: async () => {},
+      replayViewport: async (_canvas, size) => ({ bitmap: size, bounds: { x: 0, y: 0, ...size }, deviceScaleFactor: 1 }),
       window: { __noonExampleGallery: {
         selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
         executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),

@@ -68,6 +68,7 @@ pub struct PreparedFrameEvaluation {
     prior_driver_rows: usize,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
     numeric_text: Vec<PreparedNumericTextUpdate>,
+    pub(crate) authored_scalar_inputs: bool,
 }
 
 impl PreparedFrameEvaluation {
@@ -416,6 +417,7 @@ impl SceneInstance {
             prior_driver_rows,
             reactive,
             numeric_text,
+            authored_scalar_inputs: false,
         })
     }
 
@@ -545,9 +547,9 @@ impl SceneInstance {
             .reactive
             .as_ref()
             .is_some_and(|update| !update.is_empty());
-        if reactive_changed {
+        if reactive_changed && !prepared.authored_scalar_inputs {
             self.invalidate_replay_input();
-        } else if may_publish {
+        } else if !effective.is_empty() || !self.effective_driver_rows.is_empty() {
             self.invalidate_replay_domain();
         }
 

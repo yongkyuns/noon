@@ -2000,10 +2000,18 @@ test("source continuation never seals a still-growing execution plan", async () 
   } finally { endpoint?.stop(); f.close(); }
 });
 
-for (const reason of ["Incomplete", "UnsupportedDomain", "UnrecordedInput", "RetentionLimit"]) {
-  test(`replay rejection (${reason}) preserves paused forward observation without enabling rewind`, async () => {
+for (const [sealError, reason] of [
+  ["Incomplete", "Incomplete"],
+  ["UnsupportedDomain", "UnsupportedDomain"],
+  ["UnrecordedInput", "UnrecordedInput"],
+  ["RetentionLimit", "RetentionLimit"],
+  ["replay unavailable: UnsupportedDomain", "UnsupportedDomain"],
+  ["replay unavailable: RetentionLimit", "RetentionLimit"],
+  ["replay unavailable: UnsupportedDomain: detail", "UnsupportedDomain: detail"],
+]) {
+  test(`replay rejection (${sealError}) preserves the normalized reason and paused forward observation`, async () => {
     const f = fixture();
-    f.player.sealReplay = () => { throw new Error(reason); };
+    f.player.sealReplay = () => { throw new Error(sealError); };
     let seeks = 0;
     f.player.seekDeltaJson = () => { seeks += 1; throw new Error("forward controls must not seek"); };
     let ticks = 0;

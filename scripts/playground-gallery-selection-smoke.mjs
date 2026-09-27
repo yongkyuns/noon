@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 import playwright from "playwright";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_GALLERY_SELECTION_PORT ?? 4217);
@@ -100,6 +101,12 @@ try {
     await page.evaluate(() => window.__noonExampleGallery.selectedExampleId),
     "noon-pointer-selection",
   );
+  const canvas = page.locator("#scene");
+  const captureSize = { width: 960, height: 540 };
+  // Compare the renderer's pixels, not rounded-corner browser antialiasing.
+  // Keep real host pointer events enabled on the existing canvas.
+  await layoutReplayViewport(canvas, captureSize);
+  await canvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
   await page.evaluate(() => window.__noonExampleGallery.run());
   await page.waitForFunction(
     () =>
@@ -114,7 +121,7 @@ try {
     "gallery manifest must enable selection on the public runtime",
   );
 
-  const canvas = page.locator("#scene");
+  report.captureViewport = await replayViewport(canvas, captureSize);
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 0 && box.height > 0, "gallery canvas is not drawable");
   const baseline = await canvas.screenshot();

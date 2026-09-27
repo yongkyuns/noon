@@ -25,6 +25,10 @@ const REPLAY_DEPENDENT_CONTROLS = new Set([
   "resume", "seek", "restart_playback", "set_loop_duration",
 ]);
 
+function normalizeReplayUnavailableReason(error) {
+  return String(error?.message ?? error).replace(/^replay unavailable:\s*/i, "");
+}
+
 export async function attachSemanticEngine(
   context,
   request,
@@ -920,7 +924,7 @@ export async function attachSemanticEngine(
     if (continuation === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
-      catch (error) { replayUnavailable = String(error?.message ?? error); }
+      catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
     if (initiallyPaused || replayUnavailable !== null) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);

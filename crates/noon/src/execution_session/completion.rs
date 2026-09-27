@@ -567,7 +567,7 @@ impl ExecutionSession {
                 handled_scalar_signals,
             )?;
         }
-        self.signal_timeline.commit_append(timeline);
+        self.commit_scalar_timeline_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
         if (family_transform.is_some() || segment.family_replacement().is_some())

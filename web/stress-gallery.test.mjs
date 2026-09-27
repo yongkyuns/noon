@@ -91,7 +91,7 @@ const merged = await loadGalleryManifest(undefined, async (url) => {
       return manifest;
     },
   };
-});
+}, { search: "?catalog=reference" });
 assert.deepEqual(requests, [
   "./python/examples/manim_tutorial_manifest.json",
   "./python/examples/manim_stress_manifest.json",

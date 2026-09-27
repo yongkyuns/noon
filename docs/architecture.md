@@ -908,7 +908,7 @@ Transform/style/visibility-only changes must not regenerate immutable content.
 
 Renderer-local fill coverage may specialize a convex triangle or quadrilateral as one polygon, computing its pixel-box intersection once to avoid internal tessellation seams and multisample edge loss. Morph eligibility must prove convexity throughout the interpolated interval, including any removed collinear subdivisions; endpoint checks alone are insufficient. Eligible paths retain immutable endpoint vertices and GPU interpolation. Other paths keep ordinary tessellation or the sampled-mesh specialization below. This coverage choice does not create semantic geometry or a second source of animation state.
 
-Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object may replace its glyph masks within its existing instance ranges; unrelated objects and uploads remain unchanged. If a new phase changes the batch layout or exceeds available atlas residency, translation keeps the existing filtered masks. Rotated, reflected, skewed or nonuniform bitmap transforms also retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
+Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object may replace its glyph masks within its existing instance ranges; unrelated objects and uploads remain unchanged. A phase change may make a glyph empty or nonempty or change its atlas batches; retaining the previous masks in that case is incorrect because rendering would depend on playback history. The current correctness fallback rebuilds text packing and invalidates its GPU ranges while preserving unrelated geometry. This whole-text fallback is an outstanding C4 locality limitation, not a qualified object-local path; replace it with bounded object-local storage before claiming that all translated text satisfies the locality contract. Rotated, reflected, skewed or nonuniform bitmap transforms retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
 
 ### Immutable versioned resource rule
 
@@ -1142,7 +1142,7 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 
 ## Phase A — architecture consolidation
 
-**Status: Phase A architecture consolidation is complete.** [#953](https://github.com/yongkyuns/noon/issues/953) records the completed exit checklist and qualification evidence. Phase B is the default priority for common 2D feature breadth; correctness fixes continue under their owning issues.
+**Status: Phase A consolidation and the representative Phase B exit are complete.** [#953](https://github.com/yongkyuns/noon/issues/953) and [#954](https://github.com/yongkyuns/noon/issues/954) record their qualification evidence. Phase C is the next priority; correctness fixes and further curated examples continue under their owning issues.
 
 The permanent Phase A result is already reflected in the normative sections above:
 
