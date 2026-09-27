@@ -775,6 +775,11 @@ impl FramePreparer {
             path_vertices_repacked += appended.path_vertices_repacked;
             path_indices_repacked += appended.path_indices_repacked;
             self.active_instance_count += appended.instances_repacked;
+            // Once a prior painter change has enabled chunked submission, the
+            // flat append above is no longer the draw source. Rebuild only the
+            // new object's painter partition so a forward structural append is
+            // submitted without waiting for a seek or unrelated reorder.
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
         }
 
         let materialized_indices = changes
@@ -4149,6 +4154,61 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn forward_path_append_rebuilds_only_its_active_painter_chunk() {
+        const INITIAL_OBJECTS: usize = FramePreparer::RENDER_ORDER_CHUNK_SIZE;
+        let mut frame = frame(
+            (0..INITIAL_OBJECTS)
+                .map(|index| object(index as u64, GeometryRef::circle(1.0)))
+                .collect(),
+        );
+        let mut preparer = FramePreparer::new();
+        let initial_order = (0..INITIAL_OBJECTS as u32).collect::<Vec<_>>();
+        preparer.set_painter_order(&frame, &initial_order);
+        preparer.prepare(&frame);
+
+        // Activate chunked submissions with a local painter change before the
+        // later structural publication adds the plotted path.
+        let mut active_order = initial_order;
+        active_order.swap(0, 1);
+        preparer.set_painter_order_range(&frame, &active_order, 0..2);
+        preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..2));
+
+        let mut curve = object(
+            INITIAL_OBJECTS as u64,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, -0.5))
+                    .quadratic_to(Vec2::new(0.0, 1.0), Vec2::new(1.0, -0.5)),
+            ),
+        );
+        curve.style.fill = None;
+        curve.style.stroke = Some(Color::WHITE);
+        curve.style.stroke_width = 0.02;
+        frame.objects.push(curve);
+        frame.presences.push(true);
+        frame.reveals.push(0.734_193_44);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+
+        active_order.push(INITIAL_OBJECTS as u32);
+        preparer.set_painter_order_range(&frame, &active_order, 0..active_order.len());
+        let prepared = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::structural(vec![INITIAL_OBJECTS], Vec::new()),
+        );
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(prepared.stats.render_order_positions_visited, 1);
+        assert!(prepared.stats.path_vertices_repacked > 0);
+        assert!(prepared
+            .ordered_render_batches()
+            .any(|entry| { matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. }) }));
     }
 
     #[test]
