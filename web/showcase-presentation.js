@@ -13,6 +13,44 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
   const style = documentLike.createElement("style");
   style.textContent = `
     #showcase-catalog-link { text-decoration: none; white-space: nowrap; font-size: .7rem; }
+    @media (max-width: 44rem) {
+      html[data-noon-catalog="showcase"] .topbar {
+        display: grid;
+        grid-template-columns: auto minmax(8rem, 1fr) auto;
+        grid-template-areas: "brand picker catalog" "status status status";
+        gap: .4rem .5rem;
+        align-items: center;
+      }
+      html[data-noon-catalog="showcase"] .topbar .brand { grid-area: brand; }
+      html[data-noon-catalog="showcase"] #example-browser-trigger {
+        grid-area: picker;
+        min-width: 8rem;
+        max-width: none;
+      }
+      html[data-noon-catalog="showcase"] #showcase-catalog-link {
+        grid-area: catalog;
+        justify-self: end;
+        min-width: 0;
+        max-width: 6.5rem;
+        white-space: normal;
+        line-height: 1.2;
+        text-align: center;
+      }
+      html[data-noon-catalog="showcase"] .runtime-status {
+        grid-area: status;
+        width: 100%;
+        max-width: none;
+        overflow: visible;
+        flex-wrap: wrap;
+        padding: .2rem 0 0;
+      }
+      html[data-noon-catalog="showcase"] #status-text {
+        overflow: visible;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+        white-space: normal;
+      }
+    }
     .example-browser-layer .example-thumb { object-fit: contain; }
     html[data-noon-catalog="showcase"] .selected-example { display: flex !important; }
     html[data-noon-catalog="showcase"] .selected-tag.parity,
