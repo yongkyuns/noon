@@ -137,7 +137,10 @@ test("only the declared callback lesson accepts the exact idle UnsupportedDomain
     { controls: { ...state.controls, busy: "true" } },
     { disabledReplayControls: { play: true, restart: false, scrubber: true } },
   ]) assert.throws(() => assertNonreplayableHostCallbacks(entry, { ...state, ...change }, "WebGPU"));
-  assert.throws(() => assertNonreplayableHostCallbacks({ ...entry, id: "showcase-first-scene" }, state, "WebGPU"));
+  const anotherLesson = { ...entry, id: "showcase-other-callback-lesson" };
+  assert.doesNotThrow(() => assertNonreplayableHostCallbacks(anotherLesson, {
+    ...state, selectedExampleId: anotherLesson.id,
+  }, "WebGPU"));
 });
 
 test("unexpected denial stays fatal and expected nonreplayable reruns have separate counters", () => {

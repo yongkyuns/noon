@@ -52,7 +52,7 @@ test("invalid or misleading publication metadata is rejected", () => {
   }
 });
 
-test("playback capability is finite and only the reactive lesson may disclose nonreplayable callbacks", () => {
+test("playback capability is finite and nonreplayable capabilities require an explanation", () => {
   const unsupported = copy();
   unsupported.entries[0].playback_capability = "best-effort-replay";
   assert.throws(() => normalizeShowcaseManifest(unsupported), /unsupported playback capability/);
@@ -63,17 +63,20 @@ test("playback capability is finite and only the reactive lesson may disclose no
   delete reactive.playback_limitation;
   assert.throws(() => normalizeShowcaseManifest(missingExplanation), /requires a user-facing limitation/);
 
-  const arbitraryLesson = copy();
-  arbitraryLesson.entries[0].playback_capability = "nonreplayable-host-callbacks";
-  arbitraryLesson.entries[0].playback_limitation = "This explanation cannot authorize an unqualified exception.";
-  assert.throws(() => normalizeShowcaseManifest(arbitraryLesson), /not qualified for this lesson/);
-
   const gallery = normalizeShowcaseManifest(manifest);
   const normalizedReactive = gallery.examples.find((entry) => entry.id === "showcase-reactive-relationships");
   assert.equal(normalizedReactive.playbackCapability, "nonreplayable-host-callbacks");
   assert.match(normalizedReactive.summary, /cannot be retained for deterministic replay/);
   assert.ok(gallery.examples.filter((entry) => entry.id !== normalizedReactive.id)
     .every((entry) => entry.playbackCapability === "deterministic-retained-replay"));
+});
+
+test("the checked-in catalog declares only the reactive-relationships lesson nonreplayable", () => {
+  assert.deepEqual(
+    manifest.entries.filter((entry) => entry.playback_capability === "nonreplayable-host-callbacks")
+      .map((entry) => entry.id),
+    ["showcase-reactive-relationships"],
+  );
 });
 
 test("loader and facade use the showcase catalog without fetching legacy manifests", async () => {

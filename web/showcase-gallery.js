@@ -1,7 +1,6 @@
 export const SHOWCASE_MANIFEST = "./python/examples/noon_showcase_manifest.json";
 export const REPLAYABLE_SHOWCASE = "deterministic-retained-replay";
 export const NONREPLAYABLE_HOST_CALLBACKS = "nonreplayable-host-callbacks";
-const NONREPLAYABLE_SHOWCASE_ID = "showcase-reactive-relationships";
 
 export function isShowcaseRequest(locationLike) {
   const params = new URLSearchParams(locationLike?.search ?? "");
@@ -40,7 +39,6 @@ export function normalizeShowcaseManifest(manifest) {
       throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
     }
     if (playbackCapability === NONREPLAYABLE_HOST_CALLBACKS) {
-      if (entry.id !== NONREPLAYABLE_SHOWCASE_ID) throw new Error(`${entry.id}: nonreplayable host callbacks are not qualified for this lesson`);
       if (typeof entry.playback_limitation !== "string" || !entry.playback_limitation.trim()) {
         throw new Error(`${entry.id}: nonreplayable playback requires a user-facing limitation`);
       }

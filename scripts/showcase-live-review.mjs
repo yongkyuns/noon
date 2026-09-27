@@ -33,7 +33,6 @@ export function assertReplayAvailable(observed) {
 
 export function assertNonreplayableHostCallbacks(entry, observed, expectedBackend) {
   assert.equal(entry.playbackCapability, "nonreplayable-host-callbacks", "wrong declared nonreplayable capability");
-  assert.equal(entry.id, "showcase-reactive-relationships", "nonreplayable callbacks are allowed only for the reactive lesson");
   assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
   assertFirstPass(entry, observed, expectedBackend);
   assert.equal(observed.replayReason, "Replay unavailable: UnsupportedDomain",
