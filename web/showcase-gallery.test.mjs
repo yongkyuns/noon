@@ -3,9 +3,28 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { isShowcaseRequest, loadShowcaseGallery, normalizeShowcaseManifest, SHOWCASE_MANIFEST } from "./showcase-gallery.js";
 import { loadGalleryManifest, parityLabel } from "./example-gallery.js";
+import { installShowcasePresentation } from "./showcase-presentation.js";
 
 const manifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
 const copy = () => structuredClone(manifest);
+
+test("catalog navigation preserves the served page path", () => {
+  for (const showcase of [false, true]) {
+    let link;
+    const document = {
+      documentElement: { dataset: {} }, head: { append() {} },
+      getElementById: () => null,
+      createElement: () => ({}),
+      querySelector: selector => selector === ".topbar" ? { append(value) { link = value; } } : null,
+    };
+    installShowcasePresentation(document, [], showcase);
+    for (const pathname of ["/", "/web/", "/web/index.html"]) {
+      const destination = new URL(link.href, `https://noon.test${pathname}?example=old`);
+      assert.equal(destination.pathname, pathname);
+      assert.equal(destination.search, showcase ? "?catalog=reference" : "?catalog=showcase");
+    }
+  }
+});
 
 test("showcase is the default; explicit reference and legacy links retain their catalog", () => {
   assert.equal(isShowcaseRequest(undefined), true);

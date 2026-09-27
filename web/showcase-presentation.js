@@ -6,7 +6,7 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
   const link = documentLike.createElement("a");
   link.id = "showcase-catalog-link";
   link.className = "secondary-button";
-  link.href = showcase ? "./?catalog=reference" : "./?catalog=showcase";
+  link.href = showcase ? "?catalog=reference" : "?catalog=showcase";
   link.textContent = showcase ? "API reference" : "Showcase";
   topbar.append(link);
 
