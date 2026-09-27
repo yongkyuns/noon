@@ -1213,8 +1213,7 @@ impl GpuRenderer {
                 queue,
                 encoder,
                 view,
-                prepared,
-                presentations,
+                &composition,
                 *secondary,
             );
         }
@@ -1241,10 +1240,11 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        prepared: &PreparedFrame<'_>,
-        presentations: Option<&PreparedDerivedDisplay>,
+        composition: &FrameComposition<'_, '_>,
         secondary: SecondaryViewport,
     ) -> DrawStats {
+        let prepared = composition.prepared;
+        let presentations = composition.presentations;
         let [x, y, width, height] = secondary.destination;
         let camera_uniform = secondary.camera.uniform([width, height]);
         let secondary_camera_buffer = create_buffer_with_data(
