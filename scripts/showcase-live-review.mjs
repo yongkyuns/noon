@@ -26,8 +26,33 @@ export function assertFirstPass(entry, observed, expectedBackend) {
 }
 
 export function assertReplayAvailable(observed) {
+  assert.equal(observed.replayReason, "", "replayable lesson unexpectedly denied retained replay");
   assert.equal(observed.controls?.controllable, "true",
     observed.replayReason || "completed source did not admit retained replay");
+}
+
+export function assertNonreplayableHostCallbacks(entry, observed, expectedBackend) {
+  assert.equal(entry.playbackCapability, "nonreplayable-host-callbacks", "wrong declared nonreplayable capability");
+  assert.equal(entry.id, "showcase-reactive-relationships", "nonreplayable callbacks are allowed only for the reactive lesson");
+  assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
+  assertFirstPass(entry, observed, expectedBackend);
+  assert.equal(observed.replayReason, "Replay unavailable: UnsupportedDomain",
+    "nonreplayable lesson did not report the expected UnsupportedDomain denial");
+  assert.equal(observed.controls?.controllable, "false", "denied replay controls must be uncontrollable");
+  assert.equal(observed.controls?.busy, "false", "completed denied replay must not remain busy");
+  assert.deepEqual(observed.disabledReplayControls, { play: true, restart: true, scrubber: true },
+    "all replay controls must be disabled after UnsupportedDomain");
+}
+
+export function summarizeLiveReview(results) {
+  return {
+    firstPassPassed: results.filter((result) => result.firstPassOutcome === "pass").length,
+    replayPassed: results.filter((result) => result.replayOutcome === "pass").length,
+    expectedNonreplayableDenials: results.filter((result) => result.replayOutcome === "expected-denial").length,
+    nonreplayableRerunsPassed: results.filter((result) => result.nonreplayableRerunOutcome === "pass").length,
+    unexpectedReplayDenials: results.filter((result) => result.unexpectedReplayDenial === true).length,
+    failed: results.filter((result) => result.outcome !== "pass").length,
+  };
 }
 
 export function assertLiveOutcome(entry, observed, expectedBackend) {
@@ -81,7 +106,8 @@ async function main() {
   const { seekPausedGallery } = await import("./showcase-playback.mjs");
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
-  normalizeShowcaseManifest(manifest);
+  const gallery = normalizeShowcaseManifest(manifest);
+  const normalizedById = new Map(gallery.examples.map((entry) => [entry.id, entry]));
   const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
   assert.ok(["webgl", "webgpu"].includes(backend));
   const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
@@ -127,7 +153,8 @@ async function main() {
     } catch (error) {
       report.firstPassCaptureReportError = String(error);
     }
-    for (const entry of manifest.entries) {
+    for (const rawEntry of manifest.entries) {
+      const entry = { ...rawEntry, ...normalizedById.get(rawEntry.id) };
       const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", intermediateReplayOutcome: "not-run", stage: "open", pageErrors: [] };
       report.results.push(result);
       const page = await context.newPage();
@@ -167,6 +194,11 @@ async function main() {
           backend: document.querySelector("#status")?.dataset.rendererBackend,
           controls: { ...document.querySelector(".playback-controls")?.dataset },
           replayReason: document.querySelector(".playback-controls")?.title,
+          disabledReplayControls: {
+            play: document.querySelector(".playback-toggle")?.disabled === true,
+            restart: document.querySelector(".playback-restart")?.disabled === true,
+            scrubber: document.querySelector(".playback-scrubber")?.disabled === true,
+          },
         }));
         const canvas = page.locator("#scene");
         const firstPass = PNG.sync.read(await canvas.screenshot({
@@ -178,6 +210,46 @@ async function main() {
         assertFirstPass(entry, result.firstPass, expectedBackend);
         assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
         result.firstPassOutcome = "pass";
+        if (entry.playbackCapability === "nonreplayable-host-callbacks") {
+          result.stage = "expected nonreplayable capability";
+          result.replayOutcome = "fail";
+          assertNonreplayableHostCallbacks(entry, result.firstPass, expectedBackend);
+          result.replayOutcome = "expected-denial";
+          result.intermediateReplayOutcome = "not-applicable";
+          result.stage = "fresh Run after expected replay denial";
+          result.nonreplayableRerunOutcome = "fail";
+          const rerunStarted = performance.now();
+          await page.evaluate(() => window.__noonExampleGallery.run());
+          result.nonreplayableRerunWallMsIncludingAuthoring = performance.now() - rerunStarted;
+          const rerunState = await page.evaluate(() => ({
+            selectedExampleId: window.__noonExampleGallery.selectedExampleId,
+            runInFlight: window.__noonExampleGallery.runInFlight,
+            patchState: document.querySelector("#patch-status")?.dataset.state,
+            patch: document.querySelector("#patch-status")?.value,
+            backend: document.querySelector("#status")?.dataset.rendererBackend,
+            controls: { ...document.querySelector(".playback-controls")?.dataset },
+            replayReason: document.querySelector(".playback-controls")?.title,
+            disabledReplayControls: {
+              play: document.querySelector(".playback-toggle")?.disabled === true,
+              restart: document.querySelector(".playback-restart")?.disabled === true,
+              scrubber: document.querySelector(".playback-scrubber")?.disabled === true,
+            },
+          }));
+          const rerunMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+          rerunState.objectCount = rerunMetrics.metrics.objectCount;
+          assertNonreplayableHostCallbacks(entry, rerunState, expectedBackend);
+          const rerunImage = PNG.sync.read(await canvas.screenshot({
+            path: path.join(output, `${entry.id}-nonreplayable-rerun.png`),
+          }));
+          result.nonreplayableRerunPixelSha256 = hash(rerunImage.data);
+          assertLivePixels(firstPass, rerunImage);
+          assert.deepEqual(result.pageErrors, []);
+          result.nonreplayableRerunOutcome = "pass";
+          result.nonreplayableRerunMatchesFirstPass = true;
+          result.outcome = "pass";
+          console.log(`PASS live ${entry.id}: first pass, expected UnsupportedDomain denial, and fresh Run endpoint match`);
+          continue;
+        }
         result.stage = "replay capability admission";
         result.replayOutcome = "fail";
         assertReplayAvailable(result.firstPass);
@@ -268,6 +340,8 @@ async function main() {
         console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
       } catch (error) {
         result.error = String(error.stack ?? error);
+        result.unexpectedReplayDenial = entry.playbackCapability !== "nonreplayable-host-callbacks" &&
+          result.firstPass?.controls?.controllable === "false";
         result.failureState = await page.evaluate(() => ({
           patch: document.querySelector("#patch-status")?.value,
           status: document.querySelector("#status-text")?.textContent,
@@ -290,6 +364,7 @@ async function main() {
       }
     }
     report.runtimeResources = cache.stats();
+    report.summary = summarizeLiveReview(report.results);
     assert.equal(report.viewportQualification.outcome, "pass", "browser capture layout fixture failed");
     assert.deepEqual(report.results.filter((result) => result.outcome !== "pass").map((result) => result.id), [],
       "normal-playback review failures");

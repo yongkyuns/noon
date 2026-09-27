@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFirstPass, assertReplayAvailable, assertLiveOutcome, assertLiveEndpoint, assertLivePixels } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableHostCallbacks, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -114,6 +114,44 @@ test("successful first execution cannot substitute for unavailable replay", () =
   assertFirstPass(entry, state, "WebGPU");
   assert.throws(() => assertReplayAvailable(state), /UnsupportedDomain/);
   assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
+});
+
+test("only the declared callback lesson accepts the exact idle UnsupportedDomain denial", () => {
+  const entry = {
+    id: "showcase-reactive-relationships", duration: 9.2,
+    playbackCapability: "nonreplayable-host-callbacks",
+    playbackLimitation: "Python updater callbacks cannot be retained for deterministic replay.",
+  };
+  const state = {
+    ...observed(),
+    selectedExampleId: entry.id,
+    duration: "9.199999999999999",
+    replayReason: "Replay unavailable: UnsupportedDomain",
+    controls: { controllable: "false", busy: "false", elapsedSeconds: "9.199999999999999" },
+    disabledReplayControls: { play: true, restart: true, scrubber: true },
+  };
+  assertNonreplayableHostCallbacks(entry, state, "WebGPU");
+  for (const change of [
+    { replayReason: "Replay unavailable: UnsupportedFeature" },
+    { controls: { ...state.controls, controllable: "true" } },
+    { controls: { ...state.controls, busy: "true" } },
+    { disabledReplayControls: { play: true, restart: false, scrubber: true } },
+  ]) assert.throws(() => assertNonreplayableHostCallbacks(entry, { ...state, ...change }, "WebGPU"));
+  assert.throws(() => assertNonreplayableHostCallbacks({ ...entry, id: "showcase-first-scene" }, state, "WebGPU"));
+});
+
+test("unexpected denial stays fatal and expected nonreplayable reruns have separate counters", () => {
+  assert.throws(() => assertReplayAvailable({
+    controls: { controllable: "false" }, replayReason: "Replay unavailable: UnsupportedDomain",
+  }), /unexpectedly denied retained replay/);
+  assert.deepEqual(summarizeLiveReview([
+    { outcome: "pass", firstPassOutcome: "pass", replayOutcome: "pass" },
+    { outcome: "pass", firstPassOutcome: "pass", replayOutcome: "expected-denial", nonreplayableRerunOutcome: "pass" },
+    { outcome: "fail", firstPassOutcome: "pass", replayOutcome: "fail", unexpectedReplayDenial: true },
+  ]), {
+    firstPassPassed: 3, replayPassed: 1, expectedNonreplayableDenials: 1,
+    nonreplayableRerunsPassed: 1, unexpectedReplayDenials: 1, failed: 1,
+  });
 });
 
 test("first-pass errors and incomplete execution fail before replay is attempted", () => {

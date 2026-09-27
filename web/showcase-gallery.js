@@ -1,4 +1,7 @@
 export const SHOWCASE_MANIFEST = "./python/examples/noon_showcase_manifest.json";
+export const REPLAYABLE_SHOWCASE = "deterministic-retained-replay";
+export const NONREPLAYABLE_HOST_CALLBACKS = "nonreplayable-host-callbacks";
+const NONREPLAYABLE_SHOWCASE_ID = "showcase-reactive-relationships";
 
 export function isShowcaseRequest(locationLike) {
   const params = new URLSearchParams(locationLike?.search ?? "");
@@ -31,13 +34,26 @@ export function normalizeShowcaseManifest(manifest) {
     )) throw new Error(`${entry.id}: expected at least three review beats within the scene`);
     if (entry.interaction != null && entry.interaction.type !== "pointer-fill-selection") throw new Error(`${entry.id}: unsupported host interaction`);
     if (entry.interaction != null && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: interactive scenes must disclose their host setup`);
+    const playbackCapability = entry.playback_capability ?? REPLAYABLE_SHOWCASE;
+    if (![REPLAYABLE_SHOWCASE, NONREPLAYABLE_HOST_CALLBACKS].includes(playbackCapability)) {
+      throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
+    }
+    if (playbackCapability === NONREPLAYABLE_HOST_CALLBACKS) {
+      if (entry.id !== NONREPLAYABLE_SHOWCASE_ID) throw new Error(`${entry.id}: nonreplayable host callbacks are not qualified for this lesson`);
+      if (typeof entry.playback_limitation !== "string" || !entry.playback_limitation.trim()) {
+        throw new Error(`${entry.id}: nonreplayable playback requires a user-facing limitation`);
+      }
+    } else if (entry.playback_limitation != null) {
+      throw new Error(`${entry.id}: playback limitation requires a nonreplayable capability`);
+    }
     ids.add(entry.id);
     sources.add(entry.path);
     primaryFeatures.add(entry.primary_feature);
     return {
       id: entry.id,
       title: entry.title,
-      summary: entry.lesson + (entry.host_setup ? ` Host setup: ${entry.host_setup}` : ""),
+      summary: entry.lesson + (entry.host_setup ? ` Host setup: ${entry.host_setup}` : "") +
+        (entry.playback_limitation ? ` Playback limitation: ${entry.playback_limitation}` : ""),
       path: `./${entry.path}`,
       category: entry.category,
       features: [...entry.features],
@@ -51,6 +67,8 @@ export function normalizeShowcaseManifest(manifest) {
       order: ids.size,
       interaction: entry.interaction ? { type: entry.interaction.type, maxMovement: 4 } : null,
       performance: entry.performance === true,
+      playbackCapability,
+      playbackLimitation: entry.playback_limitation ?? null,
     };
   });
   return { reference: null, examples };

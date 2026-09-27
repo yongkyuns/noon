@@ -143,7 +143,9 @@
       "thumbnail_alt": "Blue and teal dots at different heights joined by a yellow updater-driven connector and axis guides",
       "still_intervals": [[1.5, 2], [4.4, 5], [8, 9.2]],
       "beats": [{"time": 1.2, "label": "Introduce the relationship"}, {"time": 3.2, "label": "Drive both endpoints"}, {"time": 4.6, "label": "Connector stays attached"}, {"time": 6.2, "label": "Change both drivers again"}],
-      "thumbnail": "thumbnails/showcase/showcase-reactive-relationships.png"
+      "thumbnail": "thumbnails/showcase/showcase-reactive-relationships.png",
+      "playback_capability": "nonreplayable-host-callbacks",
+      "playback_limitation": "This lesson uses Python updater callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
     },
     {
       "id": "showcase-raster-images", "title": "Pixels in the scene",
