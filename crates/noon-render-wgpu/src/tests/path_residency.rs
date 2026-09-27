@@ -40,7 +40,7 @@ fn resident_first_use_phases_upload_instances_only_and_keep_prefix_on_fallback()
     let prefix_vertices = preparer.path_vertices.clone();
     let prefix_indices = preparer.path_indices.clone();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let preload = preparer.preloaded_frame();
     assert!(preload.paths.is_empty() && preload.render_batches.is_empty());
     let upload = renderer
@@ -177,7 +177,7 @@ fn native_preload_rejects_nonfinite_specializations_atomically() {
     };
     let mut preparer = RetainedFramePreparer::new();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     preparer
         .preload_path_meshes(&device, &queue, &mut renderer, &[base])
         .unwrap();

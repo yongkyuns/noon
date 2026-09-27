@@ -536,7 +536,7 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, config.format);
+            let renderer = GpuRenderer::new(&device, &queue, config.format);
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             self.instance = instance;
@@ -605,7 +605,7 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, config.format);
+            let renderer = GpuRenderer::new(&device, &queue, config.format);
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             self.instance = instance;
@@ -1329,7 +1329,7 @@ mod wasm {
             let gpu_generation = 1;
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
             install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
-            let renderer = GpuRenderer::new(&device, config.format);
+            let renderer = GpuRenderer::new(&device, &queue, config.format);
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
             let webgl_context_lifecycle =
                 crate::webgl_context_lifecycle::WebGlContextLifecycle::install(&canvas, backend)?;

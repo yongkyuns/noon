@@ -157,6 +157,7 @@ jobs:
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-family-transform
         run: ${{ matrix.display }} node scripts/playground-python-family-transform-smoke.mjs
       - name: Test every selectable gallery example
+        timeout-minutes: 20
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}

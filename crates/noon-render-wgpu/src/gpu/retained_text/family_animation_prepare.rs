@@ -374,7 +374,7 @@ mod operation_selection_tests {
             let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
             let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
             let mut preparer = RetainedFramePreparer::new();
-            let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+            let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             let mut previous_vertices = Vec::new();
             for y in [0.0, 0.5] {
                 retained.objects[2].content = ObjectContentRef::Geometry(GeometryRef::path(
@@ -467,7 +467,7 @@ mod operation_selection_tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let frame = RetainedFamilyFrame {
             retained: &retained,
@@ -676,7 +676,7 @@ mod operation_selection_tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         preparer.set_scene_path_mesh_cache_budget(10, 400);
         let path = GeometryRef::path(
             noon_core::VectorPath::new()
@@ -801,7 +801,7 @@ mod operation_selection_tests {
             },
             ..Default::default()
         });
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut preparer = RetainedFramePreparer::new();
         preparer
             .preload_path_meshes(&device, &queue, &mut renderer, &requests[..2])

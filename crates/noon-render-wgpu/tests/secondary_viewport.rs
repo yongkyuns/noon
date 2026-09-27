@@ -145,7 +145,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(scene.frame());
 
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         renderer.set_camera(
             &queue,
@@ -184,6 +184,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
         renderer
             .encode_composed_frame(
                 &device,
+                &queue,
                 &mut encoder,
                 &view,
                 FrameComposition {
@@ -258,6 +259,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
             renderer
                 .encode_composed_frame(
                     &device,
+                    &queue,
                     &mut encoder,
                     &view,
                     FrameComposition {

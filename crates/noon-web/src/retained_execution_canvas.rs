@@ -891,7 +891,7 @@ mod wasm {
                 .max(mirror.resources().render_geometry_preparation_count()),
             mirror.resources().geometry_count(),
         );
-        let mut renderer = GpuRenderer::new(device, format);
+        let mut renderer = GpuRenderer::new(device, queue, format);
         let text_gpu = renderer.create_retained_text_state(device, queue);
         let resources = mirror.resources().render_geometries();
         let requests = mirror

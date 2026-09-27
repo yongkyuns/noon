@@ -120,72 +120,85 @@ try {
         ].join('\n'),
       });
     });
-    page.on('pageerror', error => result.errors.push(String(error)));
+    page.on('pageerror', error => result.errors.push(error.stack || String(error)));
     page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
+    // A browser call can stall before the polling loop checks its own deadline.
+    // Bound the whole case from Node so the job still publishes its diagnostics.
+    let caseTimer;
     try {
-      await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
-      let completed = false;
-      // Longer authored examples can run materially slower than real time in Firefox CI.
-      // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
-      const deadline = Date.now() + 105000;
-      while (Date.now() < deadline) {
-        const state = await page.evaluate(() => {
-          const gallery = window.__noonExampleGallery;
-          if (!window.__galleryMetricsPending) {
-            window.__galleryMetricsPending = true;
-            Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
-              .finally(() => { window.__galleryMetricsPending = false; });
+      await Promise.race([
+        (async () => {
+          await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
+          let completed = false;
+          // Longer authored examples can run materially slower than real time in Firefox CI.
+          // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
+          const deadline = Date.now() + 105000;
+          while (Date.now() < deadline) {
+            const state = await page.evaluate(() => {
+              const gallery = window.__noonExampleGallery;
+              if (!window.__galleryMetricsPending) {
+                window.__galleryMetricsPending = true;
+                Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
+                  .finally(() => { window.__galleryMetricsPending = false; });
+              }
+              return { selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
+                patch: { ...document.querySelector('#patch-status')?.dataset },
+                text: document.querySelector('#patch-status')?.value,
+                runtimeStatus: document.querySelector('#status-text')?.textContent,
+                rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
+                renderHost: document.querySelector('#status')?.dataset.renderHost,
+                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
+            });
+            result.state = state;
+            assert.equal(state.selected, entry.id);
+            assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
+            assert.equal(state.metricsError, undefined);
+            const metric = state.metrics?.metrics;
+            if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
+            if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
+            await page.waitForTimeout(100);
           }
-          return { selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
-            patch: { ...document.querySelector('#patch-status')?.dataset },
-            text: document.querySelector('#patch-status')?.value,
-            runtimeStatus: document.querySelector('#status-text')?.textContent,
-            metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
-        });
-        result.state = state;
-        assert.equal(state.selected, entry.id);
-        assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
-        assert.equal(state.metricsError, undefined);
-        const metric = state.metrics?.metrics;
-        if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
-        if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
-        await page.waitForTimeout(100);
-      }
-      assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
-      if (noJspi && browserName === 'chromium') {
-        assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
-          'no-JSPI smoke did not wrap the production authoring worker');
-      }
-      const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-      result.finalMetrics = metrics;
-      assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
-      const authoring = await page.evaluate(() => ({
-        results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
-      }));
-      assert.equal(authoring.error, undefined);
-      assert.equal(authoring.results.length, 1, 'expected exactly one final shared authoring result');
-      const parsed = parseAuthoringResult(authoring.results[0]);
-      assert.ok(parsed.semanticExecution, 'missing final shared execution descriptor');
-      result.semanticExecution = parsed.semanticExecution;
-      result.authoredDuration = parsed.duration;
-      assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
-      if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
-        `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
-      if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
-      assert.deepEqual(result.errors, []);
-      if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
+          assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+          if (noJspi && browserName === 'chromium') {
+            assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
+              'no-JSPI smoke did not wrap the production authoring worker');
+          }
+          const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+          result.finalMetrics = metrics;
+          assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
+          const authoring = await page.evaluate(() => ({
+            results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
+          }));
+          assert.equal(authoring.error, undefined);
+          assert.equal(authoring.results.length, 1, 'expected exactly one final shared authoring result');
+          const parsed = parseAuthoringResult(authoring.results[0]);
+          assert.ok(parsed.semanticExecution, 'missing final shared execution descriptor');
+          result.semanticExecution = parsed.semanticExecution;
+          result.authoredDuration = parsed.duration;
+          assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
+          if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
+            `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
+          if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
+          assert.deepEqual(result.errors, []);
+          if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
+        })(),
+        new Promise((_, reject) => {
+          caseTimer = setTimeout(() => reject(new Error(`${name}: browser case exceeded 150 seconds`)), 150000);
+        }),
+      ]);
       result.outcome = 'pass';
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
     } finally {
+      clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
-      await context.close();
       result.elapsedMs = performance.now() - caseStartedAt;
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
       if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors }));
+      await context.close();
     }
   }
   await Promise.all(Array.from({ length: 2 }, async () => { while (next < queue.length) await check(queue[next++]); }));

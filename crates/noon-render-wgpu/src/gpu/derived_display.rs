@@ -594,7 +594,7 @@ mod tests {
         let stable = preparer.prepare(publication.frame());
 
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 32, 32);
         renderer.upload(&device, &queue, &stable);
         let uploaded = renderer.upload_transient_presentations(&device, &queue, &derived);
@@ -675,7 +675,7 @@ mod tests {
         let stable = preparer.prepare(publication.frame());
 
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 32, 32);
         renderer.upload(&device, &queue, &stable);
         let uploaded = renderer.upload_transient_presentations(&device, &queue, &derived);

@@ -2,7 +2,6 @@ use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
-use wgpu::util::DeviceExt;
 
 mod derived_display;
 mod overlay;
@@ -541,12 +540,17 @@ impl<'a> FramePassOptions<'a> {
 }
 
 impl GpuRenderer {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        Self::new_with_output_transfer(device, target_format, OutputTransfer::Direct)
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
+        Self::new_with_output_transfer(device, queue, target_format, OutputTransfer::Direct)
     }
 
     pub fn new_with_output_transfer(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         output_transfer: OutputTransfer,
     ) -> Self {
@@ -567,11 +571,13 @@ impl GpuRenderer {
             PresentationBridge::new(device, surface_format, output_transfer, viewport_size);
         let target_format = presentation.scene_format();
         let camera_uniform = camera.uniform(viewport_size);
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noon camera uniform"),
-            contents: bytemuck::bytes_of(&camera_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let camera_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon camera uniform"),
+            bytemuck::bytes_of(&camera_uniform),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon camera bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -693,11 +699,13 @@ impl GpuRenderer {
             create_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
-        let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noon unit quad"),
-            contents: bytemuck::cast_slice(&QUAD_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let quad_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon unit quad"),
+            bytemuck::cast_slice(&QUAD_VERTICES),
+            wgpu::BufferUsages::VERTEX,
+        );
         let circle_buffer = empty_instance_buffer(device, "Noon circle instances");
         let rectangle_buffer = empty_instance_buffer(device, "Noon rectangle instances");
         let line_buffer = empty_instance_buffer(device, "Noon line instances");
@@ -1169,6 +1177,7 @@ impl GpuRenderer {
     pub fn encode_composed_frame(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         composition: FrameComposition<'_, '_>,
@@ -1201,6 +1210,7 @@ impl GpuRenderer {
         for secondary in secondary_viewports {
             stats += self.encode_secondary_viewport_validated(
                 device,
+                queue,
                 encoder,
                 view,
                 prepared,
@@ -1228,6 +1238,7 @@ impl GpuRenderer {
     fn encode_secondary_viewport_validated(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
@@ -1236,12 +1247,13 @@ impl GpuRenderer {
     ) -> DrawStats {
         let [x, y, width, height] = secondary.destination;
         let camera_uniform = secondary.camera.uniform([width, height]);
-        let secondary_camera_buffer =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Noon secondary viewport camera uniform"),
-                contents: bytemuck::bytes_of(&camera_uniform),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let secondary_camera_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon secondary viewport camera uniform"),
+            bytemuck::bytes_of(&camera_uniform),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let secondary_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Noon secondary viewport camera bind group"),
             layout: &self.camera_bind_group_layout,
@@ -1843,6 +1855,33 @@ fn create_path_pipeline_with_instance_layout(
     })
 }
 
+/// Initialize an aligned typed buffer through the queue instead of a
+/// mapped-at-creation range. This avoids the mapped-range exception observed
+/// in browser WebGPU while preserving the buffer's exact upload contract.
+pub(super) fn create_buffer_with_data(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: wgpu::Label<'_>,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    assert!(
+        !contents.is_empty()
+            && contents
+                .len()
+                .is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as usize),
+        "typed buffer initialization must have a non-zero copy-aligned length"
+    );
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label,
+        size: contents.len() as wgpu::BufferAddress,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, contents);
+    buffer
+}
+
 fn empty_instance_buffer(device: &wgpu::Device, label: &str) -> wgpu::Buffer {
     empty_buffer(
         device,
@@ -2284,7 +2323,7 @@ mod tests {
     #[test]
     fn noop_device_validates_pipelines_camera_upload_and_draw_encoding() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         let camera =
             Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         renderer.set_viewport(&device, &queue, 64, 64);
@@ -2349,6 +2388,7 @@ mod tests {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new_with_output_transfer(
             &device,
+            &queue,
             WEBGL_FORMAT,
             OutputTransfer::BrowserWebGlSrgb,
         );
@@ -2391,7 +2431,7 @@ mod tests {
             ..Default::default()
         };
         let (device, queue) = wgpu::Device::noop(&descriptor);
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
 
         let frame = test_frame_with_path();
@@ -2444,7 +2484,7 @@ mod tests {
     #[test]
     fn noop_device_validates_multisampled_path_and_analytic_passes() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
