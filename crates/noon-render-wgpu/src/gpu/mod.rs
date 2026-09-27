@@ -800,10 +800,13 @@ impl GpuRenderer {
         width: u32,
         height: u32,
     ) {
-        self.viewport_size = [width.max(1), height.max(1)];
-        (self.path_msaa_texture, self.path_msaa_view) =
-            create_path_msaa_target(device, self.target_format, self.viewport_size);
-        self.presentation.resize(device, self.viewport_size);
+        let viewport_size = [width.max(1), height.max(1)];
+        if self.viewport_size != viewport_size {
+            self.viewport_size = viewport_size;
+            (self.path_msaa_texture, self.path_msaa_view) =
+                create_path_msaa_target(device, self.target_format, self.viewport_size);
+            self.presentation.resize(device, self.viewport_size);
+        }
         self.write_camera_uniform(queue);
     }
 
@@ -2380,6 +2383,58 @@ mod tests {
 
         assert_eq!(draw.draw_calls, 3);
         assert_eq!(draw.instances_drawn, 3);
+    }
+
+    #[test]
+    fn viewport_updates_reuse_targets_until_clamped_dimensions_change() {
+        const WEBGL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new_with_output_transfer(
+            &device,
+            &queue,
+            WEBGL_FORMAT,
+            OutputTransfer::BrowserWebGlSrgb,
+        );
+        let camera =
+            Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
+        renderer.set_camera(&queue, camera);
+
+        let initial_msaa_target = renderer.path_msaa_texture.clone();
+        let initial_presentation_target = renderer
+            .presentation
+            .scene_target_for_tests()
+            .expect("WebGL presentation target")
+            .clone();
+        renderer.set_viewport(&device, &queue, 0, 0);
+        assert_eq!(renderer.viewport_size(), [1, 1]);
+        assert_eq!(renderer.path_msaa_texture, initial_msaa_target);
+        assert_eq!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&initial_presentation_target)
+        );
+
+        renderer.set_viewport(&device, &queue, 96, 54);
+        let msaa_target = renderer.path_msaa_texture.clone();
+        let presentation_target = renderer
+            .presentation
+            .scene_target_for_tests()
+            .expect("WebGL presentation target")
+            .clone();
+        renderer.set_viewport(&device, &queue, 96, 54);
+        assert_eq!(renderer.camera(), camera);
+        assert_eq!(renderer.path_msaa_texture, msaa_target);
+        assert_eq!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&presentation_target)
+        );
+
+        renderer.set_viewport(&device, &queue, 192, 108);
+        assert_eq!(renderer.viewport_size(), [192, 108]);
+        assert_ne!(renderer.path_msaa_texture, msaa_target);
+        assert_ne!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&presentation_target)
+        );
     }
 
     #[test]

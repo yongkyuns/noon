@@ -272,6 +272,31 @@ try {
     "capture did not identify the GPUDevice configured for #scene");
 
   const baseline = await renderAndCapture(page, "baseline");
+  // Camera updates at the existing viewport must not allocate full-size targets.
+  const stableViewport = await page.evaluate(async (time) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    const device = capture.devices[capture.ownerDeviceIndex];
+    const ownDescriptor = Object.getOwnPropertyDescriptor(device, "createTexture");
+    const createTexture = device.createTexture;
+    let allocations = 0;
+    Object.defineProperty(device, "createTexture", {
+      configurable: true,
+      value(...args) {
+        allocations += 1;
+        return createTexture.apply(this, args);
+      },
+    });
+    try {
+      const frames = [];
+      for (let i = 0; i < 3; i += 1) frames.push(await window.noonSmoke.renderAt(time));
+      return { allocations, presented: frames.every(frame => frame.presented) };
+    } finally {
+      if (ownDescriptor) Object.defineProperty(device, "createTexture", ownDescriptor);
+      else delete device.createTexture;
+    }
+  }, sampleTime);
+  assert.equal(stableViewport.presented, true, "same-size camera updates stopped presenting");
+  assert.equal(stableViewport.allocations, 0, "same-size camera updates recreated GPU textures");
   const firstRecovery = await destroyAndRecover(page, {
     deviceIndex: directDeviceIndex,
     minimumDeviceCount: captureBefore.deviceCount + 1,
@@ -354,6 +379,7 @@ try {
     browserVersion: browser.version(),
     initial,
     baseline: baseline.metrics,
+    stableViewport,
     duringLoss: firstRecovery.duringLoss,
     recovered: firstRecovery.recovered,
     recoveryCapture: firstRecovery.recoveryCapture,
