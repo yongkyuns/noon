@@ -32,7 +32,9 @@ class VariableLifecycle(Scene):
         assert integer.value.get_value() == 3
         integer.shift(UP)
         self.add(variable, integer)
+        integer.tracker.set_value(4.5)
         await self.wait(0.05)
+        assert integer.value.get_value() == 4
         self.remove(integer)
         variable.tracker.set_value(7.5)
         assert variable.tracker.get_value() == 7.5

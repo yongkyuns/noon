@@ -3247,8 +3247,45 @@ mod tests {
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
-        SemanticStore, StoredGeometry,
+        SemanticStore, StoredGeometry, TextResourceLookup,
     };
+
+    struct NumericRuleBackend;
+
+    impl noon::LatexBackend for NumericRuleBackend {
+        fn identity(&self) -> &str {
+            "semantic-execution-player-numeric-rule-fixture"
+        }
+
+        fn format(&self) -> noon::LatexFormat {
+            noon::LatexFormat::Preloaded
+        }
+
+        fn font(&mut self, _: &str) -> Result<noon::DviFontResource, String> {
+            Err("font-free fixture".into())
+        }
+
+        fn compile(&mut self, _: &str) -> Result<Vec<u8>, String> {
+            let mut dvi = vec![247, 2];
+            for value in [25_400_000u32, 473_628_672, 1000] {
+                dvi.extend(value.to_be_bytes());
+            }
+            dvi.push(0);
+            dvi.push(139);
+            dvi.extend([0; 44]);
+            dvi.push(132);
+            dvi.extend(655_360i32.to_be_bytes());
+            dvi.extend(327_680i32.to_be_bytes());
+            dvi.push(140);
+            dvi.push(248);
+            dvi.extend([0; 28]);
+            dvi.push(249);
+            dvi.extend([0; 4]);
+            dvi.push(2);
+            dvi.extend([223; 4]);
+            Ok(dvi)
+        }
+    }
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
         let row = &phase["objects"][0];
@@ -4455,6 +4492,79 @@ mod tests {
         assert_late_text_resource_admission(|player| {
             player.live_create_math_typst(noon::MathTypst::new("x^2"))
         });
+    }
+
+    #[test]
+    fn live_variable_tracker_update_replaces_text_through_sparse_resource_delta() {
+        let mut backend = NumericRuleBackend;
+        let scene = noon::Scene::new();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            82,
+        )
+        .unwrap();
+        let mut mirror = crate::InstalledRetainedExecutionMirror::from_bundle_bytes(
+            &player.resource_bundle_bytes(),
+        )
+        .unwrap();
+        let initial = player.delta(true).unwrap().unwrap();
+        mirror.apply_family(initial).unwrap();
+
+        player.live_wait(0.5).unwrap();
+        player.live_drive_segment_to_authored_time(0.5).unwrap();
+        player.live_complete_segment().unwrap();
+        if let Some(wait_delta) = player.delta(false).unwrap() {
+            mirror.apply_family(wait_delta).unwrap();
+        }
+
+        let variable = player
+            .live_create_variable(
+                &mut backend,
+                "x".into(),
+                1.25,
+                noon::DecimalFormat::default(),
+                48.0,
+            )
+            .unwrap();
+        player
+            .with_live_session(|live| {
+                live.add_many(&[noon::MobjectTarget::Family(variable.family())])
+                    .map(|_| ())
+            })
+            .unwrap();
+        let admitted = player.delta(false).unwrap().unwrap();
+        let admitted_object_count = admitted.retained.objects.len();
+        assert!(admitted.resource_additions.is_some());
+        mirror.apply_family(admitted).unwrap();
+
+        player.live_set_signal(variable.tracker(), 7.5).unwrap();
+        let update = player.delta(false).unwrap().unwrap();
+        assert!(!update.retained.snapshot);
+        assert!(update.retained.objects.len() < admitted_object_count);
+        assert!(update
+            .retained
+            .objects
+            .iter()
+            .any(|object| matches!(object.content, TransportObjectContent::Text { .. })));
+        assert_eq!(update.resource_additions.as_ref().unwrap().text_count(), 1);
+
+        mirror.apply_family(update).unwrap();
+        assert!(mirror
+            .frame()
+            .unwrap()
+            .objects
+            .iter()
+            .filter_map(|object| object.text())
+            .any(|handle| {
+                mirror
+                    .resources()
+                    .texts()
+                    .get(handle)
+                    .is_some_and(|resource| resource.source.as_ref() == "7.50")
+            }));
     }
 
     fn assert_late_text_resource_admission(

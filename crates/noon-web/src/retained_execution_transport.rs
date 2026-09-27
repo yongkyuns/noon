@@ -1207,7 +1207,12 @@ fn incremental_content_identity_matches(
         (ObjectContentRef::Image(current), ObjectContentRef::Image(next)) => {
             current.resource() == next.resource()
         }
-        (ObjectContentRef::Text(current), ObjectContentRef::Text(next)) => current == next,
+        // Text resources are immutable, but a live numeric binding can replace the
+        // version behind one retained object. The enclosing family envelope stages
+        // that resource addition before this mirror resolves the row, so preserving
+        // the text content kind preserves the retained slot without requiring a
+        // complete-scene snapshot.
+        (ObjectContentRef::Text(_), ObjectContentRef::Text(_)) => true,
         _ => false,
     }
 }
@@ -1798,7 +1803,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_text_resource_change_requires_snapshot() {
+    fn incremental_text_resource_change_preserves_slot_identity() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(10);
         let initial = encoder
@@ -1821,10 +1826,9 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            mirror.apply(delta),
-            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
-        ));
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(changes.object_indices(), &[1]);
+        assert_eq!(mirror.frame().unwrap(), &changed);
     }
 
     #[test]
