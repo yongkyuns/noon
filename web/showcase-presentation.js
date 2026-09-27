@@ -14,20 +14,20 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
   style.textContent = `
     #showcase-catalog-link { text-decoration: none; white-space: nowrap; font-size: .7rem; }
     @media (max-width: 44rem) {
-      html[data-noon-catalog="showcase"] .topbar {
+      html[data-noon-catalog] .topbar {
         display: grid;
         grid-template-columns: auto minmax(8rem, 1fr) auto;
         grid-template-areas: "brand picker catalog" "status status status";
         gap: .4rem .5rem;
         align-items: center;
       }
-      html[data-noon-catalog="showcase"] .topbar .brand { grid-area: brand; }
-      html[data-noon-catalog="showcase"] #example-browser-trigger {
+      html[data-noon-catalog] .topbar .brand { grid-area: brand; }
+      html[data-noon-catalog] #example-browser-trigger {
         grid-area: picker;
         min-width: 8rem;
         max-width: none;
       }
-      html[data-noon-catalog="showcase"] #showcase-catalog-link {
+      html[data-noon-catalog] #showcase-catalog-link {
         grid-area: catalog;
         justify-self: end;
         min-width: 0;
@@ -36,7 +36,7 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
         line-height: 1.2;
         text-align: center;
       }
-      html[data-noon-catalog="showcase"] .runtime-status {
+      html[data-noon-catalog] .runtime-status {
         grid-area: status;
         width: 100%;
         max-width: none;
@@ -44,7 +44,7 @@ export function installShowcasePresentation(documentLike, examples, showcase) {
         flex-wrap: wrap;
         padding: .2rem 0 0;
       }
-      html[data-noon-catalog="showcase"] #status-text {
+      html[data-noon-catalog] #status-text {
         overflow: visible;
         overflow-wrap: anywhere;
         text-overflow: clip;
