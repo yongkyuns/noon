@@ -1835,6 +1835,7 @@ impl RetainedFramePreparer {
             self.geometry_uses_source_indices = false;
         }
         self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+        self.geometry_only_classification = None;
         self.prepare_text_snapshot(device, queue, frame, changes, texts, fonts, metrics)
     }
 
