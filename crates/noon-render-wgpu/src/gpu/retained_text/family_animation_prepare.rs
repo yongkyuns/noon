@@ -359,6 +359,84 @@ mod operation_selection_tests {
         );
     }
     #[test]
+    fn family_preparation_keeps_changed_path_upload_ranges() {
+        for planned_set in [false, true] {
+            let (plan, mut retained, mut states) = fixture();
+            states[0].as_mut().unwrap().overall_progress = 1.0;
+            states[1] = None;
+            states[2] = None;
+            retained.objects[2].style.fill = None;
+            retained.objects[2].style.stroke = Some(noon_core::Color::WHITE);
+            retained.objects[2].style.stroke_width = 0.05;
+            let texts = TextResourceArena::new();
+            let fonts = FontResourceArena::new();
+            let geometries = GeometryResourceArena::new();
+            let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+            let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+            let mut preparer = RetainedFramePreparer::new();
+            let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+            let mut previous_vertices = Vec::new();
+            for y in [0.0, 0.5] {
+                retained.objects[2].content = ObjectContentRef::Geometry(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(-1.0, y))
+                        .line_to(noon_core::Vec2::new(1.0, y)),
+                ));
+                let frame = RetainedFamilyFrame {
+                    retained: &retained,
+                    family_animations: &states,
+                };
+                let prepared = if planned_set {
+                    let planned = noon_runtime::RetainedPlannedFamilyFrame {
+                        retained: &retained,
+                        family_animations: &states,
+                        family_plan_indices: &[Some(0), None, None],
+                    };
+                    preparer
+                        .prepare_family_plan_set_with_changes(
+                            &device,
+                            &queue,
+                            &planned,
+                            std::slice::from_ref(&plan),
+                            &FrameChanges::all(),
+                            &texts,
+                            &fonts,
+                            &geometries,
+                            metrics,
+                        )
+                        .unwrap()
+                } else {
+                    preparer
+                        .prepare_family_with_changes(
+                            &device,
+                            &queue,
+                            &frame,
+                            &plan,
+                            &FrameChanges::all(),
+                            &texts,
+                            &fonts,
+                            &geometries,
+                            metrics,
+                        )
+                        .unwrap()
+                };
+                let mut writes = Vec::new();
+                renderer.upload_with_trace(&device, &queue, &prepared.geometry, &mut writes);
+                if !previous_vertices.is_empty() {
+                    assert_ne!(prepared.geometry.path_vertices, previous_vertices);
+                    assert!(
+                        writes
+                            .iter()
+                            .any(|write| write.buffer == "compact_path_vertex"),
+                        "a warm family frame must upload changed path vertices"
+                    );
+                }
+                previous_vertices = prepared.geometry.path_vertices.to_vec();
+            }
+        }
+    }
+
+    #[test]
     fn family_reveal_keeps_fixed_morph_frame_and_warm_geometry() {
         let (plan, mut retained, mut states) = fixture();
         states[1] = None;

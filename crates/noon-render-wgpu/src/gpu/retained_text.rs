@@ -1227,7 +1227,6 @@ impl RetainedFramePreparer {
             publication.font_resources(),
             publication.geometry_resources(),
             metrics,
-            true,
             None,
             Some(publication.raster_image_resources()),
         )?;
@@ -1269,7 +1268,6 @@ impl RetainedFramePreparer {
             publication.font_resources(),
             publication.geometry_resources(),
             metrics,
-            true,
             Some(visible_object_indices),
             Some(publication.raster_image_resources()),
         )?;
@@ -1304,7 +1302,7 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepare_with_changes_inner(
-            device, queue, frame, changes, texts, fonts, geometries, metrics, true, None, None,
+            device, queue, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
     }
 
@@ -1332,7 +1330,6 @@ impl RetainedFramePreparer {
             fonts,
             geometries,
             metrics,
-            true,
             None,
             Some(images),
         )
@@ -1349,7 +1346,6 @@ impl RetainedFramePreparer {
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
-        allow_geometry_only: bool,
         visible_object_indices: Option<&[usize]>,
         images: Option<&dyn RasterImageResourceLookup>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
@@ -1363,7 +1359,6 @@ impl RetainedFramePreparer {
             fonts,
             geometries,
             metrics,
-            allow_geometry_only,
             visible_object_indices,
         )?;
         // Image resources, geometry, and text all prepared successfully. Commit the
@@ -1584,7 +1579,6 @@ impl RetainedFramePreparer {
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
-        allow_geometry_only: bool,
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         // A presentation-only publication still wakes the host, but stable retained
@@ -1598,7 +1592,7 @@ impl RetainedFramePreparer {
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
         }
-        if allow_geometry_only && !self.inset_views_active {
+        if !self.inset_views_active {
             match self.geometry_only_classification {
                 Some(true) if self.can_prepare_geometry_only(frame, changes) => {
                     return self.prepare_geometry_only(
@@ -1718,34 +1712,7 @@ impl RetainedFramePreparer {
         // leave an older successful generation eligible for empty-frame reuse.
         self.prepared_generation_ready = false;
 
-        // #339/#341 intentionally keep the atlas inside the retained text preparer.
-        // Snapshot the lightweight prepared records once so that borrow can end and
-        // the atlas can be borrowed alongside them for the parent GPU renderer.
-        {
-            let prepared = self
-                .text
-                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
-            self.snapshot_mask_quads.clear();
-            self.snapshot_mask_quads
-                .extend_from_slice(prepared.mask_quads);
-            self.snapshot_color_quads.clear();
-            self.snapshot_color_quads
-                .extend_from_slice(prepared.color_quads);
-            self.snapshot_text_items.clear();
-            self.snapshot_text_items.extend_from_slice(prepared.items);
-            self.snapshot_text_stats = prepared.stats;
-            self.text_item_ranges = text_item_ranges(prepared.items, frame.objects.len());
-        }
-        self.dirty_mask_ranges.clear();
-        self.dirty_color_ranges.clear();
-        self.incremental_stats.text_snapshot_copies = self
-            .incremental_stats
-            .text_snapshot_copies
-            .saturating_add(1);
-        self.text_generation = self
-            .text_generation
-            .checked_add(1)
-            .expect("retained text generation counter exhausted");
+        self.prepare_text_snapshot(device, queue, frame, changes, texts, fonts, metrics)?;
 
         let geometry = if scratch_reused {
             let no_changes = FrameChanges::default();
@@ -1858,15 +1825,60 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), RetainedPrepareError> {
-        // Keep full and structural publications intact for cache invalidation; only
-        // suppress the geometry-only fast path while this family baseline is built.
-        let result = self
-            .prepare_with_changes_inner(
-                device, queue, frame, changes, texts, fonts, geometries, metrics, false, None, None,
-            )
-            .map(|_| ());
+        // Family realization changes scratch geometry before its only preparation.
+        // Preparing an unused canonical geometry frame here would consume dirty
+        // mesh ranges before the final family frame can upload them.
+        self.prepared_generation_ready = false;
         self.geometry_only_classification = None;
-        result
+        if self.geometry_uses_source_indices {
+            self.geometry.clear_painter_order();
+            self.geometry_uses_source_indices = false;
+        }
+        self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+        self.prepare_text_snapshot(device, queue, frame, changes, texts, fonts, metrics)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_text_snapshot(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<(), RetainedPrepareError> {
+        // #339/#341 intentionally keep the atlas inside the retained text preparer.
+        // Snapshot the lightweight prepared records once so that borrow can end and
+        // the atlas can be borrowed alongside them for the parent GPU renderer.
+        {
+            let prepared = self
+                .text
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+            self.snapshot_mask_quads.clear();
+            self.snapshot_mask_quads
+                .extend_from_slice(prepared.mask_quads);
+            self.snapshot_color_quads.clear();
+            self.snapshot_color_quads
+                .extend_from_slice(prepared.color_quads);
+            self.snapshot_text_items.clear();
+            self.snapshot_text_items.extend_from_slice(prepared.items);
+            self.snapshot_text_stats = prepared.stats;
+            self.text_item_ranges = text_item_ranges(prepared.items, frame.objects.len());
+        }
+        self.dirty_mask_ranges.clear();
+        self.dirty_color_ranges.clear();
+        self.incremental_stats.text_snapshot_copies = self
+            .incremental_stats
+            .text_snapshot_copies
+            .saturating_add(1);
+        self.text_generation = self
+            .text_generation
+            .checked_add(1)
+            .expect("retained text generation counter exhausted");
+
+        Ok(())
     }
 
     fn prepare_scratch_with_changes(
@@ -4343,7 +4355,6 @@ mod tests {
                     &artifact.fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[1, 2]),
                     None,
                 )
@@ -4360,7 +4371,6 @@ mod tests {
                     &artifact.fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[1, 2]),
                     None,
                 )
@@ -5211,7 +5221,6 @@ mod tests {
                     &fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[0, 1]),
                     None,
                 )
@@ -5239,7 +5248,6 @@ mod tests {
                     &fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[1]),
                     None,
                 )
@@ -5261,7 +5269,6 @@ mod tests {
                     &fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[0]),
                     None,
                 )
@@ -5297,7 +5304,6 @@ mod tests {
                 &fonts,
                 &geometries,
                 metrics,
-                true,
                 Some(&[1]),
                 None,
             )
@@ -5314,7 +5320,6 @@ mod tests {
                     &fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[1]),
                     None,
                 )
@@ -5339,7 +5344,6 @@ mod tests {
                     &fonts,
                     &geometries,
                     metrics,
-                    true,
                     Some(&[1]),
                     None,
                 )

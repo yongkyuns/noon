@@ -215,7 +215,6 @@ async function captureSelection(context, entry, result) {
     assert.ok(selected, "actual pointer click did not change the displayed image");
     await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
     stage = "clear the selection";
-    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     await click(0.05, 0.5);
     let cleared, lastClear;
     for (let attempt = 0; attempt < 40; attempt++) {
