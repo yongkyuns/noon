@@ -377,6 +377,9 @@ try {
     warmRunMs: warm.milliseconds,
     editRunMs: edited.milliseconds,
     fps,
+    // Preserve the actual observations so a short-window regression can be
+    // diagnosed without reconstructing telemetry from an aggregate FPS value.
+    fpsSamples: cold.frameSamples,
     visual,
     fixedFrame: {
       authoredEndpointSeconds: PRODUCT_FIRST_PASS_SECONDS,
