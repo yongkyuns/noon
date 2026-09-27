@@ -1142,7 +1142,7 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 
 ## Phase A — architecture consolidation
 
-**Status: Phase A architecture consolidation is complete.** [#953](https://github.com/yongkyuns/noon/issues/953) records the completed exit checklist and qualification evidence. Phase B is the default priority for common 2D feature breadth; correctness fixes continue under their owning issues.
+**Status: Phase A consolidation and the representative Phase B exit are complete.** [#953](https://github.com/yongkyuns/noon/issues/953) and [#954](https://github.com/yongkyuns/noon/issues/954) record their qualification evidence. Phase C is the next priority; correctness fixes and further curated examples continue under their owning issues.
 
 The permanent Phase A result is already reflected in the normative sections above:
 
