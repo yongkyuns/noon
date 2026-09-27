@@ -40,11 +40,11 @@ class ShowcaseSourceContract(unittest.TestCase):
         self.assertIn("shapes[::3]", source)
         self.assertNotEqual(entry["path"], "python/examples/manim_parity_stress_grid.py")
 
-    def test_preview_destinations_do_not_reuse_illustrated_reference_posters(self):
+    def test_showcase_destinations_do_not_reuse_illustrated_reference_posters(self):
         posters = [entry["thumbnail"] for entry in MANIFEST["entries"]]
         self.assertEqual(len(posters), len(set(posters)))
         self.assertTrue(all(path.startswith("thumbnails/showcase/") and path.endswith(".png") for path in posters))
-        self.assertEqual(MANIFEST["publication"], "preview")
+        self.assertEqual(MANIFEST["publication"], "curated")
 
 
 if __name__ == "__main__":

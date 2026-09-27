@@ -8,10 +8,10 @@ const read = path => readFile(new URL(path, web));
 const manifest = JSON.parse(await read("python/examples/noon_showcase_manifest.json"));
 const evidence = JSON.parse(await read("thumbnails/showcase/capture-evidence.json"));
 
-test("every preview card has a retained, source-bound real capture", async () => {
+test("every showcase card has a retained, source-bound real capture", async () => {
   assert.equal(evidence.schema, 1);
   assert.equal(evidence.publication, "captured-preview");
-  assert.equal(manifest.publication, "preview", "posters do not authorize default promotion");
+  assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
   assert.deepEqual(evidence.posters.map(poster => poster.id), manifest.entries.map(entry => entry.id));
   for (const [index, entry] of manifest.entries.entries()) {

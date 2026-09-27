@@ -2,9 +2,9 @@
 
 ## Status and scope
 
-This is the first implementation slice, not a declaration that the entire gallery has been curated or visually approved. The fourteen authored lessons are explicitly preview-only at `?catalog=showcase` (or an explicit `?example=showcase-...` deep link). The default catalog and existing reference entries remain unchanged until the new sources, real posters, playback and backend evidence are reviewed. No placeholder poster is acceptable for publication.
+The default catalog contains fourteen authored lessons. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
-The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
+The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
 ## Editorial contract
 
@@ -16,7 +16,7 @@ Public scene source contains no regression assertions. The original matching-sha
 
 ## Dynamic scene is a featured composition
 
-**A field in motion** remains near the front of the preview, not hidden as a test utility. Its default 600 shapes and 24 animated text labels participate in six paced sections:
+**A field in motion** remains near the front of the showcase, not hidden as a test utility. Its default 600 shapes and 24 animated text labels participate in six paced sections:
 
 1. An animated field assembly.
 2. Full-field circle/square morphs.
@@ -67,7 +67,7 @@ The additional live-review runner records a WebM of each exact source through th
 
 The four feature additions have external syntax-only storyboard checks: explicit play/wait durations must sum to the declared duration and still intervals must correspond to real authored waits. These reject ambiguous timing rather than guessing it. They do not validate runtime rendering or prove perceptual smoothness. The updater lesson also pairs each registered callback with its exact removal.
 
-Generated images are artifacts until reviewed. Before default promotion, retain the approved PNGs under `web/thumbnails/showcase/`, verify every image loads on the deployed path, and review full animation playback, introduction, transitions, endpoint, replay/reset, pointer click/clear, desktop/mobile framing, and supported backends. A generated contact sheet alone is not proof that the complete animation is good.
+Generated images are artifacts until reviewed. For publication, retain the reviewed PNGs under `web/thumbnails/showcase/`, verify every image loads on the deployed path, and review full animation playback, introduction, transitions, endpoint, replay/reset, pointer click/clear, desktop/mobile framing, and supported backends. A generated contact sheet alone is not proof that the complete animation is good.
 
 ## Runtime qualification boundaries
 
@@ -97,4 +97,4 @@ The fourteen lessons are intentionally not exhaustive. Current master already ha
 
 Consolidate the public learning experience, not canonical fixtures. The 49-entry audit's source-preservation rule still applies. Its former suggestion to move the dynamic scene out of the showcase is superseded: keep the polished dynamic composition featured, while retaining the unchanged five-second stress workload for regression and profiling comparability.
 
-Do not switch the default gallery merely because these source files compile or CI artifacts exist. Review the resulting animations, fix shortcomings, and then make the publication change explicitly.
+The default-catalog change must be qualified with actual animation and responsive-layout evidence before merging. A compiling source or generated contact sheet alone is insufficient.

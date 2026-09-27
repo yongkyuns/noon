@@ -7,11 +7,12 @@ import { loadGalleryManifest, parityLabel } from "./example-gallery.js";
 const manifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
 const copy = () => structuredClone(manifest);
 
-test("showcase routes are explicit; legacy and default routes remain reference", () => {
-  assert.equal(isShowcaseRequest(undefined), false);
-  assert.equal(isShowcaseRequest({ search: "" }), false);
+test("showcase is the default; explicit reference and legacy links retain their catalog", () => {
+  assert.equal(isShowcaseRequest(undefined), true);
+  assert.equal(isShowcaseRequest({ search: "" }), true);
   assert.equal(isShowcaseRequest({ search: "?example=parity-create-circle" }), false);
   assert.equal(isShowcaseRequest({ search: "?catalog=showcase" }), true);
+  assert.equal(isShowcaseRequest({ search: "?catalog=reference" }), false);
   assert.equal(isShowcaseRequest({ search: "?example=showcase-first-scene" }), true);
   assert.equal(isShowcaseRequest({ search: "?catalog=reference&example=showcase-first-scene" }), false);
 });
@@ -30,7 +31,7 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   const pointer = gallery.examples.find((entry) => entry.interaction);
   assert.equal(pointer.interaction.type, "pointer-fill-selection");
   assert.match(pointer.summary, /copying the Python scene alone/i);
-  assert.equal(parityLabel("noon-showcase"), "Noon showcase preview");
+  assert.equal(parityLabel("noon-showcase"), "Noon showcase");
   assert.equal(parityLabel("parity-qualified"), "Parity qualified");
 });
 
@@ -82,7 +83,7 @@ test("loader and facade use the showcase catalog without fetching legacy manifes
     return { ok: true, json: async () => manifest };
   };
   assert.equal((await loadShowcaseGallery(fakeFetch)).examples.length, manifest.entries.length);
-  assert.equal((await loadGalleryManifest(undefined, fakeFetch, { search: "?catalog=showcase" })).examples.length, manifest.entries.length);
+  assert.equal((await loadGalleryManifest(undefined, fakeFetch, { search: "" })).examples.length, manifest.entries.length);
   assert.deepEqual(requested, [SHOWCASE_MANIFEST, SHOWCASE_MANIFEST]);
   await assert.rejects(loadShowcaseGallery(async () => ({ ok: false, status: 503 })), /503/);
 });

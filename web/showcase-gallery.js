@@ -5,13 +5,14 @@ const NONREPLAYABLE_SHOWCASE_ID = "showcase-reactive-relationships";
 
 export function isShowcaseRequest(locationLike) {
   const params = new URLSearchParams(locationLike?.search ?? "");
-  return params.get("catalog") === "showcase" ||
-    (params.get("catalog") !== "reference" && (params.get("example") ?? "").startsWith("showcase-"));
+  const example = params.get("example");
+  return params.get("catalog") !== "reference" &&
+    (params.get("catalog") === "showcase" || !example || example.startsWith("showcase-"));
 }
 
 export function normalizeShowcaseManifest(manifest) {
-  if (manifest?.version !== 1 || manifest.publication !== "preview" || !Array.isArray(manifest.entries)) {
-    throw new TypeError("Expected a version-1 preview showcase manifest");
+  if (manifest?.version !== 1 || manifest.publication !== "curated" || !Array.isArray(manifest.entries)) {
+    throw new TypeError("Expected a version-1 curated showcase manifest");
   }
   const ids = new Set();
   const sources = new Set();

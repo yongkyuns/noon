@@ -23,5 +23,5 @@ export async function loadGalleryManifest(
 }
 
 export function parityLabel(status) {
-  return status === "noon-showcase" ? "Noon showcase preview" : referenceParityLabel(status);
+  return status === "noon-showcase" ? "Noon showcase" : referenceParityLabel(status);
 }

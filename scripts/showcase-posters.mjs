@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
 export function posterEvidence(manifest, report) {
-  assert.equal(manifest.publication, "preview");
+  assert.equal(manifest.publication, "curated");
   assert.equal(report.checkoutRevision, report.servedBuildIdentity?.sourceRevision);
   assert.match(report.checkoutRevision, /^[a-f0-9]{40}$/);
   assert.match(report.servedBuildIdentity.buildId, /^[a-f0-9]{64}$/);
