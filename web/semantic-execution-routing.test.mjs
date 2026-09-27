@@ -33,8 +33,8 @@ function request(worker, type) {
 
 async function waitForRequest(worker, type) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const entry = worker.messages.findLast(({ message }) => message.type === type);
-    if (entry) return entry.message;
+    const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
+    if (entry) return entry.message ?? entry;
     await Promise.resolve();
   }
   assert.fail(`missing ${type}`);
@@ -509,6 +509,81 @@ test("native input submitted during a scene transition is rejected rather than q
   await switching;
   assert.match((await during).error?.message ?? "", /transition/);
   assert.equal(replacement.attachments.at(-1).controlPort.peer.messages.some(message => message.type === "native_event"), false);
+});
+
+test("semantic replacement registers its pointer view before becoming interactive", async t => {
+  const dom = pointerCanvas(t);
+  const { client, render } = await startInputClient(t, dom.canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  let settled = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "pointer-replacement" }, { authoringClient: replacement },
+  ).then(result => { settled = true; return result; });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  const registration = await waitForRequest(successor, "browser_pointer_view");
+  assert.equal(settled, false, "replacement must wait for its new pointer view registration");
+  successor.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
+  await switching;
+  dom.emit("pointerdown");
+  await inputTurn();
+  const input = successor.messages.find(message => message.type === "browser_pointer_input");
+  assert.ok(input, "first successor click must reach the current engine");
+});
+
+test("terminating a replacement while its pointer view is pending cannot attach stale input", async t => {
+  const dom = pointerCanvas(t);
+  const { client, render } = await startInputClient(t, dom.canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "pointer-replacement-terminated" }, { authoringClient: replacement },
+  );
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  await waitForRequest(successor, "browser_pointer_view");
+  client.terminate();
+  await assert.rejects(switching);
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(successor.messages.some(message => message.type === "browser_pointer_input"), false);
+});
+
+test("restart registers its pointer view before becoming interactive", async t => {
+  const dom = pointerCanvas(t);
+  const replacementCanvas = new FakeCanvas();
+  replacementCanvas.getBoundingClientRect = dom.canvas.getBoundingClientRect;
+  replacementCanvas.addEventListener = dom.canvas.addEventListener;
+  dom.canvas.cloneNode = () => replacementCanvas;
+  const { client, authoring } = await startInputClient(t, dom.canvas);
+  const renderCount = FakeWorker.instances.filter(({ name }) => name === "noon-render").length;
+  let settled = false;
+  const restarting = client.restart().then(result => { settled = true; return result; });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (FakeWorker.instances.filter(({ name }) => name === "noon-render").length === renderCount + 1) break;
+    await Promise.resolve();
+  }
+  assert.equal(FakeWorker.instances.filter(({ name }) => name === "noon-render").length, renderCount + 1);
+  const replacementRender = renderWorker();
+  replyRender(replacementRender, "prepare", "prepared");
+  await waitForRequest(replacementRender, "start_engine");
+  replyRender(replacementRender, "start_engine", "engine_started");
+  const successor = authoring.attachments.at(-1).controlPort.peer;
+  const registration = await waitForRequest(successor, "browser_pointer_view");
+  assert.equal(settled, false, "restart must wait for its new pointer view registration");
+  successor.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
+  await restarting;
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.ok(successor.messages.some(message => message.type === "browser_pointer_input"),
+    "first restarted click must reach the current engine");
 });
 
 function pointerCanvas(t) {

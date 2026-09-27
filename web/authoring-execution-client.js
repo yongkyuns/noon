@@ -196,7 +196,7 @@ export class AuthoringExecutionClient {
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
     }
-    return this.#runTransition(async () => {
+    const result = await this.#runTransition(async () => {
       const ready = await this.#player.switchToSemanticExecution(semantic.contextId, authoringClient, {
         loopDurationSeconds: duration,
         callbackSessionId: semantic.callbackSessionId,
@@ -205,7 +205,6 @@ export class AuthoringExecutionClient {
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
-      await this.#attachPointerInput();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -217,6 +216,8 @@ export class AuthoringExecutionClient {
         ...state,
       };
     });
+    await this.#withStablePlayer(() => this.#attachPointerInput());
+    return result;
   }
 
   async state() {
@@ -294,7 +295,7 @@ export class AuthoringExecutionClient {
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
-    return this.#runTransition(async () => {
+    const ready = await this.#runTransition(async () => {
       const player = this.#player;
       const mode = this.#mode;
       const generation = this.#lifecycleGeneration;
@@ -310,7 +311,6 @@ export class AuthoringExecutionClient {
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
         this.#resizeCurrentCanvas();
-        await this.#attachPointerInput();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -320,6 +320,8 @@ export class AuthoringExecutionClient {
         throw error;
       }
     });
+    await this.#withStablePlayer(() => this.#attachPointerInput());
+    return ready;
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -414,7 +416,7 @@ export class AuthoringExecutionClient {
       const mode = this.#mode;
       try {
         const result = await operation(player, mode);
-        if (this.#player !== player) {
+        if (this.#player !== player || this.#transition !== null) {
           continue;
         }
         return result;
