@@ -9,23 +9,33 @@ export const LATEX_ASSETS = Object.freeze({
 });
 const decoder = new TextDecoder();
 const MIB = 1024 * 1024;
+const LATEX_NETWORK_TIMEOUT_MS = 30_000;
 
-export async function readBounded(stream, maximum) {
+export async function readBounded(stream, maximum, signal) {
   const reader = stream.getReader();
   const chunks = [];
   let length = 0;
+  let abortReason = null;
+  const onAbort = () => {
+    abortReason = signal.reason ?? new Error("LaTeX asset request was aborted");
+    void reader.cancel(abortReason).catch(() => {});
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     while (true) {
       const { done, value } = await reader.read();
+      if (abortReason !== null) throw abortReason;
       if (done) break;
       length += value.length;
       if (length > maximum) throw new Error(`LaTeX asset exceeds ${maximum} bytes`);
       chunks.push(value);
     }
   } catch (error) {
-    await reader.cancel(error);
+    void reader.cancel(error).catch(() => {});
     throw error;
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const result = new Uint8Array(length);
@@ -38,10 +48,33 @@ export async function gunzipBounded(bytes, maximum) {
   return readBounded(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")), maximum);
 }
 
-async function verifiedFetch(url, expected, maximum, fetchAsset) {
-  const response = await fetchAsset(url);
-  if (!response.ok || !response.body) throw new Error(`Cannot load LaTeX asset: HTTP ${response.status}`);
-  const bytes = await readBounded(response.body, maximum);
+export async function verifiedFetch(
+  url,
+  expected,
+  maximum,
+  fetchAsset = fetch,
+  timeoutMs = LATEX_NETWORK_TIMEOUT_MS,
+) {
+  const controller = new AbortController();
+  let timeoutError;
+  const timeout = setTimeout(() => {
+    timeoutError = new Error(`LaTeX asset fetch timed out after ${timeoutMs} ms: ${url}`);
+    controller.abort(timeoutError);
+  }, timeoutMs);
+  let bytes;
+  try {
+    const response = await fetchAsset(url, { signal: controller.signal });
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (!response.ok || !response.body) throw new Error(`Cannot load LaTeX asset: HTTP ${response.status}`);
+    bytes = await readBounded(response.body, maximum, controller.signal);
+  } catch (error) {
+    // WebKit may reject fetch with a generic AbortError instead of the reason.
+    const failure = timeoutError ?? error;
+    controller.abort(failure);
+    throw failure;
+  } finally {
+    clearTimeout(timeout);
+  }
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const actual = Array.from(hash, byte => byte.toString(16).padStart(2, "0")).join("");
   if (actual !== expected) throw new Error("LaTeX asset integrity mismatch");

@@ -1,22 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
+import { LATEX_ASSETS } from '../web/latex/assets.js';
 
 const source = 'import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";';
 const url = 'https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.asm.wasm';
 async function attach(cache) {
   let handler;
   await cache.install({ async route(pattern, callback) {
-    assert.equal(pattern, 'https://cdn.jsdelivr.net/pyodide/v314.0.5/full/**');
+    assert.equal(pattern(new URL(url)), true);
+    assert.equal(pattern(new URL(LATEX_ASSETS.bundle)), true);
+    assert.equal(pattern(new URL(LATEX_ASSETS.metrics)), true);
+    assert.equal(pattern(new URL('https://example.com/python-worker.js')), false);
+    assert.equal(pattern(new URL(LATEX_ASSETS.bundle.replace('1.0.5.tgz', '1.0.6.tgz'))), false);
     handler = callback;
   } });
   return handler;
 }
-function request(fetch, method = 'GET') {
+function request(fetch, method = 'GET', requestUrl = url) {
   const result = {};
   return {
     result,
-    request: () => ({ url: () => url, method: () => method }),
+    request: () => ({ url: () => requestUrl, method: () => method }),
     fetch,
     async fulfill(value) { result.response = value; },
     async abort(reason) { result.aborted = reason; },
@@ -106,4 +111,21 @@ test('retained bytes are bounded and non-GET requests bypass the cache', async (
 test('unpinned or different-origin runtimes cannot opt into resource reuse', () => {
   assert.throws(() => createPyodideResourceCache(source.replace('v314.0.5', 'latest')), /pin a Pyodide release/);
   assert.throws(() => createPyodideResourceCache(source.replace('cdn.jsdelivr.net', 'example.com')), /pin a Pyodide release/);
+});
+
+
+test('pinned optional LaTeX assets share unchanged response bytes across contexts', async () => {
+  const cache = createPyodideResourceCache(source);
+  const first = await attach(cache), second = await attach(cache);
+  let fetches = 0;
+  for (const asset of [LATEX_ASSETS.bundle, LATEX_ASSETS.metrics]) {
+    const bytes = Buffer.from(asset);
+    const upstream = async () => { fetches++; return response(bytes); };
+    const a = request(upstream, 'GET', asset), b = request(upstream, 'GET', asset);
+    await Promise.all([first(a), second(b)]);
+    assert.deepEqual(a.result.response.body, bytes);
+    assert.deepEqual(b.result.response.body, bytes);
+  }
+  assert.equal(fetches, 2);
+  assert.equal(cache.stats().hits, 2);
 });

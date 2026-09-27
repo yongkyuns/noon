@@ -1,4 +1,6 @@
-// Job-local byte reuse for immutable Pyodide assets. Scene/worker sources and
+import { LATEX_ASSETS } from "../web/latex/assets.js";
+
+// Job-local byte reuse for pinned Python and optional LaTeX assets. Scene/worker sources and
 // browser state remain isolated; this does not retry a failed gallery case.
 export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 1024) {
   const moduleUrl = workerSource.match(
@@ -6,6 +8,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
   )?.[1];
   if (!moduleUrl) throw new Error('Gallery cache requires the worker to pin a Pyodide release');
   const baseUrl = new URL('.', moduleUrl).href;
+  const latexUrls = new Set([LATEX_ASSETS.bundle, LATEX_ASSETS.metrics]);
   const entries = new Map();
   const counts = {
     requests: 0,
@@ -47,7 +50,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
 
   return {
     async install(context) {
-      await context.route(`${baseUrl}**`, async route => {
+      await context.route(url => url.href.startsWith(baseUrl) || latexUrls.has(url.href), async route => {
         if (route.request().method() !== 'GET') return route.continue();
         counts.requests++;
         const url = route.request().url();

@@ -80,6 +80,7 @@ try {
     // Renderer time may precede completion of an authored static wait.
     await context.addInitScript(({ channel, protocolVersion, noJspi }) => {
       window.__galleryAuthoringResults = [];
+      window.__galleryWorkerMessages = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
           const workerArgs = [...args];
@@ -90,8 +91,16 @@ try {
               window.__galleryNoJspiWorkerWrapped = true;
             }
           }
+          const workerScriptUrl = new URL(workerArgs[0], window.location.href).href;
           const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', ({ data }) => {
+            window.__galleryWorkerMessages.push({
+              workerScriptUrl: workerScriptUrl.slice(0, 500),
+              channel: typeof data?.channel === "string" ? data.channel.slice(0, 100) : null,
+              type: typeof data?.type === "string" ? data.type.slice(0, 100) : null,
+              time: performance.now(),
+            });
+            if (window.__galleryWorkerMessages.length > 20) window.__galleryWorkerMessages.shift();
             if (data?.channel === channel && data.type === 'result') {
               if (data.protocolVersion !== protocolVersion) {
                 window.__galleryAuthoringCaptureError = 'unexpected authoring protocol version';
@@ -120,14 +129,27 @@ try {
         ].join('\n'),
       });
     });
-    context.on('requestfailed', request => result.failedRequests.push({
-      url: request.url(), resourceType: request.resourceType(), error: request.failure()?.errorText,
+    const pendingRequests = new Map();
+    context.on('request', request => pendingRequests.set(request, {
+      url: request.url(), resourceType: request.resourceType(), startedAt: performance.now(),
     }));
+    context.on('requestfinished', request => pendingRequests.delete(request));
+    context.on('requestfailed', request => {
+      result.failedRequests.push({
+        url: request.url(), resourceType: request.resourceType(), error: request.failure()?.errorText,
+      });
+      pendingRequests.delete(request);
+    });
     page.on('pageerror', error => result.errors.push(error.stack || String(error)));
-    page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        result.errors.push(msg.text());
+      }
+    });
     // A browser call can stall before the polling loop checks its own deadline.
     // Bound the whole case from Node so the job still publishes its diagnostics.
     let caseTimer;
+    let lastWorkerMessages = [];
     try {
       await Promise.race([
         (async () => {
@@ -138,14 +160,15 @@ try {
           // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
           const deadline = Date.now() + 105000;
           while (Date.now() < deadline) {
-            const state = await page.evaluate(() => {
+            const { workerMessages, ...state } = await page.evaluate(() => {
               const gallery = window.__noonExampleGallery;
               if (!window.__galleryMetricsPending) {
                 window.__galleryMetricsPending = true;
                 Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
                   .finally(() => { window.__galleryMetricsPending = false; });
               }
-              return { selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
+              return { workerMessages: window.__galleryWorkerMessages ?? [],
+                selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
@@ -153,6 +176,7 @@ try {
                 renderHost: document.querySelector('#status')?.dataset.renderHost,
                 metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
             });
+            lastWorkerMessages = workerMessages;
             result.state = state;
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
@@ -193,6 +217,15 @@ try {
       result.outcome = 'pass';
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
+      result.failureDiagnostics = {
+        pendingRequestCount: pendingRequests.size,
+        pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
+          url: request.url.slice(0, 500),
+          resourceType: request.resourceType,
+          elapsedMs: performance.now() - request.startedAt,
+        })),
+        workerMessages: lastWorkerMessages,
+      };
     } finally {
       clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
@@ -200,7 +233,7 @@ try {
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
-      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors, failedRequests: result.failedRequests }));
+      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors, failedRequests: result.failedRequests, failureDiagnostics: result.failureDiagnostics }));
       await context.close();
     }
   }

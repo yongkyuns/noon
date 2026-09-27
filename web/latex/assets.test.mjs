@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { readBounded, gunzipBounded, tarFiles, loadLatexAssets } from "./assets.js";
+import { readBounded, gunzipBounded, tarFiles, loadLatexAssets, verifiedFetch } from "./assets.js";
 import { sparseFormatSnapshot } from "./engine-io.js";
 
 function archive(name, data = new Uint8Array([1, 2])) {
@@ -30,6 +30,71 @@ test("oversized streamed assets are cancelled before collection", async () => {
     cancel() { cancelled = true; },
   });
   await assert.rejects(readBounded(stream, 9), /exceeds/);
+  assert.equal(cancelled, true);
+});
+
+async function sha256(bytes) {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(hash, byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+test("verified fetch completes before its network deadline", async () => {
+  const bytes = Uint8Array.of(1, 2, 3);
+  let signal;
+  assert.deepEqual(
+    await verifiedFetch(
+      "https://example.test/asset",
+      await sha256(bytes),
+      16,
+      async (_url, options) => {
+        signal = options.signal;
+        return new Response(bytes);
+      },
+      10,
+    ),
+    bytes,
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(signal.aborted, false);
+});
+
+test("verified fetch aborts a stalled request at its network deadline", async () => {
+  let aborted = false;
+  await assert.rejects(
+    verifiedFetch(
+      "https://example.test/stalled-request",
+      "ignored",
+      16,
+      (_url, { signal }) => new Promise((_, reject) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(new DOMException("Fetch is aborted", "AbortError"));
+        }, { once: true });
+      }),
+      10,
+    ),
+    /timed out/,
+  );
+  assert.equal(aborted, true);
+});
+
+test("verified fetch cancels a stalled response body at its network deadline", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    cancel(reason) {
+      cancelled = /timed out/.test(String(reason));
+    },
+  });
+  await assert.rejects(
+    verifiedFetch(
+      "https://example.test/stalled-body",
+      "ignored",
+      16,
+      async () => new Response(stream),
+      10,
+    ),
+    /timed out/,
+  );
   assert.equal(cancelled, true);
 });
 
