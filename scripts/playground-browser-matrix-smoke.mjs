@@ -270,7 +270,7 @@ async function runShowcaseFromPublicUi(page, exampleId) {
   return { runtime: await runtimeSnapshot(page), metrics };
 }
 
-async function completeShowcasePlayback(page) {
+async function completeShowcasePlayback(page, replayLoops) {
   const restart = page.locator(".playback-restart");
   await restart.waitFor({ state: "visible", timeout: 10_000 });
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.controllable === "true", null, { timeout: 10_000 });
@@ -292,8 +292,8 @@ async function completeShowcasePlayback(page) {
   }, null, { timeout: 10_000 });
   // Replay intentionally loops. Observe the full traversal and wrap before
   // pausing; waiting for playing=false would time out on healthy playback.
-  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0 }; });
-  await page.waitForFunction(() => {
+  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0, loops: 0 }; });
+  await page.waitForFunction((requiredLoops) => {
     if (document.querySelector("#patch-status")?.dataset.state === "error") {
       throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
     }
@@ -302,10 +302,11 @@ async function completeShowcasePlayback(page) {
     const elapsed = Number(controls?.dataset.elapsedSeconds);
     const observation = window.__matrixReplay;
     const wrapped = observation.maximum >= duration - 1 && elapsed < observation.previous;
-    observation.maximum = Math.max(observation.maximum, elapsed);
+    if (wrapped) observation.loops += 1;
+    observation.maximum = wrapped ? elapsed : Math.max(observation.maximum, elapsed);
     observation.previous = elapsed;
-    return wrapped;
-  }, null, { timeout: 180_000 });
+    return observation.loops >= requiredLoops;
+  }, replayLoops, { timeout: 180_000 });
   await page.evaluate(() => { delete window.__matrixReplay; });
   const endpoint = await seekPausedGallery(page, 23.4);
   await waitForPublishedGalleryFrame(page, endpoint, 23.4);
@@ -459,7 +460,8 @@ try {
     assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - 23.4) < 1e-7,
       `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of 23.4s`);
     console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
-    const showcasePlayback = await completeShowcasePlayback(page);
+    const replayLoops = browserName === "webkit" ? 3 : 1;
+    const showcasePlayback = await completeShowcasePlayback(page, replayLoops);
     const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
     assert.ok(Math.abs(Number(showcasePlayback.duration) - 23.4) < 1e-7,
       `showcase authored duration changed: ${showcasePlayback.duration}`);
@@ -497,6 +499,7 @@ ${consoleErrors.join("\n")}`,
         playbackDuration: showcasePlayback.duration,
         playbackEndpoint: showcasePlayback.controls.elapsedSeconds,
         replayAdmitted: showcasePlayback.controls.controllable === "true",
+        replayLoops,
         metrics: showcaseMetrics,
       },
       pageErrors,

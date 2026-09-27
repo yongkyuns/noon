@@ -51,7 +51,7 @@ try {
   for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);
   const engine = playwright[browserName];
   assert.ok(engine, `unknown browser ${browserName}`);
-  browser = await engine.launch(playgroundLaunchOptions(browserName));
+  if (browserName !== 'webkit') browser = await engine.launch(playgroundLaunchOptions(browserName));
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
   const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
@@ -70,9 +70,9 @@ try {
     if (affected.includes(entry.id)) queue.push({ entry, noJspi: true });
   }
   let next = 0;
-  async function check({ entry, noJspi }) {
+  async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
-    const context = await browser.newContext({ ...options });
+    const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
@@ -106,7 +106,7 @@ try {
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], failedRequests: [], samples: [] };
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     if (noJspi) await context.route('**/python-worker-no-jspi-test.js', async route => {
       await route.fulfill({
@@ -202,6 +202,18 @@ try {
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
       if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors, failedRequests: result.failedRequests }));
       await context.close();
+    }
+  }
+  async function check(spec) {
+    if (browserName !== 'webkit') return runCase(browser, spec);
+    // Independent examples must not inherit GPU-process state from closed cases.
+    // The public workflow separately covers repeated playback in one live page.
+    let caseBrowser = null;
+    try {
+      caseBrowser = await engine.launch(playgroundLaunchOptions(browserName));
+      await runCase(caseBrowser, spec);
+    } finally {
+      await caseBrowser?.close();
     }
   }
   // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
