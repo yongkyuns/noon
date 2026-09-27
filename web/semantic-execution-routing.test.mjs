@@ -497,6 +497,36 @@ for (const [type, submit] of [
   });
 }
 
+test("a completed playback seek is not retried into a same-player continuation transition", async t => {
+  const { client, engine, render } = await startInputClient(t);
+  const seek = client.seek(0.5);
+  const initial = await waitForRequest(engine, "seek");
+  const continuation = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "source-continuation", continuationGeneration: 1 },
+    { authoringClient: continuation },
+  );
+
+  engine.emitMessage(envelope("noon.engine", "seek", {
+    requestId: initial.requestId,
+    time: 0.5,
+    playing: false,
+  }));
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+
+  const result = await seek;
+  assert.equal(result.time, 0.5);
+  assert.equal(result.playing, false);
+  const successor = continuation.attachments.at(-1).controlPort.peer;
+  assert.equal(
+    successor.messages.filter(message => message.type === "seek").length,
+    0,
+    "a replay control completed before the transition must not address the source owner",
+  );
+});
+
 test("native input submitted during a scene transition is rejected rather than queued for its successor", async t => {
   const { client, render } = await startInputClient(t);
   const replacement = new FakeSemanticAuthoringClient();

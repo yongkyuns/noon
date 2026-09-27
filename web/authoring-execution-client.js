@@ -216,7 +216,10 @@ export class AuthoringExecutionClient {
         ...state,
       };
     });
-    await this.#withStablePlayer(() => this.#attachPointerInput());
+    await this.#withStablePlayer(
+      () => this.#attachPointerInput(),
+      { retryOnTransition: true },
+    );
     return result;
   }
 
@@ -320,7 +323,10 @@ export class AuthoringExecutionClient {
         throw error;
       }
     });
-    await this.#withStablePlayer(() => this.#attachPointerInput());
+    await this.#withStablePlayer(
+      () => this.#attachPointerInput(),
+      { retryOnTransition: true },
+    );
     return ready;
   }
 
@@ -405,7 +411,9 @@ export class AuthoringExecutionClient {
     return operation(this.#player);
   }
 
-  async #withStablePlayer(operation) {
+  // Registration may repeat after a same-player transition. A completed playback
+  // command must not be reissued into its successor source's execution ownership.
+  async #withStablePlayer(operation, { retryOnTransition = false } = {}) {
     for (;;) {
       if (this.#transition !== null) {
         await this.#transition;
@@ -416,7 +424,7 @@ export class AuthoringExecutionClient {
       const mode = this.#mode;
       try {
         const result = await operation(player, mode);
-        if (this.#player !== player || this.#transition !== null) {
+        if (this.#player !== player || (retryOnTransition && this.#transition !== null)) {
           continue;
         }
         return result;
