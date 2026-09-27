@@ -35,16 +35,6 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
 const escape = (text) => String(text).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
-async function withCanvasPointerEvents(canvas, value, action) {
-  await canvas.evaluate((element, pointerEvents) =>
-    element.style.setProperty("pointer-events", pointerEvents, "important"), value);
-  try {
-    return await action();
-  } finally {
-    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
-  }
-}
-
 function validateImage(bytes, label) {
   const image = PNG.sync.read(bytes);
   assert.ok(image.width >= 320 && image.height >= 180, `${label}: unexpectedly small capture`);
@@ -194,14 +184,12 @@ async function captureSelection(context, entry, result) {
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     const canvas = page.locator("#scene");
     await layoutReplayViewport(canvas, report.viewport);
-    await replayViewport(canvas, report.viewport);
-    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
     await replayViewport(canvas, report.viewport);
     stage = "pause and seek to the authored endpoint";
-    const requestedTime = await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
+    const requestedTime = await seekPausedGallery(page, entry.duration);
     assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
@@ -216,6 +204,7 @@ async function captureSelection(context, entry, result) {
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
     stage = "select the circle";
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     await click(0.36, 0.5);
     let selected;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -226,6 +215,7 @@ async function captureSelection(context, entry, result) {
     assert.ok(selected, "actual pointer click did not change the displayed image");
     await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
     stage = "clear the selection";
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     await click(0.05, 0.5);
     let cleared, lastClear;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -237,9 +227,9 @@ async function captureSelection(context, entry, result) {
     if (lastClear) await writeFile(path.join(output, `${entry.id}-${cleared ? "cleared" : "clear-last"}.png`), lastClear);
     assert.ok(cleared, "background click did not restore the base pixels exactly");
     stage = "restart and restore the same resolved frame";
-    await withCanvasPointerEvents(canvas, "none", () =>
-      page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click());
-    await withCanvasPointerEvents(canvas, "none", () => seekPausedGallery(page, entry.duration));
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
+    await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
+    await seekPausedGallery(page, entry.duration);
     await replayViewport(canvas, report.viewport);
     const restarted = await canvas.screenshot();
     await writeFile(path.join(output, `${entry.id}-restarted.png`), restarted);
