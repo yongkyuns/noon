@@ -17,6 +17,12 @@ finally:
     else:
         sys.modules["js"] = _previous_js
 
+from _manim_source_execution import (
+    bind_portable_construct,
+    compile_authoring_source,
+    has_portable_scene_methods,
+)
+
 
 
 class _View:
@@ -28,6 +34,83 @@ class _View:
 
 
 class ZoomedSceneFacadeTests(unittest.TestCase):
+    def test_portable_activation_admits_only_the_canonical_zoomed_method(self) -> None:
+        source = '''
+class Example(ZoomedScene):
+    def construct(self):
+        self.activate_zooming()
+        self.wait(1)
+'''
+        code, pairs = compile_authoring_source(source)
+        namespace = {"ZoomedScene": zoomed.ZoomedScene}
+        exec(code, namespace)
+        # Admission inspects methods without setup or semantic allocation.
+        scene = object.__new__(namespace["Example"])
+        construct = bind_portable_construct(scene.construct, pairs)
+        self.assertIsNotNone(construct)
+        methods = _manim_scene._portable_scene_methods(scene)
+        self.assertIsNotNone(methods)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+
+        class ClassOverride(zoomed.ZoomedScene):
+            def activate_zooming(self, animate=False):
+                return None
+
+        for candidate in (object.__new__(ClassOverride), scene):
+            if candidate is scene:
+                candidate.activate_zooming = lambda animate=False: None
+            methods = _manim_scene._portable_scene_methods(candidate)
+            self.assertIsNotNone(methods)
+            self.assertFalse(has_portable_scene_methods(candidate, **methods))
+
+        class OrdinaryScene(noon.Scene):
+            def activate_zooming(self):
+                return None
+
+        self.assertIsNone(_manim_scene._portable_scene_methods(OrdinaryScene()))
+
+    def test_portable_activation_admission_does_not_invoke_authored_lookup(self) -> None:
+        effects = []
+
+        class DescriptorScene(noon.Scene):
+            @property
+            def activate_zooming(self):
+                effects.append("descriptor")
+                return lambda: None
+
+        class DynamicScene(noon.Scene):
+            def __getattr__(self, name):
+                effects.append(name)
+                if name == "activate_zooming":
+                    return lambda: None
+                raise AttributeError(name)
+
+        self.assertIsNone(_manim_scene._portable_scene_methods(DescriptorScene()))
+        self.assertIsNone(_manim_scene._portable_scene_methods(DynamicScene()))
+        self.assertEqual(effects, [])
+
+    def test_nested_activation_override_is_not_portable(self) -> None:
+        source = '''
+class Override(ZoomedScene):
+    def activate_zooming(self, animate=False):
+        return None
+
+    def construct(self):
+        [self.activate_zooming() for _ in range(1)]
+        self.wait(1)
+'''
+        code, pairs = compile_authoring_source(source)
+        namespace = {"ZoomedScene": zoomed.ZoomedScene}
+        exec(code, namespace)
+        scene = object.__new__(namespace["Override"])
+        construct = bind_portable_construct(scene.construct, pairs)
+        self.assertIsNotNone(construct)
+        methods = _manim_scene._portable_scene_methods(scene)
+        self.assertIsNotNone(methods)
+        self.assertFalse(
+            has_portable_scene_methods(scene, **methods)
+        )
+
     def test_setup_forwards_typed_options_and_wraps_rust_handles(self) -> None:
         captured = {}
         view = _View()

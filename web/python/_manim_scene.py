@@ -635,6 +635,38 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
+def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
+    """Return the canonical methods portable source may call on ``scene``.
+
+    Zoom activation stays a ZoomedScene feature.  A scene that defines the
+    name must expose the canonical ZoomedScene implementation; otherwise the
+    existing static identity admission keeps the original synchronous path.
+    """
+    methods = {
+        "play": _base.Scene.play,
+        "wait": _base.Scene.wait,
+        "add": _base.Scene.add,
+        "remove": _base.Scene.remove,
+        "clear": _base.Scene.clear,
+    }
+    # Keep this conservative and descriptor-safe, like the base-method
+    # admission below.  The source compiler admits direct scene calls from its
+    # fixed allow-list, including calls nested in expressions.
+    if inspect.getattr_static(scene, "activate_zooming", None) is None:
+        # Base Scene has no activation method. Do not let a missing attribute
+        # be synthesized by user-defined dynamic lookup, which could conceal a
+        # synchronous barrier from the portable compiler.
+        if inspect.getattr_static(type(scene), "__getattr__", None) is not None:
+            return None
+        return methods
+    from _manim_zoomed_scene import ZoomedScene
+
+    if not isinstance(scene, ZoomedScene):
+        return None
+    methods["activate_zooming"] = ZoomedScene.activate_zooming
+    return methods
+
+
 async def execute_construct(
     scene: _base.Scene, *, portable_constructs=None
 ) -> None:
@@ -655,13 +687,11 @@ async def execute_construct(
 
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
-                if has_portable_scene_methods(
-                    scene, play=_base.Scene.play, wait=_base.Scene.wait,
-                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
-                ):
-                    portable_construct = bind_portable_construct(
-                        scene.construct, portable_constructs
-                    )
+                candidate = bind_portable_construct(scene.construct, portable_constructs)
+                if candidate is not None:
+                    methods = _portable_scene_methods(scene)
+                    if methods is not None and has_portable_scene_methods(scene, **methods):
+                        portable_construct = candidate
             if portable_construct is not None:
                 _begin_async_continuation_construct(scene)
                 setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)

@@ -218,6 +218,14 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_zoomed_scene_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("zoomed_scene.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="zoomed_scene.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "RetainedZoom.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
     def test_decorators_are_not_replayed_or_unwrapped(self):
         effects = []
         def decorate(function):
@@ -275,6 +283,23 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         class Override(Base):
             def wait(self, *args): pass
         self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
+
+    async def test_unmatched_portable_construct_keeps_ordinary_fallback(self):
+        import _manim_scene
+        import noon
+
+        events = []
+
+        class Example(noon.Scene):
+            def construct(self):
+                events.append("ordinary")
+
+        scene = Example()
+        scene._canonical_authoring_context = object()
+        # A truthy pair map exercises portable admission, while an unmatched
+        # construct must never be inspected as if it were portable.
+        await _manim_scene.execute_construct(scene, portable_constructs={object(): object()})
+        self.assertEqual(events, ["ordinary"])
 
     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
         effects = []
