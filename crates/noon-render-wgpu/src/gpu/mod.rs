@@ -248,7 +248,7 @@ pub struct Camera2D {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Inset2DGpuView {
     state: Inset2DViewState,
-    viewport: [f32; 4],
+    capture_size: [u32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

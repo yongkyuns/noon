@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
 
-export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle }) {
+export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const output = path.resolve(root, artifactDirectory);
   const selectedIds = process.env.NOON_PAIRED_CASES?.split(",").map(id => id.trim()).filter(Boolean);
@@ -36,6 +36,15 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
     try {
       await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
       await page.waitForFunction(() => window.noonHostRaster);
+      if (fixture.canvasSize) {
+        await page.evaluate(([width, height]) => {
+          const canvas = document.querySelector("#scene");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.style.width = `${width}px`;
+          canvas.style.height = `${height}px`;
+        }, fixture.canvasSize);
+      }
       const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries }) => {
         if (label === "python") {
           if (duration > 0) {
@@ -139,8 +148,8 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           const python = await capture(context, "python", expectedBackend, fixture);
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: Python host`);
           assert.equal(python.metrics.objectCount, rust.metrics.objectCount, "paired hosts must publish the same object count");
-          assert.equal(rust.png.width, 960);
-          assert.equal(rust.png.height, 540);
+          assert.equal(rust.png.width, fixture.canvasSize?.[0] ?? 960);
+          assert.equal(rust.png.height, fixture.canvasSize?.[1] ?? 540);
           assert.equal(python.png.width, rust.png.width);
           assert.equal(python.png.height, rust.png.height);
           let foregroundPixels = 0;
@@ -153,6 +162,11 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           assert.ok(foregroundPixels > 1000, "blank images cannot qualify paired authoring");
           result.static[fixture.id] = { rust: rust.metrics, python: python.metrics, foregroundPixels, differingPixels };
           assert.equal(differingPixels, 0, "Rust/WASM and Python must produce identical pixels on the same backend");
+          if (qualifyPixels) {
+            result.static[fixture.id].pixelChecks = await qualifyPixels({
+              fixture, backend: expectedBackend, rust: rust.png, python: python.png,
+            });
+          }
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: paired pixels identical`);
         }
 

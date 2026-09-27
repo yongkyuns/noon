@@ -3174,7 +3174,7 @@ pub struct RetainedTextGpuState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Inset2DRenderError {
     InvalidCamera(ObjectId),
-    DisplayOutsideViewport(ObjectId),
+    InvalidDisplay(ObjectId),
 }
 
 impl std::fmt::Display for Inset2DRenderError {
@@ -3185,9 +3185,9 @@ impl std::fmt::Display for Inset2DRenderError {
                 "inset camera {} has an invalid effective viewport",
                 object.get()
             ),
-            Self::DisplayOutsideViewport(object) => write!(
+            Self::InvalidDisplay(object) => write!(
                 formatter,
-                "inset display {} must remain fully inside the render viewport",
+                "inset display {} has invalid effective capture geometry",
                 object.get()
             ),
         }
@@ -3223,7 +3223,7 @@ impl GpuRenderer {
         RetainedTextGpuState::new(device, queue, self.target_format, self.camera)
     }
 
-    /// Prepare alternate camera uniforms and pixel rectangles for active inset views.
+    /// Prepare alternate camera uniforms and bounded capture rasters for active inset views.
     /// Existing geometry, image and glyph uploads remain shared with the main pass.
     pub fn set_inset_2d_views(
         &mut self,
@@ -3232,39 +3232,29 @@ impl GpuRenderer {
         text_state: &mut RetainedTextGpuState,
         states: &[noon_core::Inset2DViewState],
     ) -> Result<(), Inset2DRenderError> {
-        let surface = Vec2::new(self.viewport_size[0] as f32, self.viewport_size[1] as f32);
-        let main_min = self.camera.center - self.camera.world_size * 0.5;
-        let main_max = self.camera.center + self.camera.world_size * 0.5;
         let mut views = Vec::with_capacity(states.len());
         let mut cameras = Vec::with_capacity(states.len());
         for state in states.iter().copied() {
-            let world_min = state.display_center - state.display_size * 0.5;
-            let world_max = state.display_center + state.display_size * 0.5;
-            let left = (world_min.x - main_min.x) / self.camera.world_size.x * surface.x;
-            let right = (world_max.x - main_min.x) / self.camera.world_size.x * surface.x;
-            let top = (main_max.y - world_max.y) / self.camera.world_size.y * surface.y;
-            let bottom = (main_max.y - world_min.y) / self.camera.world_size.y * surface.y;
-            if ![left, right, top, bottom].into_iter().all(f32::is_finite)
-                || left < 0.0
-                || top < 0.0
-                || right > surface.x
-                || bottom > surface.y
-                || right - left < 1.0
-                || bottom - top < 1.0
-            {
-                return Err(Inset2DRenderError::DisplayOutsideViewport(state.display));
-            }
-            let pixel_width = right - left;
-            let pixel_height = bottom - top;
+            let capture_size = super::inset_capture::capture_raster_size(
+                state.display_center,
+                state.display_size,
+                self.camera,
+                self.viewport_size,
+                device.limits().max_texture_dimension_2d,
+            )
+            .map_err(|_| Inset2DRenderError::InvalidDisplay(state.display))?;
             let aspect = state.display_size.x / state.display_size.y;
             let camera = Camera2D::new(
                 state.camera.center,
                 Vec2::new(state.camera.height * aspect, state.camera.height),
             )
             .map_err(|_| Inset2DRenderError::InvalidCamera(state.camera_frame))?;
+            let Some(capture_size) = capture_size else {
+                continue;
+            };
             views.push(Inset2DGpuView {
                 state,
-                viewport: [left, top, pixel_width, pixel_height],
+                capture_size,
             });
             cameras.push(camera);
         }
@@ -3292,11 +3282,7 @@ impl GpuRenderer {
                 .images
                 .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format));
             for (index, view) in views.iter().enumerate() {
-                // Match the captured image's integer raster before fractional placement.
-                let size = [
-                    view.viewport[2].floor().max(1.0) as u32,
-                    view.viewport[3].floor().max(1.0) as u32,
-                ];
+                let size = view.capture_size;
                 let uniform =
                     ImageUniform::inset(view.state.display_center, view.state.display_size, size);
                 if let Some(target) = self.inset_targets.get_mut(index) {
@@ -3324,14 +3310,10 @@ impl GpuRenderer {
         self.inset_camera_bind_groups.truncate(views.len());
         for (index, (view, camera)) in views.iter().zip(cameras.iter()).enumerate() {
             if self.inset_views.get(index).copied() != Some(*view) {
-                let viewport = [
-                    view.viewport[2].floor().max(1.0) as u32,
-                    view.viewport[3].floor().max(1.0) as u32,
-                ];
                 queue.write_buffer(
                     &self.inset_camera_buffers[index],
                     0,
-                    bytemuck::bytes_of(&camera.uniform(viewport)),
+                    bytemuck::bytes_of(&camera.uniform(view.capture_size)),
                 );
             }
         }
