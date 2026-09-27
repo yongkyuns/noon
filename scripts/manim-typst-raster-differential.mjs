@@ -145,6 +145,13 @@ async function captureFixture(browser, backend, fixture) {
     viewport: { width: reference.pixel_width, height: reference.pixel_height },
     deviceScaleFactor: 1,
   });
+  const pageDiagnostics = [];
+  page.on("pageerror", (error) => pageDiagnostics.push(`pageerror: ${error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      pageDiagnostics.push(`console.error: ${message.text()}`);
+    }
+  });
   try {
     await page.goto(`${baseUrl}/web/retained-typst-raster.html`, { waitUntil: "load" });
     await page.waitForFunction(() => Boolean(window.noonDirectTypstRaster), null, {
@@ -168,6 +175,15 @@ async function captureFixture(browser, backend, fixture) {
     const output = path.join(outputDir, `${fixture.id}.png`);
     await page.locator("#scene").screenshot({ path: output });
     return { output, metrics };
+  } catch (error) {
+    const diagnostics = pageDiagnostics.length === 0
+      ? "none"
+      : pageDiagnostics.join("\n");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+      `${fixture.id}/${backend} page diagnostics:\n${diagnostics}`,
+      { cause: error },
+    );
   } finally {
     await page.close();
   }

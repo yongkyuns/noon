@@ -5,6 +5,14 @@ const rustHarness = await readFile(
   new URL("../crates/noon-web/src/direct_execution_smoke.rs", import.meta.url),
   "utf8",
 );
+const webLibrary = await readFile(
+  new URL("../crates/noon-web/src/lib.rs", import.meta.url),
+  "utf8",
+);
+const manimRasterWorkflow = await readFile(
+  new URL("../.github/workflows/manim-raster-differential.yml", import.meta.url),
+  "utf8",
+);
 const directCanvasHost = await readFile(
   new URL("../crates/noon-web/src/execution_canvas.rs", import.meta.url),
   "utf8",
@@ -83,6 +91,23 @@ for (const forbidden of [
     `direct Rust/WASM proof must not depend on ${forbidden}`,
   );
 }
+
+const qualifiedDirectFixtureGuard = /#\[cfg\(all\(\s*feature = "renderer",\s*target_arch = "wasm32",\s*any\(debug_assertions, feature = "renderer-smoke"\)\s*\)\)\]\s*/;
+assert.match(
+  webLibrary,
+  new RegExp(qualifiedDirectFixtureGuard.source + "mod direct_execution_smoke;"),
+  "direct Rust/WASM fixtures must be available to explicit optimized qualifications",
+);
+assert.match(
+  webLibrary,
+  new RegExp(qualifiedDirectFixtureGuard.source + "pub use direct_execution_smoke::\\*;"),
+  "optimized direct fixtures must retain their package export",
+);
+assert.match(
+  manimRasterWorkflow,
+  /NOON_RENDERER_SMOKE: "1"/,
+  "the Typst raster qualification must opt into its direct Rust/WASM fixture",
+);
 
 for (const required of [
   "let camera = session.camera().map_err(js_error)?;",

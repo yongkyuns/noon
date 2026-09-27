@@ -54,7 +54,11 @@ mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;
-#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 mod direct_execution_smoke;
 #[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 mod direct_pointer_presentation;
@@ -150,7 +154,11 @@ pub use authoring_table::*;
 pub use canonical_authoring_scene::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use determinism::*;
-#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 pub use direct_execution_smoke::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use execution_canvas::*;

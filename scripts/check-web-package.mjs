@@ -410,10 +410,11 @@ const expectedTypeSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 
-// Direct example factories are compiled only with Rust debug assertions.
-// The build profile is explicit in CI; detect an existing debug factory as well
-// when this checker is run directly against an already generated package.
+// Direct example factories are compiled in development and explicit renderer
+// qualifications. Detect an existing factory too when checking a package built
+// outside this script's environment.
 if (process.env.NOON_WASM_PROFILE === "dev"
+    || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
     "export function verifyDirectExecutionReplay(",
