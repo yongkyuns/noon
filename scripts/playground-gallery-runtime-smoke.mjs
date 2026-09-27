@@ -54,13 +54,21 @@ try {
   browser = await engine.launch(playgroundLaunchOptions(browserName));
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
-  const queue = entries.map(entry => ({ entry, noJspi: false }));
+  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
+  if (selectedIds) for (const id of selectedIds) {
+    assert.ok(entries.some(entry => entry.id === id), `unknown gallery case: ${id}`);
+  }
+  const selectedEntries = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id)) : entries;
+  assert.ok(selectedEntries.length > 0, 'gallery selection is empty');
+  const queue = selectedEntries.map(entry => ({ entry, noJspi: false }));
   // Mapped composition and callback examples must also finish without JSPI.
   // The geometry-only composition has a paired Rust example; the upstream
   // LaggedStartMap tutorial requires unsupported Tex and stays blocked.
   // This includes Chromium so a working desktop synchronous path cannot mask a
   // failure to enter the portable path.
-  if (browserName !== 'firefox') for (const id of affected) queue.push({ entry: entries.find(e => e.id === id), noJspi: true });
+  if (browserName !== 'firefox') for (const entry of selectedEntries) {
+    if (affected.includes(entry.id)) queue.push({ entry, noJspi: true });
+  }
   let next = 0;
   async function check({ entry, noJspi }) {
     const caseStartedAt = performance.now();
@@ -184,7 +192,7 @@ try {
   assert.equal(results.length, queue.length, 'incomplete inventory');
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
-  console.log(`All ${entries.length} selectable examples and ${queue.length - entries.length} no-JSPI controls passed.`);
+  console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);
 } finally {
   await writeFile(path.join(artifacts, 'results.json'), stringify(results));
   const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };

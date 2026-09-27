@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 29);
+assert.equal(gallery.examples.length, 32);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -46,7 +46,17 @@ assert.deepEqual(
     "noon-polar-plane",
     "noon-zoomed-scene",
     "noon-styled-graphs",
+    "noon-ordinary-matrix",
+    "noon-ordinary-table",
+    "noon-ordinary-variable",
   ],
+);
+
+const compilerEntries = readyEntries.filter((entry) => entry.requires_latex === true);
+assert.deepEqual(
+  compilerEntries.map((entry) => entry.id).sort(),
+  ["noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable"],
+  "only the three qualified compiler demos may declare the LaTeX bootstrap",
 );
 
 const noonOnlyPatterns = [
@@ -79,9 +89,37 @@ for (const entry of readyEntries) {
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
   assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
+  let normalizedSource = source;
+  if (entry.requires_latex === true) {
+    assert.equal(
+      (source.match(/async\s+def\s+construct\s*\(/g) ?? []).length,
+      1,
+      `${entry.id}: compiler bootstrap must be the only async construct`,
+    );
+    assert.equal(
+      (source.match(/await\s+prepare_latex\s*\(\s*\)/g) ?? []).length,
+      1,
+      `${entry.id}: compiler bootstrap must await prepare_latex exactly once`,
+    );
+    assert.match(
+      source,
+      /^    async def construct\(self\):\n        await prepare_latex\(\)\n/m,
+      `${entry.id}: await prepare_latex() must be the first construct statement`,
+    );
+    normalizedSource = source.replace(
+      "    async def construct(self):\n        await prepare_latex()\n",
+      "    def construct(self):\n",
+    );
+    assert.notEqual(normalizedSource, source, `${entry.id}: compiler bootstrap must be normalized`);
+  }
+  assert.doesNotMatch(
+    normalizedSource,
+    /\b(?:async|await)\b/,
+    `${entry.id}: no async/await is allowed beyond the declared compiler bootstrap`,
+  );
   for (const pattern of noonOnlyPatterns) {
     assert.doesNotMatch(
-      source,
+      normalizedSource,
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
     );

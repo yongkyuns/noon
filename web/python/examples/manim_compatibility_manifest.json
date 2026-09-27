@@ -474,6 +474,54 @@
       "thumbnail_alt": "Two green triangular graphs with translucent red vertices and blue outlines",
       "thumbnail_time": 0,
       "order": 1270
+    },
+    {
+      "id": "noon-ordinary-matrix",
+      "title": "Matrix",
+      "summary": "Lay out numeric and symbolic entries between matrix brackets.",
+      "status": "ready",
+      "path": "python/examples/ordinary_matrix.py",
+      "category": "manim-compatible/composites",
+      "features": ["Matrix", "MathTex", "numeric entries", "symbolic entries", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "parity-qualified",
+      "requires_latex": true,
+      "thumbnail": "thumbnails/manim/ordinary-matrix.png",
+      "thumbnail_alt": "Static 2×2 matrix containing 1, 2, x, and y",
+      "thumbnail_time": 0,
+      "order": 1280
+    },
+    {
+      "id": "noon-ordinary-table",
+      "title": "Table and MathTable",
+      "summary": "Compare plain text, math notation, and grouped cell contents in three tables.",
+      "status": "ready",
+      "path": "python/examples/table.py",
+      "category": "manim-compatible/composites",
+      "features": ["Table", "MathTable", "MobjectTable", "plain text", "math text", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "requires_latex": true,
+      "thumbnail": "thumbnails/manim/ordinary-table.png",
+      "thumbnail_alt": "Static plain-text, math-text, and composite-cell tables",
+      "thumbnail_time": 0,
+      "order": 1290
+    },
+    {
+      "id": "noon-ordinary-variable",
+      "title": "Variable",
+      "summary": "Place a math label beside a formatted numeric value.",
+      "status": "ready",
+      "path": "python/examples/variable.py",
+      "category": "manim-compatible/text",
+      "features": ["Variable", "DecimalNumber", "label", "formatted value", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "parity-qualified",
+      "requires_latex": true,
+      "thumbnail": "thumbnails/manim/ordinary-variable.png",
+      "thumbnail_alt": "Static variable x labeled with the value 12,345.60",
+      "thumbnail_time": 0,
+      "order": 1300
     }
   ]
 }
