@@ -252,32 +252,51 @@ fn compile_path_pair(
     if fill_topology_required && !filled_morph_is_supported(&source, &target) {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
-    // A fixed world frame keeps both stroke tessellation and path resource identity
-    // independent of animation progress. Prepared morph evaluation owns this frame
-    // through an interior singular scale, so only the endpoint transforms need to be
-    // invertible when a later independent TRS driver takes ownership.
+    // A fixed render frame keeps both stroke tessellation and path resource identity
+    // independent of animation progress. Anchor it at the source translation instead
+    // of baking absolute world positions into the resource: repeated morphs with the
+    // same shapes and relative motion can then share one endpoint geometry. Prepared
+    // morph evaluation owns this frame through an interior singular scale, so only the
+    // endpoint transforms need to be invertible when a later independent TRS driver
+    // takes ownership.
     if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
         && to_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
     {
         let world_source = source.transformed(from_transform);
         let world_target = target.transformed(to_transform);
+        let render_transform = Transform2D {
+            translation: from_transform.translation,
+            ..Transform2D::IDENTITY
+        };
+        let frame_source = source.transformed(Transform2D {
+            translation: noon_core::Vec2::ZERO,
+            rotation: from_transform.rotation,
+            scale: from_transform.scale,
+        });
+        let frame_target = target.transformed(Transform2D {
+            translation: to_transform.translation - from_transform.translation,
+            rotation: to_transform.rotation,
+            scale: to_transform.scale,
+        });
         // Overflowed derived points and unsupported world-space correspondence retain
         // the established local plan rather than installing an invalid resource.
         if world_source.is_finite()
             && world_target.is_finite()
+            && frame_source.is_finite()
+            && frame_target.is_finite()
             && fixed_frame_inverse_is_finite(
                 &world_source,
                 &world_target,
                 from_transform,
                 to_transform,
             )
-            && (!fill_topology_required || filled_morph_is_supported(&world_source, &world_target))
+            && (!fill_topology_required || filled_morph_is_supported(&frame_source, &frame_target))
         {
             return Ok(TransformGeometryPlan::PathPair {
                 geometry: Arc::new(GeometryRef::path(
-                    world_source.with_morph_target(world_target),
+                    frame_source.with_morph_target(frame_target),
                 )),
-                render_transform: Some(Transform2D::IDENTITY),
+                render_transform: Some(render_transform),
             });
         }
     }
@@ -356,7 +375,7 @@ fn fixed_frame_inverse_is_finite(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{Color, Vec2};
+    use noon_core::{Color, PathCommand, Vec2};
 
     #[test]
     fn identity_free_value_plan_matches_stable_track_plan() {
@@ -431,6 +450,116 @@ mod tests {
             };
             assert_eq!(render_transform.is_some(), fixed);
             assert!(geometry.is_finite());
+        }
+    }
+
+    #[test]
+    fn fixed_screen_space_frame_reuses_geometry_across_translated_morphs() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.5))
+            .line_to(Vec2::new(0.5, 1.5));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(1.25, -0.75))
+            .line_to(Vec2::new(2.0, 0.25));
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let from = Transform2D {
+            translation: Vec2::new(32.0, -24.0),
+            rotation: std::f32::consts::FRAC_PI_4,
+            scale: Vec2::new(0.5, 2.0),
+        };
+        let to = Transform2D {
+            translation: Vec2::new(41.0, -39.0),
+            rotation: -std::f32::consts::FRAC_PI_6,
+            scale: Vec2::new(1.2, 0.75),
+        };
+        let offset = Vec2::new(4096.0, -8192.0);
+        let translated_from = Transform2D {
+            translation: from.translation + offset,
+            ..from
+        };
+        let translated_to = Transform2D {
+            translation: to.translation + offset,
+            ..to
+        };
+
+        let TransformGeometryPlan::PathPair {
+            geometry,
+            render_transform: Some(render_transform),
+        } = compile_path_pair(style, style, from, to, source.clone(), target.clone()).unwrap()
+        else {
+            panic!("screen-space path pair must use a fixed frame")
+        };
+        let TransformGeometryPlan::PathPair {
+            geometry: translated_geometry,
+            render_transform: Some(translated_render_transform),
+        } = compile_path_pair(
+            style,
+            style,
+            translated_from,
+            translated_to,
+            source.clone(),
+            target.clone(),
+        )
+        .unwrap()
+        else {
+            panic!("translated screen-space path pair must use a fixed frame")
+        };
+
+        assert_eq!(geometry, translated_geometry);
+        assert_eq!(render_transform.translation, from.translation);
+        assert_eq!(
+            translated_render_transform.translation,
+            translated_from.translation
+        );
+
+        let GeometryRef::VectorPath(frame_source) = geometry.as_ref() else {
+            panic!("path pair geometry")
+        };
+        let frame_target = frame_source.morph_target().expect("path pair target");
+        let PathCommand::MoveTo {
+            to: source_in_frame,
+        } = frame_source.commands()[0]
+        else {
+            panic!("source move")
+        };
+        let PathCommand::MoveTo {
+            to: target_in_frame,
+        } = frame_target.commands()[0]
+        else {
+            panic!("target move")
+        };
+        let PathCommand::MoveTo { to: source_point } = source.commands()[0] else {
+            panic!("source point")
+        };
+        let PathCommand::MoveTo { to: target_point } = target.commands()[0] else {
+            panic!("target point")
+        };
+
+        for progress in [0.0, 0.5, 1.0] {
+            let frame_point = source_in_frame + (target_in_frame - source_in_frame) * progress;
+            let expected = from.transform_point(source_point)
+                + (to.transform_point(target_point) - from.transform_point(source_point))
+                    * progress;
+            let translated_expected = translated_from.transform_point(source_point)
+                + (translated_to.transform_point(target_point)
+                    - translated_from.transform_point(source_point))
+                    * progress;
+            let actual = render_transform.transform_point(frame_point);
+            let translated_actual = translated_render_transform.transform_point(frame_point);
+            assert!(
+                (actual - expected).length() <= 1.0e-4,
+                "progress {progress}: expected {expected:?}, got {actual:?}"
+            );
+            assert!(
+                (translated_actual - translated_expected).length() <= 1.0e-4,
+                "translated progress {progress}: expected {translated_expected:?}, got {translated_actual:?}"
+            );
         }
     }
 

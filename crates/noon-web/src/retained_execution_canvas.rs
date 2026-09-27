@@ -13,8 +13,11 @@ mod wasm {
     use crate::{
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        resolve_renderer_observation_target, InstalledRetainedExecutionMirror,
-        RendererObservationOutcome, RendererObservationRequest,
+        resolve_renderer_observation_target,
+        webgl_context_lifecycle::{
+            ensure_webgl_context_available, webgl_context_is_lost, WebGlContextLifecycle,
+        },
+        InstalledRetainedExecutionMirror, RendererObservationOutcome, RendererObservationRequest,
         RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
     };
 
@@ -32,6 +35,23 @@ mod wasm {
         fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
             Ok(wgpu::rwh::DisplayHandle::web())
         }
+    }
+
+    struct InitializedGpu {
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        backend: wgpu::Backend,
+        config: wgpu::SurfaceConfiguration,
+    }
+
+    struct RetainedGpuState {
+        preparer: RetainedFramePreparer,
+        renderer: GpuRenderer,
+        text_gpu: RetainedTextGpuState,
+        preloaded_geometry_count: usize,
+        preload_bytes_uploaded: usize,
     }
 
     /// Render-worker endpoint for `noon.execution.retained`.
@@ -71,6 +91,7 @@ mod wasm {
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
         gpu_validation_scope: Option<wgpu::ErrorScopeGuard>,
+        webgl_context_lifecycle: WebGlContextLifecycle,
         pending_renderer_observation: Option<RendererObservationRequest>,
         last_renderer_observation: Option<RendererObservationOutcome>,
         presentation_sequence: u64,
@@ -78,6 +99,86 @@ mod wasm {
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
     impl WasmRetainedExecutionCanvasRenderer {
+        /// Recreate WebGL-owned GPU state after a restored context while keeping
+        /// the installed retained mirror authoritative. The next render rebuilds
+        /// dynamic GPU state from that mirror even when no new delta arrives.
+        #[wasm_bindgen(js_name = recoverWebGlContext)]
+        pub async fn recover_webgl_context(&mut self) -> Result<bool, JsValue> {
+            if self.backend != wgpu::Backend::Gl || !self.webgl_context_lifecycle.recovery_pending()
+            {
+                return Ok(false);
+            }
+            if self.webgl_context_lifecycle.is_lost() || webgl_context_is_lost(&self.canvas)? {
+                self.webgl_context_lifecycle.mark_lost();
+                return Ok(false);
+            }
+
+            let next_generation = self
+                .gpu_generation
+                .checked_add(1)
+                .ok_or_else(|| js_message("GPU recovery generation exhausted"))?;
+            let width = self.config.width.max(1);
+            let height = self.config.height.max(1);
+            let initialized = match initialize_gpu(&self.canvas, width, height, true).await {
+                Ok(initialized) => initialized,
+                Err(_error) if webgl_context_is_lost(&self.canvas)? => {
+                    self.webgl_context_lifecycle.mark_lost();
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            };
+            if self.webgl_context_lifecycle.is_lost() || webgl_context_is_lost(&self.canvas)? {
+                self.webgl_context_lifecycle.mark_lost();
+                return Ok(false);
+            }
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+            } = initialized;
+            install_wgpu_error_handler(
+                &device,
+                next_generation,
+                backend,
+                self.gpu_diagnostics.clone(),
+            );
+            let RetainedGpuState {
+                preparer,
+                renderer,
+                text_gpu,
+                preloaded_geometry_count,
+                preload_bytes_uploaded,
+            } = build_retained_gpu_state(&self.mirror, &device, &queue, config.format)?;
+
+            self.instance = instance;
+            self.surface = surface;
+            self.device = device;
+            self.queue = queue;
+            self.backend = backend;
+            self.config = config;
+            self.preparer = preparer;
+            self.renderer = renderer;
+            self.text_gpu = text_gpu;
+            self.selection_overlay_gpu = OverlayGpuState::default();
+            self.gpu_validation_scope = None;
+            self.preloaded_geometry_count = preloaded_geometry_count;
+            self.preload_bytes_uploaded = preload_bytes_uploaded;
+            self.last_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.last_outline_cache_misses = 0;
+            self.gpu_generation = next_generation;
+            self.pending_changes = FrameChanges::all();
+            self.pending_frame = self.mirror.frame().is_some();
+            self.webgl_context_lifecycle.finish_recovery();
+            self.update_camera()?;
+            Ok(true)
+        }
+
         #[wasm_bindgen(js_name = create)]
         pub async fn create(
             canvas: OffscreenCanvas,
@@ -87,84 +188,39 @@ mod wasm {
                 InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
                     .map_err(js_error)?;
             let camera = mirror.camera();
-            let mut preparer = RetainedFramePreparer::new();
-            preparer.set_scene_path_mesh_cache_budget(
-                mirror
-                    .resources()
-                    .render_geometries()
-                    .len()
-                    .max(mirror.resources().render_geometry_preparation_count()),
-                mirror.resources().geometry_count(),
-            );
 
-            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
-            instance_descriptor.display = Some(Box::new(WebDisplaySource));
-            let instance =
-                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
-            let surface = create_surface(&instance, &canvas)?;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                    apply_limit_buckets: false,
-                })
-                .await
-                .map_err(js_error)?;
-            let backend = adapter.get_info().backend;
-            let required_limits = if backend == wgpu::Backend::Gl {
-                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
-            } else {
-                wgpu::Limits::default()
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("Noon retained execution render worker GPU device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    ..Default::default()
-                })
-                .await
-                .map_err(js_error)?;
+            let width = canvas.width().max(1);
+            let height = canvas.height().max(1);
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+            } = initialize_gpu(&canvas, width, height, false).await?;
+            if backend == wgpu::Backend::Gl {
+                ensure_webgl_context_available(&canvas)?;
+            }
             let gpu_generation = 1;
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
             install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
             let gpu_validation_scope = (backend == wgpu::Backend::BrowserWebGpu)
                 .then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));
+            let webgl_context_lifecycle = WebGlContextLifecycle::install(&canvas, backend)?;
+            if webgl_context_lifecycle.is_lost() {
+                return Err(js_message(
+                    "cannot create a renderer while the WebGL2 context is lost",
+                ));
+            }
 
-            let width = canvas.width().max(1);
-            let height = canvas.height().max(1);
-            let config = surface
-                .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_message("GPU adapter cannot present retained execution"))?;
-            surface.configure(&device, &config);
-
-            let mut renderer = GpuRenderer::new(&device, config.format);
-            renderer.set_viewport(&device, &queue, width, height);
-            let text_gpu = renderer.create_retained_text_state(&device, &queue);
-
-            // Prepare derived resident GPU geometry before the worker publishes
-            // readiness. This does not evaluate the timeline or acquire a frame.
-            let resources = mirror.resources().render_geometries();
-            let requests = mirror
-                .resources()
-                .render_geometry_preparations()
-                .iter()
-                .map(|preparation| PathMeshPreload {
-                    geometry: resources[preparation.resource as usize].as_ref(),
-                    style: preparation.style,
-                    transform: preparation.transform,
-                })
-                .collect::<Vec<_>>();
-            let preload = preparer
-                .preload_path_meshes(&device, &queue, &mut renderer, &requests)
-                .map_err(js_error)?;
-            let preloaded_geometry_count = preload.geometry.geometry_cache_misses;
-            let preload_bytes_uploaded = preload.upload.bytes_uploaded;
-            // Writes and subsequent initial-frame rendering use the same queue,
-            // so no playback draw can overtake its resident resource upload.
-            queue.submit([]);
+            let RetainedGpuState {
+                preparer,
+                renderer,
+                text_gpu,
+                preloaded_geometry_count,
+                preload_bytes_uploaded,
+            } = build_retained_gpu_state(&mirror, &device, &queue, config.format)?;
 
             let mut result = Self {
                 instance,
@@ -196,6 +252,7 @@ mod wasm {
                 gpu_generation,
                 gpu_diagnostics,
                 gpu_validation_scope,
+                webgl_context_lifecycle,
                 pending_renderer_observation: None,
                 last_renderer_observation: None,
                 presentation_sequence: 0,
@@ -212,10 +269,13 @@ mod wasm {
                 ));
             }
 
-            // Decode once so new immutable renderer resources can become resident
-            // before the retained state that references them is made renderable.
+            // The mirror remains authoritative through context loss. Resource
+            // uploads are deferred until recovery, but the exact delta is still
+            // admitted so its frame can be rebuilt without a transport retry.
             let delta: RetainedFamilyExecutionDeltaEnvelope =
                 serde_json::from_str(json).map_err(js_error)?;
+            let gpu_available = !self.webgl_context_lifecycle.is_lost()
+                && !self.webgl_context_lifecycle.recovery_pending();
             let stale = self.mirror.transport_mirror().session() == Some(delta.retained.session)
                 && self
                     .mirror
@@ -268,34 +328,36 @@ mod wasm {
                                 .geometry_count()
                                 .saturating_add(bundle.geometry_count()),
                         );
-                        let requests = addition
-                            .preparations
-                            .iter()
-                            .map(|preparation| PathMeshPreload {
-                                geometry: &addition.geometries[preparation.resource as usize],
-                                style: preparation.style,
-                                transform: preparation.transform,
-                            })
-                            .collect::<Vec<_>>();
-                        let preload = self
-                            .preparer
-                            .append_preload_path_meshes(
-                                &self.device,
-                                &self.queue,
-                                &mut self.renderer,
-                                &requests,
-                            )
-                            .map_err(js_error)?;
-                        self.preloaded_geometry_count = self
-                            .preloaded_geometry_count
-                            .saturating_add(preload.geometry.geometry_cache_misses);
-                        self.preload_bytes_uploaded = self
-                            .preload_bytes_uploaded
-                            .saturating_add(preload.upload.bytes_uploaded);
-                        // Queue writes from the admitted resource suffix precede any
-                        // first-frame uploads/draw submission that follows this call.
-                        if preload.upload.bytes_uploaded != 0 {
-                            self.queue.submit([]);
+                        if gpu_available {
+                            let requests = addition
+                                .preparations
+                                .iter()
+                                .map(|preparation| PathMeshPreload {
+                                    geometry: &addition.geometries[preparation.resource as usize],
+                                    style: preparation.style,
+                                    transform: preparation.transform,
+                                })
+                                .collect::<Vec<_>>();
+                            let preload = self
+                                .preparer
+                                .append_preload_path_meshes(
+                                    &self.device,
+                                    &self.queue,
+                                    &mut self.renderer,
+                                    &requests,
+                                )
+                                .map_err(js_error)?;
+                            self.preloaded_geometry_count = self
+                                .preloaded_geometry_count
+                                .saturating_add(preload.geometry.geometry_cache_misses);
+                            self.preload_bytes_uploaded = self
+                                .preload_bytes_uploaded
+                                .saturating_add(preload.upload.bytes_uploaded);
+                            // Queue writes from the admitted resource suffix precede any
+                            // first-frame uploads/draw submission that follows this call.
+                            if preload.upload.bytes_uploaded != 0 {
+                                self.queue.submit([]);
+                            }
                         }
                     }
                 }
@@ -351,6 +413,11 @@ mod wasm {
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
+            if self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
+            {
+                return Ok(false);
+            }
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
             }
@@ -368,8 +435,12 @@ mod wasm {
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
-                        self.surface = create_surface(&self.instance, &self.canvas)?;
-                        self.surface.configure(&self.device, &self.config);
+                        if self.backend == wgpu::Backend::Gl {
+                            self.webgl_context_lifecycle.mark_recovery_pending();
+                        } else {
+                            self.surface = create_surface(&self.instance, &self.canvas)?;
+                            self.surface.configure(&self.device, &self.config);
+                        }
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
@@ -574,6 +645,12 @@ mod wasm {
             if self.config.width != width || self.config.height != height {
                 self.config.width = width;
                 self.config.height = height;
+                if self.webgl_context_lifecycle.is_lost()
+                    || self.webgl_context_lifecycle.recovery_pending()
+                {
+                    self.pending_frame = self.mirror.frame().is_some();
+                    return Ok(());
+                }
                 self.surface.configure(&self.device, &self.config);
                 self.update_camera()?;
                 if self.mirror.frame().is_some() {
@@ -684,7 +761,10 @@ mod wasm {
 
     impl WasmRetainedExecutionCanvasRenderer {
         fn update_camera(&mut self) -> Result<(), JsValue> {
-            if !self.drawable {
+            if !self.drawable
+                || self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
+            {
                 return Ok(());
             }
             let aspect = self.pointer_view.map_or(
@@ -722,6 +802,121 @@ mod wasm {
         instance
             .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
             .map_err(js_error)
+    }
+
+    async fn initialize_gpu(
+        canvas: &OffscreenCanvas,
+        width: u32,
+        height: u32,
+        force_webgl: bool,
+    ) -> Result<InitializedGpu, JsValue> {
+        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_descriptor.backends = if force_webgl {
+            wgpu::Backends::GL
+        } else {
+            wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
+        };
+        instance_descriptor.display = Some(Box::new(WebDisplaySource));
+        let instance = if force_webgl {
+            wgpu::Instance::new(instance_descriptor)
+        } else {
+            wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await
+        };
+        let surface = create_surface(&instance, canvas)?;
+        // `create_surface` has selected/claimed the browser context at this
+        // point, so this check does not alter WebGPU selection. It must happen
+        // before adapter enumeration reaches glow's GL_VERSION probe.
+        ensure_webgl_context_available(canvas)?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
+            })
+            .await
+            .map_err(js_error)?;
+        let backend = adapter.get_info().backend;
+        if force_webgl && backend != wgpu::Backend::Gl {
+            return Err(js_message(
+                "WebGL context recovery unexpectedly selected a different GPU backend",
+            ));
+        }
+        if backend == wgpu::Backend::Gl {
+            ensure_webgl_context_available(canvas)?;
+        }
+        let required_limits = if backend == wgpu::Backend::Gl {
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        } else {
+            wgpu::Limits::default()
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Noon retained execution render worker GPU device"),
+                required_features: wgpu::Features::empty(),
+                required_limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(js_error)?;
+        if backend == wgpu::Backend::Gl {
+            ensure_webgl_context_available(canvas)?;
+        }
+        let config = surface
+            .get_default_config(&adapter, width, height)
+            .ok_or_else(|| js_message("GPU adapter cannot present retained execution"))?;
+        surface.configure(&device, &config);
+        Ok(InitializedGpu {
+            instance,
+            surface,
+            device,
+            queue,
+            backend,
+            config,
+        })
+    }
+
+    fn build_retained_gpu_state(
+        mirror: &InstalledRetainedExecutionMirror,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Result<RetainedGpuState, JsValue> {
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_scene_path_mesh_cache_budget(
+            mirror
+                .resources()
+                .render_geometries()
+                .len()
+                .max(mirror.resources().render_geometry_preparation_count()),
+            mirror.resources().geometry_count(),
+        );
+        let mut renderer = GpuRenderer::new(device, format);
+        let text_gpu = renderer.create_retained_text_state(device, queue);
+        let resources = mirror.resources().render_geometries();
+        let requests = mirror
+            .resources()
+            .render_geometry_preparations()
+            .iter()
+            .map(|preparation| PathMeshPreload {
+                geometry: resources[preparation.resource as usize].as_ref(),
+                style: preparation.style,
+                transform: preparation.transform,
+            })
+            .collect::<Vec<_>>();
+        let preload = preparer
+            .preload_path_meshes(device, queue, &mut renderer, &requests)
+            .map_err(js_error)?;
+        if preload.upload.bytes_uploaded != 0 {
+            queue.submit([]);
+        }
+        Ok(RetainedGpuState {
+            preparer,
+            renderer,
+            text_gpu,
+            preloaded_geometry_count: preload.geometry.geometry_cache_misses,
+            preload_bytes_uploaded: preload.upload.bytes_uploaded,
+        })
     }
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {

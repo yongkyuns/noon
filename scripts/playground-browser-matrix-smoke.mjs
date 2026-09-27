@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -23,6 +24,7 @@ const profiles = {
   "desktop-dpr1": { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 },
   "desktop-dpr2": { viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2 },
   "mobile-dpr2": { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 },
+  "mobile-dpr3": { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 },
 };
 
 assert.ok(
@@ -254,6 +256,66 @@ async function chooseDifferentExample(page) {
   return targetId;
 }
 
+async function runShowcaseFromPublicUi(page, exampleId) {
+  await page.goto(`${baseUrl}/web/index.html?catalog=showcase&example=${exampleId}`, { waitUntil: "load" });
+  await assertDeferredRuntime(page);
+  await page.waitForFunction(
+    (id) => document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId === id,
+    exampleId,
+    { timeout: 10_000 },
+  );
+  await page.locator("#replace-scene").click();
+  await waitForAppliedScene(page, exampleId, 180_000);
+  const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  return { runtime: await runtimeSnapshot(page), metrics };
+}
+
+async function completeShowcasePlayback(page) {
+  const restart = page.locator(".playback-restart");
+  await restart.waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.controllable === "true", null, { timeout: 10_000 });
+  await restart.click();
+  await page.waitForFunction(() => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false";
+  }, null, { timeout: 10_000 });
+  const toggle = page.locator(".playback-toggle");
+  if (await toggle.getAttribute("aria-label") === "Play animation") await toggle.click();
+  await page.waitForFunction(() => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    return document.querySelector(".playback-controls")?.dataset.playing === "true";
+  }, null, { timeout: 10_000 });
+  // Replay intentionally loops. Observe the full traversal and wrap before
+  // pausing; waiting for playing=false would time out on healthy playback.
+  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0 }; });
+  await page.waitForFunction(() => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    const controls = document.querySelector(".playback-controls");
+    const duration = Number(document.querySelector(".playback-scrubber")?.max);
+    const elapsed = Number(controls?.dataset.elapsedSeconds);
+    const observation = window.__matrixReplay;
+    const wrapped = observation.maximum >= duration - 1 && elapsed < observation.previous;
+    observation.maximum = Math.max(observation.maximum, elapsed);
+    observation.previous = elapsed;
+    return wrapped;
+  }, null, { timeout: 180_000 });
+  await page.evaluate(() => { delete window.__matrixReplay; });
+  const endpoint = await seekPausedGallery(page, 23.4);
+  await waitForPublishedGalleryFrame(page, endpoint, 23.4);
+  return page.evaluate(async () => ({
+    controls: { ...document.querySelector(".playback-controls").dataset },
+    duration: Number(document.querySelector(".playback-scrubber").max),
+    execution: await window.__noonExampleGallery.executionMetrics(),
+  }));
+}
+
 async function editAndRerun(page, expectedExampleId) {
   const editMarker = `# cross-browser matrix ${browserName} ${profileName}`;
   await page.evaluate((marker) => {
@@ -277,7 +339,7 @@ async function editAndRerun(page, expectedExampleId) {
 
 async function exerciseResize(page) {
   const sequence =
-    profileName === "mobile-dpr2"
+    profileName.startsWith("mobile-")
       ? [
           { width: 430, height: 760 },
           { width: 360, height: 780 },
@@ -297,7 +359,11 @@ async function exerciseResize(page) {
 }
 
 async function writeDiagnostics(fileName, diagnostics) {
-  await writeFile(path.join(artifactDir, fileName), `${JSON.stringify(diagnostics, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(artifactDir, fileName),
+    `${JSON.stringify(diagnostics, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2)}\n`,
+    "utf8",
+  );
 }
 
 let browser = null;
@@ -385,6 +451,19 @@ try {
     const selectedExampleId = await chooseDifferentExample(page);
     await editAndRerun(page, selectedExampleId);
     await exerciseResize(page);
+    console.log(`→ ${browserName}/${profileName}: public workflow passed; running full showcase`);
+    const showcaseSourcePass = await runShowcaseFromPublicUi(page, "showcase-dynamic-scene");
+    assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
+    assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - 23.4) < 1e-7,
+      `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of 23.4s`);
+    console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
+    const showcasePlayback = await completeShowcasePlayback(page);
+    const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
+    assert.ok(Math.abs(Number(showcasePlayback.duration) - 23.4) < 1e-7,
+      `showcase authored duration changed: ${showcasePlayback.duration}`);
+    assert.ok(Number(showcaseMetrics.objectCount) > 600,
+      `showcase retained only ${showcaseMetrics.objectCount} objects`);
+    assert.equal(showcasePlayback.controls.controllable, "true", "showcase replay was not admitted");
     finalRuntime = await runtimeSnapshot(page);
 
     assert.deepEqual(
@@ -409,11 +488,20 @@ ${consoleErrors.join("\n")}`,
       selectedHost,
       capabilities,
       runtime: finalRuntime,
+      showcase: {
+        exampleId: "showcase-dynamic-scene",
+        sourcePassState: showcaseSourcePass.runtime.patchState,
+        sourcePassTime: showcaseSourcePass.metrics?.metrics?.time,
+        playbackDuration: showcasePlayback.duration,
+        playbackEndpoint: showcasePlayback.controls.elapsedSeconds,
+        replayAdmitted: showcasePlayback.controls.controllable === "true",
+        metrics: showcaseMetrics,
+      },
       pageErrors,
       consoleErrors,
     });
     console.log(
-      `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
+      `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize + 600-shape showcase playback`,
     );
   }
 } catch (error) {

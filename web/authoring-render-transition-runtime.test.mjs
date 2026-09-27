@@ -769,3 +769,84 @@ test("surface invalidation retires a receipt once and a repaint gets a newer pre
   const b=harness.nextPort.messages.findLast(m=>m.pointerReceipt).pointerReceipt;
   assert.equal(b.sequence,a.sequence);assert.ok(b.presentation>a.presentation);
 });
+
+test("WebGL loss holds publications and resize until recovery presents the pending frame", async () => {
+  const harness = await createManagedWakeHarness([true, false, true]);
+  const recovery = deferred();
+  const sizes = [];
+  harness.createdRenderer.recoverWebGlContext = () => recovery.promise;
+  harness.createdRenderer.resize = (width, height) => sizes.push([width, height]);
+  vm.runInContext('consumeDelta("pending", {session:12, sequence:4});', harness.context);
+  const before = harness.createdRenderer.renderCalls;
+  let prevented = false;
+  harness.context.lossEvent = { preventDefault() { prevented = true; } };
+  vm.runInContext('suspendForWebGlContextLoss(lossEvent); resize({width:390, height:844});', harness.context);
+  assert.equal(prevented, true);
+  assert.equal(vm.runInContext('consumeDelta("next", {session:12, sequence:5})', harness.context), false);
+  assert.equal(vm.runInContext('tryPresent()', harness.context), false);
+  for (const callback of harness.animationFrames.splice(0)) callback(10);
+  assert.equal(harness.createdRenderer.renderCalls, before);
+  assert.deepEqual(sizes, []);
+  assert.equal(harness.nextPort.messages.filter(m => m.type === "tick").length, 0);
+  assert.equal(harness.nextPort.messages.filter(m => m.type === "execution_presented").length, 0);
+
+  const restoring = vm.runInContext('recoverAndPresentWebGlContext()', harness.context);
+  await flushTasks();
+  assert.equal(vm.runInContext('consumeDelta("next", {session:12, sequence:5})', harness.context), false);
+  recovery.resolve(true);
+  await restoring;
+  assert.deepEqual(sizes, [[390, 844]]);
+  assert.deepEqual(harness.nextPort.messages.filter(m => m.type === "execution_presented").map(m => m.sequence), [4]);
+  assert.equal(vm.runInContext('webglContextLost', harness.context), false);
+  assert.equal(harness.animationFrames.length, 0, "recovered idle engine must not poll");
+});
+
+test("WebGL loss backpressures replay handoff before retiring the current renderer", async () => {
+  const harness = await createManagedWakeHarness();
+  const replacementPort = new FakePort();
+  harness.context.replacementPort = replacementPort;
+  vm.runInContext(`
+    suspendForWebGlContextLoss({preventDefault() {}});
+    beginRendererTransition(
+      {port:replacementPort, transportMode, requestId:8}, MODE_RETAINED, "renderer_rebuilt",
+    );
+    handleRetainedResources({bytes:new Uint8Array([2])});
+  `, harness.context);
+  assert.equal(vm.runInContext('consumeDelta("replay-snapshot")', harness.context), false);
+  assert.equal(harness.createdRenderer.freed, false);
+  assert.equal(vm.runInContext('transitionMode', harness.context), "retained");
+  assert.equal(vm.runInContext('bootstrapPromise', harness.context), null);
+});
+
+test("shutdown during WebGL recovery releases the renderer only after its WASM borrow ends", async () => {
+  const harness = await createManagedWakeHarness();
+  const recovery = deferred();
+  harness.createdRenderer.recoverWebGlContext = () => recovery.promise;
+  vm.runInContext('suspendForWebGlContextLoss({preventDefault() {}});', harness.context);
+  const restoring = vm.runInContext('recoverAndPresentWebGlContext()', harness.context);
+  await flushTasks();
+  const presents = harness.createdRenderer.renderCalls;
+  vm.runInContext('stop()', harness.context);
+  assert.equal(harness.createdRenderer.freed, false);
+  const messagesBefore = harness.mainMessages.length;
+  recovery.reject(new Error("retired context"));
+  await restoring;
+  assert.equal(harness.createdRenderer.freed, true);
+  assert.equal(harness.mainMessages.length, messagesBefore, "retired recovery must not report a new error");
+  assert.equal(harness.createdRenderer.renderCalls, presents);
+});
+
+test("an incomplete WebGL recovery keeps the renderer suspended", async () => {
+  const harness = await createManagedWakeHarness();
+  harness.createdRenderer.recoverWebGlContext = async () => false;
+  const presents = harness.createdRenderer.renderCalls;
+  vm.runInContext('suspendForWebGlContextLoss({preventDefault() {}});', harness.context);
+  await vm.runInContext('recoverAndPresentWebGlContext()', harness.context);
+  assert.equal(vm.runInContext('webglContextLost', harness.context), true);
+  assert.equal(vm.runInContext('consumeDelta("next")', harness.context), false);
+  assert.equal(harness.createdRenderer.renderCalls, presents);
+  harness.createdRenderer.recoverWebGlContext = async () => true;
+  await vm.runInContext('recoverAndPresentWebGlContext()', harness.context);
+  assert.equal(vm.runInContext('webglContextLost', harness.context), false);
+  assert.equal(harness.createdRenderer.renderCalls, presents + 1);
+});

@@ -75,7 +75,13 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     );
     let frame = instance.seek(1.0).expect("seek");
     let current = frame.render_transform(0);
-    assert_eq!(current, Transform2D::IDENTITY);
+    assert_eq!(
+        current,
+        Transform2D {
+            translation: from.transform.translation,
+            ..Transform2D::IDENTITY
+        }
+    );
     assert_ne!(current, frame.objects[0].transform);
 
     let Some(GeometryRef::VectorPath(render_source)) = frame.render_geometry(0) else {

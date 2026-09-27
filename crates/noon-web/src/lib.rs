@@ -120,6 +120,8 @@ mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
 mod selection_overlay_transport;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+mod webgl_context_lifecycle;
 mod worker_pointer_presentation;
 pub use worker_pointer_presentation::PointerPresentationView;
 mod semantic_execution_player;
