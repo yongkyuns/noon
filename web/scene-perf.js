@@ -180,12 +180,18 @@ try {
 
 async function advanceSample(time) {
   if (sourceError) throw sourceError;
+  // Predeclared timelines have a finite replay interval. Static scenes (zero
+  // duration) remain useful steady-state measurements and keep sampling.
+  const replayEnd = !continuation && completedSource?.duration > 0
+    ? completedSource.duration : null;
+  const sampleTime = replayEnd === null ? time : Math.min(time, replayEnd);
   const request = continuation
-    ? execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
-    : execution.advanceTo(time);
+    ? execution.sampleToAuthoredTime(sampleTime, { stopAtSourceCompletion: true })
+    : execution.advanceTo(sampleTime);
   const result = await Promise.race([request, sourceFailure]);
   if (sourceError) throw sourceError;
-  sourceCompleted = result.sourceCompleted === true;
+  sourceCompleted = result.sourceCompleted === true ||
+    (replayEnd !== null && sampleTime >= replayEnd);
   lastSampleTime = result.time;
   return result;
 }

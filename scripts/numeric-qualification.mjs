@@ -41,11 +41,16 @@ class VariableLifecycle(Scene):
         await self.wait(0.05)
         assert variable.value.get_value() == 7.5
 `;
-    const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.05, 0.1, 0.15]);
+    // Accumulate the same wait endpoints as the authored sequence: literal 0.15
+    // is one ULP before its third endpoint and leaves the continuation suspended.
+    const frameTimes = [0];
+    for (let wait = 0; wait < 3; wait++) frameTimes.push(frameTimes.at(-1) + 0.05);
+    const duration = frameTimes.at(-1);
+    const result = await qualifyPythonPlayback(context, baseUrl, source, frameTimes);
     assert.equal(result.rendererBackend, expectedBackend);
     assert.equal(result.presented, true);
     assert.equal(result.objectCount, 3);
-    assert.ok(Math.abs(result.authoredDuration - 0.15) < 1e-6);
+    assert.ok(Math.abs(result.authoredDuration - duration) < 1e-6, JSON.stringify(result));
     return result;
   },
 });

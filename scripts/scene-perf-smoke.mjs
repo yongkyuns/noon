@@ -14,6 +14,7 @@ try {
   const cases = [
     { name: "real-demo", frames: 4, hz: 1, objects: 3, continuation: true },
     { name: "static", warmup: 0, includeSamples: true, source: "from noon import Scene, Circle\nresult = Scene()\nresult.add(Circle(0.5))", objects: 1, continuation: false },
+    { name: "predeclared-endpoint", sourcePath: "./python/examples/painter_order_overlap.py", warmup: 0, frames: 4, hz: 2, objects: 3, continuation: false, duration: 1, measured: 2 },
     { name: "empty", source: "from noon import Scene\nresult = Scene()", objects: 0, continuation: false },
     { name: "source-error", source: 'raise ValueError("profile source failure")', error: "profile source failure" },
     { name: "continuation-error", source: 'from noon import Scene\nclass Failure(Scene):\n    def construct(self):\n        self.wait(0.1)\n        raise ValueError("profile continuation failure")', hz: 1, error: "profile continuation failure" },
@@ -22,7 +23,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
     try {
       if (spec.source) await page.route("**/python/demo_scene.py", route => route.fulfill({ contentType: "text/plain", body: spec.source }));
-      await page.goto(`${server.baseUrl}/web/scene-perf.html?warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}`);
+      await page.goto(`${server.baseUrl}/web/scene-perf.html?source=${encodeURIComponent(spec.sourcePath ?? "./python/demo_scene.py")}&warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}`);
       await page.waitForFunction(() => ["complete", "error"].includes(document.querySelector("#status")?.dataset.state), null, { timeout: 60000 });
       const result = await page.evaluate(() => ({ state: document.querySelector("#status").dataset.state, status: document.querySelector("#status").value, report: window.__NOON_SCENE_PERF__ }));
       if (spec.error) {
@@ -35,6 +36,11 @@ try {
         assert.equal(result.report.execution.sourceContinuation, spec.continuation);
         assert.equal(result.report.scene.objects, spec.objects);
         assert.ok(result.report.cadence.frames > 0);
+        if (spec.duration !== undefined) {
+          assert.equal(result.report.execution.authoredDuration, spec.duration);
+          assert.equal(result.report.execution.lastMeasuredTime, spec.duration);
+          assert.equal(result.report.cadence.frames, spec.measured);
+        }
         assert.ok(result.report.pipeline.advanceRoundTripMs.p95 >= 0);
         assert.equal(result.report.setup.warmupFrames, spec.warmup ?? 1);
         if (spec.includeSamples) {
