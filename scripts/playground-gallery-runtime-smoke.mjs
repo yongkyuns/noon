@@ -106,7 +106,7 @@ try {
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], failedRequests: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     if (noJspi) await context.route('**/python-worker-no-jspi-test.js', async route => {
       await route.fulfill({
@@ -120,6 +120,9 @@ try {
         ].join('\n'),
       });
     });
+    context.on('requestfailed', request => result.failedRequests.push({
+      url: request.url(), resourceType: request.resourceType(), error: request.failure()?.errorText,
+    }));
     page.on('pageerror', error => result.errors.push(error.stack || String(error)));
     page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
     // A browser call can stall before the polling loop checks its own deadline.
@@ -197,11 +200,14 @@ try {
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
-      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors }));
+      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors, failedRequests: result.failedRequests }));
       await context.close();
     }
   }
-  await Promise.all(Array.from({ length: 2 }, async () => { while (next < queue.length) await check(queue[next++]); }));
+  // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
+  // Cold startup itself is covered by the public playground workflow.
+  const concurrency = browserName === 'webkit' ? 1 : 2;
+  await Promise.all(Array.from({ length: concurrency }, async () => { while (next < queue.length) await check(queue[next++]); }));
   assert.equal(results.length, queue.length, 'incomplete inventory');
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');

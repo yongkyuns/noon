@@ -61,6 +61,7 @@ test('failed fetches still fail their cases and do not poison later requests', a
   assert.equal(later.result.response.body.toString(), 'ok');
   assert.equal(cache.stats().upstreamRequests, 2);
   assert.equal(cache.stats().upstreamFailures, 1);
+  assert.equal(cache.stats().fulfillFailures, 0);
 });
 
 test('HTTP errors are delivered unchanged and not cached', async () => {
@@ -73,6 +74,22 @@ test('HTTP errors are delivered unchanged and not cached', async () => {
   await handler(later);
   assert.equal(later.result.response.status, 200);
   assert.equal(cache.stats().upstreamRequests, 2);
+});
+
+test('rejected fulfill is counted and aborted without reporting a response', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  const failed = request(async () => response(Buffer.from('ok')));
+  failed.fulfill = async () => { throw new Error('WebKit route closed'); };
+
+  await handler(failed);
+
+  assert.equal(failed.result.aborted, 'failed');
+  assert.equal(failed.result.response, undefined);
+  assert.equal(cache.stats().fulfillFailures, 1);
+  assert.deepEqual(cache.stats().fulfillFailureDetails, [
+    { url, error: 'WebKit route closed' },
+  ]);
 });
 
 test('retained bytes are bounded and non-GET requests bypass the cache', async () => {
