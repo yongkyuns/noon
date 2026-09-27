@@ -28,6 +28,7 @@ let webglContextRecovery = null;
 let matchingShapesQualification = null;
 let matchingShapesBreadthQualification = null;
 let retainedRecoveryFixture = null;
+let retainedDisposalFixture = null;
 
 window.noonSmoke = {
   state,
@@ -41,6 +42,12 @@ window.noonSmoke = {
     throw new Error("Noon browser smoke harness is not ready");
   },
   async retainedContextLossControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  retainedDeviceDisposalControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  disposeDirectRenderer() {
     throw new Error("Noon browser smoke harness is not ready");
   },
   metrics() {
@@ -573,6 +580,59 @@ async function start() {
     };
     retainedRecoveryFixture = { control, retained, player, context, authoring };
     return control;
+  };
+  window.noonSmoke.retainedDeviceDisposalControl = async () => {
+    if (retainedDisposalFixture !== null) return retainedDisposalFixture;
+    const canvas = document.createElement("canvas");
+    canvas.id = "retained-disposal-scene";
+    canvas.width = 960;
+    canvas.height = 540;
+    document.body.append(canvas);
+    const offscreen = canvas.transferControlToOffscreen();
+    let authoring = null;
+    let context = null;
+    let circle = null;
+    let player = null;
+    let retained = null;
+    let ready = false;
+    try {
+      authoring = new WasmAuthoringStore();
+      context = authoring.createSceneContext();
+      circle = authoring.createManimCircle(0.75);
+      context.beginLiveExecution(2);
+      context.liveAdd("1", circle);
+      player = context.createExecutionPlayer(2, 23);
+      const resourceBundle = player.resourceBundleBytes();
+      const initialDelta = player.initialDeltaJson();
+      retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+      retained.resize(canvas.width, canvas.height);
+      if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+        throw new Error("retained disposal fixture did not publish its initial scene");
+      }
+      const control = {
+        dispose() {
+          try { retained.free(); }
+          finally { canvas.remove(); retainedDisposalFixture = null; }
+        },
+      };
+      retainedDisposalFixture = control;
+      ready = true;
+      return control;
+    } finally {
+      player?.free();
+      context?.free();
+      circle?.free();
+      authoring?.free();
+      if (!ready) {
+        retained?.free();
+        canvas.remove();
+      }
+    }
+  };
+  window.noonSmoke.disposeDirectRenderer = () => {
+    if (renderer === null) throw new Error("direct renderer has already been disposed");
+    renderer.free();
+    renderer = null;
   };
   window.noonSmoke.metrics = metrics;
   state.ready = true;

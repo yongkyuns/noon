@@ -97,7 +97,10 @@ async function destroyAndRecover(
     device.destroy();
   }, deviceIndex);
   await page.waitForFunction(
-    (index) => window.__noonWebGpuDeviceCapture?.lost[index] !== null,
+    (index) => {
+      const info = window.__noonWebGpuDeviceCapture?.lost[index];
+      return info !== null && info !== undefined;
+    },
     deviceIndex,
     { timeout: 10_000 },
   );
@@ -181,6 +184,33 @@ async function destroyAndRecover(
   return { duringLoss, recovered, recoveryCapture, screenshot };
 }
 
+async function disposeAndAssertDestroyed(page, deviceIndex, label) {
+  assert.ok(Number.isInteger(deviceIndex) && deviceIndex >= 0, `${label}: GPUDevice was not captured`);
+  await page.waitForFunction(
+    (index) => {
+      const capture = window.__noonWebGpuDeviceCapture;
+      const info = capture?.lost[index];
+      return capture?.devices[index] !== undefined && info !== null && info !== undefined;
+    },
+    deviceIndex,
+    { timeout: 10_000 },
+  );
+  const lost = await page.evaluate((index) => {
+    const info = window.__noonWebGpuDeviceCapture.lost[index];
+    return info === null ? null : { ...info };
+  }, deviceIndex);
+  assert.equal(lost?.reason, "destroyed", `${label}: GPUDevice.lost did not resolve as destroyed`);
+  return lost;
+}
+
+async function assertDeviceLive(page, deviceIndex, label) {
+  const live = await page.evaluate((index) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    return capture?.devices[index] !== undefined && capture.lost[index] === null;
+  }, deviceIndex);
+  assert.equal(live, true, `${label}: GPUDevice must still be live before renderer.free()`);
+}
+
 function changedPixelCount(leftBuffer, rightBuffer) {
   const left = PNG.sync.read(leftBuffer);
   const right = PNG.sync.read(rightBuffer);
@@ -236,11 +266,14 @@ try {
   const captureBefore = await readWebGpuCapture(page);
   assert.equal(captureBefore.patched, true, `WebGPU capture patch failed: ${captureBefore.patchError}`);
   assert.ok(captureBefore.deviceCount >= 1, "Noon's WebGPU device creation was not captured");
+  const directDeviceIndex = captureBefore.ownerDeviceIndex;
+  assert.ok(Number.isInteger(directDeviceIndex) && directDeviceIndex >= 0,
+    "capture did not identify the GPUDevice configured for #scene");
 
   const baseline = await renderAndCapture(page, "baseline");
   const firstRecovery = await destroyAndRecover(page, {
-    deviceIndex: 0,
-    minimumDeviceCount: 2,
+    deviceIndex: directDeviceIndex,
+    minimumDeviceCount: captureBefore.deviceCount + 1,
     screenshotName: "recovered",
     baselineMetrics: baseline.metrics,
   });
@@ -288,6 +321,26 @@ try {
     "fresh/recovered time mismatch",
   );
 
+  await assertDeviceLive(page, secondRecovery.recoveryCapture.replacementIndex, "direct renderer");
+  const directDisposal = await page.evaluate(() => {
+    window.noonSmoke.disposeDirectRenderer();
+    return true;
+  });
+  assert.equal(directDisposal, true);
+  const directDisposedDevice = await disposeAndAssertDestroyed(page,
+    secondRecovery.recoveryCapture.replacementIndex, "direct renderer.free()");
+  await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl());
+  const retainedDeviceIndex = await page.evaluate(() =>
+    window.__noonWebGpuDeviceCapture.configuredCanvasIds
+      .findIndex((ids) => ids.includes("retained-disposal-scene")),
+  );
+  assert.ok(retainedDeviceIndex > secondRecovery.recoveryCapture.replacementIndex,
+    "retained disposal fixture did not create a separately owned GPUDevice");
+  await assertDeviceLive(page, retainedDeviceIndex, "retained renderer");
+  await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl().then((control) => control.dispose()));
+  const retainedDisposedDevice = await disposeAndAssertDestroyed(page,
+    retainedDeviceIndex, "retained renderer.free()");
+
   assert.deepEqual(browserErrors.pageErrors, [], "device-loss recovery emitted page errors");
   assert.deepEqual(freshErrors.pageErrors, [], "fresh comparison renderer emitted page errors");
   const unexpectedConsoleErrors = browserErrors.consoleErrors.filter(
@@ -312,6 +365,10 @@ try {
       recovered: secondRecovery.recovered,
       recoveryCapture: secondRecovery.recoveryCapture,
     },
+    directDeviceIndex,
+    directDisposedDevice,
+    retainedDeviceIndex,
+    retainedDisposedDevice,
     fresh: fresh.metrics,
     captureBefore,
     changedPixels,

@@ -608,6 +608,11 @@ mod wasm {
             let renderer = GpuRenderer::new(&device, &queue, config.format);
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
+            // The WebGPU backend has no destructor-side browser teardown. Once
+            // a replacement is ready, retire the previous browser device.
+            if self.backend == wgpu::Backend::BrowserWebGpu {
+                self.device.destroy();
+            }
             self.instance = instance;
             self.surface = surface;
             self.device = device;
@@ -1748,6 +1753,16 @@ mod wasm {
             return Err(js_message(&format!("{kind} must be a non-empty string")));
         }
         Ok(())
+    }
+
+    impl Drop for WasmExecutionCanvasRenderer {
+        fn drop(&mut self) {
+            // wgpu's WebGPU backend deliberately leaves GPUDevice alive on Rust
+            // drop. A renderer owns its browser device, so retire it explicitly.
+            if self.backend == wgpu::Backend::BrowserWebGpu {
+                self.device.destroy();
+            }
+        }
     }
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {

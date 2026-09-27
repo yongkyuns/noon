@@ -919,6 +919,18 @@ mod wasm {
         })
     }
 
+    impl Drop for WasmRetainedExecutionCanvasRenderer {
+        fn drop(&mut self) {
+            // Pop the retained validation scope before invalidating its device.
+            self.gpu_validation_scope.take();
+            // wgpu's WebGPU backend deliberately leaves GPUDevice alive on Rust
+            // drop. A renderer owns its browser device, so retire it explicitly.
+            if self.backend == wgpu::Backend::BrowserWebGpu {
+                self.device.destroy();
+            }
+        }
+    }
+
     fn js_error(error: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&error.to_string())
     }

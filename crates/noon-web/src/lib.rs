@@ -1,5 +1,14 @@
 #![forbid(unsafe_code)]
 
+// Preserve the Rust cause in browser diagnostics before a WASM trap obscures it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+fn install_browser_panic_diagnostics() {
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(js_sys::Error::new(&info.to_string()).as_ref());
+    }));
+}
+
 #[cfg(target_arch = "wasm32")]
 mod authoring_arc;
 #[cfg(target_arch = "wasm32")]
