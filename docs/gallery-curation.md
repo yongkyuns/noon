@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This is the first implementation slice, not a declaration that the entire gallery has been curated or visually approved. The fourteen authored lessons are explicitly preview-only at `?catalog=showcase` (or an explicit `?example=showcase-...` deep link). The default catalog and all 49 existing reference entries remain unchanged until the new sources, real posters, playback and backend evidence are reviewed. No placeholder poster is acceptable for publication.
+This is the first implementation slice, not a declaration that the entire gallery has been curated or visually approved. The fourteen authored lessons are explicitly preview-only at `?catalog=showcase` (or an explicit `?example=showcase-...` deep link). The default catalog and existing reference entries remain unchanged until the new sources, real posters, playback and backend evidence are reviewed. No placeholder poster is acceptable for publication.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -63,32 +63,33 @@ node scripts/showcase-live-review.mjs
 
 The capture script uses the existing `manim-raster-host.html` / `SemanticPreviewSession` path for the exact Noon sources; despite the historical host filename, it does not render with Manim. The pointer poster uses the actual playground interaction path. Outputs include source hashes, served build identity, requested and genuinely published times, actual backend, beat PNGs, local poster PNGs and a contact sheet. Quiet-hold timestamps must not be relabeled as newly published frames. Failed sources or missing/empty frames fail qualification. Generated posters must be inspected at card size as well as full size.
 
-The additional live-review runner records a WebM of each exact source through the ordinary gallery Run path, without external time sampling, private scene mutation, or a separate renderer. It requires successful source completion and replay, pauses at the authored endpoint, then checks that restart/seek reproduces the same pixels. Videos and endpoint PNGs are retained under each backend's `live/` directory, including failure diagnostics. Video recording and software rendering perturb wall time; neither that time nor a smoothly sampled video is a peak-performance measurement.
+The additional live-review runner records a WebM of each exact source through the ordinary gallery Run path, without external time sampling, private scene mutation, or a separate renderer. Every lesson must complete ordinary execution. Deterministic lessons must also admit retained replay, pause at the authored endpoint, and reproduce the same pixels after restart/seek and at intermediate forward/backward samples. The arbitrary Python callback lesson explicitly declares non-replayable host callbacks: it must report the expected `UnsupportedDomain`, disable replay controls, and reproduce its endpoint through a fresh Run. This is reported as rerun qualification, never as a retained-replay pass. Videos and endpoint PNGs are retained under each backend's `live/` directory, including failure diagnostics. Video recording and software rendering perturb wall time; neither that time nor a smoothly sampled video is a peak-performance measurement.
 
 The four feature additions have external syntax-only storyboard checks: explicit play/wait durations must sum to the declared duration and still intervals must correspond to real authored waits. These reject ambiguous timing rather than guessing it. They do not validate runtime rendering or prove perceptual smoothness. The updater lesson also pairs each registered callback with its exact removal.
 
 Generated images are artifacts until reviewed. Before default promotion, retain the approved PNGs under `web/thumbnails/showcase/`, verify every image loads on the deployed path, and review full animation playback, introduction, transitions, endpoint, replay/reset, pointer click/clear, desktop/mobile framing, and supported backends. A generated contact sheet alone is not proof that the complete animation is good.
 
-## Runtime findings that still block publication
+## Runtime qualification boundaries
 
-Run `35903486282` at head `3343197` produced matching results on WebGPU and WebGL: twelve of fourteen deterministic scene captures passed. Ordinary-playback recordings also exposed failures that isolated frames cannot detect. Treat the following as separate qualification concerns, not interchangeable success metrics.
+The original review evidence exposed independent forward-rendering and replay failures. Keep failed captures and recordings with their source/build identity; a later pass does not erase the earlier failure.
 
-- The canonical composition path rejects `ReplacementTransform` and `TransformFromCopy`; exported class names were not sufficient evidence of support. The revised transform lesson deliberately teaches public `copy()` plus ordinary `Transform`, and says so in its title, source and metadata. It does not emulate or claim the rejected animation APIs.
-- The reactive lesson must register **and scene-bind** all three callback targets before its first play begins. The revised source does that and includes the targets in the first FadeIn, preserving an animated introduction. Late first-time callback enrollment remains outside this lesson's demonstrated scope.
-- Group slicing, text/math and coordinate plotting complete their source animations but return `UnsupportedDomain` for retained replay. `crates/noon-runtime/src/replay.rs` explicitly excludes domains including family-animation plans and reactive property bindings. The exact invalidation path for each scene still needs qualification; do not remove those demonstrations' features to manufacture a replay pass. Unavailable replay remains a failing live-review result.
-- A live seek uses the actual authored endpoint, which may be a few floating-point bits above the decimal storyboard duration. The live endpoint check compares those representations within roundoff, while keeping the requested and published values unchanged. Deterministic sampling keeps its existing strict bounds.
-- Parent run `35899027235` had a WebGL exact-clear failure even though the child run passed pointer selection on both backends. Do not dismiss this as fixed by a later pass. Capture now retains the base, selected and last clear-attempt images before assertions, including on failure, so this discrepancy can be diagnosed without relaxing pixel equality.
+- The transform lesson teaches public `copy()` plus ordinary `Transform`. It does not emulate or claim `ReplacementTransform` or `TransformFromCopy`.
+- The reactive lesson registers and scene-binds all callback targets before its first play, and removes each callback explicitly. Arbitrary host callbacks remain outside retained replay admission. Their declared capability is surfaced to the reader and checked independently of deterministic replay; unavailable replay in any other lesson remains a failure.
+- Family animation revisions and authored scalar timelines use the shared retained execution history. Their replay repairs must preserve current-master graph dependencies and numeric-text support; gallery examples do not introduce a second execution model.
+- Subpixel glyph packing must reflect the current frame, including empty/nonempty glyph transitions. The correctness repair preserves unrelated geometry, but its whole-text packing fallback remains C4 locality debt. Gallery qualification does not close that architecture work or establish a device performance budget.
+- A live seek targets the actual authored endpoint, which may differ from the decimal storyboard duration by floating-point roundoff. Requested and published values remain recorded unchanged; deterministic sampling retains strict bounds.
+- Pointer qualification retains base, selected and clear-attempt images before assertions, including on failure. Selection must come from an actual host click and clearing must reproduce the exact base pixels.
 
-Live review retains an unseeked first-pass PNG and state before attempting replay. This preserves evidence for a completed animation when a later replay check fails; it is not a substitute for that check. Post-repair backend results, visual review and publication approval are still required.
+Live review retains an unseeked first-pass image and state before any replay attempt. Endpoint equality, intermediate replay equality, ordinary execution, visual readability, and measured performance remain separate claims.
 
 ## Remaining coverage and migration
 
-This first slice is intentionally NOT exhaustive. Finish and qualify these learning homes before describing the curated catalog as comprehensive:
+The fourteen lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
 
-- Finish rendered review of the new entrances/exits, transform-ownership, cubic-path and reactive-relationship lessons.
 - Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.
 - dt-driven updater lifecycle, beyond the authored ValueTracker relationship lesson.
+- Matrix transforms versus matrix display, tables and graph topology.
 - NumberLine transforms, NumberPlane, implicit contours, synchronized/gapped series.
 - Vector fields, camera movement with stable world references, and foreground composition.
 - Redesign the trigonometry tutorial around a persistent diagram; correct the three-check/four-item inconsistency.
