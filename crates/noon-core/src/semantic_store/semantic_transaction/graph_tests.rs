@@ -375,6 +375,50 @@ fn committed_graph_allows_generic_line_replacement_that_preserves_invariants() {
 }
 
 #[test]
+fn graph_dependency_lookup_is_exact_for_each_binding_role_and_cleans_up_after_deletion() {
+    let mut store = SemanticStore::new();
+    let (root, edge_family, line) = committed_graph(&mut store);
+    let vertex = store
+        .semantic_graph_declaration(root)
+        .unwrap()
+        .unwrap()
+        .vertices()
+        .next()
+        .unwrap()
+        .1;
+    let unrelated = store.insert_semantic_object(circle());
+
+    let graph = store.semantic_graph_declaration(root).unwrap().unwrap();
+    for dependency in [vertex, edge_family, line] {
+        assert!(graph.references_node(dependency));
+        assert_eq!(
+            store.semantic_graph_owners_for_invariant_target(dependency),
+            vec![root]
+        );
+    }
+    assert!(!graph.references_node(unrelated));
+    assert!(store
+        .semantic_graph_owners_for_invariant_target(unrelated)
+        .is_empty());
+
+    let before_revision = store.scene_revision();
+    let mut no_op = Transaction::new();
+    no_op.remove_member(edge_family, unrelated);
+    no_op.apply(&mut store).unwrap();
+    assert_eq!(store.scene_revision(), before_revision);
+    assert!(store.semantic_graph_declaration(root).unwrap().is_some());
+
+    let mut remove = Transaction::new();
+    remove.remove_node(vertex);
+    remove.apply(&mut store).unwrap();
+    assert!(store.node(vertex).is_none());
+    assert!(store.node(root).is_none());
+    assert!(store
+        .semantic_graph_owners_for_invariant_target(vertex)
+        .is_empty());
+}
+
+#[test]
 fn shared_family_convenience_requires_transaction_for_graph_owned_structure() {
     let mut store = SemanticStore::new();
     let (root, edge_family, shaft) = committed_graph(&mut store);

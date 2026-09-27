@@ -2,9 +2,12 @@
 
 use std::rc::Rc;
 
+mod riemann;
+
 use noon::{
-    AxesFrame, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, NumberLineFrame, PlotSamplingOptions,
+    AxesFrame, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimGeometryOptions, ManimNumberLine,
+    ManimNumberLineOptions, NumberLineFrame, PlotSamplingOptions, RiemannRectangleOptions,
+    RiemannSample,
 };
 use wasm_bindgen::prelude::*;
 
@@ -25,6 +28,7 @@ pub(crate) enum CoordinateRequest {
     NumberLine(ManimNumberLineOptions),
     Axes(ManimAxesOptions),
     NumberPlane(noon::ManimNumberPlaneOptions),
+    PolarPlane(noon::ManimPolarPlaneOptions),
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -48,6 +52,7 @@ impl WasmCoordinateOptions {
             CoordinateRequest::NumberLine(options) => &mut options.style,
             CoordinateRequest::Axes(options) => &mut options.style,
             CoordinateRequest::NumberPlane(options) => &mut options.axis_style,
+            CoordinateRequest::PolarPlane(options) => &mut options.axis_style,
         }
     }
 }
@@ -96,8 +101,8 @@ impl WasmCoordinateOptions {
         let ticks = match &mut self.request {
             CoordinateRequest::NumberLine(options) => &mut options.ticks,
             CoordinateRequest::Axes(options) => &mut options.ticks,
-            CoordinateRequest::NumberPlane(_) => {
-                return Err(js_error("NumberPlane ticks are not supported"))
+            CoordinateRequest::NumberPlane(_) | CoordinateRequest::PolarPlane(_) => {
+                return Err(js_error("plane ticks are not supported"));
             }
         };
         *ticks = CoordinateTicks {
@@ -183,6 +188,10 @@ impl WasmAuthoringStore {
             }
             CoordinateRequest::NumberPlane(options) => {
                 noon::ManimNumberPlane::create(Rc::clone(&self.semantics), &options)
+                    .map(|plane| plane.family().clone())
+            }
+            CoordinateRequest::PolarPlane(options) => {
+                noon::ManimPolarPlane::create(Rc::clone(&self.semantics), &options)
                     .map(|plane| plane.family().clone())
             }
         };
@@ -276,6 +285,50 @@ impl WasmAxesFrame {
             .map(WasmManimGeometryOptions::from_options)
             .map_err(coordinate_failure)
             .map_err(js_error)
+    }
+
+    /// Rust prepares the closed area path from this one captured frame; Python
+    /// only applies normal VMobject style options to the returned inert request.
+    #[wasm_bindgen(js_name = area)]
+    pub fn area(
+        &self,
+        graph: &WasmAuthoringMobjectHandle,
+        range: &[f64],
+        bounded_graph: &WasmAuthoringMobjectHandle,
+        has_bounded_graph: bool,
+    ) -> Result<WasmManimGeometryOptions, JsValue> {
+        let graph = graph.semantic_mobject();
+        let bounded = has_bounded_graph.then(|| bounded_graph.semantic_mobject());
+        let graph_path = graph
+            .path_query()
+            .map_err(AuthoringFailure::from)
+            .map_err(js_error)?;
+        let bounded_path = bounded
+            .map(|object| object.path_query())
+            .transpose()
+            .map_err(AuthoringFailure::from)
+            .map_err(js_error)?;
+        let range = match range {
+            [] => None,
+            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
+            _ => {
+                return Err(js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "area.range",
+                    "area range requires two finite values",
+                )));
+            }
+        };
+        noon::ManimGeometryOptions::axes_area(
+            self.frame,
+            graph,
+            &graph_path,
+            range,
+            bounded.zip(bounded_path.as_ref()),
+        )
+        .map(WasmManimGeometryOptions::from_options)
+        .map_err(coordinate_failure)
+        .map_err(js_error)
     }
 }
 
@@ -418,6 +471,71 @@ impl CanonicalAuthoringSceneContext {
             ),
         })
     }
+
+    /// Capture the effective axes frame and graph path observations together in
+    /// the active canonical context, then return the shared Rust area request.
+    /// The language wrapper may apply presentation options before consuming it
+    /// through its normal live geometry publication route.
+    #[wasm_bindgen(js_name = effectiveAxesAreaOptions)]
+    pub fn effective_axes_area_options(
+        &mut self,
+        axes: &WasmAuthoringFamilyHandle,
+        graph: &WasmAuthoringMobjectHandle,
+        range: &[f64],
+        bounded_graph: &WasmAuthoringMobjectHandle,
+        has_bounded_graph: bool,
+    ) -> Result<crate::WasmManimGeometryOptions, JsValue> {
+        let axes = ManimAxes::from_family(axes.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let frame = AxesFrame::new(
+            self.coordinate_line_frame(
+                &axes
+                    .x_axis()
+                    .map_err(coordinate_failure)
+                    .map_err(js_error)?,
+            )?,
+            self.coordinate_line_frame(
+                &axes
+                    .y_axis()
+                    .map_err(coordinate_failure)
+                    .map_err(js_error)?,
+            )?,
+        );
+        let graph_object = graph.semantic_mobject();
+        let graph_path = self.query_mobject_path(graph)?;
+        let bounded = if has_bounded_graph {
+            Some((
+                bounded_graph.semantic_mobject(),
+                self.query_mobject_path(bounded_graph)?,
+            ))
+        } else {
+            None
+        };
+        let range = match range {
+            [] => None,
+            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
+            _ => {
+                return Err(js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "area.range",
+                    "area range requires two finite values",
+                )))
+            }
+        };
+        ManimGeometryOptions::axes_area(
+            frame,
+            &graph_object,
+            &graph_path.value,
+            range,
+            bounded
+                .as_ref()
+                .map(|(object, path)| (*object, &path.value)),
+        )
+        .map(crate::WasmManimGeometryOptions::from_options)
+        .map_err(coordinate_failure)
+        .map_err(js_error)
+    }
 }
 
 #[cfg(all(
@@ -473,4 +591,17 @@ pub async fn create_animated_number_line_renderer(
     let program = noon::animated_number_line_example::program()
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createAreaHelpersRenderer)]
+pub async fn create_area_helpers_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::area_helpers::session().map_err(|error| JsValue::from_str(&error))?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

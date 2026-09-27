@@ -309,8 +309,9 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        let family_changes = FrameChanges::objects(changes.object_indices().to_vec());
-        let staged = self.stage_plan_mappings(frame, plans, family_changes.object_indices())?;
+        // Validate before the base encoder advances its sequence. The final
+        // family rows must follow that encoder's coalesced membership decision.
+        self.stage_plan_mappings(frame, plans, changes.object_indices())?;
         let Some(retained) = self.retained.encode_incremental_with_painter_order(
             frame.retained,
             changes,
@@ -320,6 +321,23 @@ impl RetainedFamilyExecutionDeltaEncoder {
         else {
             return Ok(None);
         };
+        // A row created and removed between publications never reaches the
+        // consumer. Sending a family reset for it would reference an unknown
+        // object. Use only the sparse rows emitted by the base transport.
+        let published_objects = retained
+            .objects
+            .iter()
+            .map(|object| object.object)
+            .collect::<std::collections::HashSet<_>>();
+        let family_changes = FrameChanges::objects(
+            changes
+                .object_indices()
+                .iter()
+                .copied()
+                .filter(|&index| published_objects.contains(&frame.retained.objects[index].id))
+                .collect(),
+        );
+        let staged = self.stage_plan_mappings(frame, plans, family_changes.object_indices())?;
         let added_plans = staged
             .added_plan_indices
             .iter()
@@ -766,6 +784,36 @@ mod tests {
             .family_states
             .iter()
             .all(|state| state.family_plan_index == Some(0)));
+    }
+
+    #[test]
+    fn created_then_removed_rows_do_not_publish_unknown_family_objects() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(25);
+        let (_, frame, _) = fixture();
+        let states = [None, None];
+        let planned = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &[None, None],
+        };
+        encoder
+            .encode_planned_snapshot_indices(&planned, &[], Camera2DState::default(), [0])
+            .unwrap();
+        let delta = encoder
+            .encode_planned_incremental_with_painter_order(
+                &planned,
+                &[],
+                &FrameChanges::with_structure(vec![1], vec![1], vec![1]).with_painter_order(1..1),
+                Camera2DState::default(),
+                &[0],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!delta.retained.snapshot);
+        assert!(delta.retained.objects.is_empty());
+        assert!(delta.retained.removed_slots.is_empty());
+        assert!(delta.family_states.is_empty());
+        assert!(delta.family_plans.is_empty());
     }
 
     #[test]

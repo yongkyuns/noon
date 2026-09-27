@@ -53,6 +53,25 @@ struct ObjectResidency {
     binding: wgpu::BindGroup,
 }
 
+/// Renderer-owned texture binding, sharing the ordinary image sampling pipeline.
+/// It never enters semantic resource arenas or their upload/retirement accounting.
+#[derive(Debug)]
+pub(super) struct ExternalImageBinding {
+    texture: wgpu::BindGroup,
+    object: wgpu::BindGroup,
+    buffer: wgpu::Buffer,
+    uniform: ImageUniform,
+}
+
+impl ExternalImageBinding {
+    pub(super) fn update(&mut self, queue: &wgpu::Queue, uniform: ImageUniform) {
+        if self.uniform != uniform {
+            queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&uniform));
+            self.uniform = uniform;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct RasterImageGpuRenderer {
     pipeline: wgpu::RenderPipeline,
@@ -114,6 +133,59 @@ impl RasterImageGpuRenderer {
             generation: None,
             pixel_bytes: 0,
         }
+    }
+
+    pub(super) fn bind_external(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        uniform: ImageUniform,
+    ) -> ExternalImageBinding {
+        let texture = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon inset captured image"),
+            layout: &self.texture_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            }],
+        });
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Noon inset image placement"),
+            contents: bytemuck::bytes_of(&uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let object = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon inset image placement binding"),
+            layout: &self.object_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        ExternalImageBinding {
+            texture,
+            object,
+            buffer,
+            uniform,
+        }
+    }
+
+    pub(super) fn draw_external<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        camera: &'a wgpu::BindGroup,
+        image: &'a ExternalImageBinding,
+        sample_count: u32,
+    ) {
+        pass.set_pipeline(if sample_count == 1 {
+            &self.pipeline
+        } else {
+            &self.pipeline_msaa
+        });
+        pass.set_bind_group(0, camera, &[]);
+        pass.set_bind_group(1, &image.texture, &[]);
+        pass.set_bind_group(2, &image.object, &[]);
+        pass.draw(0..6, 0..1);
     }
 
     pub fn stats(&self) -> RasterImageResidencyStats {

@@ -2,12 +2,20 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
   WasmCoordinateOptions,
+  WasmBarChartOptions,
+  WasmGraphOptions,
+  WasmSampleSpaceOptions,
   WasmPlotSamplingPlan,
   WasmManimArrowOptions,
   WasmManimGeometryOptions,
   WasmImageMobjectOptions,
   WasmSceneMembershipBatch,
   WasmTextColorBatch,
+  WasmLatexCompiler,
+  WasmLatexOptions,
+  WasmMatrixOptions,
+  WasmCompositeRows,
+  WasmTableOptions,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -159,10 +167,28 @@ async function initializePyodide() {
   };
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
   self.noonAuthoringArrowOptions = WasmManimArrowOptions;
+  self.noonAuthoringGraphOptions = () => new WasmGraphOptions();
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
+  self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
+  self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
+  self.noonAuthoringBarChartOptions = (values, range, width, height) =>
+    new WasmBarChartOptions(values, range, width, height);
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
   self.noonCreateAuthoringCoordinateHandle = (options) =>
     authoringStore.createCoordinates(options);
+  self.noonCreateAuthoringBarChart = (options, labels, context) => {
+    if (!latexCompiler) {
+      options.free(); labels.free();
+      throw new Error("Call await prepare_latex() before constructing BarChart");
+    }
+    return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
+      : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
+  };
+  self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing chart labels");
+    return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
+      : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
@@ -177,6 +203,122 @@ async function initializePyodide() {
     authoringStore.createManimMarkupText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
+  let latexCompiler = null;
+  let latexPreparation = null;
+  self.noonPrepareLatex = async () => {
+    if (!latexPreparation) {
+      latexPreparation = import("./latex/backend.js")
+        .then(({ prepareLatexBackend }) => prepareLatexBackend())
+        .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
+        .catch(error => { latexPreparation = null; throw error; });
+    }
+    await latexPreparation;
+  };
+  self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
+  self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
+  const numericHandle = (handle) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    return {
+      // A detached number exposes its retained authored value. An attached
+      // number is queried through the current canonical execution session.
+      value: (context) => context == null ? handle.value : context.queryMobjectDecimalValue(handle.mobject()),
+      text: () => handle.text,
+      fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
+      mobject: () => handle.mobject(),
+      integerValue: (context) => context == null ? handle.integerValue() : context.queryMobjectIntegerValue(handle.mobject()),
+      setValue: (value) => handle.setValue(latexCompiler, value),
+      incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
+      setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),
+      incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
+    };
+  };
+  self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
+    return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
+      : context.liveCreateDecimalNumber(...args));
+  };
+  const compositeRows = (rows) => {
+    const entries = new WasmCompositeRows();
+    for (const row of rows) {
+      entries.beginRow();
+      for (const entry of row) {
+        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        else entries.appendEntry(entry);
+      }
+    }
+    return entries;
+  };
+  self.noonTableOptions = (...args) => new WasmTableOptions(...args);
+  self.noonTableFromFamily = (family) => family.asTable();
+  self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
+  self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
+  self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
+  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
+    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer));
+  };
+  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
+    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
+    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
+    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectTableHandle = (rows, v, h, outer, context) => {
+    const entries = compositeRows(rows);
+    return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
+  };
+  self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
+    if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
+    const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    return {
+      family: () => handle.family(),
+      label: () => handle.label(),
+      equals: () => handle.equals(),
+      tracker: () => handle.tracker(),
+      value: () => numericHandle(handle.value()),
+    };
+  };
+  self.noonMatrixOptions = WasmMatrixOptions;
+  self.noonMatrixFromFamily = (family) => family.asMatrix();
+  self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
+    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
+    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
+    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
+    const entries = compositeRows(rows);
+    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);

@@ -100,6 +100,7 @@ impl CompiledScene {
                 channels.insert(channel);
             }
             ExecutionPatch::AddFamilyAnimation(_) => return None,
+            ExecutionPatch::SetGraphDependencies { .. } => return None,
         }
         Some(CompiledReplayRevision {
             rows: rows

@@ -63,13 +63,14 @@ fn analytic_shader_uses_centered_vector_path_stroke_contract() {
 }
 
 #[test]
-fn analytic_rectangle_fill_uses_separable_subpixel_area_coverage() {
+fn analytic_rectangle_fill_uses_shared_exact_pixel_area_coverage() {
     let shader = include_str!("../src/analytic.wgsl");
+    let polygon_coverage = include_str!("../src/polygon_coverage.wgsl");
 
     assert!(shader.contains("fn rectangle_fill_coverage("));
-    assert!(shader.contains("let x_coverage = inside_coverage(abs(position.x) - half_size.x);"));
-    assert!(shader.contains("let y_coverage = inside_coverage(abs(position.y) - half_size.y);"));
-    assert!(shader.contains("return x_coverage * y_coverage;"));
-    assert!(shader.contains("let fill_coverage = rectangle_fill_coverage(input.local, half_size);"));
+    assert!(shader.contains("input.polygon_a - pixel_minimum"));
+    assert!(shader.contains("let fill_coverage = rectangle_fill_coverage(input);"));
+    assert!(polygon_coverage.contains("fn polygon_pixel_coverage("));
+    assert!(polygon_coverage.contains("fn classify_convex_pixel("));
     assert!(shader.contains("styled_shape_color_with_fill_coverage("));
 }

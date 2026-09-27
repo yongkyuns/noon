@@ -35,8 +35,9 @@ fn assert_matching_foreground_order(source_is_foreground: bool) {
     let source = family(&mut store, &[leaf]);
     let front = object(&mut store);
     let target_leaf = path(&mut store, true);
+    let padded_target_leaf = path(&mut store, true);
     let leftover = path(&mut store, false);
-    let target = family(&mut store, &[target_leaf, leftover]);
+    let target = family(&mut store, &[target_leaf, padded_target_leaf, leftover]);
     let later = object(&mut store);
     let root = family(&mut store, &[back, source, front]);
     let foreground = if source_is_foreground {
@@ -69,8 +70,17 @@ fn assert_matching_foreground_order(source_is_foreground: bool) {
         .unwrap();
     assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
     let activated = store.scene_revision();
-    for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-        session.advance_segment_to(segment, time).unwrap();
+    // Revisit earlier effective frames before committing segment completion.
+    // Temporary matching occurrences must not accumulate or change membership.
+    for (index, time) in [0.0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.0, 0.75, 1.0]
+        .into_iter()
+        .enumerate()
+    {
+        if index < 5 {
+            session.advance_segment_to(segment, time).unwrap();
+        } else {
+            session.seek(time).unwrap();
+        }
         let ids = session
             .painter_order()
             .iter()
@@ -86,11 +96,16 @@ fn assert_matching_foreground_order(source_is_foreground: bool) {
         assert_eq!(store.scene_revision(), activated);
         assert!(!store.node(target).unwrap().is_scene_owned());
         let publication = session.take_renderer_publication();
-        assert_eq!(publication.transient_presentations().len(), 1);
-        assert!(
-            (f64::from(publication.transient_presentations()[0].state().appearance) - time).abs()
-                < 1e-6
+        // An ordinary source's temporary matching group admits padding. A
+        // foreground family keeps only its declared members; the unmatched
+        // target is independently presented in either case.
+        assert_eq!(
+            publication.transient_presentations().len(),
+            if source_is_foreground { 1 } else { 2 }
         );
+        for occurrence in publication.transient_presentations() {
+            assert!((f64::from(occurrence.state().appearance) - time).abs() < 1e-6);
+        }
     }
     session.complete_segment(&mut store, segment).unwrap();
     assert_eq!(store.node(root).unwrap().members(), [back, target, front]);

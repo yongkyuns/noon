@@ -11,6 +11,15 @@ pub(crate) fn capture_mobject_state(
     execution: &ExecutionSession,
     source: &Mobject,
 ) -> Result<SemanticObjectState, AuthoringError> {
+    capture_mobject_state_with_graph_dependency(store, execution, source, false)
+}
+
+pub(crate) fn capture_mobject_state_with_graph_dependency(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    source: &Mobject,
+    graph_dependency_row: bool,
+) -> Result<SemanticObjectState, AuthoringError> {
     let mut state = source.state()?;
     if !state.signal_bindings().is_empty() {
         return Err(AuthoringError::Unsupported(
@@ -20,7 +29,13 @@ pub(crate) fn capture_mobject_state(
     if execution.semantic_object_is_reachable(source.node_id()) {
         let store = store.borrow();
         let observed = execution.effective_semantic_object(&store, source.node_id())?;
-        if !observed.authored_content_layout_applicable() {
+        let graph_endpoint_override = graph_dependency_row
+            && !observed.authored_content_layout_applicable()
+            && observed.reveal == 1.0
+            && observed.morph == 0.0
+            && observed.render_transform.is_some()
+            && observed.render_geometry == observed.object.content.geometry();
+        if !observed.authored_content_layout_applicable() && !graph_endpoint_override {
             return Err(AuthoringError::Unsupported(
                 UnsupportedAuthoringOperation::CaptureRenderOverride,
             ));
@@ -30,26 +45,31 @@ pub(crate) fn capture_mobject_state(
                 UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
             ));
         }
-        preserve_or_capture_f32(
-            &mut state.transform.translation.x,
-            observed.object.transform.translation.x,
-        );
-        preserve_or_capture_f32(
-            &mut state.transform.translation.y,
-            observed.object.transform.translation.y,
-        );
-        preserve_or_capture_f32(
-            &mut state.transform.scale.x,
-            observed.object.transform.scale.x,
-        );
-        preserve_or_capture_f32(
-            &mut state.transform.scale.y,
-            observed.object.transform.scale.y,
-        );
-        preserve_or_capture_f32(
-            &mut state.transform.rotation_z,
-            observed.object.transform.rotation,
-        );
+        // Graph dependencies derive their line/tip render transforms from the
+        // copied vertices after admission. Keep the authored component transform
+        // here so the endpoint derivation is applied exactly once.
+        if !graph_endpoint_override {
+            preserve_or_capture_f32(
+                &mut state.transform.translation.x,
+                observed.object.transform.translation.x,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.translation.y,
+                observed.object.transform.translation.y,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.scale.x,
+                observed.object.transform.scale.x,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.scale.y,
+                observed.object.transform.scale.y,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.rotation_z,
+                observed.object.transform.rotation,
+            );
+        }
         state.set_z_index(observed.object.z_index);
         state.style = target_style_from_effective(&state.style, observed.object.style)?;
     }

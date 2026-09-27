@@ -220,7 +220,7 @@ mod tests {
             MarkupText::new("A &amp; <b>B</b> <i>C</i>\n<span foreground='#58c4dd'>é</span>")
                 .into();
         let artifact = text.compile_artifact_with_fill(None).unwrap();
-        let resource = artifact.resource;
+        let resource = artifact.resource.clone();
         assert_eq!(resource.kind, TextSourceKind::Markup);
         assert_eq!(resource.source.as_ref(), "A & B C\né");
         let faces = resource
@@ -248,7 +248,7 @@ mod tests {
             .unwrap();
         let markup: Text = MarkupText::new("Noon\né &amp; x").into();
         let markup = markup.compile_artifact_with_fill(None).unwrap();
-        let glyph_identity = |artifact: &NativeTextResourceArtifact| {
+        let glyph_identity = |artifact: &super::compiler::CompiledTextArtifact| {
             artifact
                 .resource
                 .runs
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn markup_source_parts_use_decoded_utf8_ranges() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let text = scene
             .text(MarkupText::new("<b>é</b> &amp; <i>é</i>"))
             .unwrap();
@@ -343,8 +343,8 @@ mod tests {
 
     #[test]
     fn malformed_markup_does_not_import_resources_or_allocate_objects() {
-        let scene = crate::Scene::new();
-        let store = scene.integration_store();
+        let mut scene = crate::Scene::new();
+        let store = std::rc::Rc::clone(scene.integration_store());
         let before = store.borrow().text_resources().stats();
         for source in [
             "<b>unclosed",

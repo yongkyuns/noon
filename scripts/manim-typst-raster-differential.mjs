@@ -137,7 +137,7 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("timed out waiting for retained Typst raster host");
+  throw new Error("timed out waiting for direct Typst raster host");
 }
 
 async function captureFixture(browser, backend, fixture) {
@@ -145,14 +145,21 @@ async function captureFixture(browser, backend, fixture) {
     viewport: { width: reference.pixel_width, height: reference.pixel_height },
     deviceScaleFactor: 1,
   });
+  const pageDiagnostics = [];
+  page.on("pageerror", (error) => pageDiagnostics.push(`pageerror: ${error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      pageDiagnostics.push(`console.error: ${message.text()}`);
+    }
+  });
   try {
     await page.goto(`${baseUrl}/web/retained-typst-raster.html`, { waitUntil: "load" });
-    await page.waitForFunction(() => Boolean(window.noonRetainedTypstRaster), null, {
+    await page.waitForFunction(() => Boolean(window.noonDirectTypstRaster), null, {
       timeout: 30_000,
     });
-    await page.evaluate(() => window.noonRetainedTypstRaster.ready());
+    await page.evaluate(() => window.noonDirectTypstRaster.ready());
     const metrics = await page.evaluate(
-      (config) => window.noonRetainedTypstRaster.render(config),
+      (config) => window.noonDirectTypstRaster.render(config),
       {
         source: fixture.source,
         math: fixture.kind === "math-typst",
@@ -161,13 +168,22 @@ async function captureFixture(browser, backend, fixture) {
         height: reference.pixel_height,
       },
     );
-    assert.equal(metrics.objectCount, 1, `${fixture.id}: retained object count`);
-    assert.ok(metrics.drawCalls > 0, `${fixture.id}: retained draw calls`);
+    assert.equal(metrics.objectCount, 1, `${fixture.id}: direct object count`);
+    assert.ok(metrics.drawCalls > 0, `${fixture.id}: direct draw calls`);
     const outputDir = path.join(artifactRoot, backend);
     await mkdir(outputDir, { recursive: true });
     const output = path.join(outputDir, `${fixture.id}.png`);
     await page.locator("#scene").screenshot({ path: output });
     return { output, metrics };
+  } catch (error) {
+    const diagnostics = pageDiagnostics.length === 0
+      ? "none"
+      : pageDiagnostics.join("\n");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+      `${fixture.id}/${backend} page diagnostics:\n${diagnostics}`,
+      { cause: error },
+    );
   } finally {
     await page.close();
   }

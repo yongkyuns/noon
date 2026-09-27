@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 23);
+assert.equal(gallery.examples.length, 32);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -36,11 +36,27 @@ assert.deepEqual(
     "noon-transform-matching-shapes-breadth",
     "noon-coordinate-plotting",
     "noon-animated-number-line",
+    "noon-area-helpers",
     "noon-raster-image",
     "noon-markup-text",
     "noon-text-range-colors",
     "noon-pointer-selection",
+    "noon-brace-text",
+    "noon-sample-space",
+    "noon-polar-plane",
+    "noon-zoomed-scene",
+    "noon-styled-graphs",
+    "noon-ordinary-matrix",
+    "noon-ordinary-table",
+    "noon-ordinary-variable",
   ],
+);
+
+const compilerEntries = readyEntries.filter((entry) => entry.requires_latex === true);
+assert.deepEqual(
+  compilerEntries.map((entry) => entry.id).sort(),
+  ["noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable"],
+  "only the three qualified compiler demos may declare the LaTeX bootstrap",
 );
 
 const noonOnlyPatterns = [
@@ -73,9 +89,37 @@ for (const entry of readyEntries) {
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
   assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
+  let normalizedSource = source;
+  if (entry.requires_latex === true) {
+    assert.equal(
+      (source.match(/async\s+def\s+construct\s*\(/g) ?? []).length,
+      1,
+      `${entry.id}: compiler bootstrap must be the only async construct`,
+    );
+    assert.equal(
+      (source.match(/await\s+prepare_latex\s*\(\s*\)/g) ?? []).length,
+      1,
+      `${entry.id}: compiler bootstrap must await prepare_latex exactly once`,
+    );
+    assert.match(
+      source,
+      /^    async def construct\(self\):\n        await prepare_latex\(\)\n/m,
+      `${entry.id}: await prepare_latex() must be the first construct statement`,
+    );
+    normalizedSource = source.replace(
+      "    async def construct(self):\n        await prepare_latex()\n",
+      "    def construct(self):\n",
+    );
+    assert.notEqual(normalizedSource, source, `${entry.id}: compiler bootstrap must be normalized`);
+  }
+  assert.doesNotMatch(
+    normalizedSource,
+    /\b(?:async|await)\b/,
+    `${entry.id}: no async/await is allowed beyond the declared compiler bootstrap`,
+  );
   for (const pattern of noonOnlyPatterns) {
     assert.doesNotMatch(
-      source,
+      normalizedSource,
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
     );
@@ -258,5 +302,20 @@ assert.match(numberLineSource, /Create\(number_line\)/);
 assert.match(numberLineSource, /target = number_line\.n2p\(-2\)/, "query the transformed live line");
 assert.match(numberLineSource, /number_line\.p2n\(target\)/, "check the live coordinate round-trip");
 assert.doesNotMatch(numberLineSource, /positions =|x = value|value \* 1\.1/);
+
+const breadthCases = [
+  ["noon-brace-text", /BraceText\(/, "BraceText"],
+  ["noon-sample-space", /SampleSpace\(/, "SampleSpace"],
+  ["noon-polar-plane", /PolarPlane\(/, "PolarPlane"],
+  ["noon-zoomed-scene", /ZoomedScene/, "ZoomedScene"],
+];
+for (const [id, pattern, label] of breadthCases) {
+  const entry = readyEntries.find((candidate) => candidate.id === id);
+  assert.equal(entry?.parity_status, "candidate", `${id}: breadth coverage remains a candidate`);
+  assert.ok(entry?.features.includes("Manim-compatible"), `${id}: compatibility stays searchable`);
+  const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
+  assert.match(source, /from noon import\b/, `${id}: source must import Noon`);
+  assert.match(source, pattern, `${id}: source must exercise ${label}`);
+}
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");

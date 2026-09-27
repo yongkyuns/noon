@@ -82,8 +82,8 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
     let (_scene, mut source, _segment) = expansion_source(true);
     source.advance_to(0.5).unwrap();
     let stable_count = source.session.frame().objects.len();
-    let spatial = source.session.query_viewport(viewport());
-    let query = source.query_viewport(viewport());
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
     assert_eq!(source.session.frame().objects.len(), stable_count);
     assert_eq!(spatial.object_indices().len(), 1);
     assert_eq!(query.object_indices().len(), 2);
@@ -146,8 +146,8 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
 fn native_viewport_admits_a_shared_anchor_only_once() {
     let (_scene, mut source, _segment) = expansion_source(false);
     source.advance_to(0.5).unwrap();
-    let spatial = source.session.query_viewport(viewport());
-    let query = source.query_viewport(viewport());
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
     assert_eq!(
         query.object_indices().len(),
         spatial.object_indices().len() + 1
@@ -179,8 +179,8 @@ fn native_viewport_leaves_visible_anchor_candidates_unchanged() {
     let (_scene, mut source, _segment) = expansion_source(true);
     source.advance_to(0.5).unwrap();
     let bounds = Rect::new(Vec2::new(-22.0, -2.0), Vec2::new(-16.0, 2.0));
-    let spatial = source.session.query_viewport(bounds);
-    let query = source.query_viewport(bounds);
+    let spatial = source.session.query_viewports(&[bounds]);
+    let query = source.query_viewports(&[bounds]);
     assert_eq!(query, spatial);
     let publication = source.take_renderer_publication();
     let anchor = publication.transient_presentations()[0].anchor_object_index() as usize;
@@ -193,7 +193,7 @@ fn native_viewport_seek_matches_forward_presentation() {
     forward.advance_to(0.25).unwrap();
     drop(forward.take_renderer_publication());
     forward.advance_to(0.5).unwrap();
-    let forward_query = forward.query_viewport(viewport());
+    let forward_query = forward.query_viewports(&[viewport()]);
     let forward_occurrences = forward
         .take_renderer_publication()
         .transient_presentations()
@@ -201,7 +201,7 @@ fn native_viewport_seek_matches_forward_presentation() {
 
     let (_direct_scene, mut direct, _direct_segment) = expansion_source(true);
     direct.session.seek(0.5).unwrap();
-    let direct_query = direct.query_viewport(viewport());
+    let direct_query = direct.query_viewports(&[viewport()]);
     let direct_occurrences = direct
         .take_renderer_publication()
         .transient_presentations()
@@ -221,8 +221,8 @@ fn native_viewport_releases_transient_anchors_after_completion() {
         .live(&mut source.session)
         .complete_segment(segment)
         .unwrap();
-    let spatial = source.session.query_viewport(viewport());
-    let query = source.query_viewport(viewport());
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
     assert_eq!(query, spatial);
     assert!(source
         .take_renderer_publication()

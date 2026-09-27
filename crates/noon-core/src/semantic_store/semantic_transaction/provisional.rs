@@ -108,7 +108,12 @@ impl<'a> TransactionNodeCatalog<'a> {
                 let Some(resource) = self.store.text_resources().get(handle) else {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 };
-                if resource.kind != crate::TextSourceKind::Plain {
+                if !matches!(
+                    resource.kind,
+                    crate::TextSourceKind::Plain
+                        | crate::TextSourceKind::Tex
+                        | crate::TextSourceKind::MathTex
+                ) {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 }
             }
@@ -555,6 +560,10 @@ pub(super) fn duplicate_mutation_error(
     let pending = match key {
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectContent(object)
+        | SemanticMutationKey::ObjectBarMetadata(object)
+        | SemanticMutationKey::ObjectRole(object)
+        | SemanticMutationKey::DecimalNumber(object)
+        | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
@@ -589,6 +598,18 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectContent(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateContent { index, object }
         }
+        SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
+        }
+        SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
+            SemanticMutationTransactionError::DuplicateTarget { index, target }
+        }
+        SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateContent { index, object }
+        }
+        SemanticMutationKey::TextPresentationBaseline(SemanticTransactionNodeRef::Existing(
+            object,
+        )) => SemanticMutationTransactionError::DuplicateContent { index, object },
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }
         }

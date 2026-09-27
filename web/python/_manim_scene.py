@@ -445,6 +445,77 @@ def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object
     return _commit_typed_binding(mobject, scene, reservation, handle)
 
 
+def _bind_zoomed_view(
+    scene: _base.Scene,
+    camera_frame: _base.Mobject,
+    display: _base.Mobject,
+    *,
+    display_height: float,
+    display_width: float,
+    display_center: _base.Vec2 | None,
+    display_corner: _base.Vec2,
+    display_corner_buff: float,
+    camera_frame_start: _base.Vec2,
+    zoom_factor: float,
+    camera_frame_stroke_width: float,
+    image_frame_stroke_width: float,
+    capture_own_display: bool,
+):
+    """Bind one Rust-authored inset pair without mirroring its geometry in Python."""
+    if camera_frame is display:
+        raise ValueError("zoomed camera frame and display must be distinct wrappers")
+    if camera_frame._scene is not None or display._scene is not None:
+        raise ValueError("zoomed-view wrappers are already bound")
+    context = _context(scene)
+    frame_id = scene._next_object_id
+    display_id = frame_id + 1
+    frame_reservation = _reserve_typed_binding(
+        camera_frame, scene, object(), None, object_id=frame_id
+    )
+    display_reservation = _reserve_typed_binding(
+        display, scene, object(), None, object_id=display_id
+    )
+    center_x = None if display_center is None else float(display_center.x)
+    center_y = None if display_center is None else float(display_center.y)
+    view = engine_call(
+        context.createZoomedView,
+        str(frame_id),
+        str(display_id),
+        float(display_height),
+        float(display_width),
+        center_x,
+        center_y,
+        float(display_corner.x),
+        float(display_corner.y),
+        float(display_corner_buff),
+        float(camera_frame_start.x),
+        float(camera_frame_start.y),
+        float(zoom_factor),
+        float(camera_frame_stroke_width),
+        float(image_frame_stroke_width),
+        bool(capture_own_display),
+        operation="ZoomedScene.setup",
+    )
+    frame_handle = engine_call(view.cameraFrame, operation="ZoomedScene.camera_frame")
+    display_handle = engine_call(view.display, operation="ZoomedScene.display")
+    _semantic_handles._attach_shared_handle(camera_frame, frame_handle)
+    _semantic_handles._attach_shared_handle(display, display_handle)
+    _commit_typed_binding(camera_frame, scene, frame_reservation, frame_handle)
+    _commit_typed_binding(display, scene, display_reservation, display_handle)
+    return view
+
+
+def _zoomed_view_factor(scene: _base.Scene, view: object) -> float:
+    return float(engine_call(_context(scene).zoomFactor, view, operation="ZoomedScene.get_zoom_factor"))
+
+
+def _activate_zoomed_view(scene: _base.Scene, view: object, *wrappers: _base.Mobject) -> None:
+    """Publish the relation and foreground membership through one Rust transaction."""
+    engine_call(_context(scene).activateZooming, view, operation="ZoomedScene.activate_zooming")
+    for wrapper in wrappers:
+        _register_membership_wrappers(scene, wrapper)
+
+
 def _record_mobject_binding(
     mobject: _base.Mobject,
     scene: _base.Scene,
@@ -564,6 +635,38 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
+def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
+    """Return the canonical methods portable source may call on ``scene``.
+
+    Zoom activation stays a ZoomedScene feature.  A scene that defines the
+    name must expose the canonical ZoomedScene implementation; otherwise the
+    existing static identity admission keeps the original synchronous path.
+    """
+    methods = {
+        "play": _base.Scene.play,
+        "wait": _base.Scene.wait,
+        "add": _base.Scene.add,
+        "remove": _base.Scene.remove,
+        "clear": _base.Scene.clear,
+    }
+    # Keep this conservative and descriptor-safe, like the base-method
+    # admission below.  The source compiler admits direct scene calls from its
+    # fixed allow-list, including calls nested in expressions.
+    if inspect.getattr_static(scene, "activate_zooming", None) is None:
+        # Base Scene has no activation method. Do not let a missing attribute
+        # be synthesized by user-defined dynamic lookup, which could conceal a
+        # synchronous barrier from the portable compiler.
+        if inspect.getattr_static(type(scene), "__getattr__", None) is not None:
+            return None
+        return methods
+    from _manim_zoomed_scene import ZoomedScene
+
+    if not isinstance(scene, ZoomedScene):
+        return None
+    methods["activate_zooming"] = ZoomedScene.activate_zooming
+    return methods
+
+
 async def execute_construct(
     scene: _base.Scene, *, portable_constructs=None
 ) -> None:
@@ -584,13 +687,11 @@ async def execute_construct(
 
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
-                if has_portable_scene_methods(
-                    scene, play=_base.Scene.play, wait=_base.Scene.wait,
-                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
-                ):
-                    portable_construct = bind_portable_construct(
-                        scene.construct, portable_constructs
-                    )
+                candidate = bind_portable_construct(scene.construct, portable_constructs)
+                if candidate is not None:
+                    methods = _portable_scene_methods(scene)
+                    if methods is not None and has_portable_scene_methods(scene, **methods):
+                        portable_construct = candidate
             if portable_construct is not None:
                 _begin_async_continuation_construct(scene)
                 setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
@@ -1263,7 +1364,7 @@ def _canonical_family_transform_animation(
 ) -> tuple[_compat.Group, _compat.Group, object] | None:
     if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
         source, target = animation.source, animation.target
-    elif type(animation) is _animate.TransformMatchingShapes:
+    elif type(animation) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
         source, target = animation.source, animation.target
@@ -1654,13 +1755,18 @@ def _build_canonical_composition_candidate(
     tracker_associations: list[_reactive.ValueTracker] = []
     completed_families: list[object] = []
     next_object_id = self._next_object_id
+    reserved_targets: dict[str, object] = {}
 
     def reserve(target: _base.Mobject):
         nonlocal next_object_id
+        key = _semantic_wrapper_key(target)
+        if key in reserved_targets:
+            return reserved_targets[key]
         reservation = _reserve_typed_binding(
             target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
         )
         reservations.append((target, reservation))
+        reserved_targets[key] = reservation
         if not reservation.reuse_existing_identity:
             next_object_id += 1
         return reservation
@@ -2031,7 +2137,8 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            matching = type(leaf) is _animate.TransformMatchingShapes
+            matching = type(leaf) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex)
+            source_matching = type(leaf) is _animate.TransformMatchingTex
             # Manim constructor options belong to the Transform/Fade children;
             # Scene.play options belong to their enclosing AnimationGroup.
             child = _canonical_transform_options(
@@ -2060,7 +2167,7 @@ def _build_canonical_composition_candidate(
                     _canonical_composition_rate_id(child_kwargs) or "linear"
                 )
             append_family_transform = (
-                destination.appendMatchingFamilyTransformTo
+                (destination.appendMatchingSourceFamilyTransformTo if source_matching else destination.appendMatchingFamilyTransformTo)
                 if matching else destination.appendFamilyTransformTo
             )
             append_family_transform(

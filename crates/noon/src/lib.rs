@@ -64,8 +64,10 @@ mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
 mod boolean_authoring;
+mod brace_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
+mod composite_entry;
 mod coordinate_authoring;
 /// Paired plotting scene shared by native and direct WASM qualification.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -98,9 +100,9 @@ mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
 pub use graph_authoring::{
-    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphOptions,
-    DEFAULT_GRAPH_EDGE_STROKE_WIDTH, DEFAULT_GRAPH_VERTEX_RADIUS,
-    DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
+    GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+    DEFAULT_GRAPH_VERTEX_RADIUS, DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
 };
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
@@ -109,12 +111,18 @@ mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
 pub mod integration;
+#[cfg(feature = "latex")]
+mod latex_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod live_coordinate_plotting_example;
 mod live_program;
 mod live_session;
 mod matrix_authoring;
+#[cfg(feature = "latex")]
+mod matrix_display;
 mod native_signal_authoring;
+#[cfg(feature = "latex")]
+mod numeric_authoring;
 mod path_alignment;
 mod path_editing;
 mod path_queries;
@@ -124,6 +132,7 @@ pub mod plot_presentation;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
+mod sample_space;
 mod scalar_authoring;
 mod scene;
 mod scene_membership;
@@ -135,15 +144,20 @@ mod svg_authoring;
 pub mod synchronized_plot_presentation;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod synchronized_plotting_example;
+#[cfg(any(feature = "native-text", feature = "latex"))]
+mod table_display;
 mod tangent_line_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_part_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod time_series_plotting_example;
+#[cfg(feature = "latex")]
+mod variable_authoring;
 mod vector_field_authoring;
 mod z_index;
+mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
@@ -158,10 +172,16 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
+pub use composite_entry::CompositeEntryHandle;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub use coordinate_authoring::BarLabelOptions;
 pub use coordinate_authoring::{
-    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
+    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
+    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection,
+    RiemannRectangleOptions, RiemannRectanglePlan, RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -173,7 +193,7 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionInset2DError, ExecutionSessionPublicationError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -188,6 +208,11 @@ pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHos
 pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+#[cfg(feature = "latex")]
+pub use latex_authoring::{
+    DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
+    DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
+};
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
@@ -197,44 +222,64 @@ pub use live_session::{
     FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
     TransformToRequest,
 };
+#[cfg(feature = "latex")]
+pub use matrix_display::{
+    DecimalMatrix, IntegerMatrix, Matrix, MatrixAuthoringError, MatrixOptions, MobjectMatrix,
+    DEFAULT_MATRIX_BRACKET_H_BUFF, DEFAULT_MATRIX_BRACKET_V_BUFF, DEFAULT_MATRIX_H_BUFF,
+    DEFAULT_MATRIX_V_BUFF,
+};
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
+#[cfg(feature = "latex")]
+pub use noon_core::{format_decimal, DecimalFormat, NumericFormatError};
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
     GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
     RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId, SemanticObjectProperty,
-    SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
-    SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
-    StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan,
-    TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,
-    BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
-    DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B,
-    GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
-    MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D,
-    PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B,
-    TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
-    YELLOW_E,
+    SemanticFunctionPlotRole, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle,
+    SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill,
+    TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A,
+    BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
+    DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD,
+    GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK,
+    MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B,
+    PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU,
+    TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
+    YELLOW_C, YELLOW_D, YELLOW_E,
 };
-pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
+pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
     DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
+#[cfg(feature = "latex")]
+pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
 pub use path_queries::PathQuery;
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
+pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{Scene, SceneSection, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(feature = "latex")]
+pub use table_display::{DecimalTable, IntegerTable, MathTable};
+#[cfg(any(feature = "native-text", feature = "latex"))]
+pub use table_display::{
+    MobjectTable, Table, TableAuthoringError, TableOptions, DEFAULT_TABLE_H_BUFF,
+    DEFAULT_TABLE_LABEL_BUFF, DEFAULT_TABLE_V_BUFF,
+};
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
     MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
@@ -242,9 +287,12 @@ pub use text_authoring::{
 };
 #[cfg(feature = "typst")]
 pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_part_authoring::TextPartAuthoringError;
+#[cfg(feature = "latex")]
+pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.

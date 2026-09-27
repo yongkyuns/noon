@@ -7,6 +7,56 @@ from pathlib import Path
 
 
 class ManimLiveTextConstructorTests(unittest.TestCase):
+
+    def test_latex_routes_raw_source_and_presentation_in_one_constructor(self):
+        source = r"""
+from types import SimpleNamespace
+import _manim_latex as latex
+import noon
+assert noon.Tex is latex.Tex and noon.MathTex is latex.MathTex
+calls = []
+def latex_parts(args, source):
+    return SimpleNamespace(source=source, family=lambda: object(), members=lambda: ())
+latex._create = lambda *args: calls.append(args) or latex_parts(args, args[0])
+latex._create_strings = lambda *args: calls.append(args) or latex_parts(args, r"x{{+}}y  z ")
+latex._live_text_context = lambda: None
+cold = noon.MathTex(r"\frac{1}{2}", font_size=32, color=noon.BLUE, opacity=0.4)
+assert cold.source == r"\frac{1}{2}"
+assert calls[0][:3] == (r"\frac{1}{2}", True, 32.0)
+assert calls[0][-3:] == (0.4, [], None)
+parts = noon.MathTex(r"x{{+}}y", r"{{ z }}")
+assert parts.source == r"x{{+}}y  z "
+assert calls[-1][:3] == ([r"x{{+}}y", r"{{ z }}"], True, 48.0)
+context = object()
+latex._live_text_context = lambda: context
+live = noon.Tex("raw % source")
+assert live._canonical_live_target_context is context
+assert calls[-1][0:2] == ("raw % source", False)
+assert calls[-1][-1] is context
+before = len(calls)
+for kwargs in (
+    {"font_size": 0}, {"opacity": 2}, {"unknown_option": 1},
+):
+    try: noon.Tex("invalid", **kwargs)
+    except (ValueError, NotImplementedError): pass
+    else: raise AssertionError("invalid options accepted")
+assert len(calls) == before
+isolated = noon.MathTex("x+x", substrings_to_isolate=(value for value in ("x", "+")))
+assert isolated.source == "x+x"
+assert calls[-1][-2] == ["x", "+"]
+failure = RuntimeError("compiler rejected input")
+def rejected(*args): raise failure
+latex._create = rejected
+try: noon.MathTex("bad")
+except RuntimeError as error: assert error is failure
+else: raise AssertionError("compiler error was swallowed")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_markup_text_selects_raw_source_cold_and_live_routes(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -195,3 +245,48 @@ class ManimLiveTextConstructorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ManimLatexPartTransportTests(unittest.TestCase):
+    def test_source_selection_and_colors_route_through_shared_family_handle(self):
+        source = r'''
+from types import SimpleNamespace
+import _manim_latex as latex
+import noon
+calls = []
+class Raw:
+    sourceStart=0; sourceEnd=1; firstCluster=0; clusterCount=1
+    firstVector=0; vectorCount=0; semanticKey="part:x"
+    def free(self): pass
+class RawList:
+    length=1
+    def item(self, index): return Raw()
+    def free(self): pass
+class Member:
+    semanticSlot=7; semanticGeneration=3
+    def textSource(self): return "x"
+    def textParts(self): return RawList()
+class Parts:
+    source="x"
+    fontSize=72.0
+    def family(self): return object()
+    def members(self): return (Member(),)
+    def sourceMemberIndicesFor(self, needle):
+        calls.append(("select", needle)); return (0,) if needle == "x" else ()
+    def setMemberColors(self, values): calls.append(("colors", tuple(values)))
+latex._create = lambda *args: Parts()
+latex._live_text_context = lambda: None
+value = noon.MathTex("x")
+assert value.font_size == 72.0
+part = value.get_part_by_tex("x")
+assert part.get_tex_string() == "x"
+value.set_color_by_tex("x", noon.BLUE)
+assert calls[0] == ("select", "x")
+assert calls[1] == ("select", "x")
+kind, values = calls[2]
+assert kind == "colors" and values == (noon.BLUE.red, noon.BLUE.green, noon.BLUE.blue, noon.BLUE.alpha)
+'''
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

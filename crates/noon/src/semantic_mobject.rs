@@ -17,7 +17,10 @@ mod layout;
 mod manim_geometry;
 mod style;
 use bounds::transform_layout_xy;
-pub(crate) use bounds::{boundary_for_content, layout_for_content, transformed_path_layout_bounds};
+pub(crate) use bounds::{
+    boundary_for_content, layout_for_content, transformed_path_layout_bounds,
+    transformed_rect_layout_bounds,
+};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
@@ -52,9 +55,15 @@ pub struct ManimGeometryOptions {
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
     z_index: f64,
+    role: noon_core::SemanticObjectRole,
 }
 
 impl ManimGeometryOptions {
+    /// Attach shared semantic query metadata before this inert request is published.
+    pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
+        self.role = role;
+    }
+
     pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::circle(positive_f32("radius", radius)?),
@@ -152,6 +161,7 @@ impl ManimGeometryOptions {
             transform: SemanticTransform2_5D::default(),
             style,
             z_index: 0.0,
+            role: noon_core::SemanticObjectRole::Ordinary,
         }
     }
 
@@ -337,11 +347,18 @@ impl ManimGeometryOptions {
             transform,
             style,
             z_index,
+            role,
         } = self;
         match geometry {
             GeometryRef::Circle { radius } => publish(
                 store,
-                manim_geometry_state(StoredGeometry::Circle { radius }, transform, style, z_index),
+                manim_geometry_state(
+                    StoredGeometry::Circle { radius },
+                    transform,
+                    style,
+                    z_index,
+                    role,
+                ),
             ),
             GeometryRef::Rectangle { size } => publish(
                 store,
@@ -350,6 +367,7 @@ impl ManimGeometryOptions {
                     transform,
                     style,
                     z_index,
+                    role,
                 ),
             ),
             GeometryRef::Line { start, end } => publish(
@@ -359,6 +377,7 @@ impl ManimGeometryOptions {
                     transform,
                     style,
                     z_index,
+                    role,
                 ),
             ),
             GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
@@ -369,6 +388,7 @@ impl ManimGeometryOptions {
                         transform,
                         style,
                         z_index,
+                        role,
                     ),
                 )
             }),
@@ -394,12 +414,32 @@ fn manim_geometry_state(
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
     z_index: f64,
+    role: noon_core::SemanticObjectRole,
 ) -> SemanticObjectState {
     let mut state = SemanticObjectState::new(geometry);
     state.transform = transform;
     state.style = style;
     state.set_z_index(z_index);
+    state.set_role(role);
     state
+}
+
+/// Build the ordinary state used by `ManimGeometryOptions::path` after the
+/// caller has admitted its immutable path in a shared batch scope.
+///
+/// Composite authoring uses this to keep several paths and their containing
+/// family in one semantic transaction; individual callers should keep using
+/// `ManimGeometryOptions::with_state`.
+pub(crate) fn manim_path_resource_state(
+    handle: noon_core::GeometryResourceHandle,
+) -> SemanticObjectState {
+    manim_geometry_state(
+        StoredGeometry::Resource(handle),
+        SemanticTransform2_5D::default(),
+        manim_style(Color::WHITE),
+        0.0,
+        noon_core::SemanticObjectRole::Ordinary,
+    )
 }
 
 /// An aliasing handle to one node. Use `copy_handle` for an independent object.
@@ -536,6 +576,7 @@ impl Mobject {
                 transform,
                 style,
                 z_index: 0.0,
+                role: noon_core::SemanticObjectRole::Ordinary,
             },
         )
     }

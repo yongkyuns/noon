@@ -1,6 +1,17 @@
+mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(target_arch = "wasm32")]
+mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
+#[cfg(target_arch = "wasm32")]
+mod graph;
+#[cfg(target_arch = "wasm32")]
+mod matrix;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
+#[cfg(target_arch = "wasm32")]
+mod table;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -117,6 +128,12 @@ enum OrdinaryCompositionChild {
         options: noon_core::AnimationOptions,
     },
     MatchingFamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    MatchingSourceFamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
@@ -1226,6 +1243,15 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options: *options,
                 },
+                OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Indicate {
                     target,
                     indication,
@@ -1539,6 +1565,7 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1837,6 +1864,11 @@ impl CanonicalAuthoringScene {
                     options,
                 }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
                     options,
@@ -2562,6 +2594,54 @@ impl CanonicalAuthoringScene {
             .live_replace_content(target, source)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_set_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        value: f64,
+    ) -> Result<(), AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_set_decimal_value(&number, compiler, value)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_increment_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        delta: f64,
+    ) -> Result<(), AuthoringFailure> {
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_increment_decimal_value(&number, compiler, delta)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_decimal_value(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?.live_decimal_value(&number)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_decimal_font_size(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())?;
+        self.active_live_player()?.live_decimal_font_size(&number)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn take_execution_player(
         &mut self,
@@ -2671,11 +2751,40 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod numbers;
+    mod sample_space;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 
     use super::*;
     use crate::authoring_error::js_error as typed_js_error;
+
+    /// Opaque alias of one Rust-owned inset declaration. Both accessors return
+    /// ordinary semantic mobject handles; this wrapper owns no geometry state.
+    #[wasm_bindgen]
+    pub struct WasmAuthoringZoomedViewHandle {
+        view: noon::ZoomedView,
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringZoomedViewHandle {
+        #[wasm_bindgen(js_name = cameraFrame)]
+        pub fn camera_frame(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(
+                self.view.camera_frame().clone(),
+            )
+        }
+
+        #[wasm_bindgen(js_name = display)]
+        pub fn display(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(self.view.display().clone())
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(&self) -> Result<f64, JsValue> {
+            self.view.zoom_factor().map_err(typed_js_error)
+        }
+    }
 
     /// A rejected ownership return retains the consumed WASM player wrapper.
     /// Its projected JS Error retains `takePlayer()` to recover that exact player;
@@ -2865,11 +2974,18 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
-        inner: CanonicalAuthoringScene,
+        pub(crate) inner: CanonicalAuthoringScene,
     }
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        pub(crate) fn publish_live_path_family(
+            &mut self,
+            paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+            self.inner.live_create_path_family(paths)
+        }
+
         /// Reconcile wrapper IDs only after Rust has published the completion.
         #[wasm_bindgen(js_name = associatePublishedMobjects)]
         pub fn associate_published_mobjects(
@@ -3052,6 +3168,57 @@ mod wasm {
     pub struct WasmValueTrackerHandle {
         tracker: noon::ValueTracker,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    /// Opaque shared Variable composite. Label/equals/value layout and tracker
+    /// binding were authored in Rust; language wrappers only rebind its parts.
+    #[wasm_bindgen]
+    pub struct WasmVariableHandle {
+        variable: noon::Variable,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    impl WasmVariableHandle {
+        pub(crate) fn new(
+            variable: noon::Variable,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Self {
+            Self { variable, store }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmVariableHandle {
+        #[wasm_bindgen(js_name = family)]
+        pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
+            crate::WasmAuthoringFamilyHandle::from_semantic_family(self.variable.family().clone())
+        }
+
+        #[wasm_bindgen(js_name = label)]
+        pub fn label(&self) -> crate::WasmLatexPartsHandle {
+            crate::WasmLatexPartsHandle::new(self.variable.label().clone())
+        }
+
+        #[wasm_bindgen(js_name = equals)]
+        pub fn equals(&self) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.variable
+                .equals()
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = value)]
+        pub fn value(&self) -> crate::WasmDecimalNumberHandle {
+            crate::WasmDecimalNumberHandle::from_number(self.variable.value().clone())
+        }
+
+        #[wasm_bindgen(js_name = tracker)]
+        pub fn tracker(&self) -> WasmValueTrackerHandle {
+            WasmValueTrackerHandle::from_tracker(
+                self.variable.tracker().clone(),
+                std::rc::Rc::clone(&self.store),
+            )
+        }
     }
 
     /// Opaque JS/Python identity for one canonical native vector source.
@@ -3673,6 +3840,29 @@ mod wasm {
             }
             self.children
                 .push(OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMatchingSourceFamilyTransformTo)]
+        pub fn append_matching_source_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
                     options,
@@ -4922,6 +5112,80 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        /// Create a detached inset declaration. Placement and frame geometry are
+        /// calculated by Rust from typed options, never mirrored in Python.
+        #[wasm_bindgen(js_name = createZoomedView)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_zoomed_view(
+            &mut self,
+            camera_frame_id: &str,
+            display_id: &str,
+            display_height: f64,
+            display_width: f64,
+            display_center_x: Option<f64>,
+            display_center_y: Option<f64>,
+            display_corner_x: f64,
+            display_corner_y: f64,
+            display_corner_buff: f64,
+            camera_frame_start_x: f64,
+            camera_frame_start_y: f64,
+            zoom_factor: f64,
+            camera_frame_stroke_width: f64,
+            image_frame_stroke_width: f64,
+            capture_own_display: bool,
+        ) -> Result<WasmAuthoringZoomedViewHandle, JsValue> {
+            let display_center = match (display_center_x, display_center_y) {
+                (None, None) => None,
+                (Some(x), Some(y)) => Some(Vec2::new(x as f32, y as f32)),
+                _ => {
+                    return Err(js_error(
+                        "zoomed display center requires both x and y coordinates",
+                    ));
+                }
+            };
+            let options = noon::ZoomedSceneOptions {
+                display_height,
+                display_width,
+                display_center,
+                display_corner: Vec2::new(display_corner_x as f32, display_corner_y as f32),
+                display_corner_buff,
+                camera_frame_start: Vec2::new(
+                    camera_frame_start_x as f32,
+                    camera_frame_start_y as f32,
+                ),
+                zoom_factor,
+                camera_frame_stroke_width,
+                image_frame_stroke_width,
+                capture_own_display,
+            };
+            self.inner
+                .create_zoomed_view(
+                    parse_object_id("zoomed camera-frame object ID", camera_frame_id)?,
+                    parse_object_id("zoomed display object ID", display_id)?,
+                    options,
+                )
+                .map(|view| WasmAuthoringZoomedViewHandle { view })
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner.zoom_factor(&view.view).map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = activateZooming)]
+        pub fn activate_zooming(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .activate_zooming(&view.view)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = createValueTracker)]
         pub fn create_value_tracker(
             &mut self,
@@ -5837,6 +6101,37 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectDecimalValue)]
+        pub fn query_mobject_decimal_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectIntegerValue)]
+        pub fn query_mobject_integer_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<i64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .and_then(|value| noon::integer_value(value).map_err(AuthoringFailure::from))
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectDecimalFontSize)]
+        pub fn query_mobject_decimal_font_size(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_font_size(handle.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
         pub fn declare_live_transform_to(
             &mut self,
@@ -6346,6 +6641,10 @@ mod wasm {
                     .inner
                     .live_create_number_plane(&options)
                     .map(|plane| plane.family().clone()),
+                CoordinateRequest::PolarPlane(options) => self
+                    .inner
+                    .live_create_polar_plane(&options)
+                    .map(|plane| plane.family().clone()),
             };
             family
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
@@ -6445,6 +6744,46 @@ mod wasm {
 
         /// Compile and publish one detached Typst or MathTypst object through
         /// the current retained session.
+        #[wasm_bindgen(js_name = liveCreateLatex)]
+        pub fn live_create_latex(
+            &mut self,
+            options: crate::WasmLatexOptions,
+            compiler: &mut crate::WasmLatexCompiler,
+        ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_create_latex(options.text, compiler)
+                .map(crate::WasmLatexPartsHandle::new)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetLatexMemberColors)]
+        pub fn live_set_latex_member_colors(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors = crate::authoring_latex::member_colors(values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_member_colors(handle.semantic_parts().family(), &colors)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveLatexFontSize)]
+        pub fn live_latex_font_size(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_latex_font_size(handle.semantic_parts())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCreateManimTypst)]
         pub fn live_create_manim_typst(
             &mut self,
@@ -6913,6 +7252,38 @@ mod wasm {
             )?;
             self.inner
                 .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetDecimalValue)]
+        pub fn live_set_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_set_decimal_value(target.semantic_mobject(), compiler, value)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveIncrementDecimalValue)]
+        pub fn live_increment_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            delta: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_increment_decimal_value(target.semantic_mobject(), compiler, delta)
                 .map_err(typed_js_error)
         }
 

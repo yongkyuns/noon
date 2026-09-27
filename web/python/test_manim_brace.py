@@ -133,6 +133,21 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 else:
                     raise AssertionError("invalid Brace input unexpectedly succeeded")
             assert calls == before
+
+            import _manim_brace as brace_module
+            class Context:
+                def liveBraceGeometryOptions(self, anchor, *args):
+                    assert anchor is target
+                    calls.append(("live_brace", *args))
+                    return path_options("live_brace")
+                def liveCreateManimGeometry(self, candidate):
+                    return FakeHandle(candidate.snapshot)
+            context = Context()
+            brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            brace_module._shared._layout_anchor = lambda value: value
+            live_brace = Brace(target, buff=0.4)
+            assert calls[-1] == ("live_brace", 0.0, -1.0, 0.4, 2.0)
+            assert live_brace._canonical_live_target_context is context
             """
         )
 
@@ -171,7 +186,7 @@ class ManimBraceFacadeTests(unittest.TestCase):
             brace = Brace(Square(2.0))
             anchors = [noon.Vec2(float(index), 0.0) for index in range(8)]
             anchors[7] = noon.Vec2(0.0, -2.0)
-            brace.get_anchors = lambda: anchors
+            brace.get_start_anchors = lambda: anchors
             brace.get_center = lambda: noon.ORIGIN
 
             assert brace.get_tip() == noon.Vec2(0.0, -2.0)
@@ -188,14 +203,6 @@ class ManimBraceFacadeTests(unittest.TestCase):
             assert placements == [
                 (noon.Vec2(0.0, -2.0), noon.DOWN, {"buff": 0.4})
             ]
-
-            for method in (brace.get_text, brace.get_tex):
-                try:
-                    method("x")
-                except NotImplementedError as error:
-                    assert "retained text layer" in str(error)
-                else:
-                    raise AssertionError("Tex/MathTex dependency unexpectedly succeeded")
 
             class FakeBrace(noon.Mobject):
                 def __init__(self, obj, direction=noon.DOWN, buff=0.2, **kwargs):
@@ -217,15 +224,38 @@ class ManimBraceFacadeTests(unittest.TestCase):
                     self.text = text
                     self.font_size = float(font_size)
                     self.kwargs = dict(kwargs)
+                def next_to(self, *args, **kwargs):
+                    return self
 
-            family_calls = []
+            publications = []
+            class CompositeHandle:
+                def brace(self): return object()
+                def family(self): return object()
+            class Context:
+                fail = None
+                def liveCreateBraceLabel(self, *args):
+                    publications.append(("create", args))
+                    return CompositeHandle()
+                def liveShiftBraceLabel(self, *args):
+                    if self.fail: raise RuntimeError(self.fail)
+                    publications.append(("shift", args))
+                def liveReplaceBraceLabel(self, *args):
+                    if self.fail: raise RuntimeError(self.fail)
+                    publications.append(("replace_label", args))
+                def liveChangeBraceLabel(self, *args):
+                    if self.fail: raise RuntimeError(self.fail)
+                    publications.append(("replace_both", args))
+            context = Context()
+            brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            brace_module._shared._layout_anchor = lambda value: value
+            brace_module._shared._family_wrapper_key = lambda value: str(id(value))
             brace_module.Brace = FakeBrace
-            brace_module._compat.VGroup.__init__ = (
-                lambda self, *members, z_index=0: family_calls.append(
-                    (self, members, float(z_index))
-                )
-            )
             noon.Text = FakeLabel
+            noon.Tex = FakeLabel
+            noon.MathTex = FakeLabel
+
+            assert brace.get_text("plain").text == "plain"
+            assert brace.get_tex("x").text == "x"
 
             target = object.__new__(noon.Mobject)
             target._scene = None
@@ -241,9 +271,12 @@ class ManimBraceFacadeTests(unittest.TestCase):
             assert composite.label.font_size == 36.0
             assert composite.brace.direction == noon.DOWN
             assert composite.brace.buff == 0.3
-            assert composite.brace.kwargs == {"sharpness": 1.5}
-            assert composite.brace.placed == [(composite.label, {})]
-            assert family_calls[-1][1] == (composite.brace, composite.label)
+            assert composite.brace.sharpness == 1.5
+            assert publications[-1][0] == "create"
+            assert list(composite._semantic_member_wrappers.values()) == [composite.brace, composite.label]
+            composite.change_label("replacement", font_size=32)
+            assert composite.label.text == "replacement"
+            assert publications[-1][0] == "replace_label"
 
             explicit = brace_module.BraceLabel(
                 target,
@@ -252,12 +285,8 @@ class ManimBraceFacadeTests(unittest.TestCase):
             )
             assert explicit.label.text == "Plain"
 
-            try:
-                brace_module.BraceLabel(target, "math")
-            except NotImplementedError as error:
-                assert "MathTex" in str(error)
-            else:
-                raise AssertionError("BraceLabel default must wait for MathTex")
+            default_math = brace_module.BraceLabel(target, "math")
+            assert default_math.label.text == "math"
 
             # Replacement preparation must fail before family membership changes.
             membership = []
@@ -280,15 +309,11 @@ class ManimBraceFacadeTests(unittest.TestCase):
             assert composite.label is old_label
             assert composite.brace is old_brace
 
-            class FailingBrace:
-                def __init__(self, *args, **kwargs):
-                    raise RuntimeError("brace construction failed")
-
-            brace_module.Brace = FailingBrace
+            context.fail = "brace publication failed"
             try:
                 composite.shift_brace(target)
             except RuntimeError as error:
-                assert str(error) == "brace construction failed"
+                assert str(error) == "brace publication failed"
             else:
                 raise AssertionError("expected brace construction failure")
             assert membership == []

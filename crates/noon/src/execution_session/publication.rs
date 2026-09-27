@@ -50,6 +50,7 @@ pub enum ExecutionSessionPublicationError {
     Semantic(SemanticMutationTransactionError),
     Lowering(SemanticPublicationLoweringError),
     Runtime(AuthoredPublicationError),
+    NumericText(noon_core::NumericTextResourceError),
     ExecutionSlot(ExecutionSlotError),
 }
 
@@ -81,6 +82,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::Semantic(error) => error.fmt(f),
             Self::Lowering(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
+            Self::NumericText(error) => error.fmt(f),
             Self::ExecutionSlot(error) => error.fmt(f),
         }
     }
@@ -91,6 +93,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Semantic(error) => Some(error),
             Self::Lowering(error) => Some(error),
             Self::Runtime(error) => Some(error),
+            Self::NumericText(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::RequiredCallbackPending
             | Self::ReplaySealed
@@ -460,16 +463,46 @@ impl ExecutionSession {
                 .filter(|object| !ordered_survivors.contains(object))
                 .map(ExecutionPatch::RemoveObject),
         );
+        let graph_patches = publication.conservative_graph_patches().collect::<Vec<_>>();
         if !execution_suffix.is_empty()
             || order_patches
                 .as_ref()
                 .is_some_and(|items| !items.is_empty())
+            || !graph_patches.is_empty()
         {
             conservative_patches.extend(publication.conservative_entry_patches(&prepared));
         }
         conservative_patches.extend(order_patches.iter().flatten().cloned());
+        conservative_patches.extend(graph_patches);
         conservative_patches.extend(execution_suffix.iter().cloned());
         let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
+        let numeric_entries = publication
+            .conservative_numeric_text(&prepared)
+            .into_iter()
+            .map(|entry| noon_runtime::NumericTextDriverRevisionEntry {
+                object: entry.object,
+                declaration: entry.declaration,
+            })
+            .collect::<Vec<_>>();
+        let mut numeric_patches = conservative.mutations().to_vec();
+        numeric_patches.extend(publication.conservative_entry_patches(&prepared));
+        let numeric_transaction = ExecutionMutationTransaction::from_mutations(numeric_patches);
+        let pending_numeric_signals = scalar
+            .as_ref()
+            .and_then(|scalar| scalar.reactive_enrollment.as_ref())
+            .into_iter()
+            .flat_map(|enrollment| &enrollment.projection_enrollments)
+            .map(|enrollment| (enrollment.execution_signal(), enrollment.value().clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let prepared_numeric = self
+            .runtime
+            .prepare_numeric_text_driver_revision(
+                &numeric_transaction,
+                numeric_entries,
+                prepared.store().text_resources(),
+                &pending_numeric_signals,
+            )
+            .map_err(ExecutionSessionPublicationError::NumericText)?;
         let structural_change_possible =
             publication.possible_entry_count() != 0 || !publication.possible_exits().is_empty();
         self.runtime
@@ -502,7 +535,16 @@ impl ExecutionSession {
         let entered = membership.entered_execution_objects().collect::<Vec<_>>();
         let exited = membership.exited_execution_objects().collect::<Vec<_>>();
         let execution = publication.bind(&result, &membership);
-        let (execution, resource_additions) = execution.into_parts();
+        let (execution, resource_additions, exact_numeric) =
+            execution.into_parts_with_numeric_text();
+        let exact_numeric = exact_numeric
+            .into_iter()
+            .map(|entry| noon_runtime::NumericTextDriverRevisionEntry {
+                object: entry.object,
+                declaration: entry.declaration,
+            })
+            .collect::<Vec<_>>();
+        let prepared_numeric = prepared_numeric.retain_exact(&exact_numeric);
         let execution = ExecutionMutationTransaction::from_mutations(
             execution_prefix
                 .into_iter()
@@ -539,6 +581,9 @@ impl ExecutionSession {
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
+        self.runtime
+            .commit_numeric_text_driver_revision(prepared_numeric);
+        self.sync_inset_2d_view_bindings(store);
         self.last_structural_publication = StructuralPublicationStats {
             preparation: preparation_stats,
             entered_objects: entered.len(),

@@ -304,7 +304,7 @@ def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
         engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _live_constructor_context(kind: str = "primitive"):
+def _live_constructor_context(kind: str = "primitive", *, allow_unstarted: bool = False):
     """Return the one retained context that may publish a new Mobject.
 
     Before an ordinary segment starts there is no live session to protect, so
@@ -319,10 +319,13 @@ def _live_constructor_context(kind: str = "primitive"):
         return None
     scene = reactive._current_authoring_scene()
     context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None and allow_unstarted and scene is not None:
+        from _manim_scene import _context
+        context = _context(scene)
     if context is None:
         return None
     ownership = str(engine_call(context.liveExecutionOwnership))
-    if ownership in {"active", "returned"}:
+    if ownership in {"active", "returned"} or (allow_unstarted and ownership == "none"):
         return context
     if ownership == "transferred":
         raise RuntimeError(
@@ -1751,9 +1754,47 @@ def _family_wrapper_key(value: object) -> str:
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
 
 
+def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
+    if leaf_type is None:
+        leaf_type = _compat.VMobject
+    if wrapper is None:
+        wrapper = object.__new__(_compat.Group)
+    if context is None:
+        context = getattr(wrapper, "_canonical_live_target_context", None)
+    old_members = getattr(wrapper, "_semantic_member_wrappers", {})
+    keys = list(engine_call(handle.memberKeys, operation="family.members"))
+    members = {}
+    for index, key in enumerate(keys):
+        key = str(key)
+        if bool(engine_call(handle.memberIsFamily, index, operation="family.members")):
+            member_handle = engine_call(handle.memberFamily, index, operation="family.members")
+            member = old_members.get(key)
+            if not isinstance(member, _compat.Group):
+                member = object.__new__(_compat.Group)
+            _attach_shared_family(member, member_handle, context, leaf_type)
+        else:
+            member_handle = engine_call(handle.memberMobject, index, operation="family.members")
+            member = old_members.get(key)
+            if not isinstance(member, _base.Mobject):
+                member = object.__new__(leaf_type)
+            _attach_shared_handle(member, member_handle)
+            if context is not None:
+                member._canonical_live_target_context = context
+        members[key] = member
+    wrapper._semantic_family_handle = handle
+    wrapper._semantic_member_wrappers = members
+    if context is not None:
+        wrapper._canonical_live_target_context = context
+    return wrapper
+
+
+
 def _group_members(self: _compat.Group) -> list[object]:
     # Ordering is observed from Rust only when requested. Mutations update this
     # identity registry locally; it is neither a membership nor an order cache.
+    refresh = getattr(self, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
     return [self._semantic_member_wrappers[str(key)]
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
@@ -1819,9 +1860,7 @@ def _group_target_context(value: object) -> object | None:
             for child in member.submobjects:
                 collect(child)
             return
-        context = getattr(member, "_canonical_live_target_context", None)
-        if context is None:
-            context = _live_mutation_context(member)
+        context = _live_mutation_context(member)
         if context is not None:
             contexts.append(context)
 
@@ -1845,6 +1884,8 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle",
+            "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps
             # the authoritative family and every leaf below; there is no valid
@@ -1873,15 +1914,27 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
         else:
             _initialize_shared_wrapper(target)
             target._semantic_handle = engine_call(copied.mobjectFor, source._semantic_handle)
             target._semantic_handle_fresh = True
-            if context is not None:
-                target._canonical_live_target_context = context
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
     for source, target in pairs:
+        latex = getattr(source, "_semantic_latex_handle", None)
+        if latex is not None:
+            target._semantic_latex_handle = engine_call(latex.rebindFamily, target._semantic_family_handle)
+            target._part_views()
+        if not isinstance(target, _compat.Group):
+            rebind = getattr(target, "_rebind_copied_semantic_handle", None)
+            if rebind is not None:
+                rebind()
         aggregate = getattr(source, "_semantic_arrow_handle", None)
         if aggregate is not None:
             index = getattr(source, "_semantic_arrow_index", None)
@@ -1890,6 +1943,11 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             else:
                 target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
                 target.__dict__.pop("_semantic_arrow_index", None)
+    for source, target in pairs:
+        if isinstance(source, _compat.Group):
+            rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)
+            if rehydrate is not None:
+                rehydrate()
     return clone
 
 

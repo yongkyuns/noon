@@ -1,32 +1,30 @@
-//! Retained native Text / Typst / MathTypst authoring over Noon's text resource model.
-//!
-//! The remaining authoring adapter is owned for deletion by #959. Its text
-//! objects now enter the shared compiler/runtime as `ObjectContentRef::Text` and
-//! keep shaped glyph/vector resources in explicit arenas; no placeholder geometry,
-//! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
+//! Native Text, Typst, and MathTypst authoring over Noon's semantic text resources.
 
+pub mod compiler;
 #[cfg(feature = "native-text")]
 mod markup;
 mod semantic;
+pub use compiler::TextCompilerDiagnostics;
 #[cfg(feature = "native-text")]
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
 pub(crate) use semantic::prepare_native_text;
+#[cfg(feature = "latex")]
+pub(crate) use semantic::PreparedDecimalLabels;
 #[cfg(feature = "typst")]
-pub(crate) use semantic::{math_typst_state, typst_state};
+pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
 
 use std::sync::Arc;
 
-use noon_compile::{CompileError, CompiledObject, CompiledScene};
-#[cfg(feature = "typst")]
-use noon_core::GeometryResource;
+use noon_compile::CompileError;
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResourceArena, ObjectId, Rect, Style,
-    TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind, Transform2D,
-    Vec2, WHITE,
+    Color, FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
+    TextResourceValidationError, Transform2D, WHITE,
 };
 #[cfg(feature = "native-text")]
 use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::{TextSourceKind, Vec2};
 #[cfg(feature = "native-text")]
 pub use noon_text::shaping::NativeFontFace;
 #[cfg(feature = "native-text")]
@@ -36,9 +34,7 @@ use noon_text::shaping::{
 #[cfg(feature = "typst")]
 pub use noon_typst::TypstBackendError;
 #[cfg(feature = "typst")]
-use noon_typst::{
-    compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
-};
+use noon_typst::TypstMode;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use swash::{FontRef, Stretch, StringId, Style as FontStyle, Weight};
 
@@ -58,18 +54,6 @@ pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
 #[cfg(feature = "native-text")]
 pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans Mono";
 
-/// Stable handle to one semantic object in a [`RetainedScene`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RetainedMobject {
-    id: ObjectId,
-}
-
-impl RetainedMobject {
-    pub const fn id(self) -> ObjectId {
-        self.id
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct TextPresentation {
     color: Color,
@@ -88,16 +72,6 @@ impl Default for TextPresentation {
 }
 
 impl TextPresentation {
-    fn style(&self) -> Style {
-        Style {
-            fill: Some(self.color),
-            stroke: None,
-            stroke_width: 0.0,
-            opacity: self.opacity,
-            ..Style::default()
-        }
-    }
-
     fn validate(&self) -> Result<(), TextAuthoringError> {
         if !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {
             return Err(TextAuthoringError::InvalidOpacity(self.opacity));
@@ -129,15 +103,8 @@ impl TypstSpec {
     fn compile_artifact(
         &self,
         mode: TypstMode,
-    ) -> Result<TypstResourceArtifact, TextAuthoringError> {
-        match &self.fonts {
-            Some(fonts) => Ok(compile_typst_resource_with_fonts(
-                self.source.as_ref(),
-                mode,
-                fonts.iter(),
-            )?),
-            None => Ok(compile_typst_resource(self.source.as_ref(), mode)?),
-        }
+    ) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        compiler::compile_typst(self, mode)
     }
 
     fn authored_transform(&self) -> Transform2D {
@@ -219,42 +186,6 @@ macro_rules! typst_object {
                 self.0.presentation.transform.rotation += angle;
                 self
             }
-
-            fn validate(&self) -> Result<(), TextAuthoringError> {
-                if !self.0.font_size.is_finite() || self.0.font_size <= 0.0 {
-                    return Err(TextAuthoringError::InvalidFontSize(self.0.font_size));
-                }
-                self.0.presentation.validate()
-            }
-
-            fn compile(
-                self,
-                scene: &mut RetainedScene,
-            ) -> Result<CompiledObject, TextAuthoringError> {
-                self.validate()?;
-                let artifact = self.0.compile_artifact($mode)?;
-                debug_assert_eq!(artifact.resource.kind, $kind);
-                let bounds = artifact.resource.bounds;
-                let handle = scene.import_typst_artifact(artifact)?;
-                let id = scene.allocate_object_id()?;
-                Ok(self.compiled_object(id, handle, bounds))
-            }
-
-            fn compiled_object(
-                &self,
-                id: ObjectId,
-                handle: noon_core::TextResourceHandle,
-                bounds: Rect,
-            ) -> CompiledObject {
-                let mut object = CompiledObject::new(
-                    id,
-                    handle,
-                    self.0.authored_transform(),
-                    self.0.presentation.style(),
-                );
-                object.text_bounds = Some(bounds);
-                object
-            }
         }
     };
 }
@@ -264,7 +195,7 @@ typst_object!(Typst, TypstMode::Markup, TextSourceKind::Typst);
 #[cfg(feature = "typst")]
 typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
 
-/// Native plain text authored through the same retained resource contract as Typst.
+/// Native plain text authored through the same semantic text-resource contract as Typst.
 ///
 /// This slice exposes deterministic plain/multiline text plus constructor-time
 /// source-range colors.
@@ -414,30 +345,16 @@ impl Text {
         self.presentation.validate()
     }
 
-    fn compile_artifact(&self) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
-        self.compile_artifact_with_fill(Some(self.presentation.color))
+    #[cfg(test)]
+    fn compile_artifact(&self) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        self.compile_artifact_with_fill(None)
     }
 
     fn compile_artifact_with_fill(
         &self,
-        fill: Option<Color>,
-    ) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
-        self.validate()?;
-        let font = match &self.font_face {
-            Some(font) => font.clone(),
-            None => bundled_native_font(self.font_family.as_ref())?,
-        };
-        let mut options = NativeTextOptions::new(self.font_size);
-        options.line_spacing = self.line_spacing;
-        options.fill = fill;
-        let mut compiler = NativeTextCompiler::new();
-        let mut artifact = if self.markup {
-            markup::compile(self, &font, &options, &mut compiler)?
-        } else {
-            compiler.compile_plain(self.source.as_ref(), &font, &options)?
-        };
-        self.apply_source_fills(&mut artifact.resource)?;
-        Ok(artifact)
+        _fill: Option<Color>,
+    ) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        compiler::compile_native(self)
     }
 
     fn apply_source_fills(&self, resource: &mut TextResource) -> Result<(), TextAuthoringError> {
@@ -472,30 +389,6 @@ impl Text {
         }
         *resource = resource.with_source_fills(&fills)?;
         Ok(())
-    }
-
-    fn compile(self, scene: &mut RetainedScene) -> Result<CompiledObject, TextAuthoringError> {
-        let artifact = self.compile_artifact()?;
-        let bounds = artifact.resource.bounds;
-        let handle = scene.import_native_text_artifact(artifact)?;
-        let id = scene.allocate_object_id()?;
-        Ok(self.compiled_object(id, handle, bounds))
-    }
-
-    fn compiled_object(
-        &self,
-        id: ObjectId,
-        handle: noon_core::TextResourceHandle,
-        bounds: Rect,
-    ) -> CompiledObject {
-        let mut transform = self.presentation.transform;
-        transform.scale = transform.scale.component_mul(Vec2::new(
-            NATIVE_POINT_TO_SCENE_SCALE,
-            NATIVE_POINT_TO_SCENE_SCALE,
-        ));
-        let mut object = CompiledObject::new(id, handle, transform, self.presentation.style());
-        object.text_bounds = Some(bounds);
-        object
     }
 }
 
@@ -613,8 +506,6 @@ pub enum TextAuthoringError {
     FontUnavailable(Arc<str>),
     MissingGeometryResource,
     MissingFontResource,
-    DuplicateObject(ObjectId),
-    ObjectIdSpaceExhausted,
     #[cfg(feature = "native-text")]
     NativeText(NativeTextError),
     #[cfg(feature = "native-text")]
@@ -635,8 +526,16 @@ pub enum TextAuthoringError {
     TextColorUnsupportedSourceKind(TextSourceKind),
     #[cfg(feature = "typst")]
     Typst(TypstBackendError),
+    #[cfg(feature = "latex")]
+    LatexDocument(noon_text::latex_document::LatexDocumentError),
+    #[cfg(feature = "latex")]
+    LatexDvi(noon_text::latex::LatexDviError),
+    #[cfg(feature = "latex")]
+    LatexBackend(Arc<str>),
+    Geometry(noon_core::GeometryResourceError),
     Font(FontResourceError),
     Text(TextResourceValidationError),
+    TextPart(noon_core::TextPartQueryError),
     Compile(CompileError),
     Semantic(crate::AuthoringError),
     Import(noon_core::SemanticTextImportError),
@@ -659,12 +558,6 @@ impl std::fmt::Display for TextAuthoringError {
             }
             Self::MissingFontResource => {
                 formatter.write_str("text artifact references missing font data")
-            }
-            Self::DuplicateObject(id) => {
-                write!(formatter, "duplicate retained object id {}", id.get())
-            }
-            Self::ObjectIdSpaceExhausted => {
-                formatter.write_str("retained object ID space is exhausted")
             }
             #[cfg(feature = "native-text")]
             Self::NativeText(error) => error.fmt(formatter),
@@ -696,8 +589,16 @@ impl std::fmt::Display for TextAuthoringError {
             ),
             #[cfg(feature = "typst")]
             Self::Typst(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexDocument(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexDvi(error) => error.fmt(formatter),
+            #[cfg(feature = "latex")]
+            Self::LatexBackend(error) => write!(formatter, "LaTeX backend failure: {error}"),
+            Self::Geometry(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
+            Self::TextPart(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Import(error) => error.fmt(formatter),
@@ -717,8 +618,14 @@ impl std::error::Error for TextAuthoringError {
             Self::TextSourceStyle(error) => Some(error),
             #[cfg(feature = "typst")]
             Self::Typst(error) => Some(error),
+            #[cfg(feature = "latex")]
+            Self::LatexDocument(error) => Some(error),
+            #[cfg(feature = "latex")]
+            Self::LatexDvi(error) => Some(error),
+            Self::Geometry(error) => Some(error),
             Self::Font(error) => Some(error),
             Self::Text(error) => Some(error),
+            Self::TextPart(error) => Some(error),
             Self::Compile(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Import(error) => Some(error),
@@ -749,6 +656,26 @@ impl From<TypstBackendError> for TextAuthoringError {
     }
 }
 
+#[cfg(feature = "latex")]
+impl From<noon_text::latex_document::LatexDocumentError> for TextAuthoringError {
+    fn from(value: noon_text::latex_document::LatexDocumentError) -> Self {
+        Self::LatexDocument(value)
+    }
+}
+
+#[cfg(feature = "latex")]
+impl From<noon_text::latex::LatexDviError> for TextAuthoringError {
+    fn from(value: noon_text::latex::LatexDviError) -> Self {
+        Self::LatexDvi(value)
+    }
+}
+
+impl From<noon_core::GeometryResourceError> for TextAuthoringError {
+    fn from(value: noon_core::GeometryResourceError) -> Self {
+        Self::Geometry(value)
+    }
+}
+
 impl From<FontResourceError> for TextAuthoringError {
     fn from(value: FontResourceError) -> Self {
         Self::Font(value)
@@ -758,6 +685,12 @@ impl From<FontResourceError> for TextAuthoringError {
 impl From<TextResourceValidationError> for TextAuthoringError {
     fn from(value: TextResourceValidationError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<noon_core::TextPartQueryError> for TextAuthoringError {
+    fn from(value: noon_core::TextPartQueryError) -> Self {
+        Self::TextPart(value)
     }
 }
 
@@ -789,274 +722,5 @@ impl From<&str> for Text {
 impl From<String> for Text {
     fn from(source: String) -> Self {
         Self::new(source)
-    }
-}
-
-/// Public retained authoring container for resource-backed text/math objects.
-#[derive(Clone, Debug, Default)]
-pub struct RetainedScene {
-    objects: Vec<CompiledObject>,
-    texts: TextResourceArena,
-    geometries: GeometryResourceArena,
-    fonts: FontResourceArena,
-    next_object_id: u64,
-}
-
-impl RetainedScene {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[cfg(feature = "native-text")]
-    pub fn add_text(&mut self, object: Text) -> Result<RetainedMobject, TextAuthoringError> {
-        let object = object.compile(self)?;
-        Ok(self.push_object(object))
-    }
-
-    #[cfg(feature = "typst")]
-    pub fn add_typst(&mut self, object: Typst) -> Result<RetainedMobject, TextAuthoringError> {
-        let object = object.compile(self)?;
-        Ok(self.push_object(object))
-    }
-
-    #[cfg(feature = "typst")]
-    pub fn add_math_typst(
-        &mut self,
-        object: MathTypst,
-    ) -> Result<RetainedMobject, TextAuthoringError> {
-        let object = object.compile(self)?;
-        Ok(self.push_object(object))
-    }
-
-    pub fn objects(&self) -> &[CompiledObject] {
-        &self.objects
-    }
-
-    pub const fn texts(&self) -> &TextResourceArena {
-        &self.texts
-    }
-
-    pub const fn geometries(&self) -> &GeometryResourceArena {
-        &self.geometries
-    }
-
-    pub const fn fonts(&self) -> &FontResourceArena {
-        &self.fonts
-    }
-
-    pub fn compile(&self) -> Result<CompiledScene, TextAuthoringError> {
-        Ok(CompiledScene::compile_objects(self.objects.clone(), &[])?)
-    }
-
-    fn push_object(&mut self, object: CompiledObject) -> RetainedMobject {
-        let id = object.id;
-        self.objects.push(object);
-        RetainedMobject { id }
-    }
-
-    fn allocate_object_id(&mut self) -> Result<ObjectId, TextAuthoringError> {
-        let id = ObjectId::new(self.next_object_id);
-        if self.objects.iter().any(|object| object.id == id) {
-            return Err(TextAuthoringError::DuplicateObject(id));
-        }
-        self.next_object_id = self
-            .next_object_id
-            .checked_add(1)
-            .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)?;
-        Ok(id)
-    }
-
-    #[cfg(feature = "native-text")]
-    fn import_native_text_artifact(
-        &mut self,
-        artifact: NativeTextResourceArtifact,
-    ) -> Result<noon_core::TextResourceHandle, TextAuthoringError> {
-        self.import_font_dependencies(&artifact.resource, &artifact.fonts)?;
-        Ok(self.texts.insert(artifact.resource)?)
-    }
-
-    #[cfg(feature = "typst")]
-    fn import_typst_artifact(
-        &mut self,
-        artifact: TypstResourceArtifact,
-    ) -> Result<noon_core::TextResourceHandle, TextAuthoringError> {
-        self.import_font_dependencies(&artifact.resource, &artifact.fonts)?;
-
-        let mut resource: TextResource = artifact.resource;
-        let mut vectors = Vec::with_capacity(resource.vector_items.len());
-        for item in resource.vector_items.iter() {
-            let GeometryResource::VectorPath(path) = artifact
-                .geometry
-                .get(item.geometry)
-                .ok_or(TextAuthoringError::MissingGeometryResource)?;
-            let mut imported = item.clone();
-            imported.geometry = self.geometries.insert_path(path.as_ref().clone());
-            vectors.push(imported);
-        }
-        resource.vector_items = vectors.into();
-        Ok(self.texts.insert(resource)?)
-    }
-
-    fn import_font_dependencies(
-        &mut self,
-        resource: &TextResource,
-        fonts: &FontResourceArena,
-    ) -> Result<(), TextAuthoringError> {
-        for run in resource.runs.iter() {
-            let font = fonts
-                .get_for_face(&run.font)
-                .ok_or(TextAuthoringError::MissingFontResource)?;
-            self.fonts.intern_face(&run.font, font.data.clone())?;
-        }
-        Ok(())
-    }
-}
-
-#[cfg(all(
-    test,
-    feature = "native-text",
-    feature = "typst",
-    feature = "bundled-fonts"
-))]
-mod tests {
-    use super::*;
-    use noon_core::ObjectContentRef;
-
-    #[test]
-    fn native_text_authors_retained_plain_text_without_geometry_placeholder() {
-        let mut scene = RetainedScene::new();
-        let object = scene
-            .add_text(Text::new("Native Noon").color(noon_core::YELLOW))
-            .unwrap();
-
-        assert_eq!(scene.objects().len(), 1);
-        let ObjectContentRef::Text(handle) = &scene.objects()[0].content else {
-            panic!("Text must author retained text content");
-        };
-        assert_eq!(object.id(), scene.objects()[0].id);
-        let resource = scene.texts().get(*handle).unwrap();
-        assert_eq!(resource.kind, TextSourceKind::Plain);
-        assert_eq!(resource.source.as_ref(), "Native Noon");
-        assert!(!scene.fonts().is_empty());
-        assert!(scene.objects()[0].content.geometry().is_none());
-    }
-
-    #[test]
-    fn bundled_native_text_prefers_regular_face_over_asset_order() {
-        let font = bundled_native_font(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
-        let font = FontRef::from_index(font.data.as_ref(), font.face_index as usize).unwrap();
-        let attributes = font.attributes();
-
-        assert_eq!(attributes.stretch(), Stretch::NORMAL);
-        assert_eq!(attributes.weight(), Weight::NORMAL);
-        assert_eq!(attributes.style(), FontStyle::Normal);
-    }
-
-    #[test]
-    fn native_multiline_text_preserves_backend_runs_and_source_identity() {
-        let mut scene = RetainedScene::new();
-        scene
-            .add_text(Text::new("first\nsecond").with_line_spacing(0.5))
-            .unwrap();
-        let handle = scene.objects()[0].content.text().unwrap();
-        let resource = scene.texts().get(handle).unwrap();
-        assert_eq!(resource.kind, TextSourceKind::Plain);
-        assert_eq!(resource.runs.len(), 2);
-        assert_eq!(resource.source.as_ref(), "first\nsecond");
-    }
-
-    #[test]
-    fn unavailable_native_font_fails_without_consuming_scene_identity_or_resources() {
-        let mut scene = RetainedScene::new();
-        let error = scene
-            .add_text(Text::new("Noon").with_font("Definitely Missing Font"))
-            .unwrap_err();
-        assert!(matches!(error, TextAuthoringError::FontUnavailable(_)));
-        assert!(scene.objects().is_empty());
-        assert!(scene.texts().is_empty());
-        assert!(scene.fonts().is_empty());
-
-        let object = scene.add_text(Text::new("first valid object")).unwrap();
-        assert_eq!(object.id(), ObjectId::new(0));
-    }
-
-    #[test]
-    fn typst_authors_one_retained_text_object_without_geometry_placeholder() {
-        let mut scene = RetainedScene::new();
-        let object = scene
-            .add_typst(Typst::new("*Hello* from _Typst!_").color(noon_core::YELLOW))
-            .unwrap();
-
-        assert_eq!(scene.objects().len(), 1);
-        let ObjectContentRef::Text(handle) = &scene.objects()[0].content else {
-            panic!("Typst must author retained text content");
-        };
-        assert_eq!(object.id(), scene.objects()[0].id);
-        assert_eq!(
-            scene.texts().get(*handle).unwrap().kind,
-            TextSourceKind::Typst
-        );
-        assert!(!scene.fonts().is_empty());
-        assert!(scene.objects()[0].base_style.fill.is_some());
-    }
-
-    #[test]
-    fn math_typst_keeps_math_source_identity_and_shared_vector_resources() {
-        let mut scene = RetainedScene::new();
-        scene
-            .add_math_typst(MathTypst::new("frac(x, 2)").with_font_size(72.0))
-            .unwrap();
-
-        let ObjectContentRef::Text(handle) = &scene.objects()[0].content else {
-            panic!("MathTypst must author retained text content");
-        };
-        let resource = scene.texts().get(*handle).unwrap();
-        assert_eq!(resource.kind, TextSourceKind::MathTypst);
-        assert_ne!(resource.kind, TextSourceKind::MathTex);
-        assert!(resource.vector_count() >= 1);
-        for vector in resource.vector_items.iter() {
-            assert!(matches!(
-                scene.geometries().get(vector.geometry),
-                Some(GeometryResource::VectorPath(_))
-            ));
-        }
-        assert!((scene.objects()[0].base_transform.scale.x - 0.075).abs() < 1e-6);
-        assert!((scene.objects()[0].base_transform.scale.y - 0.075).abs() < 1e-6);
-    }
-
-    #[test]
-    fn retained_scene_compiles_text_handles_without_copying_resources() {
-        let mut scene = RetainedScene::new();
-        scene.add_text(Text::new("Plain")).unwrap();
-        scene.add_typst(Typst::new("Noon")).unwrap();
-        scene
-            .add_math_typst(MathTypst::new("sum_(k=1)^n k"))
-            .unwrap();
-
-        let compiled = scene.compile().unwrap();
-        assert_eq!(compiled.objects().len(), 3);
-        assert!(compiled
-            .objects()
-            .iter()
-            .all(|object| object.text().is_some()));
-        assert_eq!(scene.texts().len(), 3);
-    }
-
-    #[test]
-    fn invalid_font_size_is_rejected_before_resource_insertion() {
-        let mut scene = RetainedScene::new();
-        let error = scene
-            .add_text(Text::new("bad").with_font_size(0.0))
-            .unwrap_err();
-        assert_eq!(error, TextAuthoringError::InvalidFontSize(0.0));
-        assert!(scene.objects().is_empty());
-        assert!(scene.texts().is_empty());
-
-        let error = scene
-            .add_typst(Typst::new("bad").with_font_size(0.0))
-            .unwrap_err();
-        assert_eq!(error, TextAuthoringError::InvalidFontSize(0.0));
-        assert!(scene.objects().is_empty());
-        assert!(scene.texts().is_empty());
     }
 }

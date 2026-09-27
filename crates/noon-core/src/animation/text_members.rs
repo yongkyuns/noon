@@ -71,13 +71,18 @@ impl std::error::Error for TextAnimationMemberError {}
 /// spans are excluded explicitly because shaping backends may retain advance glyphs for
 /// them even though Manim strips whitespace from the SVG submobject family.
 ///
-/// This intentionally accepts only `Plain` resources; Typst/Tex family semantics must
-/// be defined by their own source model. The result is derived data and must not create
-/// externally visible semantic object identities or authoring-wire glyph IDs.
+/// Plain text and compiler-authored TeX part leaves use the same retained glyph
+/// member contract. A TeX leaf is already narrowed to one ordinary source part by
+/// authoring, so its glyph sequence needs no frontend-owned SVG decomposition.
+/// Vector-bearing leaves remain explicit unsupported cases until vector members
+/// participate in the same outline plan.
 pub fn plain_text_animation_members(
     resource: &TextResource,
 ) -> Result<Vec<TextAnimationMember>, TextAnimationMemberError> {
-    if resource.kind != TextSourceKind::Plain {
+    if !matches!(
+        resource.kind,
+        TextSourceKind::Plain | TextSourceKind::Tex | TextSourceKind::MathTex
+    ) {
         return Err(TextAnimationMemberError::UnsupportedSourceKind(
             resource.kind,
         ));
@@ -280,6 +285,19 @@ mod tests {
         assert_eq!(members.len(), 2);
         assert_eq!(members[0].glyph.run_index, 0);
         assert_eq!(members[1].glyph.run_index, 1);
+    }
+
+    #[test]
+    fn projected_mathtex_leaf_uses_the_retained_glyph_member_contract() {
+        let mut value = resource(
+            "x",
+            vec![run(vec![glyph(TextSourceSpan::new(0, 1), 0, 0.0)])],
+            vec![TextRenderItem::GlyphRun(0)],
+        );
+        value.kind = TextSourceKind::MathTex;
+        let members = plain_text_animation_members(&value).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].source_span, TextSourceSpan::new(0, 1));
     }
 
     #[test]

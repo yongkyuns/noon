@@ -60,6 +60,32 @@ class TextSourcePart:
     semantic_key: str | None
 
 
+def _copy_text_parts(raw_parts: object) -> tuple[TextSourcePart, ...]:
+    """Copy Rust-owned source-part observations before releasing WASM wrappers."""
+
+    try:
+        parts: list[TextSourcePart] = []
+        for index in range(int(raw_parts.length)):
+            raw = engine_call(raw_parts.item, index)
+            try:
+                parts.append(
+                    TextSourcePart(
+                        source_start=int(raw.sourceStart),
+                        source_end=int(raw.sourceEnd),
+                        first_cluster=int(raw.firstCluster),
+                        cluster_count=int(raw.clusterCount),
+                        first_vector=int(raw.firstVector),
+                        vector_count=int(raw.vectorCount),
+                        semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
+                    )
+                )
+            finally:
+                raw.free()
+        return tuple(parts)
+    finally:
+        raw_parts.free()
+
+
 def _validated_font_size(value: float) -> float:
     font_size = float(value)
     if not math.isfinite(font_size) or font_size <= 0.0:
@@ -239,28 +265,47 @@ class _RetainedTextMobject(_base.Mobject):
             raise NotImplementedError(
                 "text source-part queries require the shared Rust authoring handle"
             )
-        raw_parts = engine_call(handle.textSourcePartsFor, needle)
+        return _copy_text_parts(engine_call(handle.textSourcePartsFor, needle))
+
+    def text_parts(self) -> tuple[TextSourcePart, ...]:
+        """Return the compiler-authored top-level partition in source order."""
+
+        handle = self._semantic_handle
+        if not hasattr(handle, "textParts"):
+            raise NotImplementedError(
+                "text indexing requires the shared Rust text-part handle"
+            )
+        return _copy_text_parts(engine_call(handle.textParts))
+
+    def _set_text_source_colors(
+        self, colors: tuple[tuple[TextSourcePart, _base.Color], ...]
+    ) -> _RetainedTextMobject:
+        if _new_text_color_batch is None:
+            raise RuntimeError("Text source colors require Noon's shared Rust authoring runtime")
+        batch = _new_text_color_batch()
         try:
-            parts: list[TextSourcePart] = []
-            for index in range(int(raw_parts.length)):
-                raw = engine_call(raw_parts.item, index)
-                try:
-                    parts.append(
-                        TextSourcePart(
-                            source_start=int(raw.sourceStart),
-                            source_end=int(raw.sourceEnd),
-                            first_cluster=int(raw.firstCluster),
-                            cluster_count=int(raw.clusterCount),
-                            first_vector=int(raw.firstVector),
-                            vector_count=int(raw.vectorCount),
-                            semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
-                        )
-                    )
-                finally:
-                    raw.free()
-            return tuple(parts)
-        finally:
-            raw_parts.free()
+            for part, color in colors:
+                value = _as_color(color)
+                engine_call(
+                    batch.pushSource,
+                    part.source_start,
+                    part.source_end,
+                    value.red,
+                    value.green,
+                    value.blue,
+                    value.alpha,
+                )
+        except BaseException:
+            batch.free()
+            raise
+        import _manim_semantic_handles as semantic
+
+        context = semantic._live_mutation_context(self)
+        if context is None:
+            engine_call(self._semantic_handle.setTextSourceColors, batch)
+        else:
+            engine_call(context.liveSetTextSourceColors, self._semantic_handle, batch)
+        return self
 
     @property
     def id(self) -> int:

@@ -21,10 +21,13 @@ from _noon_errors import engine_call
 try:
     from js import noonAuthoringCoordinateOptions as _coordinate_options
     from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
+    from js import noonAuthoringBarChartOptions as _bar_chart_options
+    from js import noonCreateAuthoringBarChart as _create_bar_chart
+    from js import noonBarChartLabels as _bar_labels
     from js import noonPlotSamplingPlan as _sampling_plan
     from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = _jsnull = None
+    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _bar_labels = _sampling_plan = _to_js = _jsnull = None
 
 
 class _NumberLabel(NamedTuple):
@@ -118,8 +121,8 @@ def _family(wrapper, handle, members):
     return wrapper
 
 
-def _leaf(handle):
-    wrapper = object.__new__(_compat.Line)
+def _leaf(handle, kind=_compat.Line):
+    wrapper = object.__new__(kind)
     _shared._attach_shared_handle(wrapper, handle)
     return wrapper
 
@@ -321,13 +324,92 @@ class Axes(_compat.Group):
             plan = engine_call(frame.plotPlan, _array(() if x_range is None else x_range),
                                _array(discontinuities), None if dt is None else float(dt), None)
         options = _evaluate(plan, function, use_smoothing, parametric=False)
-        return _curve(object.__new__(FunctionGraph), options, color, kwargs)
+        graph = _curve(object.__new__(FunctionGraph), options, color, kwargs)
+        graph.underlying_function = function
+        return graph
 
     def plot_samples(self, points, *, color=None, **kwargs):
         """Noon extension: preserve data order and repeated x values as a polyline."""
         with _owned(self._coordinate_frame()) as frame:
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
+
+    def get_area(self, graph, x_range=None, color=None, opacity=0.3,
+                 bounded_graph=None, **kwargs):
+        """Create one static closed path prepared by the shared Rust query."""
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        if context is not None:
+            options = engine_call(
+                context.effectiveAxesAreaOptions, self._semantic_family_handle,
+                graph._semantic_handle, _array(() if x_range is None else x_range),
+                graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
+                bounded_graph is not None,
+            )
+        else:
+            with _owned(self._coordinate_frame()) as frame:
+                options = engine_call(
+                    frame.area, graph._semantic_handle,
+                    _array(() if x_range is None else x_range),
+                    graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
+                    bounded_graph is not None,
+                )
+        kwargs.setdefault("fill_opacity", float(opacity))
+        kwargs.setdefault("stroke_opacity", float(opacity))
+        colors = (_base.BLUE, _base.GREEN) if color is None else color
+        if isinstance(colors, (list, tuple)):
+            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs)
+            return result.set_color_by_gradient(*colors)
+        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs)
+
+    def get_riemann_rectangles(self, graph, x_range=None, dx=0.1,
+                               input_sample_type="left", stroke_width=1,
+                               stroke_color=_base.BLACK, fill_opacity=1,
+                               color=(_base.BLUE, _base.GREEN), show_signed_area=True,
+                               bounded_graph=None, blend=False, width_scale_factor=1.001):
+        """Sample original scalar callables against one Rust-captured snapshot."""
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        sample = {"left": 0, "right": 1, "center": 2}.get(input_sample_type)
+        if sample is None:
+            raise ValueError("input_sample_type must be 'left', 'right', or 'center'")
+        colors = color if isinstance(color, (tuple, list)) else (color,)
+        colors = [_compat._as_color("Riemann color", value) for value in colors]
+        stroke_color = _compat._as_color("Riemann stroke color", stroke_color)
+        bounded = graph if bounded_graph is None else bounded_graph
+        graph_handle, bounded_handle = graph._semantic_handle, bounded._semantic_handle
+        if context is None:
+            prepare = self._semantic_family_handle.riemannSamplePlan
+            prepare_args = (graph_handle,)
+        else:
+            prepare = context.liveEffectiveRiemannSamplePlan
+            prepare_args = (self._semantic_family_handle, graph_handle)
+        options = engine_call(_coordinate_options.riemann, _array(() if x_range is None else x_range),
+                              float(dx), sample, float(width_scale_factor))
+        try:
+            engine_call(options.setPaint, _shared._gradient_components(colors),
+                        _shared._gradient_components([stroke_color]), float(stroke_width),
+                        float(fill_opacity), bool(show_signed_area), bool(blend))
+        except BaseException:
+            options.free()
+            raise
+        plan = engine_call(prepare, *prepare_args, options, bounded_handle,
+                           bounded_graph is not None)
+        with _owned(plan):
+            function = getattr(graph, "underlying_function", None)
+            bounded_function = (None if bounded_graph is None else
+                                getattr(bounded_graph, "underlying_function", None))
+            top_values, baseline_values = [], []
+            # Preserve per-rectangle top-then-lower invocation order. Each graph
+            # independently uses its callable or the captured Rust path fallback.
+            for x, sample_x in zip(engine_call(plan.starts), engine_call(plan.samples), strict=True):
+                if function is not None:
+                    top_values.append(float(function(float(sample_x))))
+                if bounded_function is not None:
+                    baseline_values.append(float(bounded_function(float(x))))
+            values = (_array(top_values), _array(baseline_values))
+            handle = (engine_call(plan.publish, *values) if context is None else
+                      engine_call(context.livePublishRiemannPlan, plan, *values))
+        members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
+        return _family(object.__new__(_compat.VGroup), handle, members)
 
     def add_coordinates(self, x_values=None, y_values=None, *, x_config=None, y_config=None, **kwargs):
         """Atomically append both axes' native Text label families before playback.
@@ -420,6 +502,154 @@ class Axes(_compat.Group):
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
+class BarChart(Axes):
+    """Shared-Rust static bar chart with explicit, atomic value changes.
+
+    The compatibility wrapper owns argument coercion and wrapper identity. Axes,
+    rectangle layout, color gradients and updates stay in the typed Rust chart.
+    """
+
+    def __init__(self, values, bar_names=None, y_range=None, x_length=None,
+                 y_length=None, bar_colors=None, bar_width=0.6,
+                 bar_fill_opacity=0.7, bar_stroke_width=3, **kwargs):
+        x_config = dict(kwargs.pop("x_axis_config", {}))
+        name_size = float(x_config.pop("font_size", 24))
+        y_config = dict(kwargs.pop("y_axis_config", {}))
+        label_settings = {"font": "DejaVu Sans Mono", "font_size": 36, "buff": 0.25, "direction": _base.LEFT}
+        aliases = {"label_direction": "direction", "line_to_number_buff": "buff"}
+        for key, value in y_config.items():
+            label_settings[aliases.get(key, key)] = value
+        if kwargs or x_config:
+            unsupported = sorted(kwargs) + ["x_axis_config." + key for key in sorted(x_config)]
+            raise NotImplementedError("unsupported BarChart option(s): " + ", ".join(unsupported))
+        if bar_names is not None:
+            bar_names = tuple(bar_names)
+            if not all(isinstance(name, str) for name in bar_names):
+                raise TypeError("bar names must be strings")
+        values = tuple(float(value) for value in values)
+        if _bar_chart_options is None:
+            raise RuntimeError("BarChart requires the shared Rust authoring host")
+        options = engine_call(_bar_chart_options, _array(values),
+                              _array(() if y_range is None else y_range),
+                              0.0 if x_length is None else float(x_length),
+                              0.0 if y_length is None else float(y_length))
+        try:
+            engine_call(options.setStyle, float(bar_width), float(bar_fill_opacity), float(bar_stroke_width))
+            if bar_colors is not None:
+                colors = bar_colors if isinstance(bar_colors, (tuple, list)) else (bar_colors,)
+                rgba = [component for color in colors for component in (
+                    _compat._as_color("bar color", color).red,
+                    _compat._as_color("bar color", color).green,
+                    _compat._as_color("bar color", color).blue,
+                    _compat._as_color("bar color", color).alpha,
+                )]
+                engine_call(options.setColors, _array(rgba))
+            context = _shared._live_constructor_context("bar chart", allow_unstarted=True)
+            if bar_names is not None:
+                engine_call(options.setNames, _to_js(list(bar_names)), name_size)
+            from _manim_number_labels import _options
+            label_options, size, color = _options(label_settings)
+        except BaseException:
+            options.free()
+            raise
+        self._bar_chart_handle = engine_call(_create_bar_chart, options, label_options, context)
+        bars = engine_call(self._bar_chart_handle.bars)
+        self.bars = _family(object.__new__(_compat.VGroup), bars,
+                            [_leaf(handle, _compat.Rectangle) for handle in engine_call(bars.directMobjects)])
+        axes = engine_call(self._bar_chart_handle.axes)
+        axis_members = [
+            _attach_number_line(object.__new__(NumberLine), engine_call(axes.coordinateAxis, index))
+            for index in (0, 1)
+        ]
+        self.axes = _family(object.__new__(Axes), axes, axis_members)
+        from _manim_number_labels import _family as _numeric_family, _remember
+        names = engine_call(self._bar_chart_handle.xLabels)
+        if names is not None and names is not _jsnull:
+            self.x_axis.labels = _chart_text_family(names, name_size, context)
+            self.x_axis._semantic_member_wrappers[_shared._family_wrapper_key(self.x_axis.labels)] = self.x_axis.labels
+        labels = engine_call(self._bar_chart_handle.yLabels)
+        _remember(self.y_axis, _numeric_family(labels, size, color))
+        _family(self, engine_call(self._bar_chart_handle.family), [self.bars, self.axes])
+        self._bar_chart_context = context
+
+    def _rehydrate_semantic_family_handle(self):
+        """Rebind this copied wrapper to its copied Rust chart family."""
+        self._bar_chart_handle = engine_call(self._semantic_family_handle.barChart)
+        self.__dict__.pop("_bar_chart_context", None)
+
+    @property
+    def x_axis(self):
+        return self.axes.x_axis
+
+    @property
+    def y_axis(self):
+        return self.axes.y_axis
+
+    @property
+    def values(self):
+        return list(engine_call(self._bar_chart_handle.values))
+
+    @property
+    def _coordinate_handle(self):
+        return self.axes._coordinate_handle
+
+    def get_bar_labels(self, color=None, font_size=24, buff=0.25, label_constructor=None):
+        from _manim_latex import Tex, MathTex
+        constructor = Tex if label_constructor is None else label_constructor
+        if constructor not in (Tex, MathTex):
+            raise NotImplementedError("BarChart labels support Tex or MathTex")
+        if _bar_labels is None:
+            raise RuntimeError("BarChart labels require the shared Rust authoring host")
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        rgba = []
+        if color is not None:
+            c = _compat._as_color("label color", color)
+            rgba = [c.red, c.green, c.blue, c.alpha]
+        handle = engine_call(_bar_labels, self._bar_chart_handle, float(font_size), float(buff),
+                             constructor is MathTex, _array(rgba), context)
+        return _chart_text_family(handle, float(font_size), context)
+
+    def change_bar_values(self, values, update_colors=True):
+        values = tuple(float(value) for value in values)
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        old = engine_call(self._bar_chart_handle.barPrefix, len(values))
+        if context is None:
+            engine_call(self._bar_chart_handle.changeBarValues, _array(values), bool(update_colors))
+        else:
+            engine_call(context.liveChangeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
+        new = engine_call(self._bar_chart_handle.barPrefix, len(values))
+        changed = []
+        for before, after in zip(old, new):
+            before_key = f"{int(before.semanticSlot)}:{int(before.semanticGeneration)}"
+            after_key = f"{int(after.semanticSlot)}:{int(after.semanticGeneration)}"
+            if before_key != after_key:
+                previous = self.bars._semantic_member_wrappers.pop(before_key, None)
+                replacement = _leaf(after, _compat.Rectangle)
+                if context is not None:
+                    replacement._canonical_live_target_context = context
+                self.bars._semantic_member_wrappers[after_key] = replacement
+                changed.extend((previous, replacement) if previous is not None else (replacement,))
+        scene = self.x_axis.shaft._scene
+        if changed and scene is not None:
+            from _manim_scene import _reconcile_completed_family_bindings
+            _reconcile_completed_family_bindings(scene, tuple(changed))
+        return self
+
+
+def _chart_text_family(handle, font_size, context=None):
+    from _manim_latex import _CompiledTexLeaf
+
+    members = []
+    for object_handle, source in engine_call(handle.numberLabelMembers):
+        label = object.__new__(_CompiledTexLeaf)
+        label._initialize_text(str(source), font_size, object_handle, _base.WHITE, 1.0,
+                               presentation_applied=True)
+        if context is not None:
+            label._canonical_live_target_context = context
+        members.append(label)
+    return _family(object.__new__(_compat.VGroup), handle, members)
+
+
 def _callable(function):
     if not callable(function):
         raise TypeError("plot function must be callable")
@@ -433,8 +663,8 @@ def _points(points):
 def _evaluate(plan, function, use_smoothing, *, parametric):
     with _owned(plan):
         parameters = engine_call(plan.parameters)
-        # This is the only host function evaluation. No callback is retained in
-        # the returned curve or invoked during deterministic playback.
+        # Construction evaluates once. Scalar callable identity may be retained
+        # for explicit Riemann queries, never for deterministic frame playback.
         if parametric:
             values = _points(function(float(t)) for t in parameters)
             return engine_call(plan.parametricSamples, values, bool(use_smoothing))
@@ -475,6 +705,7 @@ class FunctionGraph(_compat.VMobject):
                            None if dt is None else float(dt), None)
         options = _evaluate(plan, function, use_smoothing, parametric=False)
         _curve(self, options, color, kwargs)
+        self.underlying_function = function
 
 
-__all__ = ["NumberLine", "Axes", "FunctionGraph", "ParametricFunction"]
+__all__ = ["NumberLine", "Axes", "BarChart", "FunctionGraph", "ParametricFunction"]

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { serveRepository } from "./browser-test-server.mjs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import pngjs from "pngjs";
 import { browserArgs, rasterFixtureSource, sampleRasterFrames } from "./manim-raster-support.mjs";
+import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -17,6 +19,12 @@ const repoRoot = path.resolve(scriptDir, "..");
 const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
+const referenceFontPaths = JSON.parse(process.env.NOON_MANIM_REFERENCE_FONTS ?? "[]");
+assert.ok(Array.isArray(referenceFontPaths) && referenceFontPaths.every(value => typeof value === "string"),
+  "NOON_MANIM_REFERENCE_FONTS must be a JSON array of font paths");
+const referenceFonts = await Promise.all(referenceFontPaths.map(async font => ({
+  path: path.resolve(font), sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
+})));
 const fixtureSources = new Map();
 for (const fixture of manifest.fixtures) {
   const relativeSource = fixture.source ?? reference.source;
@@ -118,6 +126,7 @@ async function renderManimReferences() {
   verifyManimVersion();
   await mkdir(semanticRoot, { recursive: true });
   runChecked("python3", [
+    path.join("scripts", "manim-reference-run.py"),
     path.join("scripts", "manim-raster-semantic-reference.py"),
     "--manifest",
     manifestPath,
@@ -139,6 +148,7 @@ async function renderManimReferences() {
     await mkdir(frameDir, { recursive: true });
 
     runChecked("python3", [
+      path.join("scripts", "manim-reference-run.py"),
       "-m",
       "manim",
       "--renderer=cairo",
@@ -200,7 +210,7 @@ async function prepareHostCapturePage(page) {
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
-    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene), loopDuration: Math.max(1, fixture.expected_duration + 1) },
+    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
   );
   assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: shared source execution`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
@@ -367,30 +377,9 @@ function bboxDelta(referenceStats, actualStats) {
   };
 }
 
-function classify(sample, timingDelta) {
-  const categories = [];
-  if (Math.abs(timingDelta) > 1 / reference.frame_rate + 1e-9) categories.push("timing");
-  const backgroundDelta = sample.reference.background
-    .map((value, index) => Math.abs(value - sample.noon.background[index]))
-    .reduce((sum, value) => sum + value, 0);
-  if (backgroundDelta >= 12) categories.push("background/color-pipeline");
-  if (
-    sample.boundsDelta &&
-    Math.max(
-      Math.abs(sample.boundsDelta.centroidX),
-      Math.abs(sample.boundsDelta.centroidY),
-      Math.abs(sample.boundsDelta.width),
-      Math.abs(sample.boundsDelta.height),
-    ) > 2
-  ) {
-    categories.push("camera/layout/geometry");
-  }
-  if (sample.diff.differingRatio > 0.02) categories.push("raster/style/animation-state");
-  return [...new Set(categories)];
-}
-
 async function compareAll(references, backendResults) {
   const report = {
+    referenceFonts,
     reference,
     enforce,
     generatedAt: new Date().toISOString(),
@@ -400,6 +389,7 @@ async function compareAll(references, backendResults) {
   const executionFailures = [];
 
   for (const fixture of manifest.fixtures) {
+    const tolerance = resolveRasterTolerance(manifest, fixture);
     const referenceResult = references.get(fixture.id);
     const backendEntries = {};
     for (const backend of backends) {
@@ -439,15 +429,18 @@ async function compareAll(references, backendResults) {
             maxChannelError: diff.maxChannelError,
           },
         };
-        sample.categories = classify(sample, timingDelta);
+        const policy = evaluateRasterTolerance({ sample, timingDelta, tolerance });
+        sample.categories = policy.categories;
+        sample.policy = policy;
         samples.push(sample);
         if (enforce && sample.categories.length > 0) {
           enforcementFailures.push(
-            `${fixture.id}/${backend}/${capture.label}: ${sample.categories.join(", ")}`,
+            formatRasterPolicyFailure(fixture.id, backend, capture.label, policy),
           );
         }
       }
       backendEntries[backend] = {
+        tolerance,
         noonDuration: actualResult.duration,
         manimVideoDuration: referenceResult.frames.duration,
         durationDelta: timingDelta,

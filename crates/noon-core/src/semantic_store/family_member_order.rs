@@ -158,6 +158,21 @@ impl OrderedFamilyMembers {
         }
         Some(rank)
     }
+    pub(super) fn member_at_rank(&self, mut rank: usize) -> Option<Node> {
+        let mut node = self.order_root?;
+        loop {
+            let link = self.order_link(node);
+            let left = self.order_size(link.left);
+            if rank < left {
+                node = link.left?;
+            } else if rank == left {
+                return Some(node);
+            } else {
+                rank -= left + 1;
+                node = link.right?;
+            }
+        }
+    }
 
     pub(super) fn order_insert(&mut self, node: Node, before: Option<Node>) {
         let rank = before.map_or_else(

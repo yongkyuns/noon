@@ -2281,17 +2281,32 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     property: Property,
     animation: T,
 ) -> Option<T> {
+    let (_, reveal_slot) = driver_key(object, Property::Reveal);
     let (_, morph_slot) = driver_key(object, Property::Morph);
     let (object, transform_slot) = driver_key(object, Property::Transform);
     if property == Property::Morph {
         (0..morph_slot).find_map(|slot| {
+            if slot == reveal_slot {
+                return None;
+            }
             driven
                 .get(&(object, slot))
                 .copied()
                 .filter(|owner| *owner != animation)
         })
     } else if property == Property::Transform {
-        (0..=morph_slot).find_map(|slot| driven.get(&(object, slot)).copied())
+        (0..=morph_slot).find_map(|slot| {
+            if slot == reveal_slot {
+                None
+            } else {
+                driven.get(&(object, slot)).copied()
+            }
+        })
+    } else if property == Property::Reveal {
+        // Reveal is a renderer scalar over the retained geometry selected by the
+        // affine/morph channels. It conflicts with another reveal driver through
+        // the exact-key check, but never claims transform or morph ownership.
+        None
     } else {
         driven
             .get(&(object, transform_slot))

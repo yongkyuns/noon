@@ -60,6 +60,13 @@ impl TessellatedPath {
     /// The lookup is O(log N) over a centerline measure cached with the mesh, so
     /// repeated Create frames do not flatten or tessellate the path again.
     pub fn reveal_head_position(&self, reveal: f32) -> Option<Vec2> {
+        self.reveal_head_position_at_morph(reveal, 0.0)
+    }
+
+    /// Returns the retained morph centerline position at normalized reveal progress.
+    /// Both scalar inputs are evaluated over preparation-time samples, so animation
+    /// frames perform only two bounded linear interpolations and no path flattening.
+    pub fn reveal_head_position_at_morph(&self, reveal: f32, morph: f32) -> Option<Vec2> {
         let first = *self.reveal_points.first()?;
         let last = *self.reveal_points.last()?;
         let reveal = if reveal.is_finite() {
@@ -67,26 +74,32 @@ impl TessellatedPath {
         } else {
             0.0
         };
+        let morph = if morph.is_finite() {
+            morph.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let position =
+            |point: RevealPoint| point.position * (1.0 - morph) + point.target_position * morph;
         let upper = self
             .reveal_points
             .partition_point(|point| point.progress < reveal);
         if upper == 0 {
-            return Some(first.position);
+            return Some(position(first));
         }
         if upper >= self.reveal_points.len() {
-            return Some(last.position);
+            return Some(position(last));
         }
         let left = self.reveal_points[upper - 1];
         let right = self.reveal_points[upper];
         let span = right.progress - left.progress;
         if span <= f32::EPSILON {
-            return Some(right.position);
+            return Some(position(right));
         }
         let t = ((reveal - left.progress) / span).clamp(0.0, 1.0);
-        Some(Vec2::new(
-            left.position.x + (right.position.x - left.position.x) * t,
-            left.position.y + (right.position.y - left.position.y) * t,
-        ))
+        let left = position(left);
+        let right = position(right);
+        Some(left * (1.0 - t) + right * t)
     }
 }
 
@@ -120,6 +133,7 @@ impl std::error::Error for GeometryError {}
 struct RevealPoint {
     progress: f32,
     position: Vec2,
+    target_position: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -402,6 +416,7 @@ fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryEr
                 points.push(RevealPoint {
                     progress: progress(curve_index),
                     position: to,
+                    target_position: to,
                 });
                 current = Some(to);
                 contour_start = Some(to);
@@ -498,12 +513,14 @@ fn append_reveal_segment(
         points.push(RevealPoint {
             progress: start_progress,
             position: from,
+            target_position: from,
         });
     }
     if (to.x - from.x).hypot(to.y - from.y) > 0.0 {
         points.push(RevealPoint {
             progress: end_progress,
             position: to,
+            target_position: to,
         });
     }
 }
@@ -640,7 +657,7 @@ fn tessellate_morph_path(
 ) -> Result<TessellatedPath, GeometryError> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let reveal_points = build_reveal_points(source)?;
+    let source_reveal_points = build_reveal_points(source)?;
 
     if fill_enabled {
         let fill = if preserve_morph_order {
@@ -703,23 +720,33 @@ fn tessellate_morph_path(
             bounds,
             stroke_length: 0.0,
             morphing: true,
-            reveal_points,
+            reveal_points: source_reveal_points,
         });
     }
 
-    let plan = if preserve_morph_order {
-        crate::plan_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+    let (plan, authored_progress) = if preserve_morph_order {
+        let prepared =
+            crate::morph::plan_with_authored_progress(source, target, crate::MorphOptions::DEFAULT)
+                .map_err(|error| {
+                    GeometryError::Tessellation(format!("morph planning failed: {error}"))
+                })?;
+        (prepared.plan, Some(prepared.contours))
     } else {
-        crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
-    }
-    .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
+        (
+            crate::plan_morph(source, target, crate::MorphOptions::DEFAULT).map_err(|error| {
+                GeometryError::Tessellation(format!("morph planning failed: {error}"))
+            })?,
+            None,
+        )
+    };
     let total_points = plan.point_count();
     let mut global_point = 0_usize;
     let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
     let half_width = stroke_width * 0.5;
     let mut stroke_length = 0.0_f32;
+    let reveal_points = morph_reveal_points(&plan, authored_progress.as_deref());
 
-    for contour in &plan.contours {
+    for (contour_index, contour) in plan.contours.iter().enumerate() {
         let point_count = contour.source_points.len();
         let segment_count = if contour.closed {
             point_count
@@ -753,8 +780,25 @@ fn tessellate_morph_path(
                 stroke_cap,
                 half_width,
             );
-            let start_progress = (global_point + segment) as f32 / progress_denominator;
-            let end_progress = (global_point + next) as f32 / progress_denominator;
+            let (start_progress, end_progress) = authored_progress
+                .as_ref()
+                .map(|progress| {
+                    let progress = &progress[contour_index];
+                    (
+                        progress.point_progress[segment],
+                        if contour.closed && next == 0 {
+                            progress.end_progress
+                        } else {
+                            progress.point_progress[next]
+                        },
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        (global_point + segment) as f32 / progress_denominator,
+                        (global_point + next) as f32 / progress_denominator,
+                    )
+                });
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -781,7 +825,10 @@ fn tessellate_morph_path(
             } else {
                 index + 1
             };
-            let progress = (global_point + index) as f32 / progress_denominator;
+            let progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].point_progress[index])
+                .unwrap_or((global_point + index) as f32 / progress_denominator);
             for side in [StrokeSide::Left, StrokeSide::Right] {
                 let source_join = join_polygon(
                     contour.source_points[previous],
@@ -816,7 +863,10 @@ fn tessellate_morph_path(
         if !contour.closed && stroke_cap == StrokeCap::Round {
             let source_start = round_cap_polygon(&contour.source_points, true, half_width);
             let target_start = round_cap_polygon(&contour.target_points, true, half_width);
-            let start_progress = (global_point as f32 / progress_denominator).clamp(0.0, 1.0);
+            let start_progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].point_progress[0])
+                .unwrap_or((global_point as f32 / progress_denominator).clamp(0.0, 1.0));
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -828,8 +878,13 @@ fn tessellate_morph_path(
 
             let source_end = round_cap_polygon(&contour.source_points, false, half_width);
             let target_end = round_cap_polygon(&contour.target_points, false, half_width);
-            let end_progress =
-                ((global_point + point_count - 1) as f32 / progress_denominator).clamp(0.0, 1.0);
+            let end_progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].end_progress)
+                .unwrap_or(
+                    ((global_point + point_count - 1) as f32 / progress_denominator)
+                        .clamp(0.0, 1.0),
+                );
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -852,6 +907,47 @@ fn tessellate_morph_path(
         morphing: true,
         reveal_points,
     })
+}
+
+fn morph_reveal_points(
+    plan: &crate::MorphPlan,
+    authored_progress: Option<&[crate::morph::AuthoredContourProgress]>,
+) -> Vec<RevealPoint> {
+    let total_points = plan.point_count();
+    let denominator = total_points.saturating_sub(1).max(1) as f32;
+    let mut global_point = 0_usize;
+    let mut points = Vec::new();
+    for (contour_index, contour) in plan.contours.iter().enumerate() {
+        for (point_index, (&position, &target_position)) in contour
+            .source_points
+            .iter()
+            .zip(&contour.target_points)
+            .enumerate()
+        {
+            let progress = authored_progress.map_or(
+                ((global_point + point_index) as f32 / denominator).clamp(0.0, 1.0),
+                |progress| progress[contour_index].point_progress[point_index],
+            );
+            points.push(RevealPoint {
+                progress,
+                position,
+                target_position,
+            });
+        }
+        if contour.closed {
+            let progress = authored_progress.map_or(
+                ((global_point + contour.source_points.len()) as f32 / denominator).clamp(0.0, 1.0),
+                |progress| progress[contour_index].end_progress,
+            );
+            points.push(RevealPoint {
+                progress,
+                position: contour.source_points[0],
+                target_position: contour.target_points[0],
+            });
+        }
+        global_point += contour.source_points.len();
+    }
+    points
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1718,6 +1814,87 @@ mod tests {
             .indices
             .iter()
             .all(|index| (*index as usize) < mesh.vertices.len()));
+    }
+
+    #[test]
+    fn ordered_morph_reveal_progress_tracks_authored_curves_not_flattened_samples() {
+        // The first curve needs substantially more adaptive samples than the line.
+        // Reveal still reaches their authored boundary at exactly one half.
+        let source = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(
+                Vec2::new(0.0, 1000.0),
+                Vec2::new(2.0, -1000.0),
+                Vec2::new(2.0, 0.0),
+            )
+            .line_to(Vec2::new(3.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(
+                Vec2::new(1000.0, 0.0),
+                Vec2::new(-1000.0, 2.0),
+                Vec2::new(0.0, 2.0),
+            )
+            .line_to(Vec2::new(0.0, 3.0));
+        let prepared = crate::morph::plan_with_authored_progress(
+            &source,
+            &target,
+            crate::MorphOptions::DEFAULT,
+        )
+        .unwrap();
+        let progress = &prepared.contours[0].point_progress;
+        let boundary = progress
+            .iter()
+            .position(|value| *value == 0.5)
+            .expect("second authored curve starts at one half");
+        assert!(
+            boundary > progress.len() / 2,
+            "adaptive first curve must dominate samples"
+        );
+
+        let mesh = tessellate_styled_with_fill_preserving_morph_order(
+            &source.with_morph_target(target),
+            0.1,
+            StrokeJoin::Round,
+            StrokeCap::Butt,
+            false,
+        )
+        .unwrap();
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.path_progress == 0.5));
+        assert!(mesh.vertices.iter().all(|vertex| {
+            vertex.path_progress.is_finite() && (0.0..=1.0).contains(&vertex.path_progress)
+        }));
+        let head = mesh
+            .reveal_head_position_at_morph(0.5, 0.5)
+            .expect("morphed reveal head");
+        assert!((head - Vec2::new(1.0, 1.0)).length() < 1.0e-5);
+    }
+
+    #[test]
+    fn degenerate_reveal_span_still_uses_the_morphed_endpoint() {
+        let mesh = TessellatedPath {
+            reveal_points: vec![
+                RevealPoint {
+                    progress: 0.0,
+                    position: Vec2::ZERO,
+                    target_position: Vec2::ZERO,
+                },
+                RevealPoint {
+                    progress: f32::EPSILON * 0.5,
+                    position: Vec2::new(1.0, 2.0),
+                    target_position: Vec2::new(5.0, 6.0),
+                },
+            ],
+            ..TessellatedPath::default()
+        };
+
+        assert_eq!(
+            mesh.reveal_head_position_at_morph(f32::EPSILON * 0.25, 0.25),
+            Some(Vec2::new(2.0, 3.0))
+        );
     }
 
     #[test]

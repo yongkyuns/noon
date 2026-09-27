@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
@@ -350,6 +350,45 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
                 validate_style(*object, *style).map_err(map_object_state_error)?;
+            }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => {
+                let mut seen = HashSet::with_capacity(dependencies.len());
+                for dependency in dependencies {
+                    if !seen.insert(dependency.edge) {
+                        return Err(CompilePatchError::DuplicateGraphDependency {
+                            owner: *owner,
+                            edge: dependency.edge,
+                        });
+                    }
+                    let mut require_object = |object| {
+                        overlay
+                            .object_index(scene, object)
+                            .ok_or(CompilePatchError::UnknownObject(object))
+                    };
+                    require_object(dependency.start_vertex)?;
+                    require_object(dependency.end_vertex)?;
+                    require_object(dependency.line)?;
+                    if let crate::CompiledGraphDependencyKind::Arrow {
+                        end_tip, start_tip, ..
+                    } = dependency.kind
+                    {
+                        require_object(end_tip)?;
+                        if let Some(start_tip) = start_tip {
+                            require_object(start_tip)?;
+                        }
+                    }
+                }
+                let count = scene
+                    .graph_edge_dependencies
+                    .len()
+                    .checked_add(dependencies.len())
+                    .ok_or(CompilePatchError::TooManyGraphDependencies(usize::MAX))?;
+                if count != 0 && u32::try_from(count - 1).is_err() {
+                    return Err(CompilePatchError::TooManyGraphDependencies(count));
+                }
             }
             ExecutionPatch::AddTrack(track) => {
                 if overlay.track(scene, track.id).is_some() {

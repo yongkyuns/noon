@@ -125,7 +125,26 @@ pub fn vector_path_matching_shape_key(
     path: &VectorPath,
     transform: Transform2D,
 ) -> Result<MatchingShapeKey, MatchingShapeKeyError> {
-    let bounds = vector_path_matching_shape_bounds(path, transform)?;
+    validate_matching_shape_input(path, transform)?;
+    // Preserve the public acceptance domain: matching remains unavailable when
+    // the effective world-space geometry overflows or collapses, even though
+    // translation and positive uniform scale do not contribute to identity.
+    vector_path_matching_shape_bounds(path, transform)?;
+    // Translation is deliberately outside the matching identity.  Computing a
+    // translated point and then subtracting a translated center is equivalent
+    // over the reals, but not for f32 values close to a quantization boundary.
+    // Canonicalize the affine part before either operation so equal paths at
+    // different positions always take the same quantization path.
+    let mut key_transform = Transform2D {
+        translation: Vec2::ZERO,
+        ..transform
+    };
+    // Positive uniform scale is also outside the matching identity. Normalize
+    // it before f32 point arithmetic for the same reason as translation.
+    if key_transform.scale.x > 0.0 && key_transform.scale.x == key_transform.scale.y {
+        key_transform.scale = Vec2::ONE;
+    }
+    let bounds = vector_path_matching_shape_bounds(path, key_transform)?;
     let height = bounds.max.y - bounds.min.y;
     let center = bounds.center();
 
@@ -134,16 +153,16 @@ pub fn vector_path_matching_shape_key(
         match *command {
             PathCommand::MoveTo { to } => {
                 key.push(0);
-                push_normalized_point(&mut key, to, transform, center, height)?;
+                push_normalized_point(&mut key, to, key_transform, center, height)?;
             }
             PathCommand::LineTo { to } => {
                 key.push(1);
-                push_normalized_point(&mut key, to, transform, center, height)?;
+                push_normalized_point(&mut key, to, key_transform, center, height)?;
             }
             PathCommand::QuadraticTo { control, to } => {
                 key.push(2);
-                push_normalized_point(&mut key, control, transform, center, height)?;
-                push_normalized_point(&mut key, to, transform, center, height)?;
+                push_normalized_point(&mut key, control, key_transform, center, height)?;
+                push_normalized_point(&mut key, to, key_transform, center, height)?;
             }
             PathCommand::CubicTo {
                 control1,
@@ -151,9 +170,9 @@ pub fn vector_path_matching_shape_key(
                 to,
             } => {
                 key.push(3);
-                push_normalized_point(&mut key, control1, transform, center, height)?;
-                push_normalized_point(&mut key, control2, transform, center, height)?;
-                push_normalized_point(&mut key, to, transform, center, height)?;
+                push_normalized_point(&mut key, control1, key_transform, center, height)?;
+                push_normalized_point(&mut key, control2, key_transform, center, height)?;
+                push_normalized_point(&mut key, to, key_transform, center, height)?;
             }
             PathCommand::Close => key.push(4),
         }
@@ -222,6 +241,14 @@ mod tests {
             .close()
     }
 
+    fn parity_triangle() -> VectorPath {
+        VectorPath::new()
+            .move_to(Vec2::new(-0.5, -0.8))
+            .line_to(Vec2::new(0.5, -0.8))
+            .line_to(Vec2::new(0.0, 0.8))
+            .close()
+    }
+
     #[test]
     fn key_ignores_translation_and_positive_uniform_scale() {
         let path = asymmetric_path();
@@ -236,6 +263,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(base, moved_scaled);
+
+        let triangle_base =
+            vector_path_matching_shape_key(&parity_triangle(), Transform2D::IDENTITY).unwrap();
+        let triangle_scaled = vector_path_matching_shape_key(
+            &parity_triangle(),
+            Transform2D {
+                translation: Vec2::new(17.0, -9.0),
+                rotation: 0.0,
+                scale: Vec2::new(3.25, 3.25),
+            },
+        )
+        .unwrap();
+        assert_eq!(triangle_base, triangle_scaled);
+    }
+
+    #[test]
+    fn key_groups_repeated_shapes_across_quantization_boundary_translations() {
+        // These translations exercise the f32 cancellation that used to send
+        // equal triangles down adjacent three-decimal rounding paths.
+        let path = parity_triangle();
+        let keys = [-2.4, -0.8, 0.8].map(|x| {
+            vector_path_matching_shape_key(
+                &path,
+                Transform2D {
+                    translation: Vec2::new(x, 1.5),
+                    rotation: 0.0,
+                    scale: Vec2::ONE,
+                },
+            )
+            .unwrap()
+        });
+        assert_eq!(keys[0], keys[1]);
+        assert_eq!(keys[1], keys[2]);
     }
 
     #[test]
@@ -252,6 +312,22 @@ mod tests {
         )
         .unwrap();
         assert_ne!(base, rotated);
+    }
+
+    #[test]
+    fn key_remains_non_uniform_scale_sensitive() {
+        let path = asymmetric_path();
+        let base = vector_path_matching_shape_key(&path, Transform2D::IDENTITY).unwrap();
+        let non_uniform = vector_path_matching_shape_key(
+            &path,
+            Transform2D {
+                translation: Vec2::ZERO,
+                rotation: 0.0,
+                scale: Vec2::new(2.0, 1.0),
+            },
+        )
+        .unwrap();
+        assert_ne!(base, non_uniform);
     }
 
     #[test]
@@ -312,6 +388,22 @@ mod tests {
         assert_eq!(
             vector_path_matching_shape_bounds(&morph, Transform2D::IDENTITY),
             Err(MatchingShapeKeyError::MorphTarget)
+        );
+    }
+
+    #[test]
+    fn key_rejects_overflowing_effective_world_geometry() {
+        let path = parity_triangle();
+        assert_eq!(
+            vector_path_matching_shape_key(
+                &path,
+                Transform2D {
+                    translation: Vec2::ZERO,
+                    rotation: 0.0,
+                    scale: Vec2::new(f32::MAX, f32::MAX),
+                },
+            ),
+            Err(MatchingShapeKeyError::DegenerateHeight)
         );
     }
 }

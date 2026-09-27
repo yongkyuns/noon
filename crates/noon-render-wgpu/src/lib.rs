@@ -880,6 +880,7 @@ impl FramePreparer {
                             frame.render_transform(object_index),
                             &self.path_mesh_cache[cache_index].mesh,
                             reveal,
+                            frame.morph(object_index),
                         );
                         instances_repacked += 1;
                         if self.lines[head_index] != packed_head {
@@ -1081,6 +1082,7 @@ impl FramePreparer {
                     frame.render_transform(object_index),
                     &self.path_mesh_cache[cache_index].mesh,
                     reveal,
+                    frame.morph(object_index),
                 ))
             } else {
                 None
@@ -1515,6 +1517,7 @@ impl FramePreparer {
                         frame.render_transform(object_index),
                         &self.path_mesh_cache[cache_index].mesh,
                         reveal,
+                        frame.morph(object_index),
                     ));
                     Some(head_index)
                 } else {
@@ -2496,9 +2499,12 @@ fn pack_path_reveal_head(
     render_transform: Transform2D,
     mesh: &TessellatedPath,
     reveal: f32,
+    morph: f32,
 ) -> LineInstance {
     let reveal = reveal.clamp(0.0, 1.0);
-    let point = mesh.reveal_head_position(reveal).unwrap_or(Vec2::ZERO);
+    let point = mesh
+        .reveal_head_position_at_morph(reveal, morph)
+        .unwrap_or(Vec2::ZERO);
     let mut transform = packed_path_transform(object.style, render_transform);
     transform.padding = 1.0;
     let mut style = pack_style(object);

@@ -6,7 +6,7 @@ const read = name => readFile(new URL(name, import.meta.url), "utf8");
 
 test("static qualification cannot accidentally consume an animated gallery source", async () => {
   const harness = await read("../scripts/plotting-qualification.mjs");
-  assert.match(harness, /examples\/coordinate_plotting_static\.py/);
+  assert.match(harness, /file: "coordinate_plotting_static\.py"/);
   const source = await read("./python/examples/coordinate_plotting_static.py");
   assert.doesNotMatch(source, /self\.(?:play|wait)\(/);
   assert.match(source, /self\.add\(axes, curve, data, title, label\)/);

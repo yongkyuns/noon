@@ -8,7 +8,8 @@
 
 use std::{fmt, sync::Arc};
 
-use super::{TextPart, TextResource, TextSourceSpan};
+use super::{GlyphRun, TextPart, TextRenderItem, TextResource, TextSourceSpan};
+use crate::{Rect, Vec2};
 
 const SOURCE_PART_KEY_PREFIX: &str = "noon:text:source";
 
@@ -21,6 +22,8 @@ pub enum TextPartQueryError {
     NonContiguousClusters,
     /// The normalized vector items selected by the source span are not contiguous.
     NonContiguousVectors,
+    /// A selected vector refers to missing or retired geometry.
+    MissingGeometry(crate::GeometryResourceHandle),
 }
 
 impl fmt::Display for TextPartQueryError {
@@ -32,6 +35,9 @@ impl fmt::Display for TextPartQueryError {
                     formatter,
                     "text source span maps to non-contiguous clusters"
                 )
+            }
+            Self::MissingGeometry(handle) => {
+                write!(formatter, "text part geometry is unavailable: {handle:?}")
             }
             Self::NonContiguousVectors => {
                 write!(
@@ -46,6 +52,129 @@ impl fmt::Display for TextPartQueryError {
 impl std::error::Error for TextPartQueryError {}
 
 impl TextResource {
+    /// Build one independently transformable retained leaf for an authored part.
+    ///
+    /// The leaf keeps the canonical source and shares font identities, variation
+    /// arrays, layout identity, and vector geometry handles with the compiled
+    /// resource. Only the small run/item index vectors and selected glyph records
+    /// are projected once at authoring time. No outline extraction or geometry
+    /// compilation is performed here or during ordinary frame evaluation.
+    pub fn projected_part(
+        &self,
+        part: &TextPart,
+        geometry: &impl crate::GeometryResourceLookup,
+    ) -> Result<Self, TextPartQueryError> {
+        let cluster_end = part
+            .first_cluster
+            .checked_add(part.cluster_count)
+            .ok_or(TextPartQueryError::NonContiguousClusters)?;
+        let vector_end = part
+            .first_vector
+            .checked_add(part.vector_count)
+            .ok_or(TextPartQueryError::NonContiguousVectors)?;
+        if cluster_end > u32::try_from(self.cluster_count()).unwrap_or(u32::MAX)
+            || vector_end > u32::try_from(self.vector_count()).unwrap_or(u32::MAX)
+        {
+            return Err(TextPartQueryError::InvalidSourceSpan);
+        }
+
+        let mut projected_runs = Vec::new();
+        let mut run_map = vec![None; self.runs.len()];
+        let mut bounds = None;
+        for (old_index, run) in self.runs.iter().enumerate() {
+            let glyphs = run
+                .glyphs
+                .iter()
+                .filter(|glyph| {
+                    (part.first_cluster..cluster_end).contains(&glyph.cluster.cluster_ordinal)
+                })
+                .cloned()
+                .map(|mut glyph| {
+                    glyph.cluster.cluster_ordinal -= part.first_cluster;
+                    glyph
+                })
+                .collect::<Vec<_>>();
+            if glyphs.is_empty() {
+                continue;
+            }
+            let mut projected: GlyphRun = run.clone();
+            projected.glyphs = glyphs.into();
+            for glyph in projected.glyphs.iter() {
+                let glyph_bounds = transform_rect(glyph.bounds, run.transform);
+                bounds =
+                    Some(bounds.map_or(glyph_bounds, |current: Rect| current.union(glyph_bounds)));
+            }
+            let new_index = u32::try_from(projected_runs.len())
+                .map_err(|_| TextPartQueryError::NonContiguousClusters)?;
+            run_map[old_index] = Some(new_index);
+            projected_runs.push(projected);
+        }
+
+        let vector_start = usize::try_from(part.first_vector)
+            .map_err(|_| TextPartQueryError::NonContiguousVectors)?;
+        let vector_end_usize =
+            usize::try_from(vector_end).map_err(|_| TextPartQueryError::NonContiguousVectors)?;
+        let projected_vectors = self.vector_items[vector_start..vector_end_usize].to_vec();
+        // An indexed fraction/radical part owns only its selected rules. Using
+        // the complete formula's bounds would corrupt part layout and matching.
+        for vector in &projected_vectors {
+            let crate::GeometryResource::VectorPath(path) = geometry
+                .get(vector.geometry)
+                .ok_or(TextPartQueryError::MissingGeometry(vector.geometry))?;
+            if let Some(local) =
+                crate::semantic_path_bounds(path, f64::from(vector.style.stroke_width)).layout
+            {
+                let local = Rect::new(
+                    Vec2::new(local.min_x as f32, local.min_y as f32),
+                    Vec2::new(local.max_x as f32, local.max_y as f32),
+                );
+                let vector_bounds = transform_rect(local, vector.transform);
+                bounds = Some(
+                    bounds.map_or(vector_bounds, |current: Rect| current.union(vector_bounds)),
+                );
+            }
+        }
+
+        let mut render_items = Vec::new();
+        for item in self.render_items.iter().copied() {
+            match item {
+                TextRenderItem::GlyphRun(old) => {
+                    if let Some(Some(new)) = run_map.get(old as usize) {
+                        render_items.push(TextRenderItem::GlyphRun(*new));
+                    }
+                }
+                TextRenderItem::Vector(old) if old >= part.first_vector && old < vector_end => {
+                    render_items.push(TextRenderItem::Vector(old - part.first_vector));
+                }
+                TextRenderItem::Vector(_) => {}
+            }
+        }
+
+        let projected_part = TextPart {
+            source_span: part.source_span,
+            first_cluster: 0,
+            cluster_count: part.cluster_count,
+            first_vector: 0,
+            vector_count: part.vector_count,
+            semantic_key: part.semantic_key.clone(),
+        };
+        let resource = Self {
+            source: self.source.clone(),
+            kind: self.kind,
+            runs: projected_runs.into(),
+            vector_items: projected_vectors.into(),
+            render_items: render_items.into(),
+            parts: std::sync::Arc::from([projected_part]),
+            bounds: bounds.unwrap_or_else(|| Rect::new(Vec2::ZERO, Vec2::ZERO)),
+            baseline: self.baseline,
+            layout_artifact: self.layout_artifact.clone(),
+        };
+        resource
+            .validate()
+            .map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
+        Ok(resource)
+    }
+
     /// Project one UTF-8 source span onto normalized cluster/vector ranges.
     ///
     /// `source_span` itself is the stable semantic identity. The synthesized semantic key is
@@ -94,6 +223,25 @@ impl TextResource {
             .collect::<Result<Vec<_>, _>>()?;
         project_source_parts(self, &spans)
     }
+}
+
+fn transform_rect(bounds: Rect, transform: super::TextAffineTransform) -> Rect {
+    let corners = [
+        bounds.min,
+        Vec2::new(bounds.max.x, bounds.min.y),
+        bounds.max,
+        Vec2::new(bounds.min.x, bounds.max.y),
+    ]
+    .map(|point| transform.transform_point(point));
+    let mut min = corners[0];
+    let mut max = corners[0];
+    for point in corners.into_iter().skip(1) {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+    }
+    Rect::new(min, max)
 }
 
 fn source_part_key(span: TextSourceSpan) -> Arc<str> {
@@ -319,6 +467,107 @@ mod tests {
         let first_parts = first.source_parts_for("hello").unwrap();
         let second_parts = second.source_parts_for("hello").unwrap();
         assert_eq!(first_parts, second_parts);
+    }
+
+    #[test]
+    fn projected_part_is_a_valid_single_part_resource_with_local_indices() {
+        let resource = sample_text("ab cd");
+        let part = resource.source_parts_for("cd").unwrap().remove(0);
+
+        let projected = resource
+            .projected_part(&part, &crate::GeometryResourceArena::new())
+            .unwrap();
+
+        assert_eq!(projected.source.as_ref(), "ab cd");
+        assert_eq!(projected.cluster_count(), 2);
+        assert_eq!(projected.runs.len(), 1);
+        assert_eq!(projected.runs[0].glyphs.len(), 2);
+        assert_eq!(
+            projected.render_items.as_ref(),
+            [TextRenderItem::GlyphRun(0)]
+        );
+        assert_eq!(projected.parts.len(), 1);
+        assert_eq!(projected.parts[0].source_span, TextSourceSpan::new(3, 5));
+        assert_eq!(projected.parts[0].semantic_key, part.semantic_key);
+        assert_eq!(projected.parts[0].first_cluster, 0);
+        assert_eq!(projected.parts[0].cluster_count, 2);
+        let queried = projected.source_parts_for("cd").unwrap();
+        assert_eq!(queried[0].first_cluster, 0);
+        assert_eq!(queried[0].cluster_count, 2);
+        let selected_again = projected
+            .projected_part(&queried[0], &crate::GeometryResourceArena::new())
+            .unwrap();
+        assert_eq!(selected_again.runs, projected.runs);
+        projected.validate().unwrap();
+    }
+
+    #[test]
+    fn projected_part_keeps_all_glyphs_of_one_cluster() {
+        let mut resource = sample_text("ab");
+        let runs = Arc::make_mut(&mut resource.runs);
+        let mut glyphs = runs[0].glyphs.to_vec();
+        glyphs.insert(1, glyphs[0].clone());
+        runs[0].glyphs = glyphs.into();
+        let geometry = crate::GeometryResourceArena::new();
+        for (needle, count) in [("a", 2), ("b", 1)] {
+            let part = resource.source_parts_for(needle).unwrap().remove(0);
+            let projected = resource.projected_part(&part, &geometry).unwrap();
+            assert_eq!(projected.glyph_count(), count);
+            assert!(projected.runs[0]
+                .glyphs
+                .iter()
+                .all(|glyph| glyph.cluster.cluster_ordinal == 0));
+            assert_eq!(
+                projected.source_parts_for(needle).unwrap()[0].first_cluster,
+                0
+            );
+            assert_eq!(
+                projected.runs[0].glyphs[0].glyph_id,
+                needle.as_bytes()[0] as u32
+            );
+        }
+    }
+
+    #[test]
+    fn projected_part_bounds_include_only_selected_vector_resources() {
+        let mut geometry = crate::GeometryResourceArena::new();
+        let rule = geometry.insert_path(
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0))
+                .line_to(Vec2::new(1.0, 0.1))
+                .line_to(Vec2::new(0.0, 0.1))
+                .close(),
+        );
+        let mut resource = sample_text("ab");
+        resource.vector_items = Arc::from(
+            [4.0, 100.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| crate::TextVectorItem {
+                    geometry: rule,
+                    transform: TextAffineTransform::translation(x, 2.0),
+                    style: crate::TextVectorStyle::default(),
+                    source_span: Some(TextSourceSpan::new(i as u32, i as u32 + 1)),
+                    semantic_key: None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        resource.render_items = Arc::from([
+            TextRenderItem::GlyphRun(0),
+            TextRenderItem::Vector(0),
+            TextRenderItem::Vector(1),
+        ]);
+        resource.bounds = Rect::new(Vec2::ZERO, Vec2::new(101.0, 2.1));
+        let part = resource.source_parts_for("a").unwrap().remove(0);
+        let projected = resource.projected_part(&part, &geometry).unwrap();
+        assert_eq!(projected.bounds.max, Vec2::new(5.0, 2.1));
+        assert_eq!(projected.vector_items.len(), 1);
+        assert_eq!(projected.vector_items[0].geometry, rule);
+        assert_eq!(
+            resource.projected_part(&part, &crate::GeometryResourceArena::new()),
+            Err(TextPartQueryError::MissingGeometry(rule))
+        );
     }
 
     #[test]

@@ -46,6 +46,42 @@ pub(crate) fn publish_geometry_options(
     })
 }
 
+/// Publish a detached family of ordinary path leaves through this Scene's one
+/// semantic publication route. Paths are admitted only after preparation has
+/// completed, and admission, family creation, and leaf creation share one
+/// rollback boundary.
+pub(crate) fn publish_path_family(
+    scene: &mut Scene,
+    paths: Vec<(VectorPath, noon_core::SemanticStyle)>,
+) -> Result<MobjectFamily, AuthoringError> {
+    let root = scene.root;
+    let store_rc = Rc::clone(&scene.store);
+    if let Some(execution) = scene.execution.as_mut() {
+        {
+            let store = store_rc.borrow();
+            execution
+                .require_resource_creation_at_root(&store, root)
+                .map_err(AuthoringError::from)?;
+        }
+        let family = crate::family_authoring::publish_path_family_with(
+            &mut store_rc.borrow_mut(),
+            paths,
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            },
+        )?;
+        return MobjectFamily::from_node(store_rc, family);
+    }
+    let family = crate::family_authoring::publish_path_family_with(
+        &mut store_rc.borrow_mut(),
+        paths,
+        |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+    )?;
+    MobjectFamily::from_node(store_rc, family)
+}
+
 /// A scene owns its shared semantic store/root and, after bootstrap, the one
 /// execution component lowered from them. The optional execution slot is control
 /// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
@@ -830,6 +866,22 @@ impl Scene {
         .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn change_chart_values(
+        &mut self,
+        chart: &mut crate::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), crate::CoordinateAuthoringError> {
+        if !Rc::ptr_eq(&self.store, chart.family().integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        if self.execution.is_some() {
+            chart.change_bar_values_live(&mut self.owned_live(), values, update_colors)
+        } else {
+            chart.change_bar_values_cold(values, update_colors)
+        }
+    }
+
     /// Install the execution component lowered from this exact Scene.
     ///
     /// This is private migration plumbing for the Scene-owned live path. External
@@ -850,10 +902,29 @@ impl Scene {
         }
     }
 
+    pub(crate) fn composite_entry_state(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            &self.store,
+            self.execution.as_ref(),
+            self.root,
+            object,
+        )
+    }
+
     pub(crate) fn owned_execution_mut(&mut self) -> &mut ExecutionSession {
         self.execution
             .as_mut()
             .expect("scene execution component is not initialized")
+    }
+
+    /// Borrow the Scene-owned execution component when this Scene has crossed
+    /// the execution boundary. Feature admissions use this to publish their
+    /// prepared resources through the same atomic root transaction as geometry.
+    pub(crate) fn running_execution_mut(&mut self) -> Option<&mut ExecutionSession> {
+        self.execution.as_mut()
     }
 
     pub(crate) fn owned_live(&mut self) -> LiveSession<'_> {
@@ -875,7 +946,96 @@ impl Scene {
 }
 #[cfg(test)]
 mod arrow_atomicity_tests;
+mod brace;
 #[cfg(test)]
 mod geometry_atomicity_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "latex")]
+impl Scene {
+    /// Compile real TeX and atomically publish one detached text Mobject.
+    ///
+    /// The backend is an explicit host boundary; compiled vectors, fonts, and
+    /// the semantic node enter together through the same cold/live transaction.
+    pub fn tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    /// Compile real display math and atomically publish one detached text Mobject.
+    pub fn math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_math_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    /// Construct one detached, tracker-driven `label = value` composite through
+    /// a single resource and semantic publication boundary.
+    #[cfg(feature = "latex")]
+    pub fn variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, crate::VariableAuthoringError> {
+        crate::variable_authoring::construct_variable(
+            &self.store,
+            self.root,
+            self.execution.as_mut(),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+    }
+
+    fn publish_latex_admission(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let result = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    transaction
+                        .apply(store)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+        };
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
+        };
+        Mobject::from_node(store_rc, *node).map_err(crate::TextAuthoringError::Semantic)
+    }
+}

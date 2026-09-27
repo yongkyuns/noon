@@ -82,15 +82,17 @@ impl DirectPointerPresentation {
 
     /// Publication identity can change without dirty renderer rows (for example,
     /// a signal with no visual dependents). Re-present that identity through the
-    /// normal host wake rather than making the next pointer occurrence discover
-    /// and repair the stale receipt. Callback barriers are not display races.
+    /// normal host wake when pointer input is interested; a registered but
+    /// dormant view does not need receipt-only redraws. Callback barriers are
+    /// not display races.
     pub(crate) fn needs_refresh(&self, session: &ExecutionSession) -> bool {
         self.refresh_pending
-            || self.presented.as_ref().is_some_and(|frame| {
-                frame
-                    .validate_current(session, frame.view())
-                    .is_err_and(|error| recoverable_frame_error(&error))
-            })
+            || (session.has_native_pointer_subscribers()
+                && self.presented.as_ref().is_some_and(|frame| {
+                    frame
+                        .validate_current(session, frame.view())
+                        .is_err_and(|error| recoverable_frame_error(&error))
+                }))
     }
 
     pub(crate) fn invalidate(&mut self) {

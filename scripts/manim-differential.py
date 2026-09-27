@@ -1071,7 +1071,68 @@ def _text_range_color_observation(api):
     }
 
 
+def _area_probe(api, case, scene=None):
+    y_range = [2, 5, 1] if case == "positive_axis" else [-2, 3, 1]
+    axes = api.Axes([-2, 2, 1], y_range, x_length=6, y_length=4, tips=False)
+    if scene is not None:
+        scene.add(axes)
+    graph = axes.plot(lambda x: 0.5 * x + 0.75, [-2, 2, 0.5], use_smoothing=False)
+    bounded = axes.plot(lambda x: -0.5 * x, [-2, 2, 0.5], use_smoothing=False) if case == "bounded" else None
+    if scene is not None:
+        scene.add(graph)
+        if bounded is not None:
+            scene.add(bounded)
+    area = axes.get_area(graph, [-1.25, 1.25], bounded_graph=bounded, color=api.GREEN, opacity=0.4)
+    return {**_object_observation(area), "start": _point_observation(area.get_start()),
+            "end": _point_observation(area.get_end()), "fill": _paint_rgb(area.get_fill_color()),
+            "fill_opacity": float(area.get_fill_opacity()), "stroke_opacity": float(area.get_stroke_opacity())}
+
+
+def _riemann_probe(api, case, scene=None):
+    axes = api.Axes([-2, 2, 1], [-2, 3, 1], x_length=6, y_length=4, tips=False)
+    if scene is not None:
+        scene.add(axes)
+    graph = axes.plot(lambda x: x, [-2, 2, 0.5], use_smoothing=False)
+    bounded = axes.plot(lambda x: -0.2, [-2, 2, 0.5], use_smoothing=False) if case == "bounded" else None
+    if scene is not None:
+        scene.add(graph)
+        if bounded is not None:
+            scene.add(bounded)
+    options = {"input_sample_type": "right", "width_scale_factor": 0.25} if case == "right" else {"input_sample_type": "center"}
+    rectangles = axes.get_riemann_rectangles(graph, [-1, 1.1], dx=0.5, bounded_graph=bounded,
+                                            blend=case == "blend", show_signed_area=case != "unsigned", **options)
+    return [{**_object_observation(rect), "start": _point_observation(rect.get_start()),
+             "fill": _paint_rgb(rect.get_fill_color()), "stroke": _paint_rgb(rect.get_stroke_color()),
+             "fill_opacity": float(rect.get_fill_opacity()), "stroke_width": float(rect.get_stroke_width())}
+            for rect in rectangles.submobjects]
+
+
+def _noon_live_scene_probe(probe: Callable[[Any], Any]) -> Any:
+    """Run a coordinate fixture through one active shared Rust Scene context.
+
+    Coordinate constructors intentionally have no detached authoring fallback:
+    their retained families must be created by the canonical live context. Keep
+    this scope local to those fixtures so the detached-object semantics covered
+    by the other differential probes remain unchanged.
+    """
+    scene = noon.Scene()
+    scene.live_execution()
+    from _manim_reactive import _enter_authoring_scene, _leave_authoring_scene
+
+    token = _enter_authoring_scene(scene)
+    try:
+        return probe(scene)
+    finally:
+        _leave_authoring_scene(token)
+
+
 FIXTURES = [
+    *[Fixture(f"area_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _area_probe(noon, c, scene)),
+              lambda c=case: _area_probe(manim, c), tolerance=2e-5)
+      for case in ("baseline", "positive_axis", "bounded")],
+    *[Fixture(f"riemann_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _riemann_probe(noon, c, scene)),
+              lambda c=case: _riemann_probe(manim, c), tolerance=2e-5)
+      for case in ("center", "right", "bounded", "blend", "unsigned")],
     Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
             lambda: _text_range_color_observation(manim)),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),

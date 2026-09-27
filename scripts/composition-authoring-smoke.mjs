@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -155,3 +156,12 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS shared composition: 20 retained samples cover unequal runtimes, nested/nonlinear timing, Wait/Add, LaggedStartMap and repeated targets");
 } finally { await browser?.close(); await server.close(); }
+
+// Qualify Noon's independent retained channels separately from Manim point mutation.
+await qualifyPairedAuthoring({
+  artifactDirectory: process.env.NOON_MORPH_REVEAL_ARTIFACTS ?? "morph-reveal-artifacts",
+  cases: [1.5, 2.5, 3].map(sampleTime => ({
+    id: `morph-reveal-${sampleTime}`, file: "ordinary_morph_reveal.py",
+    factory: "createDirectMorphRevealRenderer", objectCount: 1, duration: 3, sampleTime,
+  })),
+});

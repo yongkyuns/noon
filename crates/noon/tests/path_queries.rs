@@ -1,4 +1,7 @@
-use noon::{AnimationOptions, RateFunction, Scene, Vec2, VectorPath};
+use noon::{
+    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene,
+    SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
+};
 
 fn near(actual: (f64, f64), expected: (f64, f64)) {
     assert!(
@@ -257,6 +260,62 @@ fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coher
             midpoint.curve_points(index).unwrap()
         );
     }
+}
+
+#[test]
+fn effective_combined_morph_reveal_uses_authored_curve_progress_and_direct_seek() {
+    let mut scene = Scene::new();
+    let source = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .cubic_to(Vec2::new(0., 5.), Vec2::new(2., -5.), Vec2::new(2., 0.))
+        .line_to(Vec2::new(3., 0.));
+    let target_path = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .cubic_to(Vec2::new(5., 0.), Vec2::new(-5., 2.), Vec2::new(0., 2.))
+        .line_to(Vec2::new(0., 3.));
+    let object = scene.path(source, Default::default()).unwrap();
+    let target = scene.path(target_path, Default::default()).unwrap();
+    let linear = AnimationOptions::new()
+        .run_time(2.)
+        .rate_func(RateFunction::Linear);
+    let request = AnimationCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        children: vec![
+            AnimationCompositionRequest::Create {
+                target: &object,
+                options: linear,
+            },
+            AnimationCompositionRequest::TransformTo(TransformToRequest::point_correspondence(
+                &object, &target, linear,
+            )),
+        ],
+        options: AnimationOptions::new(),
+    };
+    let mut session = scene.execution_session().unwrap();
+    let segment = scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.)
+        .unwrap();
+    let midpoint =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
+    // Persistent partial geometry keeps the zero-length boundary curve so later
+    // path alignment observes the same authored two-curve topology.
+    assert_eq!(midpoint.curve_count(), 2);
+    near(midpoint.start().unwrap(), (0., 0.));
+    near(midpoint.end().unwrap(), (1., 1.));
+
+    session.seek(0.25).unwrap();
+    session.seek(1.).unwrap();
+    let replay =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
+    assert_eq!(replay.anchors_and_handles(), midpoint.anchors_and_handles());
+    assert_eq!(replay.end().unwrap(), midpoint.end().unwrap());
 }
 
 #[test]

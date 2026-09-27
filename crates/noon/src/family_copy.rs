@@ -2,11 +2,16 @@
 use crate::AuthoringError;
 use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeCreation, SemanticNodeId, SemanticNodeKind, SemanticObjectState, SemanticStore,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeBinding,
+    SemanticGraphEdgeDependency, SemanticLocalNodeToken, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
+    SemanticObjectState, SemanticStore, SemanticTransactionGraphDeclaration,
+    SemanticTransactionGraphEdgeBinding,
 };
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 /// A detached copied family and a derived mapping for host wrapper reconstruction.
 /// The semantic store owns all copied nodes; dropping this lookup does not change them.
@@ -138,14 +143,17 @@ impl PendingFamilyCopy {
 pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     source: &MobjectFamily,
     references: &[MobjectTarget<'_>],
-    mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
+    mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
 ) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), E> {
     source.validate()?;
     let store = source.integration_store();
+    let graph_dependency_rows = graph_dependency_copy_rows(source)?;
     let mut transaction = SemanticMutationTransaction::new();
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
+    let mut table_layouts = Vec::new();
+    let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
     for target in references {
         queue.push(target.require_store(store)?);
@@ -178,13 +186,27 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if let Some(graph) = graph_declaration {
             graph_declarations.push((id, graph));
         }
+        if members.is_some() {
+            if let Some(layout) = store
+                .borrow()
+                .semantic_table_layout(id)
+                .map_err(AuthoringError::from)?
+            {
+                table_layouts.push((id, layout));
+            }
+        }
         let creation = if let Some(members) = members {
             queue.extend(members.iter().rev().copied());
             edges.push((id, members));
             SemanticNodeCreation::family()
         } else {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
-            SemanticNodeCreation::object(capture(&mobject)?)
+            let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
+            if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
+                inset_views.push((id, view));
+                state.set_role(noon_core::SemanticObjectRole::Ordinary);
+            }
+            SemanticNodeCreation::object(state)
         };
         let pending = transaction.create_node(creation);
         if let Some(z) = family_z {
@@ -197,19 +219,44 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             transaction.add_member(copied[&parent], copied[&member]);
         }
     }
+    for (display, view) in inset_views {
+        let camera = copied
+            .get(&view.camera_frame)
+            .copied()
+            .map(noon_core::SemanticTransactionNodeRef::from)
+            .unwrap_or_else(|| view.camera_frame.into());
+        transaction.set_inset_2d_view(copied[&display], camera, view.capture_own_display);
+    }
     for (source_family, graph) in graph_declarations {
         let vertices = graph.vertices().map(|(id, source)| (id, copied[&source]));
-        let edges = graph.edges().map(|(edge, binding)| {
-            SemanticTransactionGraphEdgeBinding::new(
-                edge.id,
-                copied[&binding.family()].into(),
-                copied[&binding.line()].into(),
-            )
-        });
+        let edges = graph
+            .edges()
+            .map(|(edge, binding)| match binding.dependency() {
+                SemanticGraphEdgeDependency::Line => SemanticTransactionGraphEdgeBinding::new(
+                    edge.id,
+                    copied[&binding.family()].into(),
+                    copied[&binding.line()].into(),
+                ),
+                SemanticGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                } => SemanticTransactionGraphEdgeBinding::new_arrow(
+                    edge.id,
+                    copied[&binding.family()].into(),
+                    copied[&binding.line()].into(),
+                    copied[&end_tip].into(),
+                    start_tip.map(|tip| copied[&tip].into()),
+                    policy,
+                ),
+            });
         transaction.set_graph_declaration(
             copied[&source_family],
             SemanticTransactionGraphDeclaration::new(graph.topology().clone(), vertices, edges),
         );
+    }
+    for (source_family, layout) in table_layouts {
+        transaction.set_table_layout(copied[&source_family], layout);
     }
     Ok((
         transaction,
@@ -219,6 +266,40 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             copied,
         },
     ))
+}
+
+fn graph_dependency_copy_rows<E: From<AuthoringError>>(
+    source: &MobjectFamily,
+) -> Result<HashSet<SemanticNodeId>, E> {
+    let store = source.integration_store().borrow();
+    let mut rows = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![source.node_id()];
+    while let Some(node_id) = stack.pop() {
+        if !seen.insert(node_id) {
+            continue;
+        }
+        let node = store.node(node_id).ok_or_else(|| {
+            AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(node_id))
+        })?;
+        let SemanticNodeKind::Family(_) = node.kind() else {
+            continue;
+        };
+        if let Some(graph) = node.graph_declaration() {
+            for (_, binding) in graph.edges() {
+                rows.insert(binding.line());
+                if let SemanticGraphEdgeDependency::Arrow {
+                    end_tip, start_tip, ..
+                } = binding.dependency()
+                {
+                    rows.insert(end_tip);
+                    rows.extend(start_tip);
+                }
+            }
+        }
+        stack.extend(node.members_iter());
+    }
+    Ok(rows)
 }
 
 impl MobjectFamily {
@@ -234,7 +315,8 @@ impl MobjectFamily {
         &self,
         references: &[MobjectTarget<'_>],
     ) -> Result<FamilyCopy, AuthoringError> {
-        let (transaction, pending) = prepare_family_copy(self, references, Mobject::state)?;
+        let (transaction, pending) =
+            prepare_family_copy(self, references, |mobject, _| mobject.state())?;
         let result = transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map_err(AuthoringError::from)?;

@@ -715,7 +715,7 @@ test("selection-only publications retry presentation, gate clear, and settle wit
   // GPU results are deliberately stubbed: this proves production controller
   // ordering/acknowledgement, not the shape or pixels drawn by Rust/WASM.
   harness.createdRenderer.applyDeltaJson = json => { applied.push(JSON.parse(json)); return true; };
-  const selected = { channel: "noon.execution.retained", protocol_version: 5,
+  const selected = { channel: "noon.execution.retained", protocol_version: 6,
     session: 12, sequence: 4, time: 0, snapshot: false, objects: [],
     selection_overlay: { geometry: { kind: "circle", radius: 1 },
       transform: { translation: {x:0,y:0}, scale: {x:1,y:1}, rotation: 0 } } };

@@ -37,7 +37,7 @@ impl LiveSession<'_> {
         };
         self.publish_path_edits(prepared).map(|_| ())
     }
-    pub(super) fn publish_path_edits(
+    pub(crate) fn publish_path_edits(
         &mut self,
         prepared: crate::path_editing::PreparedPathEdits,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {

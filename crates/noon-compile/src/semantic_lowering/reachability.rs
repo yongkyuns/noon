@@ -30,6 +30,7 @@ struct ReachabilityNode {
     kind: ReachabilityKind,
     scene_root: bool,
     reachable_parents: HashSet<SemanticNodeId>,
+    graph_root: bool,
 }
 
 impl ReachabilityNode {
@@ -57,6 +58,9 @@ enum ReachabilityKind {
 pub struct SemanticExecutionReachabilityUpdate {
     entered_objects: Vec<SemanticNodeId>,
     exited_objects: Vec<SemanticNodeId>,
+    entered_graph_roots: Vec<SemanticNodeId>,
+    exited_graph_roots: Vec<SemanticNodeId>,
+    updated_graph_roots: Vec<SemanticNodeId>,
 }
 
 impl SemanticExecutionReachabilityUpdate {
@@ -69,7 +73,23 @@ impl SemanticExecutionReachabilityUpdate {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entered_objects.is_empty() && self.exited_objects.is_empty()
+        self.entered_objects.is_empty()
+            && self.exited_objects.is_empty()
+            && self.entered_graph_roots.is_empty()
+            && self.exited_graph_roots.is_empty()
+            && self.updated_graph_roots.is_empty()
+    }
+
+    pub fn entered_graph_roots(&self) -> &[SemanticNodeId] {
+        &self.entered_graph_roots
+    }
+
+    pub fn exited_graph_roots(&self) -> &[SemanticNodeId] {
+        &self.exited_graph_roots
+    }
+
+    pub fn updated_graph_roots(&self) -> &[SemanticNodeId] {
+        &self.updated_graph_roots
     }
 }
 
@@ -200,6 +220,7 @@ impl SemanticExecutionReachability {
         impacts: &[SemanticMutationImpact],
     ) -> Result<SemanticExecutionReachabilityUpdate, SemanticLoweringError> {
         let mut journal = ReachabilityJournal::default();
+        let mut updated_graph_roots = Vec::new();
 
         for impact in impacts {
             match *impact {
@@ -223,20 +244,46 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
+                | SemanticMutationImpact::BarMetadata { .. }
+                | SemanticMutationImpact::ObjectRole { .. }
+                | SemanticMutationImpact::DecimalNumber { .. }
+                | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
                 | SemanticMutationImpact::ForegroundMembers { .. }
-                | SemanticMutationImpact::GraphDeclaration { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::NodeAdded { .. }
                 | SemanticMutationImpact::AnimationAdded { .. } => {}
+                SemanticMutationImpact::GraphDeclaration { scope } => {
+                    let Some(reachable) =
+                        self.nodes.get(&scope).map(ReachabilityNode::is_reachable)
+                    else {
+                        continue;
+                    };
+                    self.record_touch(&mut journal, scope);
+                    let graph_root = store
+                        .node(scope)
+                        .and_then(|node| node.graph_declaration())
+                        .is_some();
+                    self.nodes
+                        .get_mut(&scope)
+                        .expect("tracked graph scope remains present")
+                        .graph_root = graph_root;
+                    if reachable && graph_root {
+                        updated_graph_roots.push(scope);
+                    }
+                }
             }
         }
 
-        self.finish_update(store, journal)
+        let mut update = self.finish_update(store, journal)?;
+        updated_graph_roots.sort_unstable();
+        updated_graph_roots.dedup();
+        update.updated_graph_roots = updated_graph_roots;
+        Ok(update)
     }
 
     fn finish_update(
@@ -263,6 +310,20 @@ impl SemanticExecutionReachability {
             match (before, after) {
                 (false, true) => update.entered_objects.push(*id),
                 (true, false) => update.exited_objects.push(*id),
+                _ => {}
+            }
+            let graph_before = journal
+                .originals
+                .get(id)
+                .and_then(Option::as_ref)
+                .is_some_and(|node| node.graph_root && node.is_reachable());
+            let graph_after = self
+                .nodes
+                .get(id)
+                .is_some_and(|node| node.graph_root && node.is_reachable());
+            match (graph_before, graph_after) {
+                (false, true) => update.entered_graph_roots.push(*id),
+                (true, false) => update.exited_graph_roots.push(*id),
                 _ => {}
             }
         }
@@ -347,6 +408,7 @@ impl SemanticExecutionReachability {
                 kind,
                 scene_root: false,
                 reachable_parents: HashSet::new(),
+                graph_root: node.graph_declaration().is_some(),
             },
         );
         Ok(true)

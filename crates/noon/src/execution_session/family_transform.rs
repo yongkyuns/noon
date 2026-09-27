@@ -159,6 +159,19 @@ pub(super) fn build_matching_family_transform_plan(
     moved_sources: &[PreparedMatchingShapeSourceMember],
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
     let runtime = &session.runtime;
+    let foreground_members = store
+        .node(root)
+        .ok_or_else(|| "matching foreground scope is missing".to_owned())?
+        .foreground_members();
+    // Foreground admission preserves the declared source family projection.
+    // Matching's temporary equal-key group can pad its own members, but those
+    // copies are not members of the retained foreground source. Target-side
+    // leftovers are independently admitted and still receive transient rows.
+    let derived_occurrences = if foreground_members.contains(&payload.source_root()) {
+        &[][..]
+    } else {
+        payload.derived_occurrences()
+    };
     // Admission moves ordinary sources ahead of the ordered foreground tail.
     // A detached target leftover belongs before that tail even when the source
     // itself is foreground, or this z layer has no ordinary stable anchor.
@@ -166,11 +179,7 @@ pub(super) fn build_matching_family_transform_plan(
     let mut foreground_heads = std::collections::HashMap::new();
     if !payload.target_leftovers().is_empty() {
         let mut seen = std::collections::HashSet::new();
-        for &foreground in store
-            .node(root)
-            .ok_or_else(|| "matching foreground scope is missing".to_owned())?
-            .foreground_members()
-        {
+        for &foreground in foreground_members {
             for node in store
                 .ordered_authoring_nodes(foreground)
                 .map_err(|e| e.to_string())?
@@ -209,7 +218,7 @@ pub(super) fn build_matching_family_transform_plan(
     }
     build_matching_family_transform_plan_from_parts(
         runtime,
-        payload.derived_occurrences(),
+        derived_occurrences,
         payload.target_leftovers(),
         payload.target_occurrence_index_start(),
         |z| {

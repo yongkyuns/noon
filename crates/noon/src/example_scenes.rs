@@ -2,8 +2,14 @@
 
 pub mod affine_fade;
 pub mod analytic_profile;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub mod bar_chart;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod brace_text;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;
@@ -15,24 +21,33 @@ pub mod family_paint;
 pub mod family_placement;
 pub mod family_replacement;
 pub mod family_transform_indicate;
+pub mod foreground_matching;
 pub mod foreground_membership;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod markup_text;
+#[cfg(feature = "latex")]
+pub mod matrix;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
+#[cfg(feature = "latex")]
+pub mod numeric_decimal;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod polar_plane;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
+pub mod sample_space;
 pub mod specialized_geometry;
 pub mod svg_morph;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]
+pub mod table;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -46,6 +61,9 @@ pub mod text_source_parts;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
+#[cfg(feature = "latex")]
+pub mod variable;
+pub mod zoomed_scene;
 
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 use crate::{MathTypst, Typst};
@@ -3308,3 +3326,6 @@ pub mod graph;
 pub mod implicit_plotting;
 pub mod number_plane;
 pub mod pointer_selection;
+
+#[cfg(feature = "latex")]
+pub mod latex_text;

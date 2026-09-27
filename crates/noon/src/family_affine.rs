@@ -18,13 +18,16 @@ pub(crate) enum FamilyAffine {
 }
 
 impl FamilyAffine {
-    /// Keep ordinary affine edits resource-free. A world-axis scale that requires
-    /// shear is baked into only the affected immutable vector paths.
-    pub(crate) fn prepare(
+    /// Prepare one affine edit for an addressed root.  A Table's spacing is an
+    /// authored declaration on its own family root, so only a scale addressed
+    /// at that root changes its buffers. Scaling an enclosing family still uses
+    /// ordinary leaf affine behavior.
+    pub(crate) fn prepare_for_scope(
         self,
         store: &SemanticStore,
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
+        scope: Option<SemanticNodeId>,
     ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
         let mut affine_leaves = Vec::new();
         let mut replacements = Vec::new();
@@ -45,7 +48,7 @@ impl FamilyAffine {
             }
             affine_leaves.push(leaf);
         }
-        let transaction = self.transaction(store, &affine_leaves, bounds)?;
+        let transaction = self.transaction(store, &affine_leaves, bounds, scope)?;
         Ok(
             crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
                 .with_transaction(transaction),
@@ -57,6 +60,7 @@ impl FamilyAffine {
         store: &SemanticStore,
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
+        scope: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let center = bounds_critical_point(bounds, 0.0, 0.0);
         if let Self::Flip(axis, _) = self {
@@ -146,6 +150,19 @@ impl FamilyAffine {
             }
             stage_state_changes(&mut transaction, leaf, previous, &next);
         }
+        if let (Self::Scale(x, y, _), Some(scope)) = (self, scope) {
+            if matches!(
+                store.node(scope).map(|node| node.kind()),
+                Some(noon_core::SemanticNodeKind::Family(_))
+            ) {
+                if let Some(layout) = store
+                    .semantic_table_layout(scope)
+                    .map_err(AuthoringError::from)?
+                {
+                    transaction.set_table_layout(scope, layout.scaled_buffers(x, y));
+                }
+            }
+        }
         Ok(transaction)
     }
 }
@@ -206,7 +223,10 @@ fn resolve_pivot(
 impl MobjectFamily {
     /// Scale each unique semantic leaf about the family center in one transaction.
     pub fn scale(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        self.apply_affine(FamilyAffine::Scale(x, y, ManimRotationPivot::Center))
+        LayoutAnchor::from(self).apply_affine_with_table_layout(
+            FamilyAffine::Scale(x, y, ManimRotationPivot::Center),
+            Some(self.node_id()),
+        )
     }
 
     /// Rotate each unique leaf about a shared center, edge or explicit point.
@@ -250,11 +270,30 @@ impl LayoutAnchor {
     }
 
     fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
+        let scope = self.resolve()?;
+        self.apply_affine_with_table_layout(operation, Some(scope))
+    }
+
+    pub(crate) fn apply_affine_without_table_layout(
+        &self,
+        operation: FamilyAffine,
+    ) -> Result<(), AuthoringError> {
+        self.apply_affine_with_table_layout(operation, None)
+    }
+
+    /// Direct family and anchor scales update Table buffers, including with a
+    /// pivot. Stretch operations explicitly opt out.
+    pub(crate) fn apply_affine_with_table_layout(
+        &self,
+        operation: FamilyAffine,
+        table_layout_scope: Option<SemanticNodeId>,
+    ) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
-        let prepared = operation.prepare(
+        let prepared = operation.prepare_for_scope(
             &self.integration_store().borrow(),
             layout.leaves(),
             layout.boundary_bounds(),
+            table_layout_scope,
         )?;
         prepared.publish(
             &mut self.integration_store().borrow_mut(),

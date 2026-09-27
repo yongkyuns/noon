@@ -528,7 +528,7 @@ fn surface_cleanup_does_not_relax_explicit_source_retirement() {
 }
 
 #[test]
-fn signal_only_publication_requests_receipt_refresh_without_scene_dirtiness() {
+fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let source = NativeStateSource::Control {
@@ -555,15 +555,66 @@ fn signal_only_publication_requests_receipt_refresh_without_scene_dirtiness() {
     assert!(session.take_renderer_publication().changes().is_empty());
     assert!(!session.wake_state().frame_pending());
     for _ in 0..128 {
-        assert!(host.needs_refresh(&session));
+        assert!(!host.needs_refresh(&session));
         assert!(
             !session.wake_state().frame_pending(),
-            "receipt refresh is not scene invalidation"
+            "a dormant pointer view must not request receipt-only refreshes"
         );
     }
+    assert_eq!(
+        host.presented.as_ref().unwrap().publication(),
+        displayed,
+        "quiet publication changes must not rewrite the dormant receipt"
+    );
+}
+
+#[test]
+fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let source = NativeStateSource::Control {
+        name: "receipt-only".into(),
+    };
+    signal(
+        &mut store,
+        root,
+        source.clone(),
+        SemanticSignalValue::Scalar(0.0),
+    );
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.enable_pointer_fill_selection(4.0).unwrap();
+    assert!(session.has_native_pointer_subscribers());
+    let mut host = DirectPointerPresentation::default();
+    host.set_view(1, SIZE).unwrap();
     let frame = host.capture(&session, session.camera().unwrap()).unwrap();
+    session.take_renderer_publication();
     host.did_present(frame);
-    assert!(!host.needs_refresh(&session));
+    let displayed = host.presented.clone().unwrap();
+
+    session
+        .set_native_state_input(source, NativeInputValue::Scalar(1.0))
+        .unwrap();
+    assert_ne!(displayed.publication(), session.publication_context());
+    assert!(session.take_renderer_publication().changes().is_empty());
+    assert!(host.needs_refresh(&session));
+
+    // A stale occurrence triggers cancellation and a fresh presentation; it
+    // must never be silently replayed against the newly published receipt.
+    let mut binding = None;
+    let mut sequence = 0;
+    assert!(!host
+        .submit(
+            &mut session,
+            &mut binding,
+            &mut sequence,
+            input(BrowserPointerKind::Press),
+        )
+        .unwrap());
+    assert_eq!(
+        sequence, 0,
+        "the stale occurrence is never admitted or replayed"
+    );
+    assert!(host.refresh_pending);
 }
 
 #[test]

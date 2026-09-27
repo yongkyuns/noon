@@ -6,9 +6,13 @@ use super::{MathTypst, Typst, TypstSpec};
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 
 mod objects;
+#[cfg(feature = "typst")]
+pub(crate) use objects::{prepare_math_typst, prepare_typst, TypstAdmission};
+#[cfg(feature = "latex")]
+pub(crate) mod decimal_labels;
 #[cfg(feature = "native-text")]
 pub(crate) use objects::prepare_native_text;
-#[cfg(feature = "typst")]
-pub(crate) use objects::{math_typst_state, typst_state};
 #[cfg(feature = "native-text")]
 mod number_labels;
+#[cfg(feature = "latex")]
+pub(crate) use decimal_labels::PreparedDecimalLabels;

@@ -8,9 +8,9 @@
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
-    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
-    StoredGeometry, Vec2, VectorPath,
+    Color, SemanticArrowShaftRole, SemanticGraphArrowPolicy, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectRole,
+    SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -153,33 +153,39 @@ impl ManimArrowOptions {
         self,
         store: &mut SemanticStore,
     ) -> Result<PreparedArrow, AuthoringError> {
-        let ShortenedLine {
+        let endpoint_policy = SemanticGraphArrowPolicy::new(
+            self.buff,
+            self.tip_length,
+            self.max_tip_length_to_length_ratio,
+        );
+        debug_assert!(endpoint_policy.is_valid());
+        let geometry = noon_geometry::ArrowGeometry::between(
+            self.start,
+            self.end,
+            self.buff,
+            self.tip_length,
+            self.max_tip_length_to_length_ratio,
+            self.start_tip,
+        );
+        let noon_geometry::ArrowGeometry {
             visible_start,
             visible_end,
             direction,
-            length,
-        } = shortened_line(self.start, self.end, self.buff)?;
-        let effective_tip_length = self
-            .tip_length
-            .min(self.max_tip_length_to_length_ratio * length);
-        let end_base = (
-            visible_end.0 - direction.0 * effective_tip_length,
-            visible_end.1 - direction.1 * effective_tip_length,
-        );
-        let start_base = (
-            visible_start.0 + direction.0 * effective_tip_length,
-            visible_start.1 + direction.1 * effective_tip_length,
-        );
-        let shaft_start = if self.start_tip {
-            start_base
-        } else {
-            visible_start
-        };
-        let shaft_end = end_base;
-        // Manim attaches the end tip before it caps the stroke. A DoubleArrow
-        // then attaches its start tip without recalculating that cap, so use
-        // the post-end-tip shaft length rather than the final visible shaft.
-        let stroke_cap_length = (end_base.0 - visible_start.0).hypot(end_base.1 - visible_start.1);
+            visible_length,
+            tip_length: effective_tip_length,
+            shaft_start,
+            shaft_end,
+            ..
+        } = geometry;
+        for (name, value) in [
+            ("arrow visible start x", visible_start.0),
+            ("arrow visible start y", visible_start.1),
+            ("arrow visible end x", visible_end.0),
+            ("arrow visible end y", visible_end.1),
+            ("arrow visible length", visible_length),
+        ] {
+            crate::integration::authoring_render_f64(name, value)?;
+        }
 
         let mut shaft = self.prototype.into_state(store)?;
         shaft.content = StoredGeometry::Line {
@@ -193,7 +199,7 @@ impl ManimArrowOptions {
             self.max_stroke_width_to_length_ratio,
         )));
         shaft.style.stroke_width =
-            initial_stroke_width.min(self.max_stroke_width_to_length_ratio * stroke_cap_length);
+            geometry.stroke_width(initial_stroke_width, self.max_stroke_width_to_length_ratio);
 
         let tip_color = manim_visible_color(&shaft.style);
         let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
@@ -214,6 +220,7 @@ impl ManimArrowOptions {
             start_tip,
             tip_color,
             z_index: self.z_index,
+            endpoint_policy,
         })
     }
 }
@@ -366,6 +373,9 @@ pub(crate) struct PreparedArrow {
     pub(crate) start_tip: Option<VectorPath>,
     pub(crate) tip_color: Color,
     pub(crate) z_index: f64,
+    /// Constructor policy retained only so composite semantic declarations can
+    /// lower the same Arrow at effective endpoint positions.
+    pub(crate) endpoint_policy: SemanticGraphArrowPolicy,
 }
 
 pub(crate) struct StagedArrow {
@@ -373,6 +383,7 @@ pub(crate) struct StagedArrow {
     pub(crate) shaft: noon_core::SemanticLocalNodeToken,
     pub(crate) end_tip: noon_core::SemanticLocalNodeToken,
     pub(crate) start_tip: Option<noon_core::SemanticLocalNodeToken>,
+    pub(crate) endpoint_policy: SemanticGraphArrowPolicy,
 }
 
 #[derive(Debug)]
@@ -381,13 +392,6 @@ pub(crate) struct CommittedArrow {
     shaft: noon_core::SemanticNodeId,
     end_tip: noon_core::SemanticNodeId,
     start_tip: Option<noon_core::SemanticNodeId>,
-}
-
-struct ShortenedLine {
-    visible_start: (f64, f64),
-    visible_end: (f64, f64),
-    direction: (f64, f64),
-    length: f64,
 }
 
 /// Materialize one Arrow request inside the existing resource rollback scope.
@@ -451,6 +455,7 @@ pub(crate) fn stage_prepared_arrow(
         shaft,
         end_tip,
         start_tip,
+        endpoint_policy: prepared.endpoint_policy,
     }
 }
 
@@ -489,61 +494,13 @@ fn tip_state(
     state
 }
 
-fn shortened_line(
-    start: (f64, f64),
-    end: (f64, f64),
-    buff: f64,
-) -> Result<ShortenedLine, AuthoringError> {
-    let dx = end.0 - start.0;
-    let dy = end.1 - start.1;
-    let length = dx.hypot(dy);
-    let direction = if length == 0.0 {
-        (1.0, 0.0)
-    } else {
-        (dx / length, dy / length)
-    };
-    let (visible_start, visible_end) = if buff > 0.0 && length >= 2.0 * buff && length > 0.0 {
-        (
-            (start.0 + direction.0 * buff, start.1 + direction.1 * buff),
-            (end.0 - direction.0 * buff, end.1 - direction.1 * buff),
-        )
-    } else {
-        (start, end)
-    };
-    let visible_length = (visible_end.0 - visible_start.0).hypot(visible_end.1 - visible_start.1);
-    for (name, value) in [
-        ("arrow visible start x", visible_start.0),
-        ("arrow visible start y", visible_start.1),
-        ("arrow visible end x", visible_end.0),
-        ("arrow visible end y", visible_end.1),
-        ("arrow visible length", visible_length),
-    ] {
-        crate::integration::authoring_render_f64(name, value)?;
-    }
-    Ok(ShortenedLine {
-        visible_start,
-        visible_end,
-        direction,
-        length: visible_length,
-    })
-}
-
 fn triangle_tip_path(
     apex: (f64, f64),
     direction: (f64, f64),
     length: f64,
 ) -> Result<VectorPath, AuthoringError> {
-    let base = (apex.0 - direction.0 * length, apex.1 - direction.1 * length);
-    let half_width = length * 0.5;
-    let perpendicular = (-direction.1, direction.0);
-    let first_base = (
-        base.0 + perpendicular.0 * half_width,
-        base.1 + perpendicular.1 * half_width,
-    );
-    let second_base = (
-        base.0 - perpendicular.0 * half_width,
-        base.1 - perpendicular.1 * half_width,
-    );
+    let [apex, first_base, second_base] =
+        noon_geometry::arrow_tip_vertices(apex, direction, length);
     Ok(VectorPath::new()
         .move_to(lower_point("arrow tip apex", apex)?)
         .line_to(lower_point("arrow tip base 1", first_base)?)

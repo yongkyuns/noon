@@ -136,14 +136,18 @@ class Brace(_compat.VMobject):
             fill_opacity=fill_value,
             background_stroke_width=background_stroke_width,
         )
-        candidate = engine_call(
-            target.beginBrace,
-            direction_value.x,
-            direction_value.y,
-            buff_value,
-            sharpness_value,
-            operation="Brace",
-        )
+        context = _shared._live_constructor_context("Brace", allow_unstarted=True)
+        if context is None:
+            candidate = engine_call(
+                target.beginBrace, direction_value.x, direction_value.y,
+                buff_value, sharpness_value, operation="Brace",
+            )
+        else:
+            candidate = engine_call(
+                context.liveBraceGeometryOptions, _shared._layout_anchor(mobject),
+                direction_value.x, direction_value.y, buff_value, sharpness_value,
+                operation="Brace",
+            )
         _finish_candidate(self, candidate, "Brace", options)
         self.buff = buff_value
         self.sharpness = sharpness_value
@@ -152,9 +156,9 @@ class Brace(_compat.VMobject):
     def get_tip(self) -> _base.Vec2:
         """Return the pinned ManimCE v0.21 brace-tip anchor."""
         # Cairo's Brace.get_tip() returns points[28] == the eighth anchor in
-        # the canonical cubic path. Noon's anchors come from the Rust-owned
+        # the canonical cubic path. Noon's start anchors come from the Rust-owned
         # retained VectorPath query, so Python owns only the class-specific index.
-        anchors = self.get_anchors()
+        anchors = self.get_start_anchors()
         if len(anchors) <= _BRACE_TIP_ANCHOR_INDEX:
             raise RuntimeError("Brace path does not contain the canonical tip anchor")
         return anchors[_BRACE_TIP_ANCHOR_INDEX]
@@ -252,12 +256,7 @@ class BraceBetweenPoints(Brace):
 
 
 class BraceLabel(_compat.VGroup):
-    """Brace plus label as an ordinary semantic family.
-
-    Noon's retained B4 layer does not yet expose ManimCE ``MathTex``. Therefore
-    the upstream default constructor is fail-closed until that dependency lands;
-    callers may already use an explicit retained label constructor such as ``Text``.
-    """
+    """Brace plus a retained ``MathTex`` label as an ordinary semantic family."""
 
     def __init__(
         self,
@@ -288,15 +287,56 @@ class BraceLabel(_compat.VGroup):
 
         self.label_constructor = constructor
         self.brace_direction = _base._as_vec2(brace_direction)
-        self.brace = Brace(
-            obj,
-            direction=self.brace_direction,
-            buff=buff,
-            **brace_options,
+        self._brace_buff = _shared._ir._finite_number("buff", buff)
+        self._brace_sharpness = _shared._ir._finite_number("sharpness", brace_options.pop("sharpness", 2.0))
+        if brace_options:
+            raise NotImplementedError("unsupported BraceLabel brace_config option(s): " + ", ".join(sorted(brace_options)))
+        context = _shared._live_constructor_context("BraceLabel", allow_unstarted=True)
+        if context is None:
+            raise RuntimeError("BraceLabel requires a canonical Scene authoring context")
+        target = _shared._layout_anchor(obj)
+        if target is None:
+            raise TypeError("BraceLabel target requires a shared Mobject or family")
+        label = _new_label(constructor, text, font_size_value)
+        label_anchor = _shared._layout_anchor(label)
+        if label_anchor is None:
+            raise TypeError("BraceLabel label requires a shared Mobject or family")
+        self._brace_label_handle = engine_call(
+            context.liveCreateBraceLabel, target, label_anchor,
+            self.brace_direction.x, self.brace_direction.y,
+            self._brace_buff, self._brace_sharpness, _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+            operation="BraceLabel.create",
         )
-        self.label = _new_label(constructor, text, font_size_value)
-        self.brace.put_at_tip(self.label)
-        super().__init__(self.brace, self.label, z_index=z_index)
+        self._canonical_live_target_context = context
+        self._install_members(label)
+        if z_index != 0:
+            self.set_z_index(z_index)
+
+    def _install_members(self, label):
+        handle = engine_call(self._brace_label_handle.brace)
+        brace = getattr(self, "brace", None)
+        previous = getattr(brace, "_semantic_handle", None)
+        if previous is None or (getattr(previous, "semanticSlot", None), getattr(previous, "semanticGeneration", None)) != (getattr(handle, "semanticSlot", None), getattr(handle, "semanticGeneration", None)):
+            brace = object.__new__(Brace)
+        _shared._attach_shared_handle(brace, handle)
+        brace._canonical_live_target_context = self._canonical_live_target_context
+        brace.buff = self._brace_buff
+        brace.sharpness = self._brace_sharpness
+        brace.direction = self.brace_direction
+        self.brace, self.label = brace, label
+        self._semantic_family_handle = engine_call(self._brace_label_handle.family)
+        self._semantic_member_wrappers = {
+            _shared._family_wrapper_key(member): member for member in (brace, label)
+        }
+
+    def _rehydrate_semantic_family_handle(self):
+        self._brace_label_handle = engine_call(
+            self._semantic_family_handle.asBraceLabel,
+            self.brace_direction.x, self.brace_direction.y,
+            self._brace_buff, self._brace_sharpness, _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+        )
+        # The ordinary family-copy pass has already rebound both wrapper identities.
+        self.brace, self.label = self.submobjects
 
     def creation_anim(self, label_anim=None, brace_anim=None):
         if label_anim is None:
@@ -307,52 +347,42 @@ class BraceLabel(_compat.VGroup):
         return animation_group(brace_anim(self.brace), label_anim(self.label))
 
     def shift_brace(self, obj: _base.Mobject, **kwargs: Any) -> BraceLabel:
+        if kwargs:
+            raise NotImplementedError("shift_brace option changes are not yet supported")
         if isinstance(obj, list):
             obj = _compat.VGroup(*obj)
-        old_brace = self.brace
-        # Prepare the replacement before changing family membership. Constructor
-        # and brace-geometry failures therefore leave the published composite intact.
-        brace = Brace(obj, direction=self.brace_direction, **kwargs)
-        brace.put_at_tip(self.label)
-        self.remove(old_brace, self.label)
-        self.add(brace, self.label)
-        self.brace = brace
+        target = _shared._layout_anchor(obj)
+        if target is None:
+            raise TypeError("BraceLabel target requires a shared Mobject or family")
+        engine_call(self._canonical_live_target_context.liveShiftBraceLabel,
+                    self._brace_label_handle, target, operation="BraceLabel.shift_brace")
+        self._install_members(self.label)
         return self
 
     def change_label(self, *text: str, **kwargs: Any) -> BraceLabel:
-        old_label = self.label
-        # Construct, validate, and place the detached replacement first. User
-        # constructor/placement failures cannot dismantle the existing family.
         label = self.label_constructor(*text, **kwargs)
-        if not isinstance(label, _base.Mobject):
-            raise TypeError("label_constructor must return a Mobject")
-        self.brace.put_at_tip(label)
-        self.remove(old_label)
-        self.add(label)
-        self.label = label
+        anchor = _shared._layout_anchor(label)
+        if anchor is None:
+            raise TypeError("label_constructor must return a shared Mobject or family")
+        engine_call(self._canonical_live_target_context.liveReplaceBraceLabel,
+                    self._brace_label_handle, anchor, operation="BraceLabel.change_label")
+        self._install_members(label)
         return self
 
-    def change_brace_label(
-        self,
-        obj: _base.Mobject,
-        *text: str,
-        **kwargs: Any,
-    ) -> BraceLabel:
+    def change_brace_label(self, obj: _base.Mobject, *text: str, **kwargs: Any) -> BraceLabel:
         if isinstance(obj, list):
             obj = _compat.VGroup(*obj)
-        old_brace = self.brace
-        old_label = self.label
-        # Prepare both replacements before publishing either one, so a label
-        # failure cannot leave a newly committed brace paired with the old label.
-        brace = Brace(obj, direction=self.brace_direction)
+        target = _shared._layout_anchor(obj)
+        if target is None:
+            raise TypeError("BraceLabel target requires a shared Mobject or family")
         label = self.label_constructor(*text, **kwargs)
-        if not isinstance(label, _base.Mobject):
-            raise TypeError("label_constructor must return a Mobject")
-        brace.put_at_tip(label)
-        self.remove(old_brace, old_label)
-        self.add(brace, label)
-        self.brace = brace
-        self.label = label
+        anchor = _shared._layout_anchor(label)
+        if anchor is None:
+            raise TypeError("label_constructor must return a shared Mobject or family")
+        engine_call(self._canonical_live_target_context.liveChangeBraceLabel,
+                    self._brace_label_handle, target, anchor,
+                    operation="BraceLabel.change_brace_label")
+        self._install_members(label)
         return self
 
 

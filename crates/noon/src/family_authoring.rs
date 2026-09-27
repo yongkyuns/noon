@@ -1,5 +1,8 @@
 //! Typed handle for authoritative semantic family membership.
 
+mod path_admission;
+pub(crate) use path_admission::publish_path_family_with;
+
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
@@ -67,6 +70,36 @@ impl FamilyTranslation {
                 .map(|state| state.transform.translation)
                 .map_err(AuthoringError::from)
         })
+    }
+
+    /// Stage this translation into an aggregate semantic transaction.
+    ///
+    /// Composite authoring uses this instead of publishing an intermediate
+    /// placement transaction. Repeated leaves are accumulated before one
+    /// property write per semantic identity.
+    pub(crate) fn stage(
+        self,
+        transaction: &mut SemanticMutationTransaction,
+        store: &SemanticStore,
+    ) -> Result<(), AuthoringError> {
+        let mut translations = BTreeMap::new();
+        for (leaf, x, y) in self.into_shifts() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = translations.entry(leaf) {
+                let translation = store
+                    .semantic_object_state_checked(leaf)
+                    .map_err(AuthoringError::from)?
+                    .transform
+                    .translation;
+                entry.insert(translation);
+            }
+            let translation = translations.get_mut(&leaf).expect("inserted above");
+            translation.x += x;
+            translation.y += y;
+        }
+        for (leaf, translation) in translations {
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        Ok(())
     }
 
     pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {

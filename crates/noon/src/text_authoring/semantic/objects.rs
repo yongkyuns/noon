@@ -4,23 +4,34 @@ use super::TextAuthoringError;
 use super::{MathTypst, Typst};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
-#[cfg(feature = "typst")]
-use noon_core::GeometryResourceArena;
 #[cfg(feature = "native-text")]
 use noon_core::Vec2;
 #[cfg(feature = "typst")]
 use noon_typst::TypstMode;
 
-#[cfg(feature = "native-text")]
-pub(crate) struct NativeTextAdmission {
+#[cfg(feature = "typst")]
+pub(crate) struct TypstAdmission {
+    identity: noon_core::TextCompilationIdentity,
     resource: noon_core::TextResource,
     fonts: noon_core::FontResourceArena,
+    geometry: noon_core::GeometryResourceArena,
     transform: noon_core::SemanticTransform2_5D,
     style: noon_core::SemanticStyle,
 }
 
-#[cfg(feature = "native-text")]
-impl NativeTextAdmission {
+trait CompiledTextAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError>;
+}
+
+#[cfg(feature = "typst")]
+impl TypstAdmission {
     pub(crate) fn publish<T>(
         self,
         store: &mut noon_core::SemanticStore,
@@ -30,17 +41,110 @@ impl NativeTextAdmission {
         ) -> Result<T, TextAuthoringError>,
     ) -> Result<T, TextAuthoringError> {
         let Self {
+            identity,
+            resource,
+            fonts,
+            geometry,
+            transform,
+            style,
+        } = self;
+        store.publish_compiled_detached_text(
+            identity,
+            resource,
+            fonts,
+            &geometry,
+            move |handle| semantic_text_state(handle, transform, style),
+            publish,
+        )
+    }
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) struct NativeTextAdmission {
+    identity: noon_core::TextCompilationIdentity,
+    resource: noon_core::TextResource,
+    fonts: noon_core::FontResourceArena,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+}
+
+#[cfg(feature = "native-text")]
+impl NativeTextAdmission {
+    /// Split a native-text admission for a larger atomic publication.
+    ///
+    /// Containers such as `Table` import all shaped resources as one batch and
+    /// create their topology in the same semantic transaction.  Keeping this
+    /// at the text boundary prevents a container from recreating native text
+    /// state (and accidentally losing its presentation contract).
+    pub(crate) fn into_compiled_resource_parts_with_presentation(
+        self,
+    ) -> (
+        noon_core::TextCompilationIdentity,
+        noon_core::TextResource,
+        noon_core::FontResourceArena,
+        noon_core::GeometryResourceArena,
+        noon_core::SemanticTransform2_5D,
+        noon_core::SemanticStyle,
+    ) {
+        (
+            self.identity,
+            self.resource,
+            self.fonts,
+            noon_core::GeometryResourceArena::new(),
+            self.transform,
+            self.style,
+        )
+    }
+    pub(crate) fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        let Self {
+            identity,
             resource,
             fonts,
             transform,
             style,
         } = self;
-        store.publish_glyph_detached_text(
+        store.publish_compiled_glyph_detached_text(
+            identity,
             resource,
             fonts,
             move |handle| semantic_text_state(handle, transform, style),
             publish,
         )
+    }
+}
+
+#[cfg(feature = "native-text")]
+impl CompiledTextAdmission for NativeTextAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        NativeTextAdmission::publish(self, store, publish)
+    }
+}
+
+#[cfg(feature = "typst")]
+impl CompiledTextAdmission for TypstAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        TypstAdmission::publish(self, store, publish)
     }
 }
 
@@ -51,6 +155,7 @@ pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, Tex
         NATIVE_POINT_TO_SCENE_SCALE,
         NATIVE_POINT_TO_SCENE_SCALE,
     ));
+    let identity = super::super::compiler::native_identity(&text)?;
     let artifact = text.compile_artifact_with_fill(None)?;
     let (transform, style) = text_artifact_presentation(
         transform,
@@ -58,46 +163,89 @@ pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, Tex
         text.presentation.opacity,
     )?;
     Ok(NativeTextAdmission {
-        resource: artifact.resource,
-        fonts: artifact.fonts,
+        identity,
+        resource: artifact.resource.as_ref().clone(),
+        fonts: artifact.fonts.as_ref().clone(),
         transform,
         style,
     })
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn typst_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    text: Typst,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
-    typst_spec_state(store, text.0, TypstMode::Markup)
+pub(crate) fn prepare_typst(text: Typst) -> Result<TypstAdmission, TextAuthoringError> {
+    prepare_typst_spec(text.0, TypstMode::Markup)
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn math_typst_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    text: MathTypst,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
-    typst_spec_state(store, text.0, TypstMode::Math)
+pub(crate) fn prepare_math_typst(text: MathTypst) -> Result<TypstAdmission, TextAuthoringError> {
+    prepare_typst_spec(text.0, TypstMode::Math)
 }
 
 impl crate::Scene {
-    /// Create an ordinary detached native text Mobject in this scene's shared store.
+    /// Shape and atomically admit one detached native text Mobject.
     #[cfg(feature = "native-text")]
-    pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_text(std::rc::Rc::clone(self.integration_store()), text)
+    pub fn text(&mut self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_text_admission(prepare_native_text(text.into())?)
     }
 
     /// Create an ordinary detached Typst Mobject in this scene's shared store.
     #[cfg(feature = "typst")]
-    pub fn typst(&self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_typst(std::rc::Rc::clone(self.integration_store()), text)
+    pub fn typst(&mut self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_typst_admission(prepare_typst(text)?)
     }
 
     /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
     #[cfg(feature = "typst")]
-    pub fn math_typst(&self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_math_typst(std::rc::Rc::clone(self.integration_store()), text)
+    pub fn math_typst(&mut self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_typst_admission(prepare_math_typst(text)?)
+    }
+}
+
+impl crate::Scene {
+    #[cfg(feature = "native-text")]
+    fn publish_text_admission(
+        &mut self,
+        admission: NativeTextAdmission,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_compiled_text_admission(admission)
+    }
+
+    #[cfg(feature = "typst")]
+    fn publish_typst_admission(
+        &mut self,
+        admission: TypstAdmission,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_compiled_text_admission(admission)
+    }
+
+    fn publish_compiled_text_admission<A: CompiledTextAdmission>(
+        &mut self,
+        admission: A,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        let root = self.root();
+        let store_rc = std::rc::Rc::clone(self.integration_store());
+        let result = if let Some(execution) = self.running_execution_mut() {
+            execution
+                .require_resource_creation_at_root(&store_rc.borrow(), root)
+                .map_err(|error| TextAuthoringError::Semantic(error.into()))?;
+            let mut store = store_rc.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })?
+        } else {
+            let mut store = store_rc.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })?
+        };
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one text admission creates one detached semantic node")
+        };
+        crate::Mobject::from_node(store_rc, *node).map_err(TextAuthoringError::Semantic)
     }
 }
 
@@ -124,65 +272,67 @@ impl crate::Mobject {
         crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
     }
 
-    /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
+    /// Compile Typst into the shared semantic text resource and return its ordinary semantic handle.
     #[cfg(feature = "typst")]
     pub fn from_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: Typst,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let state = typst_state(&store, text)?;
-        crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
+        let admission = prepare_typst(text)?;
+        publish_detached_admission(store, admission)
     }
 
-    /// Compile MathTypst into the shared retained text resource and return its ordinary semantic handle.
+    /// Compile MathTypst into the shared semantic text resource and return its ordinary semantic handle.
     #[cfg(feature = "typst")]
     pub fn from_math_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: MathTypst,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let state = math_typst_state(&store, text)?;
-        crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
+        let admission = prepare_math_typst(text)?;
+        publish_detached_admission(store, admission)
     }
 }
 
 #[cfg(feature = "typst")]
-fn typst_spec_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+fn prepare_typst_spec(
     text: super::TypstSpec,
     mode: TypstMode,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+) -> Result<TypstAdmission, TextAuthoringError> {
     if !text.font_size.is_finite() || text.font_size <= 0.0 {
         return Err(TextAuthoringError::InvalidFontSize(text.font_size));
     }
     text.presentation.validate()?;
+    let identity = super::super::compiler::typst_identity(&text, mode);
     let artifact = text.compile_artifact(mode)?;
-    text_artifact_state(
-        store,
+    let (transform, style) = text_artifact_presentation(
         text.authored_transform(),
         text.presentation.color,
         text.presentation.opacity,
-        artifact.resource,
-        artifact.fonts,
-        artifact.geometry,
-    )
+    )?;
+    Ok(TypstAdmission {
+        identity,
+        resource: artifact.resource.as_ref().clone(),
+        fonts: artifact.fonts.as_ref().clone(),
+        geometry: artifact.geometry.as_ref().clone(),
+        transform,
+        style,
+    })
 }
 
 #[cfg(feature = "typst")]
-fn text_artifact_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    transform: noon_core::Transform2D,
-    color: noon_core::Color,
-    opacity: f32,
-    resource: noon_core::TextResource,
-    fonts: noon_core::FontResourceArena,
-    geometries: GeometryResourceArena,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
-    let (transform, style) = text_artifact_presentation(transform, color, opacity)?;
-    let handle = store
-        .borrow_mut()
-        .import_text_resource(resource, &fonts, &geometries)
-        .map_err(TextAuthoringError::Import)?;
-    Ok(semantic_text_state(handle, transform, style))
+fn publish_detached_admission<A: CompiledTextAdmission>(
+    store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    admission: A,
+) -> Result<crate::Mobject, TextAuthoringError> {
+    let result = admission.publish(&mut store.borrow_mut(), |store, transaction| {
+        transaction
+            .apply(store)
+            .map_err(|error| TextAuthoringError::Semantic(error.into()))
+    })?;
+    let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+        unreachable!("one text admission creates one detached semantic node")
+    };
+    crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
 }
 
 fn text_artifact_presentation(
@@ -227,7 +377,7 @@ fn text_artifact_presentation(
     Ok((semantic_transform, style))
 }
 
-fn semantic_text_state(
+pub(crate) fn semantic_text_state(
     handle: noon_core::TextResourceHandle,
     transform: noon_core::SemanticTransform2_5D,
     style: noon_core::SemanticStyle,
@@ -301,6 +451,110 @@ mod tests {
     }
 
     #[test]
+    fn scene_owned_text_admission_stays_current_after_execution_install() {
+        let mut scene = crate::Scene::new();
+        let seed = scene.circle(0.25).unwrap();
+        scene.add(&seed).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let before = scene.revision();
+        let frame_len = scene.owned_execution().frame().objects.len();
+
+        let label = scene.text(super::Text::new("running native")).unwrap();
+        let typst = scene
+            .typst(super::Typst::new("#text[running Typst]"))
+            .unwrap();
+        let math = scene
+            .math_typst(super::MathTypst::new("x^2 + y^2"))
+            .unwrap();
+
+        assert_eq!(scene.revision().get(), before.get() + 3);
+        assert_eq!(scene.owned_execution().frame().objects.len(), frame_len);
+        for object in [&label, &typst, &math] {
+            assert!(scene
+                .owned_execution()
+                .execution_object_id(object.node_id())
+                .is_none());
+            scene.add(object).unwrap();
+        }
+        assert_eq!(scene.owned_execution().frame().objects.len(), frame_len + 3);
+        assert_eq!(
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            scene.revision()
+        );
+    }
+
+    #[test]
+    fn identical_native_objects_share_one_retained_resource_but_not_node_identity() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let mut scene = crate::Scene::new();
+        let first = scene.text(super::Text::new("shared")).unwrap();
+        let second = scene
+            .text(super::Text::new("shared").color(noon_core::RED))
+            .unwrap();
+        assert_ne!(first.node_id(), second.node_id());
+        assert_eq!(
+            first.state().unwrap().content.text(),
+            second.state().unwrap().content.text(),
+            "presentation state must not duplicate immutable normalized text"
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
+        assert_eq!(
+            crate::text_authoring::compiler::text_compiler_diagnostics().successful_compiles,
+            1
+        );
+    }
+
+    #[test]
+    fn unicode_range_paint_is_shared_while_node_presentation_stays_independent() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let mut scene = crate::Scene::new();
+        let source = "é Noon";
+        let first = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::YELLOW)
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+        let second = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::BLUE)
+                    .shift(noon_core::Vec2::new(2.0, 0.0))
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+
+        let handle = first.state().unwrap().content.text().unwrap();
+        assert_eq!(second.state().unwrap().content.text(), Some(handle));
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .clone();
+        assert_eq!(resource.source.as_ref(), source);
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert_eq!(
+            first.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+        assert_eq!(
+            second.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::BLUE))
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
+    }
+
+    #[test]
     fn typst_and_math_typst_use_shared_semantic_text_resources() {
         let mut scene = crate::Scene::new();
         let label = scene
@@ -353,7 +607,7 @@ mod tests {
 
     #[test]
     fn invalid_text_presentation_registers_neither_resources_nor_semantic_nodes() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let before = scene.integration_store().borrow().scene_revision();
         let resources = scene.integration_store().borrow().text_resources().stats();
         assert!(scene
@@ -461,7 +715,7 @@ mod tests {
 
     #[test]
     fn constructor_range_colors_project_paint_before_cold_admission() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let label = scene
             .text(
                 super::Text::new("Noon blue Noon")
@@ -490,7 +744,7 @@ mod tests {
 
     #[test]
     fn invalid_constructor_range_colors_publish_nothing_cold_or_live() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let revision = scene.integration_store().borrow().scene_revision();
         let resources = scene.integration_store().borrow().text_resources().stats();
         assert!(matches!(
@@ -536,7 +790,7 @@ mod tests {
 
     #[test]
     fn constructor_range_colors_treat_the_nonwhite_base_color_as_default() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let label = scene
             .text(
                 super::Text::new("abcdef")
@@ -723,7 +977,7 @@ mod tests {
 
     #[test]
     fn detached_text_shrink_admits_only_its_preowned_resource() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let label = scene.text(super::Text::new("Hello World!")).unwrap();
         let unrelated = scene.text(super::Text::new("not admitted")).unwrap();
         let label_resource = label.state().unwrap().content.text().unwrap();

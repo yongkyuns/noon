@@ -14,12 +14,51 @@ fn axes_options() -> ManimAxesOptions {
     ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
 }
 
+fn polar_options() -> ManimPolarPlaneOptions {
+    ManimPolarPlaneOptions {
+        radius_max: 2.0,
+        size: Some(4.0),
+        radius_step: 1.0,
+        azimuth_step: Some(4.0),
+        azimuth_offset: std::f64::consts::FRAC_PI_2,
+        azimuth_direction: PolarAzimuthDirection::Clockwise,
+        faded_line_ratio: 2,
+        ..Default::default()
+    }
+}
+
 fn resources(scene: &Scene) -> usize {
     scene
         .integration_store()
         .borrow()
         .geometry_resources()
         .len()
+}
+
+#[test]
+fn polar_plane_reuses_cartesian_frame_with_decorative_azimuth() {
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let frame = plane.authored_polar_frame().unwrap();
+
+    near(frame.polar_to_point(2.0, 0.0).unwrap(), [2.0, 0.0]);
+    near(
+        frame
+            .polar_to_point(2.0, std::f64::consts::FRAC_PI_2)
+            .unwrap(),
+        [0.0, 2.0],
+    );
+    near(frame.point_to_polar([2.0, 0.0]).unwrap(), [2.0, 0.0]);
+
+    let root = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(plane.family().node_id())
+        .unwrap();
+    assert_eq!(root.len(), 4);
+    assert_eq!(root[0], plane.faded_lines().unwrap().node_id());
+    assert_eq!(root[1], plane.background_lines().unwrap().node_id());
+    assert_eq!(resources(&scene), 0);
 }
 
 #[test]
@@ -453,4 +492,234 @@ fn elongated_tick_offsets_match_pinned_tolerance_and_validate_atomically() {
     options.ticks.limit = 1;
     assert!(scene.number_line(&options).is_err());
     assert_eq!(scene.revision(), revision);
+}
+
+#[test]
+fn area_clips_graph_ranges_and_closes_against_the_axis_baseline() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+    let area = axes.get_area(&graph, Some([-2.0, 2.0]), None).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let points = area.path_query().unwrap().anchors();
+    near(
+        [points[0].0, points[0].1],
+        frame.coords_to_point(-1.0, 0.0).unwrap(),
+    );
+    assert!(points.iter().any(|point| {
+        let expected = frame.coords_to_point(1.0, 0.0).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+}
+
+#[test]
+fn area_baseline_is_the_physical_axis_when_zero_is_outside_the_y_range() {
+    let mut scene = Scene::new();
+    let axes = scene
+        .axes(&ManimAxesOptions::new(
+            [-2.0, 2.0, 1.0],
+            [2.0, 6.0, 1.0],
+            4.0,
+            4.0,
+        ))
+        .unwrap();
+    let graph = axes.plot(|_| 3.0, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+    let area = axes.get_area(&graph, None, None).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    assert!(area.path_query().unwrap().anchors().iter().any(|point| {
+        let expected = frame.coords_to_point(1.0, 2.0).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+}
+
+#[test]
+fn bounded_area_reverses_the_lower_graph_and_riemann_partition_is_half_open() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let top = axes
+        .plot(|x| x + 1.0, Some(&[-1.0, 1.0, 1.0]), false)
+        .unwrap();
+    let bottom = axes
+        .plot(|x| x - 1.0, Some(&[-0.5, 0.5, 0.5]), false)
+        .unwrap();
+    let area = axes
+        .get_area(&top, Some([-1.0, 1.0]), Some(&bottom))
+        .unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let points = area.path_query().unwrap().anchors();
+    near(
+        [points[0].0, points[0].1],
+        frame.coords_to_point(-0.5, 0.5).unwrap(),
+    );
+    assert!(points.iter().any(|point| {
+        let expected = frame.coords_to_point(-0.5, -1.5).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+    let rectangles = axes
+        .get_riemann_rectangles(
+            &top,
+            RiemannRectangleOptions {
+                x_range: Some([-1.0, 1.0]),
+                dx: 0.5,
+                sample: RiemannSample::Right,
+                width_scale_factor: 1.0,
+                bounded_graph: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(rectangles.node_id())
+            .unwrap()
+            .member_count(),
+        4
+    );
+}
+
+#[test]
+fn riemann_family_is_one_atomic_scene_publication() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes
+        .plot(|x| x + 1.0, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    scene
+        .add_many(&[axes.family().into(), (&graph).into()])
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+
+    let before_revision = scene.revision();
+    let before_nodes = scene.integration_store().borrow().len();
+    let before_resources = resources(&scene);
+    let rectangles = scene
+        .effective_riemann_rectangles(
+            &axes,
+            &graph,
+            RiemannRectangleOptions {
+                dx: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision().get(), before_revision.get() + 1);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 5);
+    assert_eq!(resources(&scene), before_resources + 4);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(rectangles.node_id())
+            .unwrap()
+            .member_count(),
+        4
+    );
+}
+
+#[test]
+fn riemann_preparation_failure_has_no_partial_family_or_resources() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 0.5]), false).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let paths = resources(&scene);
+
+    assert!(matches!(
+        axes.get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                dx: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        Err(CoordinateAuthoringError::InvalidOptions(_))
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), paths);
+}
+
+#[test]
+fn riemann_right_sample_extends_past_nondivisible_interval_and_controls_bbox() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 2.0, 0.5]), false).unwrap();
+    let rectangles = axes
+        .get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                x_range: Some([0.0, 1.1]),
+                dx: 0.5,
+                sample: RiemannSample::Right,
+                width_scale_factor: 0.25,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(rectangles.node_id())
+        .unwrap();
+    assert_eq!(members.len(), 3);
+    let last = Mobject::from_node(Rc::clone(scene.integration_store()), members[2]).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let bounds = last.boundary_bounds().unwrap().unwrap();
+    assert!((bounds.max_x - frame.coords_to_point(1.5, 0.0).unwrap()[0]).abs() < 1e-5);
+}
+
+#[test]
+fn riemann_paints_signed_gradient_and_rejects_invalid_style_atomically() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 0.5]), false).unwrap();
+    let options = RiemannRectangleOptions {
+        dx: 1.0,
+        blend: true,
+        ..Default::default()
+    };
+    let rectangles = axes
+        .get_riemann_rectangles(&graph, options.clone())
+        .unwrap();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(rectangles.node_id())
+        .unwrap();
+    assert_eq!(members.len(), 2);
+    let first = Mobject::from_node(Rc::clone(scene.integration_store()), members[0])
+        .unwrap()
+        .state()
+        .unwrap();
+    let color = noon_core::BLUE;
+    let expected = SemanticPaint::Solid(noon_core::Color::rgba(
+        1.0 - color.red,
+        1.0 - color.green,
+        1.0 - color.blue,
+        1.0,
+    ));
+    assert_eq!(first.style.fill, Some(expected.clone()));
+    assert_eq!(first.style.stroke, Some(expected));
+    assert_eq!(first.style.fill_opacity, 1.0);
+    assert_eq!(first.style.stroke_width, 0.01);
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let before = resources(&scene);
+    assert!(axes
+        .get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                fill_opacity: f64::NAN,
+                ..options
+            }
+        )
+        .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), before);
 }

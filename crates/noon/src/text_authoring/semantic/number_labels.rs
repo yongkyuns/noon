@@ -75,8 +75,8 @@ fn prepare(
         .delta::<Error>(Some(bounds), |_, _| Ok((label.point[0], label.point[1])))?;
         let translation = crate::semantic_mobject::authoring_xy_f64(x, y)?;
         prepared.push(PreparedLabel {
-            resource: artifact.resource,
-            fonts: artifact.fonts,
+            resource: artifact.resource.as_ref().clone(),
+            fonts: artifact.fonts.as_ref().clone(),
             transform: SemanticTransform2_5D {
                 translation,
                 scale: SemanticVec3::new(scale, scale, 1.0),

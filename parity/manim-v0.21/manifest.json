@@ -11,12 +11,70 @@
   },
   "fixtures": [
     {
+      "id": "math-table",
+      "scene": "MathTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "mobject-table",
+      "scene": "MobjectTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "table-highlights",
+      "scene": "TableHighlightOrder",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "matrix",
+      "scene": "OrdinaryMatrix",
+      "source": "parity/manim-v0.21/core-examples/matrix.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "bar-chart",
+      "scene": "BarChartExample",
+      "source": "parity/manim-v0.21/core-examples/bar_chart.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "graph",
+      "scene": "GraphExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "graph-style",
+      "scene": "GraphStyleExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "area-helpers",
+      "scene": "RetainedAreaHelpers",
+      "source": "parity/manim-v0.21/core-examples/area_helpers.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
       "id": "implicit-curves",
       "scene": "RetainedImplicitCurves",
       "source": "parity/manim-v0.21/core-examples/implicit_curves.py",
       "expected_duration": 0.2,
-      "qualification_status": "candidate",
-      "notes": "Source-equivalent adaptive contours: smooth closed circle and disconnected unsmoothed hyperbola through shifted nonuniform Axes.",
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2.",
       "raster_tolerance": {
         "max_bounds_delta_px": 2,
         "max_differing_ratio": 0.006,
@@ -28,8 +86,7 @@
       "scene": "NumberPlaneGrid",
       "source": "parity/manim-v0.21/core-examples/number_plane.py",
       "expected_duration": 0.2,
-      "qualification_status": "candidate",
-      "notes": "Ordinary retained grid lines: zero/three subdivisions, asymmetric ranges, explicit lengths/styles, scaling and painter order.",
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2.",
       "raster_tolerance": {
         "max_bounds_delta_px": 2,
         "max_differing_ratio": 0.006,
@@ -720,6 +777,18 @@
       "expected_duration": 1.0
     },
     {
+      "id": "zoomed-scene",
+      "scene": "RetainedZoom",
+      "source": "parity/manim-v0.21/core-examples/zoomed_scene.py",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "sample-space",
+      "scene": "SampleSpaceExample",
+      "source": "parity/manim-v0.21/core-examples/sample_space.py",
+      "expected_duration": 0.2
+    },
+    {
       "id": "path-queries",
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",
@@ -764,16 +833,46 @@
       "scene": "MarkupTextExample",
       "source": "parity/manim-v0.21/core-examples/markup_text.py",
       "expected_duration": 0.2,
-      "qualification_status": "candidate",
-      "notes": "Representative source fixture; exact raster qualification remains pending."
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2. Exact DejaVu Sans Mono font bytes are pinned for the reference."
     },
     {
       "id": "text-range-colors",
       "scene": "TextRangeColors",
       "source": "parity/manim-v0.21/core-examples/text_range_colors.py",
       "expected_duration": 0.2,
-      "qualification_status": "candidate",
-      "notes": "Repeated substring, Unicode, whitespace/newline, and nonoverlapping positive/negative source ranges."
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2. Exact DejaVu Sans Mono font bytes are pinned for the reference."
+    },
+    {
+      "id": "variable",
+      "scene": "VariableExample",
+      "source": "parity/manim-v0.21/core-examples/variable.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "numeric-decimal-number",
+      "scene": "NumericDecimalNumberExample",
+      "source": "parity/manim-v0.21/core-examples/numeric_decimal_number.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "latex-text",
+      "scene": "LatexTextExample",
+      "source": "parity/manim-v0.21/core-examples/latex_text.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "mathtex-substrings",
+      "scene": "MathTexSubstrings",
+      "source": "parity/manim-v0.21/core-examples/mathtex_substrings.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     }
   ],
   "sample_fractions": [

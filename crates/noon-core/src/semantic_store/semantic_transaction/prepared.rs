@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
-use crate::{SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding};
+use crate::{
+    SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticGraphEdgeDependency,
+    SemanticTransactionGraphEdgeDependency,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTransactionReadError {
@@ -135,6 +138,27 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Self::new(transaction, store)
     }
 
+    /// Re-preflight this unpublished batch after resolving metadata against a
+    /// transaction-local allocator identity.
+    ///
+    /// Composite resource authors use this narrow extension when a newly
+    /// created DecimalNumber binds to a signal created by the same transaction.
+    /// The allocator remains exclusively borrowed, so the planned signal id is
+    /// stable across this second preflight and still cannot escape publication.
+    pub fn with_decimal_number(
+        self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        number: crate::SemanticDecimalNumber,
+    ) -> Result<Self, SemanticMutationTransactionError> {
+        let Self {
+            store,
+            mut transaction,
+            ..
+        } = self;
+        transaction.replace_decimal_number(object, number);
+        Self::new(transaction, store)
+    }
+
     /// All submitted mutations, preserving original indices and exact no-ops.
     pub fn mutations(&self) -> &[SemanticMutation] {
         self.transaction.mutations()
@@ -191,7 +215,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::SetZIndex { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
-                | SemanticMutation::ReplaceContent { object, .. } => Some(*object),
+                | SemanticMutation::ReplaceContent { object, .. }
+                | SemanticMutation::ReplaceDecimalNumber { object, .. }
+                | SemanticMutation::ReplaceTextPresentationBaseline { object, .. } => Some(*object),
                 _ => None,
             })
             .collect();
@@ -256,7 +282,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Existing(id)
                 if self.preflight.removed_existing.contains(&id) =>
             {
-                return Err(SemanticTransactionReadError::RemovedExistingNode(id))
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id));
             }
             SemanticTransactionNodeRef::Pending(token) => {
                 self.validate_read_token(token)?;
@@ -283,7 +309,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     Some(SemanticNodeCreation::Family { .. })
                 ) =>
             {
-                return Ok(0.0)
+                return Ok(0.0);
             }
             _ => {}
         }
@@ -642,6 +668,60 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
+                SemanticMutation::SetBarMetadata { object, metadata } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object must remain valid while transaction owns the semantic store")
+                        .set_bar_metadata(metadata);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::BarMetadata { object });
+                }
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let role = camera_frame.map_or(SemanticObjectRole::Ordinary, |camera| {
+                        SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(resolve_node_ref(
+                                camera,
+                                &committed_nodes,
+                            ))
+                            .capture_own_display(capture_own_display),
+                        )
+                    });
+                    store.replace_semantic_object_role(object, role);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
+                }
+                SemanticMutation::ReplaceDecimalNumber { object, number } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state")
+                        .set_decimal_number(Some(number));
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::DecimalNumber { object });
+                }
+                SemanticMutation::ReplaceTextPresentationBaseline { object, baseline } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let state = store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state");
+                    match baseline {
+                        Some(baseline) => state.set_text_presentation_baseline(baseline),
+                        None => state.clear_text_presentation_baseline(),
+                    }
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::TextPresentationBaseline { object });
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
                     store
@@ -731,10 +811,26 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .iter()
                         .copied()
                         .map(|edge| {
+                            let dependency = match edge.dependency() {
+                                SemanticTransactionGraphEdgeDependency::Line => {
+                                    SemanticGraphEdgeDependency::Line
+                                }
+                                SemanticTransactionGraphEdgeDependency::Arrow {
+                                    end_tip,
+                                    start_tip,
+                                    policy,
+                                } => SemanticGraphEdgeDependency::Arrow {
+                                    end_tip: resolve_node_ref(end_tip, &committed_nodes),
+                                    start_tip: start_tip
+                                        .map(|tip| resolve_node_ref(tip, &committed_nodes)),
+                                    policy,
+                                },
+                            };
                             SemanticGraphEdgeBinding::from_resolved(
                                 edge.id(),
                                 resolve_node_ref(edge.family(), &committed_nodes),
                                 resolve_node_ref(edge.line(), &committed_nodes),
+                                dependency,
                             )
                         })
                         .collect();
@@ -746,9 +842,20 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     let previous = store
                         .replace_semantic_graph_declaration(scope, Some(graph))
                         .expect("preflighted graph scope remains a family");
-                    debug_assert!(previous.is_none());
+                    // Replacements are explicitly validated against the final
+                    // transaction overlay. Dropping the prior declaration here
+                    // only changes graph authority; unrelated semantic nodes
+                    // retain their identities and resources.
+                    drop(previous);
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::GraphDeclaration { scope });
+                }
+                SemanticMutation::SetTableLayout { scope, layout } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    store
+                        .replace_semantic_table_layout(scope, layout)
+                        .expect("preflighted table layout scope remains a family");
+                    written_slots.insert(scope);
                 }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
@@ -840,6 +947,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                                     object: *object,
                                     property: *property,
                                 });
+                            }
+                            SemanticRemoveNodeEffect::ObjectRoleReplaced(object) => {
+                                impacts
+                                    .push(SemanticMutationImpact::ObjectRole { object: *object });
                             }
                         }
                     }

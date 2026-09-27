@@ -6,6 +6,7 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod brace;
 mod coordinates;
 mod family_layout;
 mod image;
@@ -212,6 +213,11 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    MatchingSourceFamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     Indicate {
         target: &'a Mobject,
         indication: IndicateOptions,
@@ -370,7 +376,7 @@ pub enum LiveSessionError {
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
     Callback(crate::ExecutionSessionCallbackError),
-    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
     Activation(ExecutionSessionAnimationError),
@@ -389,7 +395,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
@@ -406,7 +412,7 @@ impl std::error::Error for LiveSessionError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Callback(error) => Some(error),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
             Self::Segment(error) => Some(error),
@@ -471,6 +477,10 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        self.store
+    }
+
     /// Associate an existing detached tracker while a continuation holds the
     /// only borrowed execution capability.
     ///
@@ -511,6 +521,31 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         crate::Scene::publish_running_transaction(self.store, self.root, self.session, transaction)
             .map_err(Into::into)
+    }
+
+    /// Prepare resources and publish one semantic transaction while borrowing
+    /// the already-running execution session. Composite authoring uses this
+    /// boundary so resource admission and the transaction share one rollback
+    /// scope without manufacturing a second Scene or runtime owner.
+    pub(crate) fn with_semantic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            &mut dyn FnMut(
+                &mut noon_core::SemanticStore,
+                SemanticMutationTransaction,
+            )
+                -> Result<SemanticMutationTransactionResult, crate::AuthoringError>,
+        ) -> Result<T, crate::AuthoringError>,
+    ) -> Result<T, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        let mut publish = |store: &mut noon_core::SemanticStore,
+                           transaction: SemanticMutationTransaction| {
+            self.session
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
+                .map_err(crate::AuthoringError::from)
+        };
+        operation(&mut store, &mut publish).map_err(Into::into)
     }
 
     /// Add an existing detached object to this live scene root.
@@ -595,6 +630,139 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Compile a detached numeric object without invalidating the live publication.
+    #[cfg(feature = "latex")]
+    pub fn create_decimal_number(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+        format: crate::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::DecimalNumber, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        crate::DecimalNumber::construct_with(
+            Rc::clone(self.store),
+            backend,
+            value,
+            format,
+            font_size,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            },
+        )
+        .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Persist one DecimalNumber value through the current execution publication.
+    #[cfg(feature = "latex")]
+    pub fn set_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let authored = self.authored(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .set_value_live(backend, value, authored, effective, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn increment_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        delta: f64,
+    ) -> Result<(), LiveSessionError> {
+        let value = number
+            .value()
+            .map_err(crate::numeric_authoring::numeric_live_error)?;
+        self.set_decimal_value(number, backend, value + delta)
+    }
+
+    /// Bind one existing DecimalNumber to a canonical scalar tracker through
+    /// the current live publication. Glyph dependencies, semantic metadata and
+    /// the runtime driver revision are prepared before either layer commits.
+    #[cfg(feature = "latex")]
+    pub fn bind_decimal_to_tracker(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        tracker: &ValueTracker,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        tracker.require_store(self.store)?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        number
+            .bind_to_tracker_live(backend, tracker, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Construct an atomic shared Variable with a fresh scoped tracker.
+    #[cfg(feature = "latex")]
+    pub fn create_variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, LiveSessionError> {
+        crate::variable_authoring::construct_variable(
+            self.store,
+            self.root,
+            Some(self.session),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+        .map_err(crate::variable_authoring::variable_live_error)
+    }
+
+    /// Read DecimalNumber's current runtime value through its declared tracker binding.
+    /// Unbound numbers retain their authored/base value.
+    #[cfg(feature = "latex")]
+    pub fn decimal_value(&self, number: &crate::DecimalNumber) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        number
+            .current_value(self.session)
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Read DecimalNumber font size from the current effective publication.
+    #[cfg(feature = "latex")]
+    pub fn decimal_font_size(
+        &self,
+        number: &crate::DecimalNumber,
+    ) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .font_size_at(&effective)
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -654,8 +822,14 @@ impl<'a> LiveSession<'a> {
         self.require_family(source)?;
         self.require_target_capture()?;
         let (transaction, pending) =
-            crate::family_copy::prepare_family_copy(source, references, |mobject| {
-                self.capture_mobject_state(mobject)
+            crate::family_copy::prepare_family_copy(source, references, |mobject, graph_row| {
+                crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                    self.store,
+                    self.session,
+                    mobject,
+                    graph_row,
+                )
+                .map_err(LiveSessionError::from)
             })?;
         let result = self.apply(transaction)?;
         pending.resolve(&result).map_err(LiveSessionError::from)
@@ -735,11 +909,39 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    fn capture_mobject_state(
+    pub(crate) fn capture_mobject_state(
         &self,
         source: &Mobject,
     ) -> Result<SemanticObjectState, LiveSessionError> {
         crate::effective_capture::capture_mobject_state(self.store, self.session, source)
+            .map_err(LiveSessionError::from)
+    }
+
+    pub(crate) fn composite_entry_state(
+        &self,
+        source: &Mobject,
+    ) -> Result<SemanticObjectState, crate::AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            self.store,
+            Some(self.session),
+            self.root,
+            source,
+        )
+    }
+
+    /// Capture conservative world-axis bounds from one coherent object state.
+    /// Reachable objects use the live effective transform; detached objects use
+    /// their validated authored state. Publication and callback gates are shared
+    /// with other live target-capture operations.
+    pub(crate) fn capture_boundary_bounds(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<noon_core::Bounds2D64>, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.require_target_capture()?;
+        let state = self.capture_mobject_state(mobject)?;
+        let store = self.store.borrow();
+        crate::semantic_mobject::boundary_for_content(&store, state.content, state.transform)
             .map_err(LiveSessionError::from)
     }
 
@@ -806,6 +1008,33 @@ impl<'a> LiveSession<'a> {
         Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
+    /// Publish a detached family of prepared ordinary paths in the current
+    /// borrowed execution publication. Geometry admission and every family leaf
+    /// share one transaction and rollback scope.
+    pub fn create_path_family(
+        &mut self,
+        paths: Vec<(noon_core::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let family = crate::family_authoring::publish_path_family_with(
+            &mut self.store.borrow_mut(),
+            paths,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+            },
+        )
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            error => LiveSessionError::from(error),
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.store), family).map_err(LiveSessionError::from)
+    }
+
     /// Construct a family while a continuation holds the only borrowed live
     /// execution capability.
     ///
@@ -858,14 +1087,124 @@ impl<'a> LiveSession<'a> {
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
+    /// Compile and publish one detached TeX object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    /// Compile and publish one detached display-math object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn create_math_tex_parts(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn create_tex_parts(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex_parts(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let (result, family, members, source, parts, _font_size) = {
+            let mut store = self.store.borrow_mut();
+            admission.publish_parts(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        crate::latex_authoring::finish_latex_parts(
+            std::rc::Rc::clone(self.store),
+            &result,
+            family,
+            members,
+            source,
+            parts,
+        )
+        .map_err(LiveSessionError::Text)
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
+    }
+
     /// Compile and publish one detached Typst object through this live session.
     #[cfg(feature = "typst")]
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state =
-            crate::text_authoring::typst_state(self.store, text).map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
     /// Compile and publish one detached MathTypst object through this live session.
@@ -876,21 +1215,34 @@ impl<'a> LiveSession<'a> {
     ) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::math_typst_state(self.store, text)
-            .map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_math_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
     #[cfg(feature = "typst")]
-    fn create_detached_mobject(
+    fn create_compiled_text(
         &mut self,
-        state: SemanticObjectState,
+        admission: crate::text_authoring::TypstAdmission,
     ) -> Result<Mobject, LiveSessionError> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
-        let result = self.apply(transaction)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one detached primitive creation has one exact semantic impact")
+            unreachable!("one Typst admission creates one detached semantic node")
         };
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
@@ -1133,6 +1485,22 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    pub fn declare_and_activate_source_matching_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            },
+            AnimationOptions::new(),
+        )
     }
 
     /// Indicate one object and restore its activation-effective source state.
@@ -1611,6 +1979,19 @@ impl<'a> LiveSession<'a> {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
                 Request::MatchingFamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
                     options: *options,
@@ -2391,6 +2772,49 @@ impl<'a> LiveSession<'a> {
         opacity: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
+    }
+
+    pub fn set_family_member_colors(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Option<Color>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let expected = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(crate::AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(crate::AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            }
+            .into());
+        }
+        let transaction = family.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?;
+        self.apply(transaction)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, LiveSessionError> {
+        let layout = self.effective_family_layout(parts.family())?;
+        parts
+            .font_size_for_height(layout.height)
+            .map_err(LiveSessionError::from)
     }
 
     fn edit_family_style(
@@ -4632,6 +5056,48 @@ mod recursive_composition_tests {
             ))
         ));
         assert_eq!(session.publication_context(), before);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn create_only_shares_detached_admission_with_point_morph_driver() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let target = square.target_editor().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = square.integration_store().borrow().len();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::Create {
+                    target: &square,
+                    options: linear(0.2),
+                },
+                AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &square,
+                    &target,
+                    linear(0.2),
+                )),
+            ],
+        };
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new());
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: crate::ExecutionSessionCreateError::DuplicateTarget,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }

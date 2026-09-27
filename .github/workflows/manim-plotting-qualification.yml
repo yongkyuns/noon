@@ -11,6 +11,7 @@ on:
       - 'web/number-label-smoke.js'
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
+      - 'scripts/paired-authoring-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
       - 'scripts/animated-plotting-checks.mjs'

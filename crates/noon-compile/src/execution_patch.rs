@@ -1,8 +1,28 @@
 use noon_core::{
-    ObjectContentRef, ObjectId, Property, Rect, Style, TrackDefinition, TrackId, Transform2D,
+    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, Style, TrackDefinition, TrackId,
+    Transform2D,
 };
 
-use crate::{CompiledFamilyAnimation, CompiledObject, CompiledScene};
+use crate::{CompiledFamilyAnimation, CompiledGraphArrowPolicy, CompiledObject, CompiledScene};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompiledGraphDependencyKind {
+    Line,
+    Arrow {
+        end_tip: ObjectId,
+        start_tip: Option<ObjectId>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphDependencyDefinition {
+    pub edge: GraphEdgeId,
+    pub start_vertex: ObjectId,
+    pub end_vertex: ObjectId,
+    pub line: ObjectId,
+    pub kind: CompiledGraphDependencyKind,
+}
 
 /// Renderer-independent mutations over the compiler-owned execution plan.
 ///
@@ -34,6 +54,12 @@ pub enum ExecutionPatch {
     SetStyle {
         object: ObjectId,
         style: Style,
+    },
+    /// Replace one graph root's complete endpoint dependency declaration.
+    /// Empty dependencies retire that root without relocating unrelated slots.
+    SetGraphDependencies {
+        owner: ObjectId,
+        dependencies: Vec<CompiledGraphDependencyDefinition>,
     },
     AddTrack(TrackDefinition),
     AddFamilyAnimation(CompiledFamilyAnimation),

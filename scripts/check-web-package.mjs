@@ -18,6 +18,14 @@ const expectedJavascriptSurface = [
   "createManimCircle(",
   "createManimText(",
   "createManimTypst(",
+  "export class WasmLatexCompiler",
+  "export class WasmLatexOptions",
+  "export class WasmLatexPartsHandle",
+  "createLatex(",
+  "liveCreateLatex(",
+  "textSource(",
+  "textSourcePartsFor(",
+  "textParts(",
   "createManimSquare(",
   "createManimRectangle(",
   "createManimLine(",
@@ -193,6 +201,11 @@ const expectedTypeSurface = [
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number, colors?: WasmTextColorBatch | null): WasmAuthoringMobjectHandle",
   "export class WasmTextColorBatch",
   "createManimTypst(source: string, math: boolean, font_size: number): WasmAuthoringMobjectHandle",
+  "createLatex(options: WasmLatexOptions, compiler: WasmLatexCompiler): WasmLatexPartsHandle",
+  "liveCreateLatex(options: WasmLatexOptions, compiler: WasmLatexCompiler): WasmLatexPartsHandle",
+  "textSource(): string",
+  "textSourcePartsFor(needle: string): WasmTextPartList",
+  "textParts(): WasmTextPartList",
   "createManimSquare(side_length: number): WasmAuthoringMobjectHandle",
   "createManimRectangle(width: number, height: number): WasmAuthoringMobjectHandle",
   "createManimLine(start_x: number, start_y: number, end_x: number, end_y: number): WasmAuthoringMobjectHandle",
@@ -397,15 +410,25 @@ const expectedTypeSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 
-// Direct example factories are compiled only with Rust debug assertions.
-// The build profile is explicit in CI; detect an existing debug factory as well
-// when this checker is run directly against an already generated package.
+// Replay qualification is independent of renderer fixture availability.
 if (process.env.NOON_WASM_PROFILE === "dev"
+    || process.env.NOON_REPLAY_SMOKE === "1"
+    || javascript.includes("export function verifyDirectExecutionReplay(")) {
+  expectedJavascriptSurface.push("export function verifyDirectExecutionReplay(");
+  expectedTypeSurface.push("export function verifyDirectExecutionReplay(");
+}
+
+// Direct example factories are compiled in development and explicit renderer
+// qualifications. Detect an existing factory too when checking a package built
+// outside this script's environment.
+if (process.env.NOON_WASM_PROFILE === "dev"
+    || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
-    "export function verifyDirectExecutionReplay(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
+    "export function createDirectTypstCanvasRenderer(",
+    "export function createDirectSingleTypstCanvasRenderer(",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
     "export function createDirectCallbackPaintSmokeRenderer(",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(",
@@ -471,10 +494,11 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
-    "export function verifyDirectExecutionReplay(",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectTypstCanvasRenderer(canvas: OffscreenCanvas, typst_source: string, math_typst_source: string): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectSingleTypstCanvasRenderer(canvas: OffscreenCanvas, source: string, math: boolean, font_size: number): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectCallbackPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -545,7 +569,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
 }
 
 // Recovery qualification also runs with release optimizations. Its explicit
-// fixture feature does not enable the rest of the debug example surface.
+// fixture feature includes direct renderer examples, independently of replay.
 if (process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
   expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");

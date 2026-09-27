@@ -25,6 +25,9 @@ pub use matching_shape_correspondence::*;
 mod mutation;
 pub use mutation::*;
 
+mod numeric_text;
+pub use numeric_text::*;
+
 mod text;
 pub use text::*;
 

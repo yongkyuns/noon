@@ -1,6 +1,18 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::MatchingShapeKey;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MatchingFamilyKey {
+    Shape(MatchingShapeKey),
+    Source(Arc<str>),
+}
+
+impl From<MatchingShapeKey> for MatchingFamilyKey {
+    fn from(value: MatchingShapeKey) -> Self {
+        Self::Shape(value)
+    }
+}
 
 /// One deterministic equal-key group shared by the source and target families.
 ///
@@ -8,7 +20,7 @@ use crate::MatchingShapeKey;
 /// matching Manim's group-transform semantics for repeated keys.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MatchingShapeGroup {
-    pub key: MatchingShapeKey,
+    pub key: MatchingFamilyKey,
     pub source_indices: Vec<usize>,
     pub target_indices: Vec<usize>,
 }
@@ -27,16 +39,16 @@ pub struct MatchingShapeCorrespondence {
 /// their authored order inside each group. Leftovers retain their original family
 /// order. No unmatched member is paired by position or proximity.
 pub fn matching_shape_correspondence(
-    source_keys: &[MatchingShapeKey],
-    target_keys: &[MatchingShapeKey],
+    source_keys: &[MatchingFamilyKey],
+    target_keys: &[MatchingFamilyKey],
 ) -> MatchingShapeCorrespondence {
-    let mut target_by_key: HashMap<MatchingShapeKey, Vec<usize>> = HashMap::new();
+    let mut target_by_key: HashMap<MatchingFamilyKey, Vec<usize>> = HashMap::new();
     for (index, key) in target_keys.iter().cloned().enumerate() {
         target_by_key.entry(key).or_default().push(index);
     }
 
-    let mut source_group_positions: HashMap<MatchingShapeKey, usize> = HashMap::new();
-    let mut source_groups: Vec<(MatchingShapeKey, Vec<usize>)> = Vec::new();
+    let mut source_group_positions: HashMap<MatchingFamilyKey, usize> = HashMap::new();
+    let mut source_groups: Vec<(MatchingFamilyKey, Vec<usize>)> = Vec::new();
     for (index, key) in source_keys.iter().cloned().enumerate() {
         if let Some(position) = source_group_positions.get(&key).copied() {
             source_groups[position].1.push(index);
@@ -83,13 +95,15 @@ mod tests {
     use super::*;
     use crate::{vector_path_matching_shape_key, Transform2D, Vec2, VectorPath};
 
-    fn key(offset: f32) -> MatchingShapeKey {
+    fn key(offset: f32) -> MatchingFamilyKey {
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, -1.0))
             .line_to(Vec2::new(1.0 + offset, -0.5))
             .line_to(Vec2::new(-0.25, 1.0))
             .close();
-        vector_path_matching_shape_key(&path, Transform2D::IDENTITY).unwrap()
+        vector_path_matching_shape_key(&path, Transform2D::IDENTITY)
+            .unwrap()
+            .into()
     }
 
     #[test]
@@ -127,5 +141,19 @@ mod tests {
         assert_eq!(correspondence.matched_groups[0].target_indices, vec![1]);
         assert_eq!(correspondence.unmatched_source_indices, vec![1, 2]);
         assert_eq!(correspondence.unmatched_target_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn source_keys_use_the_same_duplicate_stable_grouping() {
+        let x = MatchingFamilyKey::Source(Arc::from("x"));
+        let plus = MatchingFamilyKey::Source(Arc::from("+"));
+        let correspondence = matching_shape_correspondence(
+            &[x.clone(), plus.clone(), x.clone()],
+            &[x.clone(), x.clone(), plus.clone()],
+        );
+        assert_eq!(correspondence.matched_groups[0].key, x);
+        assert_eq!(correspondence.matched_groups[0].source_indices, vec![0, 2]);
+        assert_eq!(correspondence.matched_groups[0].target_indices, vec![0, 1]);
+        assert_eq!(correspondence.matched_groups[1].key, plus);
     }
 }

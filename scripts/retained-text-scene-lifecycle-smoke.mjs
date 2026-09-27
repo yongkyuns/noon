@@ -32,13 +32,13 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`retained Text lifecycle smoke server did not start: ${lastError}\n${serverOutput}`);
+  throw new Error(`text lifecycle smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
 const lifecycleSource = `
 from noon import *
 
-class RetainedSceneLifecycle(Scene):
+class TextSceneLifecycle(Scene):
     def construct(self):
         label = Text("Lifecycle", font_size=48)
         self.live_execution()

@@ -50,11 +50,14 @@ export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
   }));
 }
 
-export function rasterFixtureSource(source, scene) {
+export function rasterFixtureSource(source, scene, { requires_latex = false } = {}) {
   const adapted = source.replace("from manim import *", "from noon import *");
+  const prepared = requires_latex
+    ? `from noon import prepare_latex\nawait prepare_latex()\n${adapted}`
+    : adapted;
   // Selection is host bootstrap. The normal source runner owns construct and
   // continuation; authored semantics and callbacks remain unchanged.
-  return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
+  return `${prepared}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
 }
 
 export function browserArgs(backend, { gpuMode = "software" } = {}) {

@@ -10,6 +10,7 @@ image-decode = ["dep:image"]
 # Convenience product configuration. Geometry-only consumers disable defaults.
 default = ["native-text", "typst", "bundled-fonts", "image-decode"]
 native-text = ["dep:noon-text", "dep:swash"]
+latex = ["dep:noon-text"]
 typst = ["dep:noon-typst"]
 # Weak forwarding does not activate the Typst compiler for native-text consumers.
 bundled-fonts = ["dep:typst-assets", "noon-typst?/bundled-fonts"]

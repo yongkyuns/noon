@@ -20,6 +20,9 @@ class Builder:
     def appendMatchingFamilyTransformTo(self, *args):
         self.children.append(("matching", args))
 
+    def appendMatchingSourceFamilyTransformTo(self, *args):
+        self.children.append(("tex", args))
+
     def appendFamilyTransformTo(self, *args):
         self.children.append(("structural", args))
 
@@ -27,6 +30,10 @@ class Builder:
 class Matching:
     def __init__(self, **kwargs):
         self.anim_args = kwargs
+
+
+class MatchingTex(Matching):
+    pass
 
 
 class MatchingTimingScopeTests(unittest.TestCase):
@@ -48,7 +55,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         module = ast.Module(body=helpers + [route], type_ignores=[])
         cls.module = ast.fix_missing_locations(module)
 
-    def route(self, constructor=None, play=None, matching=True):
+    def route(self, constructor=None, play=None, matching=True, matching_class=Matching):
         self.resolutions = []
         def resolve(leaf, kwargs, **unused):
             self.resolutions.append(dict(kwargs))
@@ -57,13 +64,13 @@ class MatchingTimingScopeTests(unittest.TestCase):
             return NS(run_time=opts.get("run_time", opts.get("duration", 1.0)),
                       rate_func=opts.get("rate_func", opts.get("easing", "smooth")),
                       lag_ratio=opts.get("lag_ratio", 0.0), path_arc=opts.get("path_arc", 0.0))
-        namespace = {"_animate": NS(TransformMatchingShapes=Matching),
+        namespace = {"_animate": NS(TransformMatchingShapes=Matching, TransformMatchingTex=MatchingTex),
                      "_canonical_transform_options": resolve, "math": math,
                      "_rate_functions": NS(easing_from_rate_func=lambda value: value)}
         exec(compile(self.module, "_manim_scene.py:matching-transport", "exec"), namespace)
         context = NS(beginOrdinaryCompositionBuilder=lambda kind, duration, lag, play_duration:
                      Builder(duration, lag))
-        leaf = Matching(**(constructor or {})) if matching else NS(anim_args=constructor or {})
+        leaf = matching_class(**(constructor or {})) if matching else NS(anim_args=constructor or {})
         source, target = (NS(_semantic_family_handle=object()) for _ in range(2))
         parent, completed = Builder(), []
         namespace["route"](context, parent, (source, target, leaf), play or {}, completed)
@@ -87,6 +94,16 @@ class MatchingTimingScopeTests(unittest.TestCase):
                 self.assertEqual((tag, args[2], args[3]), ("matching", child_duration, child_rate))
                 self.assertEqual(self.resolutions, [{}])
                 self.assertEqual(len(completed), 2)
+
+    def test_tex_matching_keeps_constructor_and_play_timing_scopes(self):
+        parent, completed = self.route(
+            {"rate_func": "smooth", "run_time": 3},
+            {"rate_func": "linear", "run_time": 2}, matching_class=MatchingTex)
+        outer = parent.children[0]
+        self.assertEqual((outer.duration, outer.rate), (2, "linear"))
+        tag, args = outer.children[0]
+        self.assertEqual((tag, args[2], args[3]), ("tex", 3, "smooth"))
+        self.assertEqual(len(completed), 2)
 
     def test_constructor_family_lag_and_path_remain_child_options(self):
         parent, _ = self.route({"lag_ratio": 0.2, "path_arc": 1.5})

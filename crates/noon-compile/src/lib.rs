@@ -6,6 +6,7 @@ pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
 mod execution_patch;
+mod graph_dependencies;
 mod replay_revision;
 pub use replay_revision::CompiledReplayRevision;
 mod semantic_lowering;
@@ -13,7 +14,10 @@ mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
@@ -21,8 +25,9 @@ use noon_core::{
 };
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
-    CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    CompositionTimeMap, GeometryRef, GraphEdgeId, ObjectId, ObjectStateField, Property, Style,
+    TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    VectorPath,
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
@@ -32,7 +37,10 @@ use noon_core::{
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
-pub use execution_patch::{ExecutionMutationTransaction, ExecutionPatch};
+pub use execution_patch::{
+    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, ExecutionMutationTransaction,
+    ExecutionPatch,
+};
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
 
@@ -103,6 +111,17 @@ pub struct CompiledObject {
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
     pub live: bool,
+}
+
+/// One sparse tracker-to-effective-text execution declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledNumericTextDriver {
+    pub signal: noon_core::SignalId,
+    pub object_index: u32,
+    pub format: noon_core::DecimalFormat,
+    pub font_size: f32,
+    pub point_to_scene_scale: f32,
+    pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
 }
 
 impl CompiledObject {
@@ -411,6 +430,157 @@ pub struct CompiledTransactionPreflightStats {
     pub staged_compiled_scene_clones: usize,
 }
 
+/// Renderer-neutral endpoint policy for one graph-owned Arrow dependency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphArrowPolicy {
+    buff: f32,
+    tip_length: f32,
+    max_tip_length_to_length_ratio: f32,
+    initial_stroke_width: f32,
+    max_stroke_width_to_length_ratio: f32,
+}
+
+impl CompiledGraphArrowPolicy {
+    pub const fn new(
+        buff: f32,
+        tip_length: f32,
+        max_tip_length_to_length_ratio: f32,
+        initial_stroke_width: f32,
+        max_stroke_width_to_length_ratio: f32,
+    ) -> Self {
+        Self {
+            buff,
+            tip_length,
+            max_tip_length_to_length_ratio,
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio,
+        }
+    }
+
+    pub const fn buff(self) -> f32 {
+        self.buff
+    }
+
+    pub const fn tip_length(self) -> f32 {
+        self.tip_length
+    }
+
+    pub const fn max_tip_length_to_length_ratio(self) -> f32 {
+        self.max_tip_length_to_length_ratio
+    }
+
+    pub const fn initial_stroke_width(self) -> f32 {
+        self.initial_stroke_width
+    }
+
+    pub const fn max_stroke_width_to_length_ratio(self) -> f32 {
+        self.max_stroke_width_to_length_ratio
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompiledGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip_index: u32,
+        start_tip_index: Option<u32>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+/// One graph endpoint dependency lowered into stable compiled object rows.
+///
+/// The rows still contain ordinary geometry/style. This declaration only tells
+/// runtime which effective rows must be recomputed when either vertex moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphEdgeDependency {
+    owner: ObjectId,
+    edge: GraphEdgeId,
+    start_vertex_index: u32,
+    end_vertex_index: u32,
+    line_index: u32,
+    kind: CompiledGraphEdgeKind,
+    live: bool,
+}
+
+impl CompiledGraphEdgeDependency {
+    pub const fn new(
+        owner: ObjectId,
+        edge: GraphEdgeId,
+        start_vertex_index: u32,
+        end_vertex_index: u32,
+        line_index: u32,
+        kind: CompiledGraphEdgeKind,
+    ) -> Self {
+        Self {
+            owner,
+            edge,
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+            live: true,
+        }
+    }
+
+    pub const fn owner(self) -> ObjectId {
+        self.owner
+    }
+
+    pub const fn edge(self) -> GraphEdgeId {
+        self.edge
+    }
+
+    pub const fn is_live(self) -> bool {
+        self.live
+    }
+
+    pub const fn start_vertex_index(self) -> u32 {
+        self.start_vertex_index
+    }
+
+    pub const fn end_vertex_index(self) -> u32 {
+        self.end_vertex_index
+    }
+
+    pub const fn line_index(self) -> u32 {
+        self.line_index
+    }
+
+    pub const fn kind(self) -> CompiledGraphEdgeKind {
+        self.kind
+    }
+}
+
+/// Stable nondegenerate local geometry used by Graph endpoint dependencies.
+///
+/// Semantic rows keep their authored world-space content. The execution plan is
+/// free to specialize those rows, and a fixed local basis lets runtime publish
+/// endpoint motion as transforms even when the authored edge was initially
+/// collapsed. Worker transport consequently retains the ordinary object resource
+/// instead of minting a new effective geometry resource on every frame.
+pub(crate) fn graph_line_execution_content() -> ObjectContentRef {
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .into()
+}
+
+pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
+    let [apex, first, second] = noon_geometry::arrow_tip_vertices((1.0, 0.0), (1.0, 0.0), 1.0)
+        .map(|(x, y)| Vec2::new(x as f32, y as f32));
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close(),
+    )
+    .into()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
@@ -434,6 +604,18 @@ pub struct CompiledScene {
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
     family_animations: Vec<CompiledFamilyAnimationChannel>,
+    /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
+    graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
+    graph_dependency_indices: HashMap<(ObjectId, GraphEdgeId), u32>,
+    free_graph_dependency_indices: Vec<u32>,
+    graph_owner_dependencies: HashMap<ObjectId, Vec<u32>>,
+    /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
+    graph_incident_dependencies: HashMap<u32, Vec<u32>>,
+    /// Any graph-owned row -> dependency indices that must be re-derived when
+    /// that effective row changes. Includes vertices, designated Lines and tips.
+    graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
+    /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
+    numeric_text_drivers: Vec<CompiledNumericTextDriver>,
     resources: CompiledResources,
 }
 
@@ -553,6 +735,11 @@ pub enum CompilePatchError {
     ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
+    TooManyGraphDependencies(usize),
+    DuplicateGraphDependency {
+        owner: ObjectId,
+        edge: GraphEdgeId,
+    },
     InvalidFamilyAnimation,
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -605,6 +792,16 @@ impl std::fmt::Display for CompilePatchError {
             Self::TooManyFamilyAnimations => {
                 formatter.write_str("scene contains too many family animation plans")
             }
+            Self::TooManyGraphDependencies(count) => write!(
+                formatter,
+                "scene contains too many graph endpoint dependencies: {count}"
+            ),
+            Self::DuplicateGraphDependency { owner, edge } => write!(
+                formatter,
+                "graph dependency owner {} repeats edge {}",
+                owner.get(),
+                edge.get()
+            ),
             Self::InvalidZIndex(id) => write!(formatter, "object {} has non-finite z-index", id.get()),
             Self::InvalidFamilyAnimation => {
                 formatter.write_str("invalid family animation plan, timing, or mapping")
@@ -702,6 +899,26 @@ impl std::error::Error for CompilePatchError {
 }
 
 impl CompiledScene {
+    fn graph_execution_content_for_row(&self, object_index: u32) -> Option<ObjectContentRef> {
+        for &dependency_index in self.graph_dependencies_for_changed_row(object_index) {
+            let dependency = self.graph_edge_dependencies[dependency_index as usize];
+            if dependency.line_index() == object_index {
+                return Some(graph_line_execution_content());
+            }
+            if let CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } = dependency.kind()
+            {
+                if end_tip_index == object_index || start_tip_index == Some(object_index) {
+                    return Some(graph_tip_execution_content());
+                }
+            }
+        }
+        None
+    }
+
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
     /// Mapped composition leaves retain the root interval for completion, while
@@ -853,6 +1070,13 @@ impl CompiledScene {
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
+            graph_edge_dependencies: Vec::new(),
+            graph_dependency_indices: HashMap::new(),
+            free_graph_dependency_indices: Vec::new(),
+            graph_owner_dependencies: HashMap::new(),
+            graph_incident_dependencies: HashMap::new(),
+            graph_dirty_dependencies: HashMap::new(),
+            numeric_text_drivers: Vec::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -933,6 +1157,47 @@ impl CompiledScene {
         &self.family_animations
     }
 
+    pub fn graph_edge_dependencies(&self) -> &[CompiledGraphEdgeDependency] {
+        &self.graph_edge_dependencies
+    }
+
+    pub fn graph_edge_dependency(&self, index: u32) -> Option<CompiledGraphEdgeDependency> {
+        self.graph_edge_dependencies
+            .get(index as usize)
+            .copied()
+            .filter(|dependency| dependency.is_live())
+    }
+
+    pub fn graph_dependencies_for_owner(&self, owner: ObjectId) -> &[u32] {
+        self.graph_owner_dependencies
+            .get(&owner)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn numeric_text_drivers(&self) -> &[CompiledNumericTextDriver] {
+        &self.numeric_text_drivers
+    }
+
+    /// Return only the graph dependencies touching one compiled vertex row.
+    pub fn incident_graph_dependencies(&self, vertex_index: u32) -> &[u32] {
+        self.graph_incident_dependencies
+            .get(&vertex_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Return graph dependencies invalidated by one changed effective row.
+    ///
+    /// Ordinary rows use the shared empty slice. Graph vertices remain O(degree);
+    /// a designated Line or tip normally maps to exactly one dependency.
+    pub fn graph_dependencies_for_changed_row(&self, object_index: u32) -> &[u32] {
+        self.graph_dirty_dependencies
+            .get(&object_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     pub fn raster_image_resources(&self) -> &impl RasterImageResourceLookup {
         &self.resources
     }
@@ -953,6 +1218,18 @@ impl CompiledScene {
         self.objects
             .get(object_index as usize)
             .is_some_and(|object| object.live)
+    }
+
+    /// Return the retained execution slot for a live or retired object identity.
+    ///
+    /// Structural publication uses this during preflight so a re-entering object
+    /// can stage sparse runtime state against the slot that `CreateObject` will
+    /// reactivate, without scanning or mutating the compiled scene.
+    pub fn retained_object_index(&self, id: ObjectId) -> Option<u32> {
+        self.object_indices
+            .get(&id)
+            .copied()
+            .or_else(|| self.retired_object_indices.get(&id).copied())
     }
 
     pub fn object_id_at_slot(&self, object_index: u32) -> Option<ObjectId> {
@@ -1091,7 +1368,10 @@ impl CompiledScene {
                 text_bounds,
             } => self.object_index(*object).is_none_or(|index| {
                 let existing = &self.objects[index as usize];
-                &existing.content != content || existing.text_bounds != *text_bounds
+                let content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
+                existing.content != content || existing.text_bounds != *text_bounds
             }),
             ExecutionPatch::SetTransform { object, transform } => self
                 .object_index(*object)
@@ -1115,6 +1395,10 @@ impl CompiledScene {
             ExecutionPatch::ReorderObject { object, before } => {
                 self.painter_reorder_changes(*object, *before)
             }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.graph_dependencies_patch_changes(*owner, dependencies),
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
@@ -1280,7 +1564,9 @@ impl CompiledScene {
                         });
                     }
                 }
-                self.objects[index as usize].content = content.clone();
+                self.objects[index as usize].content = self
+                    .graph_execution_content_for_row(index)
+                    .unwrap_or_else(|| content.clone());
                 self.objects[index as usize].text_bounds = *text_bounds;
             }
             ExecutionPatch::SetTransform { object, transform } => {
@@ -1297,6 +1583,10 @@ impl CompiledScene {
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_style = *style;
             }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.apply_graph_dependencies(*owner, dependencies)?,
             ExecutionPatch::AddTrack(track) => {
                 if self.track_locators.contains_key(&track.id) {
                     return Err(CompilePatchError::DuplicateTrack(track.id));

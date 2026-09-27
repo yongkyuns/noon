@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { rasterFixtureSource } from "./manim-raster-support.mjs";
 
 const source = await readFile(new URL("./shared-playback-raster.mjs", import.meta.url), "utf8");
 // Execute the real configuration boundary, without importing Playwright or
@@ -13,7 +14,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const configure = new AsyncFunction("assert", "readFile", "path", "repoRoot", "process",
   `${source.slice(start, end)}\nreturn { manifest, fixtures, baseline, reference, backends };`);
 const repoRoot = path.resolve("playback-test-repository");
-const oracle = { version: "0.21.0", frame_rate: 30 };
+const oracle = { version: "0.21.0", frame_rate: 30, source: "fixture.py" };
 const matching = { id: "matching-shapes-reordered", scene: "MatchingShapesReordered", expected_duration: 2.2 };
 const other = { id: "other", scene: "Other", expected_duration: 1 };
 const fullManifest = { reference: oracle, fixtures: [matching, other] };
@@ -86,4 +87,41 @@ test("selected fixtures without dense evidence still fail rather than being skip
   const qualify = new AsyncFunction("assert", "baseline", "fixture",
     `${source.slice(functionStart, functionEnd)}\nreturn qualifyFixture(null, fixture, "webgpu");`);
   await assert.rejects(qualify(assert, result.baseline, other), /dense fixture source selection changed/);
+});
+
+test("shared playback passes fixture preparation metadata through the canonical source adapter", async () => {
+  const functionStart = source.indexOf("async function qualifyFixture(");
+  const functionEnd = source.indexOf("\nconst results =", functionStart);
+  assert.ok(functionStart >= 0 && functionEnd > functionStart, "playback qualification boundary moved");
+  const qualify = new AsyncFunction(
+    "assert", "baseline", "reference", "path", "repoRoot", "manifest", "readFile", "rasterFixtureSource", "page", "fixture", "baseUrl",
+    `${source.slice(functionStart, functionEnd)}\nreturn qualifyFixture(page, fixture, "webgpu");`,
+  );
+  const loadedSources = [];
+  const stopAfterLoad = new Error("stop after shared source adaptation");
+  const page = {
+    async goto() {},
+    async waitForFunction() {},
+    async evaluate(_callback, argument) {
+      if (argument?.source !== undefined) {
+        loadedSources.push(argument.source);
+        throw stopAfterLoad;
+      }
+      return true;
+    },
+  };
+  const baseline = { fixtures: [] };
+  const reference = { fixtures: [] };
+  const dependencies = [assert, baseline, reference, path, repoRoot, fullManifest,
+    async () => "from manim import *\nclass Example(Scene): pass\n", rasterFixtureSource, page];
+  const plain = { id: "plain", scene: "Example", expected_duration: 1 };
+  const latex = { ...plain, id: "latex", requires_latex: true };
+  for (const fixture of [plain, latex]) {
+    baseline.fixtures = [{ ...fixture, expectedDuration: 1, backends: { webgpu: { samples: [{}] } } }];
+    reference.fixtures = [{ id: fixture.id, frame_count: 1, frames: [{ time: 0 }] }];
+    await assert.rejects(qualify(...dependencies, fixture, "http://example.test"), stopAfterLoad);
+  }
+  assert.equal(loadedSources.length, 2);
+  assert.doesNotMatch(loadedSources[0], /await prepare_latex\(\)/);
+  assert.match(loadedSources[1], /await prepare_latex\(\)/);
 });

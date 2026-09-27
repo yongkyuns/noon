@@ -136,6 +136,9 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = []
 
+                def liveExecutionOwnership(self):
+                    return "active"
+
                 def liveArrangeFamily(self, family, options):
                     direction_x, direction_y, buff, center = options[:4]
                     self.calls.append(

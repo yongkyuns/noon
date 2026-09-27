@@ -2,7 +2,6 @@ import asyncio
 import inspect
 from pathlib import Path
 import textwrap
-from pathlib import Path
 from unittest.mock import patch
 import unittest
 
@@ -14,6 +13,35 @@ from _manim_source_execution import (
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_module_preparation_finishes_before_scene_definition(self):
+        from _manim_source_execution import execute_authoring_module
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                events = []
+                release = asyncio.Event()
+                async def prepare():
+                    events.append("preparing")
+                    await release.wait()
+                    events.append("prepared")
+                source = textwrap.dedent("""
+                    await prepare()
+                    class Example:
+                        events.append("defined")
+                        def construct(self):
+                            self.wait(0.2)
+                """)
+                code, pairs = compile_authoring_source(source, portable=portable)
+                namespace = {"prepare": prepare, "events": events}
+                task = asyncio.create_task(execute_authoring_module(code, namespace))
+                await asyncio.sleep(0)
+                self.assertEqual(events, ["preparing"])
+                self.assertNotIn("Example", namespace)
+                release.set()
+                await task
+                self.assertEqual(events, ["preparing", "prepared", "defined"])
+                self.assertEqual(bool(pairs), portable)
+                self.assertFalse(inspect.iscoroutinefunction(namespace["Example"].construct))
+
     async def test_source_invocation_restores_cleanup_after_failure(self):
         cleanups = []
         self.assertIsNone(current_source_invocation())
@@ -190,6 +218,14 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_zoomed_scene_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("zoomed_scene.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="zoomed_scene.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "RetainedZoom.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
     def test_decorators_are_not_replayed_or_unwrapped(self):
         effects = []
         def decorate(function):
@@ -247,6 +283,23 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         class Override(Base):
             def wait(self, *args): pass
         self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
+
+    async def test_unmatched_portable_construct_keeps_ordinary_fallback(self):
+        import _manim_scene
+        import noon
+
+        events = []
+
+        class Example(noon.Scene):
+            def construct(self):
+                events.append("ordinary")
+
+        scene = Example()
+        scene._canonical_authoring_context = object()
+        # A truthy pair map exercises portable admission, while an unmatched
+        # construct must never be inspected as if it were portable.
+        await _manim_scene.execute_construct(scene, portable_constructs={object(): object()})
+        self.assertEqual(events, ["ordinary"])
 
     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
         effects = []

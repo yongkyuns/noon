@@ -171,6 +171,66 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub struct WasmDecimalNumberHandle {
+        number: noon::DecimalNumber,
+    }
+
+    impl WasmDecimalNumberHandle {
+        pub(crate) fn from_number(number: noon::DecimalNumber) -> Self {
+            Self { number }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmDecimalNumberHandle {
+        #[wasm_bindgen(getter)]
+        pub fn value(&self) -> Result<f64, JsValue> {
+            self.number.value().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = integerValue)]
+        pub fn integer_value(&self) -> Result<i64, JsValue> {
+            self.number
+                .value()
+                .map_err(js_error)
+                .and_then(|value| noon::integer_value(value).map_err(js_error))
+        }
+        #[wasm_bindgen(getter)]
+        pub fn text(&self) -> Result<String, JsValue> {
+            self.number.text().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = fontSize)]
+        pub fn font_size(&self) -> Result<f64, JsValue> {
+            self.number.font_size().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = setValue)]
+        pub fn set_value(
+            &mut self,
+            compiler: &mut crate::WasmLatexCompiler,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            self.number
+                .set_value(compiler, value)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = incrementValue)]
+        pub fn increment_value(
+            &mut self,
+            compiler: &mut crate::WasmLatexCompiler,
+            delta: f64,
+        ) -> Result<(), JsValue> {
+            self.number
+                .increment_value(compiler, delta)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = mobject)]
+        pub fn mobject(&self) -> WasmAuthoringMobjectHandle {
+            WasmAuthoringMobjectHandle::from_semantic_mobject(self.number.mobject().clone())
+        }
+    }
+
+    #[wasm_bindgen]
     impl WasmAuthoringStore {
         #[wasm_bindgen(constructor)]
         pub fn new() -> Self {
@@ -195,6 +255,52 @@ mod wasm {
                 tracker,
                 Rc::clone(&self.semantics),
             ))
+        }
+
+        #[wasm_bindgen(js_name = createDecimalNumber)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_decimal_number(
+            &self,
+            value: f64,
+            decimal_places: u32,
+            include_sign: bool,
+            group_with_commas: bool,
+            show_ellipsis: bool,
+            unit: Option<String>,
+            font_size: f64,
+            compiler: &mut crate::WasmLatexCompiler,
+        ) -> Result<WasmDecimalNumberHandle, JsValue> {
+            if !font_size.is_finite() || font_size <= 0.0 || font_size > f64::from(f32::MAX) {
+                return Err(js_error(
+                    "DecimalNumber font_size must be finite and positive",
+                ));
+            }
+            noon::DecimalNumber::with_font_size(
+                Rc::clone(&self.semantics),
+                compiler,
+                value,
+                noon::DecimalFormat {
+                    decimal_places,
+                    include_sign,
+                    group_with_commas,
+                    show_ellipsis,
+                    unit,
+                },
+                font_size as f32,
+            )
+            .map(|number| WasmDecimalNumberHandle { number })
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = numericFromMobject)]
+        pub fn numeric_from_mobject(
+            &self,
+            object: &WasmAuthoringMobjectHandle,
+        ) -> Result<WasmDecimalNumberHandle, JsValue> {
+            object.id_in_store(&self.semantics, "DecimalNumber")?;
+            noon::DecimalNumber::from_mobject(object.semantic_mobject().clone())
+                .map(|number| WasmDecimalNumberHandle { number })
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createManimGeometry)]
@@ -1187,7 +1293,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct WasmPathQuery {
-        value: noon::PathQuery,
+        pub(crate) value: noon::PathQuery,
     }
 
     impl WasmPathQuery {

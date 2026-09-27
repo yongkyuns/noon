@@ -880,6 +880,7 @@ mod tests {
             snapshot,
             time: 0.0,
             camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 slot: TransportSlotId {
                     slot: 0,
@@ -887,6 +888,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(7),
+                z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
                 },

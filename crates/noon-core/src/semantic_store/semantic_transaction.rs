@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::semantic_animations::{normalize_text_reveal_options, normalize_text_write_options};
 use super::semantic_declarations::{
@@ -9,17 +10,20 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransactionGraphDeclaration, SemanticTransformInterpolation,
-    SemanticUpdaterRegistration, StoredGeometry,
+    SemanticBarMetadata, SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint,
+    SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry,
+    SemanticScalarSignalTrack, SemanticScalarSignalTrackError, SemanticSceneOperationError,
+    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
+    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
+    TextPresentationBaseline,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
+mod inset_view;
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
 
@@ -76,9 +80,30 @@ pub enum SemanticMutation {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
+    SetInset2DView {
+        object: SemanticTransactionNodeRef,
+        camera_frame: Option<SemanticTransactionNodeRef>,
+        capture_own_display: bool,
+    },
     ReplaceContent {
         object: SemanticTransactionNodeRef,
         content: SemanticObjectContent,
+    },
+    /// Replace retained DecimalNumber inputs together with a normal text-content
+    /// mutation. This deliberately does not generalize object roles.
+    ReplaceDecimalNumber {
+        object: SemanticTransactionNodeRef,
+        number: SemanticDecimalNumber,
+    },
+    ReplaceTextPresentationBaseline {
+        object: SemanticTransactionNodeRef,
+        baseline: Option<TextPresentationBaseline>,
+    },
+    /// Replace optional retained BarChart source metadata without changing the
+    /// object's ordinary semantic role or visual state.
+    SetBarMetadata {
+        object: SemanticTransactionNodeRef,
+        metadata: Option<Arc<SemanticBarMetadata>>,
     },
     SetZIndex {
         node: SemanticTransactionNodeRef,
@@ -127,6 +152,10 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         graph: SemanticTransactionGraphDeclaration,
     },
+    SetTableLayout {
+        scope: SemanticTransactionNodeRef,
+        layout: SemanticTableLayout,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -162,8 +191,18 @@ impl SemanticMutation {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
+            | Self::ReplaceDecimalNumber { object, .. }
+            | Self::ReplaceTextPresentationBaseline { object, .. }
+            | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
+            Self::SetInset2DView {
+                object,
+                camera_frame,
+                ..
+            } => std::iter::once(*object)
+                .chain(camera_frame.iter().copied())
+                .collect(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
@@ -174,6 +213,7 @@ impl SemanticMutation {
             Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
                 .chain(graph.node_references())
                 .collect(),
+            Self::SetTableLayout { scope, .. } => vec![*scope],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -215,7 +255,11 @@ impl SemanticMutation {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
+            | Self::ReplaceDecimalNumber { object, .. }
+            | Self::ReplaceTextPresentationBaseline { object, .. }
+            | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
+            | Self::SetInset2DView { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
@@ -223,6 +267,7 @@ impl SemanticMutation {
             Self::ScopeSignal { scope, .. }
             | Self::SetForegroundMembers { scope, .. }
             | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
+            Self::SetTableLayout { scope, .. } => scope.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -245,6 +290,16 @@ impl SemanticMutation {
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
+            Self::SetBarMetadata { object, .. } => {
+                Some(SemanticMutationKey::ObjectBarMetadata(*object))
+            }
+            Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
+            Self::ReplaceDecimalNumber { object, .. } => {
+                Some(SemanticMutationKey::DecimalNumber(*object))
+            }
+            Self::ReplaceTextPresentationBaseline { object, .. } => {
+                Some(SemanticMutationKey::TextPresentationBaseline(*object))
+            }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -259,6 +314,7 @@ impl SemanticMutation {
             | Self::ScopeSignal { .. }
             | Self::SetForegroundMembers { .. }
             | Self::SetGraphDeclaration { .. } => None,
+            Self::SetTableLayout { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -286,6 +342,10 @@ pub(super) enum SemanticMutationKey {
         property: SemanticObjectProperty,
     },
     ObjectContent(SemanticTransactionNodeRef),
+    ObjectBarMetadata(SemanticTransactionNodeRef),
+    ObjectRole(SemanticTransactionNodeRef),
+    DecimalNumber(SemanticTransactionNodeRef),
+    TextPresentationBaseline(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
@@ -325,6 +385,19 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    /// Retained BarChart source metadata changed without changing render data.
+    BarMetadata {
+        object: SemanticNodeId,
+    },
+    ObjectRole {
+        object: SemanticNodeId,
+    },
+    DecimalNumber {
+        object: SemanticNodeId,
+    },
+    TextPresentationBaseline {
         object: SemanticNodeId,
     },
     ObjectStyle {
@@ -489,6 +562,33 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Bind ordinary rectangles as an inset display and camera in one publication.
+    pub fn set_inset_2d_view(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        camera_frame: impl Into<SemanticTransactionNodeRef>,
+        capture_own_display: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetInset2DView {
+            object: object.into(),
+            camera_frame: Some(camera_frame.into()),
+            capture_own_display,
+        });
+        self
+    }
+
+    pub fn clear_inset_2d_view(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetInset2DView {
+            object: object.into(),
+            camera_frame: None,
+            capture_own_display: false,
+        });
+        self
+    }
+
     /// Replace only the authored content reference/value of one semantic object.
     pub fn replace_content(
         &mut self,
@@ -499,6 +599,53 @@ impl SemanticMutationTransaction {
             object: object.into(),
             content: content.into(),
         });
+        self
+    }
+
+    /// Replace one object's typed numeric metadata. The mutation is valid only
+    /// when the staged object content is text, so a bad late mutation rolls the
+    /// complete transaction back before resources or scene state are committed.
+    pub fn replace_decimal_number(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        number: SemanticDecimalNumber,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ReplaceDecimalNumber {
+            object: object.into(),
+            number,
+        });
+        self
+    }
+
+    /// Replace the optional BarChart source metadata for one ordinary object.
+    ///
+    /// The payload is pointer-sized and validated before publication. Passing
+    /// `None` removes chart ownership while retaining the object's geometry,
+    /// style, role, and identity.
+    pub fn set_bar_metadata(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        metadata: Option<Arc<SemanticBarMetadata>>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetBarMetadata {
+            object: object.into(),
+            metadata,
+        });
+        self
+    }
+
+    /// Replace receiver-owned presentation metadata atomically with related
+    /// text content. It does not create renderer work by itself.
+    pub fn replace_text_presentation_baseline(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        baseline: Option<TextPresentationBaseline>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceTextPresentationBaseline {
+                object: object.into(),
+                baseline,
+            });
         self
     }
 
@@ -639,6 +786,17 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetGraphDeclaration {
             scope: scope.into(),
             graph,
+        });
+        self
+    }
+    pub fn set_table_layout(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        layout: SemanticTableLayout,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetTableLayout {
+            scope: scope.into(),
+            layout,
         });
         self
     }
@@ -844,6 +1002,21 @@ impl SemanticMutationTransaction {
             source,
             target_state,
             SemanticFamilyTransformMode::MatchingShapes,
+            options,
+        )
+    }
+
+    /// Stage activation-time authored-source correspondence for retained text families.
+    pub fn create_source_matching_family_transform_animation(
+        &mut self,
+        source: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::MatchingSourceKeys,
             options,
         )
     }
@@ -1430,6 +1603,7 @@ impl SemanticMutationTransaction {
         let mut staged_signal_scope_additions = Vec::new();
         let mut staged_signal_scope_membership = HashSet::new();
         let mut staged_foreground = HashMap::new();
+        let mut staged_table_layouts = HashMap::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -1668,6 +1842,112 @@ impl SemanticMutationTransaction {
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetBarMetadata { object, metadata } => {
+                    if metadata
+                        .as_ref()
+                        .is_some_and(|metadata| !metadata.is_valid())
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidBarMetadata {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.bar_metadata() != metadata.as_deref();
+                    if did_change {
+                        state.set_bar_metadata(metadata.clone());
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
+                    if let Some(camera) = camera_frame {
+                        catalog.ensure_object(*camera, index)?;
+                        if camera == object {
+                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                                index,
+                            });
+                        }
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if !matches!(
+                        state.role(),
+                        SemanticObjectRole::Ordinary | SemanticObjectRole::Inset2DView(_)
+                    ) || object.existing().is_some_and(|object| {
+                        !store
+                            .semantic_graph_owners_for_invariant_target(object)
+                            .is_empty()
+                    }) {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let current = match state.role() {
+                        SemanticObjectRole::Inset2DView(view) => {
+                            Some((view.camera_frame.into(), view.capture_own_display))
+                        }
+                        _ => None,
+                    };
+                    let requested = camera_frame.map(|camera| (camera, *capture_own_display));
+                    changed.push(current != requested);
+                    // Pending camera identities exist only inside the transaction.
+                    // Commit resolves them before publishing the semantic role.
+                    if let Some(camera) = camera_frame.and_then(|camera| camera.existing()) {
+                        state.set_role(SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(camera)
+                                .capture_own_display(*capture_own_display),
+                        ));
+                    } else {
+                        state.set_role(SemanticObjectRole::Ordinary);
+                    }
+                }
+                SemanticMutation::ReplaceDecimalNumber { object, number } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if !number.is_valid() {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let did_change = state.decimal_number() != Some(number);
+                    if did_change {
+                        state.set_decimal_number(Some(number.clone()));
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::ReplaceTextPresentationBaseline { object, baseline } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.text_presentation_baseline() != *baseline;
+                    if did_change {
+                        match baseline {
+                            Some(baseline) => state.set_text_presentation_baseline(*baseline),
+                            None => state.clear_text_presentation_baseline(),
+                        }
                     }
                     changed.push(did_change);
                 }
@@ -1943,6 +2223,28 @@ impl SemanticMutationTransaction {
                 SemanticMutation::SetGraphDeclaration { .. } => {
                     changed.push(true);
                 }
+                SemanticMutation::SetTableLayout { scope, layout } => {
+                    catalog.ensure_family(*scope, index)?;
+                    if !layout.is_valid() {
+                        return Err(SemanticMutationTransactionError::InvalidTableLayout {
+                            index,
+                            scope: *scope,
+                        });
+                    }
+                    let previous = match staged_table_layouts.get(scope).copied() {
+                        Some(previous) => Some(previous),
+                        None => match scope {
+                            SemanticTransactionNodeRef::Existing(scope) => {
+                                store.semantic_table_layout(*scope).map_err(|error| {
+                                    SemanticMutationTransactionError::Node { index, error }
+                                })?
+                            }
+                            SemanticTransactionNodeRef::Pending(_) => None,
+                        },
+                    };
+                    changed.push(previous != Some(*layout));
+                    staged_table_layouts.insert(*scope, *layout);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -2041,9 +2343,11 @@ impl SemanticMutationTransaction {
             removed_existing: removed_nodes,
             removed_pending,
         };
-        // New graph declarations validate their complete final construction
-        // overlay. Existing graphs use only dependency-local checks below: a
-        // one-edge edit must never clone or scan the whole graph.
+        inset_view::validate(self, &preflight, store)?;
+        // A graph declaration describes the complete final topology/binding
+        // overlay.  Replacing an existing declaration is the only supported
+        // way for a transaction to change graph-owned membership; this keeps
+        // the invariant explicit while still allowing bounded graph edits.
         let mut staged_graph_scopes = HashSet::new();
         for (index, mutation) in self.mutations.iter().enumerate() {
             if let SemanticMutation::SetGraphDeclaration { scope, graph } = mutation {
@@ -2059,6 +2363,18 @@ impl SemanticMutationTransaction {
             }
         }
 
+        let replaced_graph_scopes = self
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                SemanticMutation::SetGraphDeclaration {
+                    scope: SemanticTransactionNodeRef::Existing(scope),
+                    ..
+                } => Some(*scope),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+
         for (index, mutation) in self.mutations.iter().enumerate() {
             if !preflight.changed[index] {
                 continue;
@@ -2071,6 +2387,9 @@ impl SemanticMutationTransaction {
                     };
                     for scope in store.semantic_graph_owners_for_invariant_target(*family) {
                         if preflight.removed_existing.contains(&scope) {
+                            continue;
+                        }
+                        if replaced_graph_scopes.contains(&scope) {
                             continue;
                         }
                         return Err(SemanticMutationTransactionError::InvalidGraphDeclaration {
@@ -2140,18 +2459,6 @@ fn validate_graph_declaration(
     if !staged_scopes.insert(scope) {
         return Err(SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope });
     }
-    if let SemanticTransactionNodeRef::Existing(scope_id) = scope {
-        if store
-            .node(scope_id)
-            .and_then(|node| node.graph_declaration())
-            .is_some()
-        {
-            return Err(
-                SemanticMutationTransactionError::DuplicateGraphDeclaration { index, scope },
-            );
-        }
-    }
-
     let removed = |node: SemanticTransactionNodeRef| match node {
         SemanticTransactionNodeRef::Existing(node) => preflight.removed_existing.contains(&node),
         SemanticTransactionNodeRef::Pending(token) => preflight.removed_pending.contains(&token),
@@ -2240,13 +2547,94 @@ fn validate_graph_declaration(
                 "graph edge Line must be a direct edge-family member",
             ));
         }
+        let line_state = object_state(binding.line());
         if !matches!(
-            object_state(binding.line()).and_then(|state| state.content.geometry()),
+            line_state.and_then(|state| state.content.geometry()),
             Some(StoredGeometry::Line { .. })
         ) {
             return Err(invalid(
                 "graph edge dependency component must be an analytic Line",
             ));
+        }
+
+        let edge_members = preflight
+            .family_edges
+            .members_for_read(store, binding.family())
+            .into_iter()
+            .collect::<HashSet<_>>();
+        match (edge.directed, binding.dependency()) {
+            (false, SemanticTransactionGraphEdgeDependency::Line) => {
+                if edge_members.len() != 1 {
+                    return Err(invalid(
+                        "undirected graph edge family must contain exactly its designated Line",
+                    ));
+                }
+            }
+            (
+                true,
+                SemanticTransactionGraphEdgeDependency::Arrow {
+                    end_tip,
+                    start_tip,
+                    policy,
+                },
+            ) => {
+                if !policy.is_valid() {
+                    return Err(invalid(
+                        "graph Arrow endpoint policy must be finite and nonnegative",
+                    ));
+                }
+                if !matches!(
+                    line_state.map(SemanticObjectState::role),
+                    Some(SemanticObjectRole::ArrowShaft(_))
+                ) {
+                    return Err(invalid(
+                        "directed graph edge Line must retain the shared Arrow shaft role",
+                    ));
+                }
+
+                let mut expected_members = HashSet::with_capacity(3);
+                expected_members.insert(binding.line());
+                for (tip, expected_role) in [
+                    (Some(end_tip), SemanticObjectRole::ArrowEndTip),
+                    (start_tip, SemanticObjectRole::ArrowStartTip),
+                ] {
+                    let Some(tip) = tip else {
+                        continue;
+                    };
+                    catalog.ensure_object(tip, index)?;
+                    if removed(tip) || !semantic_objects.insert(tip) {
+                        return Err(invalid(
+                            "graph Arrow tip identities must be distinct live semantic objects",
+                        ));
+                    }
+                    if !matches!(object_state(tip), Some(state) if state.role() == expected_role) {
+                        return Err(invalid(
+                            "graph Arrow tip dependency must reference the matching shared Arrow role",
+                        ));
+                    }
+                    if !edge_members.contains(&tip) {
+                        return Err(invalid(
+                            "graph Arrow tip dependency must be a direct edge-family member",
+                        ));
+                    }
+                    expected_members.insert(tip);
+                }
+                if edge_members != expected_members {
+                    return Err(invalid(
+                        "directed graph edge family must contain exactly its shaft and declared tips",
+                    ));
+                }
+            }
+            (false, SemanticTransactionGraphEdgeDependency::Arrow { .. }) => {
+                return Err(invalid(
+                    "undirected graph edges must use Line endpoint dependencies",
+                ));
+            }
+            (true, SemanticTransactionGraphEdgeDependency::Line) => {
+                return Err(invalid(
+                    "directed graph edges must use shared Arrow endpoint dependencies",
+                ));
+            }
         }
 
         if !vertices_by_id.contains_key(&edge.start) || !vertices_by_id.contains_key(&edge.end) {
@@ -2528,6 +2916,10 @@ pub enum SemanticMutationTransactionError {
         scope: SemanticTransactionNodeRef,
         reason: &'static str,
     },
+    InvalidTableLayout {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+    },
     DuplicateForegroundScope {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -2646,6 +3038,10 @@ pub enum SemanticMutationTransactionError {
         property: SemanticObjectProperty,
     },
     DuplicateContent {
+        index: usize,
+        object: SemanticNodeId,
+    },
+    DuplicateBarMetadata {
         index: usize,
         object: SemanticNodeId,
     },
@@ -2814,6 +3210,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticNodeId,
     },
+    InvalidBarMetadata {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
     InvalidGeometryResource {
         index: usize,
         resource: crate::GeometryResourceHandle,
@@ -2866,6 +3266,7 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidTableLayout { index, scope } => write!(formatter, "semantic transaction mutation {index} has invalid Table layout for {scope:?}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"
@@ -2879,15 +3280,28 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 "semantic transaction mutation {index} has invalid Graph declaration for {scope:?}: {reason}"
             ),
             Self::DuplicateForegroundScope { index, scope } => write!(
-                formatter, "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
+                formatter,
+                "semantic transaction mutation {index} repeats foreground declarations for {scope:?}"
             ),
-            Self::InvalidForegroundMember { index, scope, member } => write!(
-                formatter, "semantic transaction mutation {index} has duplicate or self foreground reference {member:?} under {scope:?}"
+            Self::InvalidForegroundMember {
+                index,
+                scope,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} has duplicate or self foreground reference {member:?} under {scope:?}"
             ),
-            Self::ForegroundUsesRemovedNode { index, scope, member } => write!(
-                formatter, "semantic transaction mutation {index} declares removed foreground member {member:?} under {scope:?}"
+            Self::ForegroundUsesRemovedNode {
+                index,
+                scope,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} declares removed foreground member {member:?} under {scope:?}"
             ),
-            Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
+            Self::SceneRevisionExhausted => {
+                write!(formatter, "Noon scene revision space exhausted")
+            }
             Self::InsertionOrderExhausted => {
                 write!(formatter, "Noon semantic insertion-order space exhausted")
             }
@@ -2903,7 +3317,11 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} uses unknown pending node {token:?}"
             ),
-            Self::PendingNodeKindMismatch { index, token, expected } => write!(
+            Self::PendingNodeKindMismatch {
+                index,
+                token,
+                expected,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} requires pending node {token:?} to be {expected:?}"
             ),
@@ -2919,31 +3337,62 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} mixes full and scalar style mutation on pending object {object:?}"
             ),
-            Self::PendingFamilyCycle { index, family, member } => write!(
+            Self::PendingFamilyCycle {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} creates a family cycle {family:?} -> {member:?}"
             ),
-            Self::PendingNotFamilyMember { index, family, member } => write!(
+            Self::PendingNotFamilyMember {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot reorder non-member {member:?} in family {family:?}"
             ),
-            Self::PendingSubscriptionUsesRemovedSignal { index, object, property, signal } => write!(
+            Self::PendingSubscriptionUsesRemovedSignal {
+                index,
+                object,
+                property,
+                signal,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot bind removed signal {signal:?} to {property:?} on pending object {object:?}"
             ),
-            Self::PendingFamilyEdgeUsesRemovedNode { index, family, member } => write!(
+            Self::PendingFamilyEdgeUsesRemovedNode {
+                index,
+                family,
+                member,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot use removed node {member:?} in pending family edge for {family:?}"
             ),
-            Self::PendingFamilyOrderUsesRemovedNode { index, family, node } => write!(
+            Self::PendingFamilyOrderUsesRemovedNode {
+                index,
+                family,
+                node,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot use removed node {node:?} in pending family order for {family:?}"
             ),
-            Self::PendingNonFinitePropertyValue { index, object, property } => write!(
+            Self::PendingNonFinitePropertyValue {
+                index,
+                object,
+                property,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} to a non-finite value"
             ),
-            Self::PendingPropertyTypeMismatch { index, object, property, expected, actual } => write!(
+            Self::PendingPropertyTypeMismatch {
+                index,
+                object,
+                property,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} requiring {expected} to {actual}"
             ),
@@ -2959,7 +3408,14 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot set a non-finite style on pending object {object:?}"
             ),
-            Self::PendingSubscriptionTypeMismatch { index, object, property, signal, expected, actual } => write!(
+            Self::PendingSubscriptionTypeMismatch {
+                index,
+                object,
+                property,
+                signal,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot bind {actual} signal {signal:?} to {property:?} on pending object {object:?} requiring {expected}"
             ),
@@ -2990,8 +3446,20 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
-            Self::NonFiniteZIndex { index, node } => write!(formatter, "mutation {index} has non-finite z-index for {node:?}"),
-            Self::DuplicateZIndex { index, node } => write!(formatter, "mutation {index} duplicates z-index for {node:?}"),
+            Self::DuplicateBarMetadata { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats BarChart metadata replacement on object {}:{}",
+                object.slot(),
+                object.generation()
+            ),
+            Self::NonFiniteZIndex { index, node } => write!(
+                formatter,
+                "mutation {index} has non-finite z-index for {node:?}"
+            ),
+            Self::DuplicateZIndex { index, node } => write!(
+                formatter,
+                "mutation {index} duplicates z-index for {node:?}"
+            ),
             Self::DuplicateStyle { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats style replacement on object {}:{}",
@@ -3113,7 +3581,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
-            Self::InvalidObjectContent { index } => write!(formatter, "semantic transaction mutation {index}: object geometry contains non-finite values"),
+            Self::InvalidObjectContent { index } => write!(
+                formatter,
+                "semantic transaction mutation {index}: object geometry contains non-finite values"
+            ),
             Self::InvalidNodeObjectState { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an object with non-finite authored transform/style values"
@@ -3256,6 +3727,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::InvalidBarMetadata { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign invalid BarChart metadata to object {object:?}"
+            ),
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,
                 "semantic transaction mutation {index} references unavailable geometry resource {:?}",
@@ -3334,6 +3809,9 @@ mod base_tests;
 
 #[cfg(test)]
 mod content_tests;
+
+#[cfg(test)]
+mod bar_metadata_tests;
 
 #[cfg(test)]
 mod style_tests;

@@ -103,6 +103,39 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
 }
 
 impl MobjectFamily {
+    /// Atomically recolor selected leaves by current authoritative family order.
+    /// `None` preserves a leaf. The exact length is validated before staging.
+    pub fn set_member_colors(&self, colors: &[Option<Color>]) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let expected = self
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(self.node_id())
+            .map_err(AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            });
+        }
+        self.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?
+        .apply(&mut self.integration_store().borrow_mut())
+        .map(|_| ())
+        .map_err(AuthoringError::from)
+    }
+
     /// Atomically update supplied paint fields on each unique leaf.
     pub fn set_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
         self.edit_style(|style| update.apply(style))
@@ -247,5 +280,42 @@ impl MobjectFamily {
             }
         }
         Ok(transaction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Scene;
+
+    #[test]
+    fn member_colors_validate_count_before_atomic_publication() {
+        let mut scene = Scene::new();
+        let first = scene.rectangle(1.0, 1.0).unwrap();
+        let second = scene.circle(0.5).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let before = (first.state().unwrap(), second.state().unwrap());
+
+        assert!(matches!(
+            family.set_member_colors(&[Some(crate::RED)]),
+            Err(AuthoringError::FamilyMemberValueCount {
+                expected: 2,
+                actual: 1
+            })
+        ));
+        assert_eq!(first.state().unwrap(), before.0);
+        assert_eq!(second.state().unwrap(), before.1);
+
+        family
+            .set_member_colors(&[Some(crate::RED), Some(crate::BLUE)])
+            .unwrap();
+        assert_eq!(
+            first.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(crate::RED))
+        );
+        assert_eq!(
+            second.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(crate::BLUE))
+        );
     }
 }

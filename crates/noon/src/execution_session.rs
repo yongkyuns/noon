@@ -106,6 +106,13 @@ impl AnimationAdmissions {
     }
 }
 
+/// Mutable transaction state shared while recursively staging a composition.
+struct CompositionStaging<'a> {
+    declaration: &'a mut SemanticMutationTransaction,
+    admitted: &'a mut AnimationAdmissions,
+    removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+}
+
 fn stage_animation_admissions(
     store: &SemanticStore,
     root: SemanticNodeId,
@@ -156,6 +163,11 @@ pub(crate) enum SemanticCompositionRequest {
         options: AnimationOptions,
     },
     MatchingFamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    MatchingSourceFamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
         options: AnimationOptions,
@@ -262,6 +274,40 @@ pub(crate) enum SemanticCompositionRequest {
     },
 }
 
+impl SemanticCompositionRequest {
+    /// Direct leaf target used to reject competing parallel introductions.
+    /// Compound requests are validated while staging their children.
+    const fn direct_leaf_target(&self) -> Option<SemanticNodeId> {
+        match self {
+            Self::TransformTo { source, .. }
+            | Self::FamilyTransformTo { source, .. }
+            | Self::MatchingFamilyTransformTo { source, .. }
+            | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
+            Self::Indicate { target, .. }
+            | Self::FamilyIndicate { target, .. }
+            | Self::DrawBorderThenFill { target, .. }
+            | Self::FamilyDrawBorderThenFill { target, .. }
+            | Self::FamilySubsetDisplay { target, .. }
+            | Self::FamilyFade { target, .. }
+            | Self::TextWrite { target, .. }
+            | Self::FamilyTextWrite { target, .. }
+            | Self::TextReveal { target, .. }
+            | Self::FamilyReveal { target, .. }
+            | Self::PassingFlash { target, .. }
+            | Self::Rotate { target, .. }
+            | Self::Add { target, .. }
+            | Self::Fade { target, .. }
+            | Self::Create { target, .. }
+            | Self::Uncreate { target, .. }
+            | Self::AffineLifecycle { target, .. } => Some(*target),
+            Self::FocusOn { .. }
+            | Self::ValueTracker { .. }
+            | Self::Wait { .. }
+            | Self::Composition { .. } => None,
+        }
+    }
+}
+
 impl PreparedAnimationLifecycle {
     const fn root(&self) -> SemanticNodeId {
         match self {
@@ -350,6 +396,43 @@ impl std::fmt::Display for ExecutionSessionCameraError {
 }
 
 impl std::error::Error for ExecutionSessionCameraError {}
+
+/// Error produced when an authored inset cannot be derived from one coherent
+/// effective runtime frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionSessionInset2DError {
+    MissingCameraFrame { object: ObjectId },
+    InvalidCameraFrame { object: ObjectId },
+    MissingDisplay { object: ObjectId },
+    InvalidDisplay { object: ObjectId },
+}
+
+impl std::fmt::Display for ExecutionSessionInset2DError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (kind, object) = match *self {
+            Self::MissingCameraFrame { object } => ("camera frame is missing", object),
+            Self::InvalidCameraFrame { object } => ("camera frame is invalid", object),
+            Self::MissingDisplay { object } => ("display is missing", object),
+            Self::InvalidDisplay { object } => {
+                ("display must be a positive unrotated rectangle", object)
+            }
+        };
+        write!(
+            formatter,
+            "inset 2D view {kind} for object {}",
+            object.get()
+        )
+    }
+}
+
+impl std::error::Error for ExecutionSessionInset2DError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Inset2DExecutionBinding {
+    camera_frame: ObjectId,
+    display: ObjectId,
+    capture_own_display: bool,
+}
 
 /// Unsupported lifecycle shape for the bounded canonical leaf-fade operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -655,6 +738,7 @@ pub struct ExecutionSession {
     signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
+    inset_2d_views: Vec<Inset2DExecutionBinding>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
@@ -693,6 +777,7 @@ impl Clone for ExecutionSession {
             signal_timeline: self.signal_timeline.clone(),
             runtime,
             camera_object: self.camera_object,
+            inset_2d_views: self.inset_2d_views.clone(),
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
@@ -760,12 +845,10 @@ impl ExecutionSession {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_store(store)?;
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     /// Instantiate the existing runtime for one semantic scene family.
@@ -781,12 +864,10 @@ impl ExecutionSession {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_root(store, root)?;
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     /// Instantiate one scene with an explicitly selected, exact authored animation graph.
@@ -817,12 +898,10 @@ impl ExecutionSession {
             animation_root,
             origin,
         )?;
-        Ok(Self::from_lowered(
-            store.identity(),
-            execution_index,
-            reachability,
-            lowered,
-        ))
+        let mut session =
+            Self::from_lowered(store.identity(), execution_index, reachability, lowered);
+        session.sync_inset_2d_view_bindings(store);
+        Ok(session)
     }
 
     fn from_lowered(
@@ -864,6 +943,7 @@ impl ExecutionSession {
             signal_timeline,
             runtime,
             camera_object,
+            inset_2d_views: Vec::new(),
             next_activation_track_id,
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
@@ -918,6 +998,15 @@ impl ExecutionSession {
         self.runtime.text_resources()
     }
 
+    /// Bounded retained resources synthesized by effective numeric drivers.
+    pub fn effective_text_resource_stats(&self) -> noon_core::TextResourceStats {
+        self.runtime.effective_text_resource_stats()
+    }
+
+    pub fn effective_text_resource_slot_capacity(&self) -> usize {
+        self.runtime.effective_text_resource_slot_capacity()
+    }
+
     /// Read-only font resources projected with this execution session.
     pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
         self.runtime.font_resources()
@@ -943,24 +1032,46 @@ impl ExecutionSession {
 
     /// Query current visible rows through the session-owned execution-slot index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.query_viewports(&[bounds])
+    }
+
+    /// Query the union of several camera bounds in canonical painter order.
+    /// Work scales with the candidate sets of the active views and never expands
+    /// to a full scene scan merely because an inset is active.
+    pub fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
         self.sync_spatial_index();
-        let query = self.spatial_index.query_rect(bounds);
-        let object_indices: Vec<_> = query
-            .slots()
-            .iter()
-            .filter_map(|&slot| {
+        let mut slots = std::collections::BTreeSet::new();
+        let mut spatial_stats = SpatialQueryStats::default();
+        for bounds in bounds {
+            let query = self.spatial_index.query_rect(*bounds);
+            slots.extend(query.slots().iter().copied());
+            let stats = query.stats();
+            spatial_stats.cells_visited = spatial_stats
+                .cells_visited
+                .saturating_add(stats.cells_visited);
+            spatial_stats.candidates_tested = spatial_stats
+                .candidates_tested
+                .saturating_add(stats.candidates_tested);
+            spatial_stats.full_scan_fallbacks = spatial_stats
+                .full_scan_fallbacks
+                .saturating_add(stats.full_scan_fallbacks);
+        }
+        let mut object_indices: Vec<_> = slots
+            .into_iter()
+            .filter_map(|slot| {
                 let object = self.slots.object_for_slot(slot)?;
                 self.runtime.frame_index_for_object(object)
             })
             .collect();
-        debug_assert_eq!(
-            object_indices.len(),
-            query.stats().results,
-            "live spatial candidates must resolve through execution identity"
-        );
+        object_indices.sort_unstable_by_key(|&index| {
+            self.runtime
+                .painter_rank(index)
+                .expect("live spatial candidate has a painter rank")
+        });
+        spatial_stats.results = object_indices.len();
         ExecutionViewportQuery {
             object_indices,
-            spatial_stats: query.stats(),
+            spatial_stats,
         }
     }
 
@@ -998,6 +1109,106 @@ impl ExecutionSession {
             .ok_or(ExecutionSessionCameraError {
                 object: camera_object,
             })
+    }
+
+    /// Active inset views derived from ordinary objects in the current frame epoch.
+    ///
+    /// The authoritative semantic relation is resolved only when topology changes.
+    /// Per-frame work is therefore bounded by active views and reads the frame and
+    /// display rows from the same already-evaluated runtime frame.
+    pub fn inset_2d_views(
+        &self,
+    ) -> Result<Vec<noon_core::Inset2DViewState>, ExecutionSessionInset2DError> {
+        self.inset_2d_views
+            .iter()
+            .filter(|binding| {
+                self.runtime
+                    .frame_index_for_object(binding.display)
+                    .is_some_and(|index| self.runtime.frame().is_present(index))
+            })
+            .map(|binding| {
+                let camera_object = self.runtime.effective_object(binding.camera_frame).ok_or(
+                    ExecutionSessionInset2DError::MissingCameraFrame {
+                        object: binding.camera_frame,
+                    },
+                )?;
+                let camera = camera_object
+                    .geometry()
+                    .and_then(|geometry| {
+                        Camera2DState::from_frame_object(geometry, camera_object.transform)
+                    })
+                    .ok_or(ExecutionSessionInset2DError::InvalidCameraFrame {
+                        object: binding.camera_frame,
+                    })?;
+                let display = self.runtime.effective_object(binding.display).ok_or(
+                    ExecutionSessionInset2DError::MissingDisplay {
+                        object: binding.display,
+                    },
+                )?;
+                let size = match display.geometry() {
+                    Some(noon_core::GeometryRef::Rectangle { size })
+                        if display.transform.translation.x.is_finite()
+                            && display.transform.translation.y.is_finite()
+                            && display.transform.rotation.is_finite()
+                            && display.transform.rotation.abs() <= 1.0e-6
+                            && display.transform.scale.x.is_finite()
+                            && display.transform.scale.y.is_finite() =>
+                    {
+                        noon_core::Vec2::new(
+                            size.x * display.transform.scale.x.abs(),
+                            size.y * display.transform.scale.y.abs(),
+                        )
+                    }
+                    _ => {
+                        return Err(ExecutionSessionInset2DError::InvalidDisplay {
+                            object: binding.display,
+                        });
+                    }
+                };
+                if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+                    return Err(ExecutionSessionInset2DError::InvalidDisplay {
+                        object: binding.display,
+                    });
+                }
+                Ok(noon_core::Inset2DViewState {
+                    camera_frame: binding.camera_frame,
+                    display: binding.display,
+                    camera,
+                    display_center: display.transform.translation,
+                    display_size: size,
+                    display_stroke_width: display.style.stroke_width
+                        * match display.style.stroke_width_mode {
+                            noon_core::StrokeWidthMode::ScreenSpace => 1.0,
+                            noon_core::StrokeWidthMode::ScaleWithObject => display
+                                .transform
+                                .scale
+                                .x
+                                .abs()
+                                .max(display.transform.scale.y.abs()),
+                        },
+                    capture_own_display: binding.capture_own_display,
+                })
+            })
+            .collect()
+    }
+
+    fn sync_inset_2d_view_bindings(&mut self, store: &SemanticStore) {
+        self.inset_2d_views = store
+            .inset_2d_views()
+            .filter(|(display, role)| {
+                self.reachability.is_reachable(*display)
+                    && self.reachability.is_reachable(role.camera_frame)
+            })
+            .filter_map(|(display, role)| {
+                Some(Inset2DExecutionBinding {
+                    camera_frame: self
+                        .execution_index
+                        .execution_object_id(role.camera_frame)?,
+                    display: self.execution_index.execution_object_id(display)?,
+                    capture_own_display: role.capture_own_display,
+                })
+            })
+            .collect();
     }
 
     fn sync_spatial_index(&mut self) {
@@ -1376,6 +1587,43 @@ impl ExecutionSession {
         Ok(signal)
     }
 
+    /// Publish one already-prepared composite that creates and scopes a fresh
+    /// scalar input. Reactive enrollment and any numeric driver referencing the
+    /// transaction-local signal share the same preflight and semantic commit.
+    #[cfg(feature = "latex")]
+    pub(crate) fn publish_prepared_scoped_value_tracker(
+        &mut self,
+        prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
+        root: SemanticNodeId,
+        signal_token: noon_core::SemanticLocalNodeToken,
+        initial: f64,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionAnimationError> {
+        let semantic_signal = prepared
+            .planned_node_id(signal_token)
+            .expect("surviving fresh signal owns one planned semantic identity");
+        let runtime_value = ReactiveValue::Scalar(lower_live_scalar_value(initial)?);
+        let projection = self
+            .reactive_projection
+            .prepare_input_signal_enrollment(semantic_signal, runtime_value.clone())?
+            .expect("fresh transaction-local signal is not already enrolled");
+        let runtime_enrollment = self.runtime.prepare_reactive_signal_enrollment_batch(&[(
+            projection.execution_signal(),
+            runtime_value,
+        )])?;
+        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+            prepared,
+            Vec::new(),
+            Some(root),
+            publication::SemanticPublicationPurpose::AuthoredMutation,
+            Some(publication::PreparedReactiveEnrollmentBatch {
+                projection_enrollments: vec![projection],
+                runtime_enrollment,
+            }),
+            [semantic_signal].into_iter().collect(),
+        )
+        .map_err(ExecutionSessionAnimationError::AuthoredPublication)
+    }
+
     /// Atomically associate and, when necessary, sparsely enroll one existing
     /// detached scalar signal in this execution root.
     pub fn associate_value_tracker(
@@ -1640,9 +1888,12 @@ impl ExecutionSession {
             store,
             root,
             request,
-            &mut declaration,
-            &mut admitted,
-            &mut removals,
+            CompositionStaging {
+                declaration: &mut declaration,
+                admitted: &mut admitted,
+                removals: &mut removals,
+            },
+            false,
         )?;
         stage_animation_admissions(store, root, &admitted.ordered, &mut declaration)?;
         self.declare_and_activate_prepared_animation(
@@ -1715,10 +1966,14 @@ impl ExecutionSession {
         store: &SemanticStore,
         root: SemanticNodeId,
         request: &SemanticCompositionRequest,
-        declaration: &mut SemanticMutationTransaction,
-        admitted: &mut AnimationAdmissions,
-        removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+        staging: CompositionStaging<'_>,
+        reuse_compatible_admission: bool,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let CompositionStaging {
+            declaration,
+            admitted,
+            removals,
+        } = staging;
         let admit = |target: SemanticNodeId,
                      admitted: &mut AnimationAdmissions|
          -> Result<(), ExecutionSessionAnimationError> {
@@ -1774,7 +2029,9 @@ impl ExecutionSession {
                 complete_priority,
                 options,
             } => {
-                admit(*source, admitted)?;
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*source).into())) {
+                    admit(*source, admitted)?;
+                }
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -1787,6 +2044,11 @@ impl ExecutionSession {
                 Ok(animation)
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            }
+            | SemanticCompositionRequest::MatchingSourceFamilyTransformTo {
                 source,
                 target_state,
                 options,
@@ -1833,9 +2095,18 @@ impl ExecutionSession {
                 // Matching presentation uses the same foreground-aware admission
                 // as ordinary targets, with stable source identity and topology.
                 admitted.insert((*source).into());
-                Ok(declaration.create_matching_family_transform_animation(
+                let mode = if matches!(
+                    request,
+                    SemanticCompositionRequest::MatchingSourceFamilyTransformTo { .. }
+                ) {
+                    noon_core::SemanticFamilyTransformMode::MatchingSourceKeys
+                } else {
+                    noon_core::SemanticFamilyTransformMode::MatchingShapes
+                };
+                Ok(declaration.create_family_transform_animation_with_mode(
                     *source,
                     *target_state,
+                    mode,
                     *options,
                 ))
             }
@@ -1934,9 +2205,12 @@ impl ExecutionSession {
                             store,
                             root,
                             &expanded,
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            false,
                         )
                     }
                     Err(error) => {
@@ -2060,9 +2334,12 @@ impl ExecutionSession {
                                     .rate_func(RateFunction::Linear)
                                     .introducer(introducer),
                             },
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            false,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -2341,7 +2618,9 @@ impl ExecutionSession {
             }
             SemanticCompositionRequest::Create { target, options } => {
                 self.require_create_target(store, *target)?;
-                admit(*target, admitted)?;
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
                 Ok(declaration.create_create_animation(*target, *options))
             }
             SemanticCompositionRequest::Uncreate { target, options } => {
@@ -2385,16 +2664,83 @@ impl ExecutionSession {
                         error: ExecutionSessionCreateError::EmptyParallel,
                     });
                 }
+                // A content-morph Transform and Create own disjoint morph and reveal
+                // drivers in Noon's retained-channel extension. They share one detached
+                // source in a Parallel play, so membership is admitted once while both
+                // animations retain their own semantic identities. Competing Create
+                // introductions remain an atomic preflight error.
+                let mut introductions = HashMap::<SemanticNodeId, usize>::new();
+                let mut morphs = HashMap::<SemanticNodeId, usize>::new();
+                let mut occurrences = HashMap::<SemanticNodeId, usize>::new();
+                if *kind == SemanticAnimationCompositionKind::Parallel {
+                    for child in children {
+                        match child {
+                            SemanticCompositionRequest::Create { target, .. } => {
+                                *introductions.entry(*target).or_default() += 1;
+                                *occurrences.entry(*target).or_default() += 1;
+                            }
+                            SemanticCompositionRequest::TransformTo {
+                                source,
+                                target_state,
+                                ..
+                            } => {
+                                let source_content = store
+                                    .semantic_object_state_checked(*source)
+                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                                        target: *source,
+                                        error,
+                                    })?
+                                    .content;
+                                let target_content = store
+                                    .semantic_object_state_checked(*target_state)
+                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                                        target: *target_state,
+                                        error,
+                                    })?
+                                    .content;
+                                if source_content != target_content {
+                                    *morphs.entry(*source).or_default() += 1;
+                                }
+                                *occurrences.entry(*source).or_default() += 1;
+                            }
+                            _ => {
+                                if let Some(target) = child.direct_leaf_target() {
+                                    *occurrences.entry(target).or_default() += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut compatible = HashSet::new();
+                for (&target, &count) in &introductions {
+                    let valid = count == 1
+                        && morphs.get(&target) == Some(&1)
+                        && occurrences.get(&target) == Some(&2);
+                    if valid {
+                        compatible.insert(target);
+                    } else if occurrences.get(&target).copied().unwrap_or_default() > 1 {
+                        return Err(ExecutionSessionAnimationError::CreateTarget {
+                            target,
+                            error: ExecutionSessionCreateError::DuplicateTarget,
+                        });
+                    }
+                }
                 let children = children
                     .iter()
                     .map(|child| {
+                        let reuse_admission = child
+                            .direct_leaf_target()
+                            .is_some_and(|target| compatible.contains(&target));
                         self.stage_composition_request(
                             store,
                             root,
                             child,
-                            declaration,
-                            admitted,
-                            removals,
+                            CompositionStaging {
+                                declaration,
+                                admitted,
+                                removals,
+                            },
+                            reuse_admission,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -3257,7 +3603,8 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                     (channels.stable_tracks().to_vec(), plan, None)
                 }
-                SemanticFamilyTransformMode::MatchingShapes => {
+                SemanticFamilyTransformMode::MatchingShapes
+                | SemanticFamilyTransformMode::MatchingSourceKeys => {
                     if !schedule.scalar_leaves().is_empty() {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                             "matching family Transform does not yet compose with scalar leaves"

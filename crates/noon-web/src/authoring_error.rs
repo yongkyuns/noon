@@ -75,6 +75,39 @@ impl Error for AuthoringFailure {
         self.cause.as_deref().map(|cause| cause as &dyn Error)
     }
 }
+impl From<noon::TableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TableAuthoringError) -> Self {
+        use noon::TableAuthoringError::*;
+        match error {
+            EmptyTable => Self::new("input", "table.empty", error),
+            RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
+            InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
+            InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("table.live_session", &error),
+        }
+    }
+}
+impl From<noon::MatrixAuthoringError> for AuthoringFailure {
+    fn from(error: noon::MatrixAuthoringError) -> Self {
+        use noon::MatrixAuthoringError::*;
+        match error {
+            EmptyMatrix => Self::new("input", "matrix.empty", error),
+            RaggedRows { .. } => Self::new("input", "matrix.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "matrix.duplicate_entry", error),
+            InvalidOption { .. } => Self::new("input", "matrix.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "matrix.invalid_structure", error),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("matrix.live_session", &error),
+        }
+    }
+}
 impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
     fn from(error: noon::FamilyCallbackPaintError) -> Self {
         use noon::FamilyCallbackPaintError::*;
@@ -423,6 +456,37 @@ impl From<noon_core::SemanticScalarSignalQueryError> for AuthoringFailure {
     }
 }
 
+impl From<noon::TextPartAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TextPartAuthoringError) -> Self {
+        match error {
+            noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
+            noon::TextPartAuthoringError::NotText(_) => {
+                AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
+                AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
+                AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
+            }
+            noon::TextPartAuthoringError::Query(
+                noon::TextPartQueryError::NonContiguousClusters,
+            ) => AuthoringFailure::new(
+                "unsupported_operation",
+                "text_parts.non_contiguous_clusters",
+                error,
+            ),
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::NonContiguousVectors) => {
+                AuthoringFailure::new(
+                    "unsupported_operation",
+                    "text_parts.non_contiguous_vectors",
+                    error,
+                )
+            }
+        }
+    }
+}
+
 impl From<noon::TextAuthoringError> for AuthoringFailure {
     fn from(error: noon::TextAuthoringError) -> Self {
         use noon::TextAuthoringError as E;
@@ -650,6 +714,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
                 Self::unclassified("runtime.publication", &cause),
             ),
+            E::NumericText(cause) => Self::caused_by(
+                "publication.numeric_text",
+                message,
+                Self::unclassified("runtime.numeric_text", &cause),
+            ),
             E::ExecutionSlot(cause) => Self::caused_by(
                 "publication.execution_slot",
                 message,
@@ -846,6 +915,26 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
             .expect("new Error object accepts its cause");
     }
     object.into()
+}
+
+impl From<noon::VariableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::VariableAuthoringError) -> Self {
+        match error {
+            noon::VariableAuthoringError::Text(error) => error.into(),
+            noon::VariableAuthoringError::Numeric(error) => error.into(),
+            noon::VariableAuthoringError::Authoring(error) => error.into(),
+        }
+    }
+}
+
+impl From<noon::NumericAuthoringError> for AuthoringFailure {
+    fn from(error: noon::NumericAuthoringError) -> Self {
+        match error {
+            noon::NumericAuthoringError::Text(error) => error.into(),
+            noon::NumericAuthoringError::Semantic(error) => error.into(),
+            other => Self::new("invalid_input", "numeric.input", other),
+        }
+    }
 }
 
 #[cfg(test)]

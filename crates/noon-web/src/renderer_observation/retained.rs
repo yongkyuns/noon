@@ -542,10 +542,12 @@ mod tests {
             snapshot: true,
             time: 1.5,
             camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 slot,
                 order: 0,
                 object: ObjectId::new(21),
+                z_index: 0.0,
                 content: TransportObjectContent::from(&ObjectContentRef::Geometry(
                     GeometryRef::circle(1.0),
                 )),

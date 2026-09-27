@@ -52,6 +52,36 @@ impl From<TextPartQueryError> for TextPartAuthoringError {
 }
 
 impl Mobject {
+    /// Compiler-authored retained partition for the current text resource.
+    pub fn text_parts(&self) -> Result<Vec<TextPart>, TextPartAuthoringError> {
+        let state = self.state()?;
+        let handle = state
+            .content
+            .text()
+            .ok_or(TextPartAuthoringError::NotText(self.node_id()))?;
+        let store = self.integration_store().borrow();
+        let resource = store
+            .text_resources()
+            .get(handle)
+            .ok_or(AuthoringError::MissingTextResource(handle))?;
+        Ok(resource.parts.to_vec())
+    }
+
+    /// The canonical UTF-8 source addressed by this object's retained text parts.
+    pub fn text_source(&self) -> Result<std::sync::Arc<str>, TextPartAuthoringError> {
+        let handle = self
+            .state()?
+            .content
+            .text()
+            .ok_or(TextPartAuthoringError::NotText(self.node_id()))?;
+        let store = self.integration_store().borrow();
+        let resource = store
+            .text_resources()
+            .get(handle)
+            .ok_or(AuthoringError::MissingTextResource(handle))?;
+        Ok(std::sync::Arc::clone(&resource.source))
+    }
+
     /// Project one authored UTF-8 source span through this text object's retained resource.
     pub fn text_source_part(
         &self,
@@ -102,7 +132,7 @@ mod tests {
 
     #[test]
     fn semantic_text_parts_reuse_resource_identity_across_object_presentation_edits() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut label = scene.text(Text::new("Noon Noon")).unwrap();
         let resource = label.state().unwrap().content.text().unwrap();
         let before = label.text_source_parts_for("Noon").unwrap();

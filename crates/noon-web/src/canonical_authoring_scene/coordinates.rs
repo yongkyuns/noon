@@ -1,13 +1,87 @@
-//! Dispatch only to the currently owned execution player. In particular a
-//! transferred context cannot create unpublished cold coordinate identities.
+//! Route coordinate authoring through the current owner; transferred contexts
+//! cannot create unpublished cold identities.
 use super::*;
 
 impl CanonicalAuthoringScene {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn live_create_path_family(
+        &mut self,
+        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.active_live_player()?.live_create_path_family(paths)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn live_create_polar_plane(
+        &mut self,
+        options: &noon::ManimPolarPlaneOptions,
+    ) -> Result<noon::ManimPolarPlane, AuthoringFailure> {
+        self.active_live_player()?.live_create_polar_plane(options)
+    }
+
     pub(super) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,
     ) -> Result<noon::ManimAxes, AuthoringFailure> {
         self.active_live_player()?.live_create_axes(options)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return self
+                .scene
+                .bar_chart(options)
+                .map_err(crate::plot_error::coordinate_failure);
+        }
+        self.active_live_player()?.live_create_bar_chart(options)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_change_bar_values(
+        &mut self,
+        chart: &mut noon::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.active_live_player()?
+            .live_change_bar_values(chart, values, update_colors)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_labeled_bar_chart(
+        &mut self,
+        options: &noon::ManimBarChartOptions,
+        labels: &noon::plot_presentation::NumberLabelOptions,
+        compiler: &mut impl noon::LatexBackend,
+    ) -> Result<noon::ManimBarChart, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return self
+                .scene
+                .bar_chart_with_axis_labels(options, labels, compiler)
+                .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
+        }
+        self.active_live_player()?
+            .live_create_labeled_bar_chart(options, labels, compiler)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_bar_labels(
+        &mut self,
+        chart: &noon::ManimBarChart,
+        compiler: &mut impl noon::LatexBackend,
+        options: &noon::BarLabelOptions,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return chart
+                .get_bar_labels(compiler, options)
+                .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
+        }
+        self.active_live_player()?
+            .live_bar_labels(chart, compiler, options)
     }
 
     pub(super) fn live_create_number_line(

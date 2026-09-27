@@ -1,5 +1,6 @@
 mod correspondence;
 pub use correspondence::PreparedPathInterpolation;
+pub(crate) use correspondence::{plan_with_authored_progress, AuthoredContourProgress};
 use noon_core::{Vec2, VectorPath};
 
 use crate::{
@@ -198,6 +199,26 @@ pub fn interpolate_path_preserving_order(
     progress: f32,
 ) -> Result<VectorPath, MorphError> {
     correspondence::interpolate(source, target, progress)
+}
+
+/// Interpolate ordered morph controls, then retain the authored prefix selected by
+/// `reveal`. Both values are normalized animation progress. This is the semantic
+/// counterpart of the renderer's retained morph mesh: reveal advances uniformly by
+/// aligned Bezier curve and by parameter within that curve, independent of how many
+/// flattening samples tessellation needs.
+pub fn interpolate_revealed_path_preserving_order(
+    source: &VectorPath,
+    target: &VectorPath,
+    morph: f32,
+    reveal: f32,
+) -> Result<VectorPath, MorphError> {
+    if !reveal.is_finite() || !(0.0..=1.0).contains(&reveal) {
+        return Err(MorphError::PathAlignment(
+            crate::PathProportionError::InvalidProportion(reveal),
+        ));
+    }
+    let path = correspondence::interpolate(source, target, morph)?;
+    Ok(crate::authored_partial_path(&path, 0.0, reveal))
 }
 
 fn plan_morph_impl(

@@ -1,13 +1,14 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::Vec2;
+use noon_core::{Inset2DViewState, Vec2};
 use wgpu::util::DeviceExt;
 
 mod derived_display;
 mod overlay;
 mod presentation;
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
+mod inset_capture;
 mod raster_image_gpu;
 mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
@@ -244,6 +245,12 @@ pub struct Camera2D {
     pub world_size: Vec2,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inset2DGpuView {
+    state: Inset2DViewState,
+    capture_size: [u32; 2],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraError {
     InvalidWorldSize,
@@ -469,6 +476,11 @@ pub struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_bind_group_layout: wgpu::BindGroupLayout,
+    inset_camera_buffers: Vec<wgpu::Buffer>,
+    inset_camera_bind_groups: Vec<wgpu::BindGroup>,
+    inset_views: Vec<Inset2DGpuView>,
+    inset_targets: Vec<inset_capture::InsetCaptureTarget>,
+    inset_camera_by_display: std::collections::HashMap<noon_core::ObjectId, usize>,
     camera: Camera2D,
     viewport_size: [u32; 2],
     target_format: wgpu::TextureFormat,
@@ -581,7 +593,12 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../analytic.wgsl"));
+        let polygon_coverage = include_str!("../polygon_coverage.wgsl");
+        let analytic_source = format!("{}\n{}", include_str!("../analytic.wgsl"), polygon_coverage);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon analytic shader"),
+            source: wgpu::ShaderSource::Wgsl(analytic_source.into()),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout)],
@@ -665,7 +682,11 @@ impl GpuRenderer {
                 instance_layout: line_instance_layout(),
             },
         );
-        let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
+        let path_source = format!("{}\n{}", include_str!("../path.wgsl"), polygon_coverage);
+        let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon path shader"),
+            source: wgpu::ShaderSource::Wgsl(path_source.into()),
+        });
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let full_path_pipeline =
@@ -721,6 +742,11 @@ impl GpuRenderer {
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout: camera_layout,
+            inset_camera_buffers: Vec::new(),
+            inset_camera_bind_groups: Vec::new(),
+            inset_views: Vec::new(),
+            inset_targets: Vec::new(),
+            inset_camera_by_display: std::collections::HashMap::new(),
             camera,
             viewport_size,
             target_format,

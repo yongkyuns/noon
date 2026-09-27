@@ -5,6 +5,9 @@ edition = "2021"
 license = "MIT"
 description = "Native window host for typed Noon execution sessions"
 
+[features]
+latex = ["noon/latex"]
+
 [dependencies]
 noon = { path = "../noon" }
 noon-core = { path = "../noon-core" }

@@ -32,10 +32,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     node --check "$source"
   done < <(find web -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print | sort)
 
-  while IFS= read -r source; do
-    node --check "$source"
-  done < <(find web/js -type f -name '*.js' -print | sort)
-
   node --check scripts/build-python-worker.mjs
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
@@ -66,9 +62,13 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
+  node --check scripts/playground-product-e2e.mjs
+  node --check scripts/playground-product-fps.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
+  node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/plotting-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs
@@ -89,6 +89,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/perf-corpus-budget.test.mjs
   node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
+  node --test scripts/playground-product-fps.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"

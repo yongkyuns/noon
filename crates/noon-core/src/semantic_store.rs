@@ -4,7 +4,7 @@
 //! live with the store they mutate. Immutable resources are shared contracts in
 //! the sibling resources module; execution and rendering remain downstream.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,8 @@ pub use semantic_bindings::*;
 
 mod semantic_graph;
 pub use semantic_graph::*;
+mod semantic_table_layout;
+pub use semantic_table_layout::*;
 
 mod semantic_animations;
 pub use semantic_animations::*;
@@ -589,6 +591,12 @@ pub struct SemanticStore {
     text_resources: crate::TextResourceArena,
     raster_image_resources: crate::RasterImageResourceArena,
     font_resources: crate::FontResourceArena,
+    // Bounded compiler registries supply deterministic complete identities. This
+    // store-local index maps those identities to one immutable retained resource;
+    // semantic nodes still retain independent identity and presentation state.
+    compiled_text_resources: HashMap<crate::TextCompilationIdentity, crate::TextResourceHandle>,
+    compiled_text_resource_order: VecDeque<crate::TextCompilationIdentity>,
+    compiled_text_resource_retained_bytes: usize,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -598,6 +606,11 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
+    table_layouts: HashMap<SemanticNodeId, SemanticTableLayout>,
+    /// Derived index of authored inset display roles. The role on each ordinary
+    /// display object remains authoritative; this bounds view discovery by active
+    /// inset count rather than total semantic slots.
+    inset_2d_displays: BTreeSet<SemanticNodeId>,
     last_mutation: SemanticMutationStats,
     scene_revision: crate::SceneRevision,
 }
@@ -649,12 +662,42 @@ impl Clone for SemanticStore {
                 }
             }
         }
+        let compiled_text_resources: HashMap<_, _> = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(key, handle)| {
+                self.text_resources.get(*handle)?;
+                let mut handle = *handle;
+                handle.arena = text_namespace;
+                Some((key.clone(), handle))
+            })
+            .collect();
+        let compiled_text_resource_order = self
+            .compiled_text_resource_order
+            .iter()
+            .filter(|key| compiled_text_resources.contains_key(*key))
+            .cloned()
+            .collect::<VecDeque<_>>();
+        let compiled_text_resource_retained_bytes = compiled_text_resource_order
+            .iter()
+            .map(|identity| {
+                identity.descriptor.len()
+                    + identity
+                        .font_contents
+                        .iter()
+                        .map(|font| font.len())
+                        .sum::<usize>()
+            })
+            .sum();
         Self {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
             raster_image_resources,
             font_resources,
+            compiled_text_resources,
+            compiled_text_resource_order,
+            compiled_text_resource_retained_bytes,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
@@ -664,6 +707,8 @@ impl Clone for SemanticStore {
             next_insertion_order: self.next_insertion_order,
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
+            table_layouts: self.table_layouts.clone(),
+            inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
         }
@@ -671,6 +716,41 @@ impl Clone for SemanticStore {
 }
 
 impl SemanticStore {
+    pub fn inset_2d_views(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, crate::SemanticInset2DViewRole)> + '_ {
+        self.inset_2d_displays.iter().filter_map(|display| {
+            let state = self.node(*display)?.semantic_object_state()?;
+            let crate::SemanticObjectRole::Inset2DView(role) = state.role() else {
+                return None;
+            };
+            Some((*display, role))
+        })
+    }
+
+    pub(crate) fn replace_semantic_object_role(
+        &mut self,
+        object: SemanticNodeId,
+        role: crate::SemanticObjectRole,
+    ) {
+        self.unregister_semantic_references_for_owner(object);
+        self.inset_2d_displays.remove(&object);
+        self.node_mut(object)
+            .expect("validated semantic object")
+            .semantic_object_state_mut()
+            .expect("validated semantic object state")
+            .set_role(role);
+        if matches!(
+            self.node(object)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(object);
+        }
+        self.register_semantic_references_for_owner(object);
+    }
+
     pub(crate) const fn next_insertion_order(&self) -> u64 {
         self.next_insertion_order
     }
@@ -759,6 +839,14 @@ impl SemanticStore {
         self.node_mut(id)
             .expect("newly inserted semantic node exists")
             .object_state = Some(state);
+        if matches!(
+            self.node(id)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(id);
+        }
         self.register_semantic_references_for_owner(id);
         id
     }
@@ -880,6 +968,32 @@ impl SemanticStore {
             return Err(SemanticStoreError::NotFamily(scope));
         }
         Ok(node.graph_declaration())
+    }
+    pub fn semantic_table_layout(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<SemanticTableLayout>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(self.table_layouts.get(&scope).copied())
+    }
+    pub(crate) fn replace_semantic_table_layout(
+        &mut self,
+        scope: SemanticNodeId,
+        layout: SemanticTableLayout,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.table_layouts.insert(scope, layout);
+        Ok(())
     }
 
     pub(crate) fn replace_semantic_graph_declaration(
@@ -1431,7 +1545,9 @@ impl SemanticStore {
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
+        self.inset_2d_displays.remove(&id);
         self.incoming_references.remove(&id);
+        self.table_layouts.remove(&id);
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
