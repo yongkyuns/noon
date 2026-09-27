@@ -158,7 +158,7 @@ async function destroyAndRecover(
 
   const recoveryCapture = await page.evaluate((lostIndex) => {
     const capture = window.__noonWebGpuDeviceCapture;
-    const replacementIndex = capture.devices.length - 1;
+    const replacementIndex = capture.ownerDeviceIndex;
     return {
       deviceCount: capture.devices.length,
       lost: capture.lost,
@@ -184,7 +184,7 @@ async function destroyAndRecover(
   return { duringLoss, recovered, recoveryCapture, screenshot };
 }
 
-async function disposeAndAssertDestroyed(page, deviceIndex, label) {
+async function assertDeviceDestroyed(page, deviceIndex, label) {
   assert.ok(Number.isInteger(deviceIndex) && deviceIndex >= 0, `${label}: GPUDevice was not captured`);
   await page.waitForFunction(
     (index) => {
@@ -208,7 +208,8 @@ async function assertDeviceLive(page, deviceIndex, label) {
     const capture = window.__noonWebGpuDeviceCapture;
     return capture?.devices[index] !== undefined && capture.lost[index] === null;
   }, deviceIndex);
-  assert.equal(live, true, `${label}: GPUDevice must still be live before renderer.free()`);
+  assert.equal(live, true,
+    `${label}: GPUDevice must still be live before renderer.free(): ${JSON.stringify(await readWebGpuCapture(page))}`);
 }
 
 function changedPixelCount(leftBuffer, rightBuffer) {
@@ -322,12 +323,8 @@ try {
   );
 
   await assertDeviceLive(page, secondRecovery.recoveryCapture.replacementIndex, "direct renderer");
-  const directDisposal = await page.evaluate(() => {
-    window.noonSmoke.disposeDirectRenderer();
-    return true;
-  });
-  assert.equal(directDisposal, true);
-  const directDisposedDevice = await disposeAndAssertDestroyed(page,
+  await page.evaluate(() => window.noonSmoke.disposeDirectRenderer());
+  const directDisposedDevice = await assertDeviceDestroyed(page,
     secondRecovery.recoveryCapture.replacementIndex, "direct renderer.free()");
   await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl());
   const retainedDeviceIndex = await page.evaluate(() =>
@@ -338,7 +335,7 @@ try {
     "retained disposal fixture did not create a separately owned GPUDevice");
   await assertDeviceLive(page, retainedDeviceIndex, "retained renderer");
   await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl().then((control) => control.dispose()));
-  const retainedDisposedDevice = await disposeAndAssertDestroyed(page,
+  const retainedDisposedDevice = await assertDeviceDestroyed(page,
     retainedDeviceIndex, "retained renderer.free()");
 
   assert.deepEqual(browserErrors.pageErrors, [], "device-loss recovery emitted page errors");
@@ -379,7 +376,7 @@ try {
   await freshPage.close();
   await page.close();
   console.log(
-    "✓ repeated WebGPU device loss advances GPU generations and preserves scene, time, and exact output",
+    "✓ repeated WebGPU recovery preserves exact output; direct and retained disposal destroy owned devices",
   );
 } catch (error) {
   await writeDiagnostics("failure", {

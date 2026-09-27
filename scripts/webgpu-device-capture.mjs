@@ -12,6 +12,7 @@ export function installCaptureState() {
   try {
     const canvasOwners = new WeakMap();
     const configuredContexts = new WeakSet();
+    const capturedAdapters = new WeakSet();
     const recordCanvasConfiguration = (canvas, device) => {
       const deviceIndex = state.devices.indexOf(device);
       if (deviceIndex < 0) return;
@@ -70,6 +71,7 @@ export function installCaptureState() {
       value: async (...adapterArgs) => {
         const adapter = await originalRequestAdapter(...adapterArgs);
         if (!adapter) return adapter;
+        if (capturedAdapters.has(adapter)) return adapter;
 
         const originalRequestDevice = adapter.requestDevice.bind(adapter);
         Object.defineProperty(adapter, "requestDevice", {
@@ -89,6 +91,7 @@ export function installCaptureState() {
             return device;
           },
         });
+        capturedAdapters.add(adapter);
         return adapter;
       },
     });
