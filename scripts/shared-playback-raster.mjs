@@ -55,7 +55,7 @@ async function qualifyFixture(page, fixture, backend) {
   });
   times.push(fixture.expected_duration);
   const source = await readFile(path.join(repoRoot, fixture.source ?? manifest.reference.source), "utf8");
-  const selected = rasterFixtureSource(source, fixture.scene);
+  const selected = rasterFixtureSource(source, fixture.scene, fixture);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
   assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
     "sparse raster capture requires the isolated shared test server");
