@@ -618,7 +618,13 @@ mod tests {
             size_of::<Option<Arc<SemanticBarMetadata>>>(),
             size_of::<usize>()
         );
-        assert!(size_of::<SemanticObjectRole>() <= 3 * size_of::<usize>());
+        // NumberLine already carries three f64 values inline. The role budget
+        // is that existing payload plus its aligned discriminant; optional bar
+        // metadata must not increase the footprint of every ordinary object.
+        assert!(
+            size_of::<SemanticObjectRole>()
+                <= size_of::<SemanticNumberLineRole>() + std::mem::align_of::<SemanticObjectRole>()
+        );
     }
 
     #[test]

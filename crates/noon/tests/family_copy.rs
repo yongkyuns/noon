@@ -308,7 +308,14 @@ fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
 fn directed_graph_family_copy_remaps_arrow_dependency_components() {
     let mut scene = Scene::new();
     let graph = scene
-        .digraph([("a", (-2.0, 0.0)), ("b", (2.0, 0.0))], [("a", "b")])
+        .digraph_with_options(
+            [("a", (-2.0, 0.0)), ("b", (2.0, 0.0))],
+            [("a", "b")],
+            noon::GraphOptions {
+                vertex_radius: 0.21,
+                ..Default::default()
+            },
+        )
         .unwrap();
     let edge_id = graph.edge_id(&"a", &"b").unwrap();
     let source_edge = graph.edge(&"a", &"b").unwrap();
@@ -337,7 +344,7 @@ fn directed_graph_family_copy_remaps_arrow_dependency_components() {
             assert_eq!(end_tip, copied_end_tip.node_id());
             assert_eq!(start_tip, None);
             assert!(policy.is_valid());
-            assert_eq!(policy.buff(), 0.15);
+            assert_eq!(policy.buff(), 0.21);
             assert_eq!(policy.tip_length(), noon::DEFAULT_ARROW_TIP_LENGTH);
             assert_eq!(
                 policy.max_tip_length_to_length_ratio(),
