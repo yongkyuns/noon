@@ -23,6 +23,23 @@ test("bounded decompression refuses expansion beyond the admission limit", async
   assert.deepEqual(await gunzipBounded(gzip, 8192), new Uint8Array(gunzipSync(gzip)));
 });
 
+test("successful single-use asset reads finish without releasing an exhausted reader", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(Uint8Array.of(1, 2));
+      controller.enqueue(Uint8Array.of(3));
+      controller.close();
+    },
+  });
+  const getReader = stream.getReader.bind(stream);
+  stream.getReader = () => {
+    const reader = getReader();
+    reader.releaseLock = () => { throw new Error("exhausted-reader cleanup must not run"); };
+    return reader;
+  };
+  assert.deepEqual(await readBounded(stream, 3), Uint8Array.of(1, 2, 3));
+});
+
 test("oversized streamed assets are cancelled before collection", async () => {
   let cancelled = false;
   const stream = new ReadableStream({

@@ -237,6 +237,8 @@ pub struct PreparedFrame<'a> {
     pub path_vertices: &'a [PathVertex],
     pub path_indices: &'a [u32],
     pub path_batches: &'a [PathBatch],
+    path_mesh_cache: &'a [CachedPathMesh],
+    path_batch_cache_indices: &'a [usize],
     /// Painter-ordered index stream for mostly-unique path geometry.
     pub mega_path_indices: &'a [u32],
     /// Path instance attributes repeated per geometry vertex so the packed path
@@ -509,6 +511,7 @@ struct CachedPathMesh {
     stroke_cap: StrokeCap,
     fill_enabled: bool,
     mesh: TessellatedPath,
+    bounds: Option<[noon_core::Rect; 2]>,
     resident: Option<path_residency::ResidentPathRanges>,
     last_used: u64,
     sampled: Option<sampled_morph::SampledPathMesh>,
@@ -1753,6 +1756,8 @@ impl FramePreparer {
             path_vertices: &self.path_vertices,
             path_indices: &self.path_indices,
             path_batches: &self.path_batches,
+            path_mesh_cache: &self.path_mesh_cache,
+            path_batch_cache_indices: &self.path_batch_cache_indices,
             mega_path_indices: &self.mega_path_indices,
             mega_path_vertex_instances: &self.mega_path_vertex_instances,
             mega_path_batches: &self.mega_path_batches,
@@ -2020,6 +2025,7 @@ impl FramePreparer {
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
             fill_enabled,
+            bounds: tessellated_path_bounds(&mesh),
             mesh,
             resident: None,
             last_used,
@@ -2585,6 +2591,34 @@ pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
             PathSurface::Fill => 0,
             PathSurface::Stroke => 1,
         }
+}
+
+// Cache source/target tessellation boxes, including stroke triangles. Blending
+// their extents conservatively bounds the GPU's current interpolated vertices.
+fn tessellated_path_bounds(mesh: &TessellatedPath) -> Option<[noon_core::Rect; 2]> {
+    if mesh.vertices.is_empty() {
+        return None;
+    }
+    let mut min = [Vec2::new(f32::INFINITY, f32::INFINITY); 2];
+    let mut max = [Vec2::new(f32::NEG_INFINITY, f32::NEG_INFINITY); 2];
+    for vertex in &mesh.vertices {
+        for (index, point) in [vertex.position, vertex.target_position]
+            .into_iter()
+            .enumerate()
+        {
+            if !point.x.is_finite() || !point.y.is_finite() {
+                return None;
+            }
+            min[index].x = min[index].x.min(point.x);
+            min[index].y = min[index].y.min(point.y);
+            max[index].x = max[index].x.max(point.x);
+            max[index].y = max[index].y.max(point.y);
+        }
+    }
+    Some([
+        noon_core::Rect::new(min[0], max[0]),
+        noon_core::Rect::new(min[1], max[1]),
+    ])
 }
 
 pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {

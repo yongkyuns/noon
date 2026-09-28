@@ -75,6 +75,10 @@ try {
   for (const manifest of ['manim_tutorial_manifest.json', 'manim_compatibility_manifest.json', 'manim_stress_manifest.json']) {
     entries.push(...(await json(`python/examples/${manifest}`)).entries.filter(e => e.status === 'ready'));
   }
+  // Curated performance scenes need the same mobile/WebKit lifecycle coverage.
+  const showcase = await json('python/examples/noon_showcase_manifest.json');
+  entries.push(...showcase.entries.filter(entry => entry.performance)
+    .map(entry => ({ ...entry, expected_duration: entry.duration })));
   assert.equal(new Set(entries.map(e => e.id)).size, entries.length, 'duplicate gallery IDs');
   for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);
   const engine = playwright[browserName];

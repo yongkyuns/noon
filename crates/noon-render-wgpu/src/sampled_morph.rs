@@ -122,6 +122,7 @@ impl FramePreparer {
             stroke_cap: style.stroke_cap,
             fill_enabled: style.fill.is_some(),
             mesh,
+            bounds: None,
             resident: None,
             last_used,
             sampled: Some(SampledPathMesh {

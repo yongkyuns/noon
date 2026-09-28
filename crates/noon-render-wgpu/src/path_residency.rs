@@ -266,6 +266,8 @@ impl FramePreparer {
             path_vertices: &self.path_vertices,
             path_indices: &self.path_indices,
             path_batches: &[],
+            path_mesh_cache: &self.path_mesh_cache,
+            path_batch_cache_indices: &[],
             mega_path_indices: &[],
             mega_path_vertex_instances: &[],
             mega_path_batches: &[],

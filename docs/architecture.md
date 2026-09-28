@@ -1031,7 +1031,7 @@ Whether native host integration deserves a separate crate such as `noon-native` 
 
 The renderer is usable directly from the native Rust runtime and through web integration. Neither platform host owns renderer semantics.
 
-Renderer-specific mirrors and caches are derived and disposable.
+Renderer-specific mirrors and caches are derived and disposable. Compact-path submission may combine a bounded window of mutually disjoint raster bounds while retaining shared meshes and contiguous instance ranges. Bounds derive from cached source/target tessellation and current transforms, with a pixel/rounding guard; overlapping, unknown, sampled-morph, and exact-polygon cases retain ordinary painter order. Text, images, and inset composition remain ordering barriers. This is disposable draw compaction, not a semantic reorder or a new scene representation.
 
 ---
 
