@@ -46,9 +46,9 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Functions and samples | Function/sample overlay and legend | Pretending samples are measured data |
 | Relationships that follow motion | ValueTracker-driven dots and their attached connector | dt-driven integrators and input callbacks |
 | Pixels in the scene | Recognizable array-backed raster | 2x2 alpha/resource-reuse fixture |
-| Select a shape | Animated introduction plus host selection | Undelivered Indicate-on-click or wheel zoom |
+| Select a shape | Animated introduction plus source-declared Rust-owned click Indicate | Legacy session-selection overlay behavior or wheel zoom |
 
-The pointer example's Python code authors the scene only. Its manifest declares `pointer-fill-selection`, and the existing playground configures that host behavior after authoring completes. The host source is `web/main.js` / `web/authoring-execution-client.js`; no hidden callback is claimed to live in Python. The selected-example summary discloses this setup in the showcase UI. The poster must be captured after an actual click, and a subsequent background click must restore the base pixels.
+The reference `noon-pointer-selection` example remains the legacy session-selection overlay: its manifest declares `pointer-fill-selection`, and the existing playground configures it after authoring completes. The curated `showcase-pointer-selection` lesson instead declares `on_click(..., Indicate(...))` in Python, lowers that typed binding through Rust, and has no manifest interaction policy or host callback. Its poster is captured after a real click, then after the Indicate animation restores the baseline automatically; a background click must leave the image unchanged.
 
 ## Preview generation and review
 
@@ -78,7 +78,7 @@ The original review evidence exposed independent forward-rendering and replay fa
 - Family animation revisions and authored scalar timelines use the shared retained execution history. Their replay repairs must preserve current-master graph dependencies and numeric-text support; gallery examples do not introduce a second execution model.
 - Subpixel glyph packing must reflect the current frame, including empty/nonempty glyph transitions. The correctness repair preserves unrelated geometry, but its whole-text packing fallback remains C4 locality debt. Gallery qualification does not close that architecture work or establish a device performance budget.
 - A live seek targets the actual authored endpoint, which may differ from the decimal storyboard duration by floating-point roundoff. Requested and published values remain recorded unchanged; deterministic sampling retains strict bounds.
-- Pointer qualification retains base, selected and clear-attempt images before assertions, including on failure. Selection must come from an actual host click and clearing must reproduce the exact base pixels.
+- Pointer qualification retains base, indicated and restoration-attempt images before assertions, including on failure. The legacy selection overlay still clears through its session policy. The showcase action must come from an actual host click, restore automatically, settle its wake state, and ignore a background click.
 
 Live review retains an unseeked first-pass image and state before any replay attempt. Endpoint equality, intermediate replay equality, ordinary execution, visual readability, and measured performance remain separate claims.
 
@@ -93,7 +93,7 @@ The fourteen lessons are intentionally not exhaustive. Current master already ha
 - NumberLine transforms, NumberPlane, implicit contours, synchronized/gapped series.
 - Vector fields, camera movement with stable world references, and foreground composition.
 - Redesign the trigonometry tutorial around a persistent diagram; correct the three-check/four-item inconsistency.
-- Complete host-interaction setup presentation and separately qualify any Indicate-on-click or wheel-zoom extension.
+- Keep legacy session-selection presentation distinct from source-declared actions, and separately qualify future wheel-zoom extensions.
 
 Consolidate the public learning experience, not canonical fixtures. The 49-entry audit's source-preservation rule still applies. Its former suggestion to move the dynamic scene out of the showcase is superseded: keep the polished dynamic composition featured, while retaining the unchanged five-second stress workload for regression and profiling comparability.
 

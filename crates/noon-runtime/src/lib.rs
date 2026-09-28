@@ -9,6 +9,8 @@ mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
+mod transient_animation;
+pub use transient_animation::PreparedTransientAnimation;
 mod reactive;
 mod renderer_publication;
 mod replay;
@@ -192,6 +194,7 @@ pub struct SceneInstance {
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    transient_animations: transient_animation::TransientAnimations,
     active_family_animation_indices: BTreeSet<usize>,
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
     /// Monotonic diagnostic count of sparse graph dependency visits.
@@ -218,6 +221,7 @@ impl Clone for SceneInstance {
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            transient_animations: self.transient_animations.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
             graph_dependency_visits: self.graph_dependency_visits,
@@ -267,6 +271,7 @@ impl SceneInstance {
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            transient_animations: Default::default(),
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
             graph_dependency_visits: 0,
@@ -480,8 +485,9 @@ impl SceneInstance {
         self.validate_replay_time(time)?;
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
+        let had_interaction = self.interactions_active();
         self.seek_unchecked(time);
-        if self.frame.time != previous_time {
+        if self.frame.time != previous_time || had_interaction {
             self.publish_effective_change();
         }
         Ok(&self.frame)
@@ -1088,6 +1094,7 @@ impl SceneInstance {
     }
 
     fn seek_unchecked(&mut self, time: f64) {
+        self.clear_transient_animations();
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
         self.active_family_animation_indices.clear();

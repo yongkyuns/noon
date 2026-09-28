@@ -264,6 +264,7 @@ struct NativeApp {
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
     realtime_clock: Option<RealtimeClock>,
+    interaction_wall_origin: Instant,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
     force_full_redraw: bool,
@@ -310,6 +311,7 @@ impl NativeApp {
             window: None,
             gpu: None,
             realtime_clock: None,
+            interaction_wall_origin: Instant::now(),
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
             force_full_redraw: false,
@@ -481,7 +483,13 @@ impl NativeApp {
             return Ok(());
         }
 
-        self.advance_realtime_timeline(Instant::now())?;
+        let now = Instant::now();
+        self.advance_realtime_timeline(now)?;
+        self.execution.advance_interactions(
+            now.saturating_duration_since(self.interaction_wall_origin)
+                .as_secs_f64(),
+        )?;
+
         if !self.publication_pending() {
             return Ok(());
         }
@@ -830,6 +838,11 @@ impl ApplicationHandler for NativeApp {
             return;
         }
 
+        if self.execution.session().interactions_active() {
+            window.request_redraw();
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
         let timeline = self.execution.timeline();
         let now = Instant::now();
         let clock = self.realtime_clock_for_timeline(timeline, now);

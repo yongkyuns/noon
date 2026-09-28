@@ -65,6 +65,24 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
+### Source-declared click indication
+
+An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:
+
+```python
+self.on_click(shape, Indicate(shape, run_time=0.4))
+```
+
+The Rust equivalents publish the same semantic binding before or during live authoring:
+
+```rust
+scene.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
+// Or, after execution starts:
+live.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
+```
+
+The action uses restoring `there_and_back` timing. A click on an already active target is ignored. Clicks do not interrupt an active authored segment or signal/host driver. Input remains available after the introduction, including when playback is paused at its endpoint or its source program has completed; the runtime drives and settles the short effective animation without advancing authored time.
+
 ### Live authoring and integration boundaries
 
 The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.

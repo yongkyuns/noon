@@ -20,6 +20,7 @@ mod viewport_tests;
 /// visibility, and acknowledge a publication after successful presentation.
 pub(crate) trait NativeExecutionSource {
     fn frame_time(&self) -> f64;
+    fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError>;
     fn camera(&self) -> Result<Camera2DState, NativeHostError>;
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery;
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError>;
@@ -79,6 +80,13 @@ impl StaticExecutionSource {
 }
 
 impl NativeExecutionSource for StaticExecutionSource {
+    fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.session
+            .advance_interactions(wall_time_seconds)
+            .map(|_| ())
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn frame_time(&self) -> f64 {
         self.session.frame().time
     }
@@ -207,6 +215,13 @@ where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
 {
+    fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.program
+            .advance_interactions(wall_time_seconds)
+            .map(|_| ())
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn frame_time(&self) -> f64 {
         self.program.session().frame().time
     }

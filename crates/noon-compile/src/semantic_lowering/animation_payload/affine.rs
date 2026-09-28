@@ -999,7 +999,7 @@ fn push_published_channel(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct LoweredAffineChannel {
+pub struct LoweredAffineChannel {
     pub property: Property,
     pub conflict_property: SemanticObjectProperty,
     pub completion: SemanticAnimationCompletion,
@@ -1024,7 +1024,7 @@ pub(super) struct LoweredPassingFlashPhase {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum AffinePayloadIssue {
+pub enum AffinePayloadIssue {
     InvalidEffectiveTransform,
     InvalidEffectiveStyle,
     InvalidEffectiveReveal,
@@ -1839,6 +1839,22 @@ pub(super) fn lower_indicate_channels(
     color: noon_core::Color,
     scale_center: noon_core::SemanticVec3,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    lower_indicate_channels_with_bindings(
+        source.signal_bindings(),
+        from,
+        scale_factor,
+        color,
+        scale_center,
+    )
+}
+
+pub fn lower_indicate_channels_with_bindings(
+    bindings: &[noon_core::SemanticSignalBinding],
+    from: EffectiveAnimationProperties,
+    scale_factor: f64,
+    color: noon_core::Color,
+    scale_center: noon_core::SemanticVec3,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
     if !transform_is_finite(from.transform) {
         return Err(AffinePayloadIssue::InvalidEffectiveTransform);
     }
@@ -1874,8 +1890,8 @@ pub(super) fn lower_indicate_channels(
     let to_fill = recolor(from.style.fill);
     let to_stroke = recolor(from.style.stroke);
     let mut channels = Vec::with_capacity(4);
-    push_affine_channel(
-        source,
+    push_affine_channel_with_bindings(
+        bindings,
         SemanticObjectProperty::Translation,
         Property::Position,
         TrackValues::Vec2 {
@@ -1886,8 +1902,8 @@ pub(super) fn lower_indicate_channels(
         from.transform.translation != to_translation,
         &mut channels,
     )?;
-    push_affine_channel(
-        source,
+    push_affine_channel_with_bindings(
+        bindings,
         SemanticObjectProperty::Scale,
         Property::Scale,
         TrackValues::Vec2 {
@@ -1898,8 +1914,8 @@ pub(super) fn lower_indicate_channels(
         from.transform.scale != to_scale,
         &mut channels,
     )?;
-    push_affine_channel(
-        source,
+    push_affine_channel_with_bindings(
+        bindings,
         SemanticObjectProperty::FillOpacity,
         Property::Fill,
         TrackValues::Color {
@@ -1910,8 +1926,8 @@ pub(super) fn lower_indicate_channels(
         from.style.fill != to_fill,
         &mut channels,
     )?;
-    push_affine_channel(
-        source,
+    push_affine_channel_with_bindings(
+        bindings,
         SemanticObjectProperty::StrokeOpacity,
         Property::Stroke,
         TrackValues::Color {
@@ -2118,10 +2134,33 @@ fn push_affine_channel(
     changed: bool,
     channels: &mut Vec<LoweredAffineChannel>,
 ) -> Result<(), AffinePayloadIssue> {
+    push_affine_channel_with_bindings(
+        source.signal_bindings(),
+        semantic_property,
+        property,
+        values,
+        completion,
+        changed,
+        channels,
+    )
+}
+
+fn push_affine_channel_with_bindings(
+    bindings: &[noon_core::SemanticSignalBinding],
+    semantic_property: SemanticObjectProperty,
+    property: Property,
+    values: TrackValues,
+    completion: SemanticAnimationCompletion,
+    changed: bool,
+    channels: &mut Vec<LoweredAffineChannel>,
+) -> Result<(), AffinePayloadIssue> {
     if !changed {
         return Ok(());
     }
-    if has_binding(source, semantic_property) {
+    if bindings
+        .iter()
+        .any(|binding| binding.property() == semantic_property)
+    {
         return Err(AffinePayloadIssue::ReactiveDriverConflict(
             semantic_property,
         ));

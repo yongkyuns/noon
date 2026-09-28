@@ -684,6 +684,14 @@ class Scene:
     ) -> Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
 
+    def on_click(self, target: Mobject, animation: object) -> Scene:
+        """Run Indicate(target) in Rust on a primary click of a filled circle/rectangle.
+
+        Clicks during that target's indication are ignored. Completion restores
+        its appearance; script time stays unchanged. No Python callback is kept.
+        """
+        return _scene_operations()._on_click(self, target, animation)
+
     def pointer_position_signal(self) -> Any:
         return _scene_operations()._canonical_pointer_position_signal(self)
 

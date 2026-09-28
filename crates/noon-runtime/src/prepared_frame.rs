@@ -169,6 +169,56 @@ impl std::fmt::Display for PreparedFrameCommitError {
 impl std::error::Error for PreparedFrameCommitError {}
 
 impl SceneInstance {
+    /// Publish already-validated transient effective writes without advancing the
+    /// authored timeline or touching replay retention.  This is deliberately
+    /// narrower than `commit_prepared_frame`: interaction drivers use it while a
+    /// replay is sealed, but cannot mutate scheduler state, replay inputs, or the
+    /// authored frame time.
+    pub(crate) fn commit_transient_effective_properties(
+        &mut self,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<&FrameState, PreparedFrameCommitError> {
+        if effective.runtime != self.identity {
+            return Err(PreparedFrameCommitError::ForeignRuntime {
+                expected: self.identity,
+                actual: effective.runtime,
+            });
+        }
+        if effective.expected != self.publication {
+            return Err(PreparedFrameCommitError::StalePublication {
+                expected: effective.expected,
+                actual: self.publication,
+            });
+        }
+        if effective.writes.is_empty() {
+            return Ok(&self.frame);
+        }
+        let next = self.publication.frame_epoch().checked_next().ok_or(
+            PreparedFrameCommitError::FrameEpochExhausted(self.publication.frame_epoch()),
+        )?;
+        let mut changed = false;
+        for (object_index, write) in effective.writes {
+            let mut row = FrameRowState::from_frame(&self.frame, object_index);
+            apply_effective_property_to_row(
+                row.as_mut(&self.frame.objects[object_index].content),
+                write,
+            );
+            if row.differs_from_frame(&self.frame, object_index) {
+                let priority_changed = row.z_index != self.frame.objects[object_index].z_index;
+                row.write_to_frame(&mut self.frame, object_index);
+                if priority_changed {
+                    self.reposition_painter_row(object_index);
+                }
+                self.mark_changed(object_index);
+                changed = true;
+            }
+        }
+        if changed {
+            self.publication = self.publication.with_frame_epoch(next);
+        }
+        Ok(&self.frame)
+    }
+
     /// Atomically advance timeline channels, then apply one already-lowered reactive
     /// input batch before publishing the resulting frame.
     pub fn advance_to_with_reactive_inputs(

@@ -782,3 +782,103 @@ fn desired_selection_image_is_identity_free_and_does_not_consume_publication() {
     assert!(first.pointer_selection_presentation().is_none());
     assert!(first.take_renderer_publication().changes().is_empty());
 }
+
+fn authored_indicate_fixture() -> (SemanticStore, SemanticNodeId, ExecutionSession) {
+    let (mut store, _, target, mut session) = fixture();
+    session.disable_pointer_fill_selection().unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_click_indicate(
+        target,
+        Some(noon_core::SemanticClickIndicate::new(
+            1.2,
+            noon_core::YELLOW,
+            0.4,
+        )),
+    );
+    session.apply_semantic_transaction(&mut store, tx).unwrap();
+    (store, target, session)
+}
+
+#[test]
+fn authored_click_indicate_restores_without_advancing_scene_time_or_history() {
+    let (store, target, mut session) = authored_indicate_fixture();
+    session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    session.seal_replay().unwrap();
+    let before = session.frame().clone();
+    let context = session.publication_context();
+    let history = session.replay_stats();
+    assert!(session.has_native_pointer_subscribers());
+    click(&mut session, 0, 0.0);
+    assert!(session.interactions_active());
+    assert!(session.pointer_selection_presentation().is_none());
+    session.advance_interactions(10.0).unwrap();
+    session.advance_interactions(10.2).unwrap();
+    assert!((session.frame().objects[0].transform.scale.x - 1.2).abs() < 1e-5);
+    assert_eq!(session.frame().time, before.time);
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        context.scene_revision()
+    );
+    assert_eq!(
+        session.publication_context().execution_revision(),
+        context.execution_revision()
+    );
+    // A repeated click must not capture the temporarily enlarged shape.
+    click(&mut session, 2, 0.0);
+    session.advance_interactions(10.5).unwrap();
+    assert!(!session.interactions_active());
+    assert_eq!(session.frame(), &before);
+    assert_eq!(session.replay_stats(), history);
+    assert!(session.replay_is_sealed());
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .scale
+            .x,
+        1.0
+    );
+    // No click history or second driver survives completion.
+    click(&mut session, 4, 0.0);
+    session.advance_interactions(20.0).unwrap();
+    session.advance_interactions(20.2).unwrap();
+    assert!((session.frame().objects[0].transform.scale.x - 1.2).abs() < 1e-5);
+    let middle_publication = session.publication_context();
+    session.seek(0.0).unwrap();
+    assert!(!session.interactions_active());
+    assert_eq!(session.frame(), &before);
+    assert_ne!(
+        session.publication_context().frame_epoch(),
+        middle_publication.frame_epoch()
+    );
+}
+
+#[test]
+fn authored_click_indicate_ignores_background_drag_and_rejects_invalid_ticks_atomically() {
+    let (_, _, mut session) = authored_indicate_fixture();
+    let before = session.frame().clone();
+    click(&mut session, 0, 4.0);
+    assert!(!session.interactions_active());
+    submit(&mut session, 2, press(0.0, 100.0));
+    submit(
+        &mut session,
+        3,
+        NativePointerInputKind::Move(position(0.0, 130.0)),
+    );
+    submit(&mut session, 4, release(0.0, 100.0));
+    assert!(!session.interactions_active());
+    assert_eq!(session.frame(), &before);
+    click(&mut session, 5, 0.0);
+    session.advance_interactions(1.0).unwrap();
+    session.advance_interactions(1.2).unwrap();
+    let middle = session.frame().clone();
+    for bad in [f64::NAN, f64::INFINITY, -1.0, 1.1] {
+        assert!(session.advance_interactions(bad).is_err());
+        assert_eq!(session.frame(), &middle);
+    }
+    session.advance_interactions(1.5).unwrap();
+    assert_eq!(session.frame(), &before);
+}

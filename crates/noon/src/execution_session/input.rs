@@ -24,6 +24,7 @@ pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionInputError {
     InvalidPointerClickTolerance,
+    Interaction(String),
     PointerNotConfigured,
     ForeignPointerRuntime,
     StalePointerBinding,
@@ -59,6 +60,7 @@ pub enum ExecutionSessionInputError {
 impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interaction(message) => formatter.write_str(message),
             Self::InvalidPointerClickTolerance => formatter.write_str("click tolerance must be finite and nonnegative logical pixels"),
             Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
@@ -223,7 +225,8 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        self.pointer_selection.enabled()
+        !self.interaction_bindings.is_empty()
+            || self.pointer_selection.enabled()
             || !self
                 .reactive_projection
                 .native_state_targets(&NativeStateSource::PointerPosition)
@@ -311,7 +314,7 @@ impl ExecutionSession {
     /// Native event subscribers observe every accepted down/up occurrence; cancel
     /// is never projected into a successful release. Opt-in transient fill
     /// selection prepares through the shared picker and commits only after all
-    /// native effects succeed. Drag/authored action policy is not implemented.
+    /// native effects succeed. Authored click actions use the same admitted occurrence.
     pub fn submit_native_pointer_input(
         &mut self,
         token: &NativePointerInputToken,
@@ -319,6 +322,7 @@ impl ExecutionSession {
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
         let selection = self.prepare_pointer_selection(token, input)?;
+        let action = self.prepare_click_animation(selection.click)?;
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -336,6 +340,11 @@ impl ExecutionSession {
         }
         self.last_native_event_sequence = Some(input.sequence());
         self.pointer_selection = selection.state;
+        if let Some(action) = action {
+            self.runtime
+                .start_transient_animation(action)
+                .expect("admitted native input cannot change authored revision or time");
+        }
         Ok(NativePointerInputPublication {
             input,
             previous,

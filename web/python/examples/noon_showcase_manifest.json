@@ -159,13 +159,11 @@
     },
     {
       "id": "showcase-pointer-selection", "title": "Select a shape",
-      "lesson": "Reveal a scene, then select a shape and clear the selection with a background click.",
-      "primary_feature": "host-pointer-interaction", "category": "Interaction",
-      "path": "python/examples/showcase_pointer_selection.py", "features": ["Create", "pointer selection", "session overlay"],
+      "lesson": "Reveal a scene, then click a shape to run a Rust-owned Indicate animation declared in Python.",
+      "primary_feature": "authored-pointer-interaction", "category": "Interaction",
+      "path": "python/examples/showcase_pointer_selection.py", "features": ["Create", "on_click", "Indicate"],
       "duration": 2.6, "thumbnail_time": 2.6,
-      "thumbnail": "thumbnails/showcase/showcase-pointer-selection.png", "thumbnail_alt": "The actual blue circle selected beside the green rectangle after the animated introduction",
-      "interaction": {"type": "pointer-fill-selection"},
-      "host_setup": "The gallery enables pointer-fill-selection after source completion; copying the Python scene alone does not install pointer handling. See docs/gallery-curation.md.",
+      "thumbnail": "thumbnails/showcase/showcase-pointer-selection.png", "thumbnail_alt": "The actual blue circle briefly indicated beside the green rectangle after the animated introduction",
       "still_intervals": [[2.1, 2.6]],
       "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to interact"}]
     }

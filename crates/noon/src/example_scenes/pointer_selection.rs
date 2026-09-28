@@ -3,6 +3,15 @@
 use crate::{ExecutionSession, Scene, BLUE, GREEN};
 
 pub fn scene() -> Result<Scene, String> {
+    build(false)
+}
+
+/// Same geometry with source-authored Rust click-to-Indicate declarations.
+pub fn click_indicate_scene() -> Result<Scene, String> {
+    build(true)
+}
+
+fn build(animated: bool) -> Result<Scene, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut circle = scene.circle(0.9)?;
@@ -18,12 +27,25 @@ pub fn scene() -> Result<Scene, String> {
         rectangle.set_translation(1.5, -0.2)?;
         scene.add(&circle)?;
         scene.add(&rectangle)?;
+        if animated {
+            for shape in [&circle, &rectangle] {
+                scene.on_click_indicate(
+                    shape,
+                    crate::IndicateOptions::default(),
+                    crate::AnimationOptions::new().run_time(0.4),
+                )?;
+            }
+        }
         #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
         {
             let label = scene.text(
-                crate::Text::new("Click a filled shape; background clears")
-                    .with_font_size(24.0)
-                    .shift(crate::Vec2::new(0.0, 2.8)),
+                crate::Text::new(if animated {
+                    "Click a filled shape; it restores automatically"
+                } else {
+                    "Click a filled shape; background clears"
+                })
+                .with_font_size(24.0)
+                .shift(crate::Vec2::new(0.0, 2.8)),
             )?;
             scene.add_many(&[(&label).into()])?;
         }

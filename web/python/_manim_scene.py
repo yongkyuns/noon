@@ -1407,6 +1407,47 @@ def _canonical_indicate_animation(
     return target, family
 
 
+def _indicate_parameters(animation: object, play_kwargs: dict[str, object]):
+    """Convert authoring arguments once for scripted and click-driven Indicate."""
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(animation),
+        default_lag_ratio=0.0,
+        play_run_time=play_kwargs.get("run_time", play_kwargs.get("duration")),
+        play_easing=play_kwargs.get("easing"),
+        play_rate_func=play_kwargs.get("rate_func"),
+        play_lag_ratio=play_kwargs.get("lag_ratio"),
+    )
+    if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+        raise NotImplementedError("canonical Indicate does not support path options")
+    if resolved.rate_func != "there_and_back":
+        raise NotImplementedError("canonical restoring Indicate requires there_and_back easing")
+    rgba = tuple(
+        float(getattr(animation.color, name))
+        for name in ("red", "green", "blue", "alpha")
+    )
+    return (
+        float(animation.scale_factor), *rgba, float(resolved.run_time),
+        str(resolved.rate_func), float(resolved.lag_ratio),
+    )
+
+
+def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Scene:
+    """Declare a Rust action; Python callbacks do not participate in playback."""
+    if not isinstance(animation, _animate.Indicate):
+        raise NotImplementedError("Scene.on_click currently supports Indicate(target) only")
+    classified = _canonical_indicate_animation(self, animation)
+    animated, family = classified
+    if family or animated is not target:
+        raise ValueError("Scene.on_click requires Indicate on the same single target")
+    engine_call(
+        _context(self).liveBindClickIndicate,
+        target._semantic_handle,
+        *_indicate_parameters(animation, {}),
+        operation="Scene.on_click",
+    )
+    return self
+
+
 def _canonical_passing_flash_animation(
     scene: _base.Scene, animation: object
 ) -> _base.Mobject | None:
@@ -2101,38 +2142,12 @@ def _build_canonical_composition_candidate(
         indicate = _canonical_indicate_animation(self, animation)
         if indicate is not None:
             target, family = indicate
-            resolved = _options.resolve(
-                builder_args=_options.builder_args(animation),
-                default_lag_ratio=0.0,
-                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
-                play_easing=child_kwargs.get("easing"),
-                play_rate_func=child_kwargs.get("rate_func"),
-                play_lag_ratio=child_kwargs.get("lag_ratio"),
-            )
-            if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
-                raise NotImplementedError("canonical Indicate does not support path options")
-            if resolved.rate_func != "there_and_back":
-                raise NotImplementedError(
-                    "canonical restoring Indicate requires there_and_back easing"
-                )
-            color = animation.color
-            rgba = tuple(
-                float(getattr(color, name))
-                for name in ("red", "green", "blue", "alpha")
-            )
             method = builder.appendIndicateFamily if family else builder.appendIndicateMobject
             handle = getattr(
                 target,
                 "_semantic_family_handle" if family else "_semantic_handle",
             )
-            method(
-                handle,
-                float(animation.scale_factor),
-                *rgba,
-                float(resolved.run_time),
-                str(resolved.rate_func),
-                float(resolved.lag_ratio),
-            )
+            method(handle, *_indicate_parameters(animation, child_kwargs))
             return
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:

@@ -5,9 +5,9 @@ use crate::{
     SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticStore,
-    SemanticStyle, VectorPath,
+    AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -44,6 +44,26 @@ pub(crate) fn publish_geometry_options(
         };
         Ok(*node)
     })
+}
+
+pub(crate) fn click_indicate_declaration(
+    indication: crate::IndicateOptions,
+    options: AnimationOptions,
+) -> Result<SemanticClickIndicate, AuthoringError> {
+    if !matches!(options.rate_func, None | Some(RateFunction::ThereAndBack))
+        || options.lag_ratio.unwrap_or(0.0) != 0.0
+        || options.path_arc.unwrap_or(0.0) != 0.0
+        || options.reverse_rate_function.unwrap_or(false)
+        || options.remover.unwrap_or(false)
+        || options.introducer.unwrap_or(false)
+    {
+        return Err(AuthoringError::InvalidClickIndicateOptions);
+    }
+    Ok(SemanticClickIndicate::new(
+        indication.scale_factor,
+        indication.color,
+        options.run_time.unwrap_or(1.0),
+    ))
 }
 
 /// Publish a detached family of ordinary path leaves through this Scene's one
@@ -798,6 +818,24 @@ impl Scene {
             return Err(crate::AuthoringError::ForeignStore);
         }
         object.validate()
+    }
+
+    /// Author one restoring `click -> Indicate` declaration for an analytic
+    /// Circle or Rectangle. Runtime invocation remains an execution-session
+    /// concern; this only publishes language-neutral semantic intent.
+    pub fn on_click_indicate(
+        &mut self,
+        target: &Mobject,
+        indication: crate::IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<(), crate::AuthoringError> {
+        self.require_object(target)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_click_indicate(
+            target.node_id(),
+            Some(click_indicate_declaration(indication, options)?),
+        );
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.

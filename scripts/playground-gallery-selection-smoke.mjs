@@ -23,7 +23,7 @@ let server;
 let browser;
 let runtimeCache;
 const captures = {};
-const report = { interaction: "pointer-fill-selection" };
+const report = { legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate" };
 let failure;
 
 function changedPixels(leftBytes, rightBytes) {
@@ -59,6 +59,28 @@ async function waitForPresentation(page, previous) {
     previous,
     { timeout: 15000 },
   );
+}
+
+async function waitForExactPixels(canvas, baseline, label) {
+  let last;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    last = await canvas.screenshot();
+    if (changedPixels(baseline, last) === 0) return last;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`${label} did not restore the exact baseline pixels`);
+}
+
+async function presentedFrames(page) {
+  return page.evaluate(async () =>
+    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
+  );
+}
+
+async function assertSettled(page, label) {
+  const before = await presentedFrames(page);
+  await page.waitForTimeout(250);
+  assert.equal(await presentedFrames(page), before, `${label} left a frame wake active`);
 }
 
 try {
@@ -153,7 +175,81 @@ try {
   assert.equal(clearDifference, 0, "background clear must restore the authored image exactly");
   assert.deepEqual(errors, []);
 
-  report.renderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
+  report.legacyRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
+
+  // The curated lesson carries no manifest interaction policy. Its Rust-owned
+  // click declaration must still work after the authored introduction has
+  // finished and replay has been paused at that endpoint.
+  await page.goto(`${base}?catalog=showcase&example=showcase-pointer-selection`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  assert.equal(
+    await page.evaluate(() => window.__noonExampleGallery.selectedExampleId),
+    "showcase-pointer-selection",
+  );
+  assert.equal(
+    await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
+    "none",
+    "source-declared click actions must not require manifest interaction policy",
+  );
+  const source = await fetch(new URL("python/examples/showcase_pointer_selection.py", base)).then((response) => response.text());
+  assert.match(source, /\.on_click\s*\(/, "showcase source must declare its click action");
+  const authoredCanvas = page.locator("#scene");
+  await layoutReplayViewport(authoredCanvas, captureSize);
+  await authoredCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
+  await page.evaluate(() => window.__noonExampleGallery.run());
+  await page.waitForFunction(
+    () => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight,
+    null,
+    { timeout: 60000 },
+  );
+  const pause = page.getByRole("button", { name: "Pause animation", exact: true });
+  if (await pause.count()) await pause.click();
+  const scrubber = page.locator(".playback-scrubber");
+  const endpoint = Number(await scrubber.getAttribute("max"));
+  await scrubber.evaluate((input, time) => {
+    input.value = String(time);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, endpoint);
+  await page.waitForFunction((time) => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false" &&
+      controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
+      Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
+  }, endpoint);
+  const authoredBox = await authoredCanvas.boundingBox();
+  assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
+  const authoredBaseline = await authoredCanvas.screenshot();
+  captures.authoredBaseline = authoredBaseline;
+  const clickCircle = () => page.mouse.click(
+    authoredBox.x + authoredBox.width * 0.36,
+    authoredBox.y + authoredBox.height * 0.5,
+  );
+  const waitChanged = async (baseline, label) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const image = await authoredCanvas.screenshot();
+      if (changedPixels(baseline, image) > 500) return image;
+      await page.waitForTimeout(25);
+    }
+    throw new Error(`${label} did not change trusted canvas pixels`);
+  };
+  await clickCircle();
+  const indicated = await waitChanged(authoredBaseline, "first authored click");
+  captures.indicated = indicated;
+  report.indicatedChanged = changedPixels(authoredBaseline, indicated);
+  const restored = await waitForExactPixels(authoredCanvas, authoredBaseline, "first authored click");
+  captures.restored = restored;
+  await assertSettled(page, "first authored click");
+  await clickCircle();
+  const repeated = await waitChanged(authoredBaseline, "repeated authored click");
+  captures.repeated = repeated;
+  await waitForExactPixels(authoredCanvas, authoredBaseline, "repeated authored click");
+  await assertSettled(page, "repeated authored click");
+  const beforeBackground = await presentedFrames(page);
+  await page.mouse.click(authoredBox.x + 12, authoredBox.y + 12);
+  await page.waitForTimeout(150);
+  assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
+  assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
+  report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
 } catch (error) {
   failure = error;
   throw error;
@@ -185,5 +281,5 @@ try {
   }
 }
 console.log(
-  `Gallery pointer selection passed: selectedChanged=${report.selectedChanged}, clearDifference=${report.clearDifference}`,
+  `Gallery pointer interactions passed: legacy=${report.selectedChanged}, authored=${report.indicatedChanged}`,
 );

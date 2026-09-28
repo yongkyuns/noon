@@ -98,6 +98,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
+                | SemanticMutationImpact::ClickIndicate { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }

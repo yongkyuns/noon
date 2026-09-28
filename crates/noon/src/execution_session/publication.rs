@@ -584,6 +584,7 @@ impl ExecutionSession {
         self.runtime
             .commit_numeric_text_driver_revision(prepared_numeric);
         self.sync_inset_2d_view_bindings(store);
+        self.refresh_interaction_bindings(store, &result, &entered, &exited);
         self.last_structural_publication = StructuralPublicationStats {
             preparation: preparation_stats,
             entered_objects: entered.len(),
