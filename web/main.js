@@ -1,6 +1,7 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
+import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { createSourceRestart } from "./playground-source-restart.js";
@@ -29,6 +30,8 @@ const metricObjects = document.querySelector("#metric-objects");
 const metricDraws = document.querySelector("#metric-draws");
 const metricUpload = document.querySelector("#metric-upload");
 const metricTime = document.querySelector("#metric-time");
+const metricFps = document.querySelector("#metric-fps");
+const presentationRate = new PresentationRate();
 const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
 const disposeFullscreen = installPreviewFullscreen(
@@ -441,6 +444,7 @@ function beginBusy() {
 }
 
 function showError(error) {
+  resetPresentationRate();
   console.error(error);
   setRuntimeStatus(`Error: ${error}`, "error");
   patchStatus.value = "Runtime failed";
@@ -448,6 +452,7 @@ function showError(error) {
 }
 
 function showSceneError(error) {
+  resetPresentationRate();
   console.error(error);
   patchStatus.value = `Python failed: ${error}`;
   patchStatus.dataset.state = "error";
@@ -895,6 +900,7 @@ async function runScene() {
   const example = currentExample();
   if (!example) return null;
 
+  resetPresentationRate();
   const runToken = generations.beginRun(example.id);
   const source = sceneSourceEditor.value;
   const runRequest = { token: runToken, source };
@@ -1335,6 +1341,7 @@ async function updateWorkerMetrics() {
     status.dataset.playbackPlaying = String(
       activeSourceContinuation !== null || playbackState.playing,
     );
+    if (status.dataset.playbackPlaying !== "true") resetPresentationRate();
   } catch (error) {
     if (isCurrentMetricsObservation(observation)) showError(error);
   } finally {
@@ -1366,6 +1373,15 @@ async function updateRendererMetrics(observation) {
     status.dataset.hostMissedDeadlines = String(host.missedDeadlines);
     status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
     status.dataset.presentedFrames = String(metrics.presentedFrames);
+    if (metrics.ready && status.dataset.playbackPlaying === "true" &&
+        patchStatus.dataset.state !== "error") {
+      const session = `${observation.runGeneration}:${metrics.mode}:${metrics.rendererRebuilds}:${metrics.gpuGeneration}`;
+      const fps = presentationRate.observe(metrics, session);
+      const text = fps === null ? "—" : fps.toFixed(1);
+      if (metricFps.value !== text) metricFps.value = text;
+    } else {
+      resetPresentationRate();
+    }
   } catch (error) {
     if (isCurrentMetricsObservation(observation)) showError(error);
   } finally {
@@ -1373,7 +1389,13 @@ async function updateRendererMetrics(observation) {
   }
 }
 
+function resetPresentationRate() {
+  presentationRate.reset();
+  if (metricFps.value !== "—") metricFps.value = "—";
+}
+
 function stopMetricsPolling() {
+  resetPresentationRate();
   metricsEpoch += 1;
   metricsNextPollAt = 0;
   if (metricsTimer !== null) {

@@ -941,6 +941,7 @@ export function createAuthoringRenderController(host) {
       presentedFrames,
       modeSwitches,
       rendererRebuilds,
+      sampledAtMs: performance.now(),
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),

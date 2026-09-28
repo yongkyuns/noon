@@ -1,3 +1,37 @@
+// Constant-space live rate, sampled with the renderer's counter and clock.
+// UI timers and scene time are not evidence that a frame was presented.
+export class PresentationRate {
+  #baseline = null;
+  #session = null;
+  #fps = null;
+
+  reset() {
+    this.#baseline = null;
+    this.#session = null;
+    this.#fps = null;
+  }
+
+  observe({ presentedFrames, sampledAtMs }, session) {
+    if (!Number.isSafeInteger(presentedFrames) || presentedFrames < 0 ||
+        !Number.isFinite(sampledAtMs)) {
+      this.reset();
+      return null;
+    }
+    const baseline = this.#baseline;
+    if (baseline === null || session !== this.#session ||
+        presentedFrames < baseline.presentedFrames || sampledAtMs <= baseline.sampledAtMs) {
+      this.#session = session;
+      this.#baseline = { presentedFrames, sampledAtMs };
+      this.#fps = null;
+    } else if (sampledAtMs - baseline.sampledAtMs >= 1000) {
+      this.#fps = (presentedFrames - baseline.presentedFrames) * 1000 /
+        (sampledAtMs - baseline.sampledAtMs);
+      this.#baseline = { presentedFrames, sampledAtMs };
+    }
+    return this.#fps;
+  }
+}
+
 export class FrameMetrics {
   #lastTimestamp = null;
   #submissionMs = [];

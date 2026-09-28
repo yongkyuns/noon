@@ -338,7 +338,7 @@ function createWorkerHarness(renderResults = [false, true]) {
     MessagePort: FakePort,
     RetainedExecutionCanvasRenderer: { create: () => creation.promise },
     SharedExecutionDeltaReader: class { drain() { return 0; } },
-    TransferableExecutionDeltaReceiver: class { drain() {} },
+    TransferableExecutionDeltaReceiver: class { drain() {} pendingCount() { return 0; } },
     EXECUTION_TRANSPORT_SHARED: "shared",
     EXECUTION_TRANSPORT_TRANSFERABLE: "transferable",
     drainRendererGpuDiagnostics: () => true,
@@ -539,6 +539,18 @@ test("Rust wake directives admit one animation drive and one deadline without id
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
   assert.equal(harness.timers.size, 0);
   assert.equal(harness.animationFrames.length, 0);
+});
+
+test("renderer telemetry timestamps pending snapshots without inventing presentations", () => {
+  const harness = createWorkerHarness();
+  let now = 1000;
+  harness.context.performance = { now: () => now };
+  const before = vm.runInContext("currentMetrics()", harness.context);
+  now = 2000;
+  const after = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(before.sampledAtMs, 1000);
+  assert.equal(after.sampledAtMs, 2000);
+  assert.equal(after.presentedFrames, before.presentedFrames);
 });
 
 test("idle continuation retries a pending surface publication without advancing the engine", async () => {

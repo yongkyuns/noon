@@ -22,6 +22,7 @@ function fixture() {
     setTimeout(callback, delay) { const next = ++id; timers.set(next, { callback, delay }); return next; },
     clearTimeout(timer) { timers.delete(timer); },
     async updateWorkerMetrics() { reads += 1; },
+    resetPresentationRate() {},
   };
   const api = vm.runInNewContext(`${source}\n({ start: startMetricsPolling, stop: stopMetricsPolling })`, context);
   return {

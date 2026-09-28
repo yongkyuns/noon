@@ -265,9 +265,13 @@ async function runShowcaseFromPublicUi(page, exampleId) {
     { timeout: 10_000 },
   );
   await page.locator("#replace-scene").click();
+  await page.locator("#metric-fps").waitFor({ state: "visible" });
+  await page.waitForFunction(() => Number(document.querySelector("#metric-fps")?.value) > 0,
+    null, { timeout: 180_000 });
+  const sourceFps = await page.locator("#metric-fps").evaluate(output => output.value);
   await waitForAppliedScene(page, exampleId, 180_000);
   const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-  return { runtime: await runtimeSnapshot(page), metrics };
+  return { runtime: await runtimeSnapshot(page), metrics, sourceFps };
 }
 
 async function completeShowcasePlayback(page, replayLoops) {
@@ -292,7 +296,7 @@ async function completeShowcasePlayback(page, replayLoops) {
   }, null, { timeout: 10_000 });
   // Replay intentionally loops. Observe the full traversal and wrap before
   // pausing; waiting for playing=false would time out on healthy playback.
-  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0, loops: 0 }; });
+  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0, loops: 0, fps: [], lastSampleAt: 0 }; });
   await page.waitForFunction((requiredLoops) => {
     if (document.querySelector("#patch-status")?.dataset.state === "error") {
       throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
@@ -301,20 +305,33 @@ async function completeShowcasePlayback(page, replayLoops) {
     const duration = Number(document.querySelector(".playback-scrubber")?.max);
     const elapsed = Number(controls?.dataset.elapsedSeconds);
     const observation = window.__matrixReplay;
+    const now = performance.now();
+    if (now - observation.lastSampleAt >= 1000 && observation.fps.length < 180) {
+      const fps = Number(document.querySelector("#metric-fps")?.value);
+      if (Number.isFinite(fps)) observation.fps.push({ time: elapsed, fps });
+      observation.lastSampleAt = now;
+    }
     const wrapped = observation.maximum >= duration - 1 && elapsed < observation.previous;
     if (wrapped) observation.loops += 1;
     observation.maximum = wrapped ? elapsed : Math.max(observation.maximum, elapsed);
     observation.previous = elapsed;
     return observation.loops >= requiredLoops;
   }, replayLoops, { timeout: 180_000 });
-  await page.evaluate(() => { delete window.__matrixReplay; });
+  const fps = await page.evaluate(() => {
+    const samples = window.__matrixReplay.fps;
+    delete window.__matrixReplay;
+    return samples;
+  });
+  assert.ok(fps.some(sample => sample.fps > 0), "replay must expose live renderer FPS");
   const endpoint = await seekPausedGallery(page, 23.4);
   await waitForPublishedGalleryFrame(page, endpoint, 23.4);
-  return page.evaluate(async () => ({
+  await page.waitForFunction(() => document.querySelector("#metric-fps")?.value === "—");
+  return page.evaluate(async (fps) => ({
     controls: { ...document.querySelector(".playback-controls").dataset },
     duration: Number(document.querySelector(".playback-scrubber").max),
     execution: await window.__noonExampleGallery.executionMetrics(),
-  }));
+    fps,
+  }), fps);
 }
 
 async function editAndRerun(page, expectedExampleId) {
