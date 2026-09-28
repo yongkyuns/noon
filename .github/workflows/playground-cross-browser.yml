@@ -17,6 +17,8 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-gallery-selection-smoke.mjs"
+      - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "web/**"
@@ -34,6 +36,8 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-gallery-selection-smoke.mjs"
+      - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "web/**"
@@ -156,6 +160,13 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-family-transform
         run: ${{ matrix.display }} node scripts/playground-python-family-transform-smoke.mjs
+      - name: Test gallery click animation and idle restoration
+        timeout-minutes: 5
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/selection
+        run: ${{ matrix.display }} node scripts/playground-gallery-selection-smoke.mjs
       - name: Test every selectable gallery example
         timeout-minutes: 20
         env:

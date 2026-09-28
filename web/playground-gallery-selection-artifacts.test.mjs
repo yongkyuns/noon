@@ -12,7 +12,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -25,6 +25,9 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     return [bytes, { width: 32, height: 32, data }];
   }));
   const events = [];
+  let contextOptions;
+  let launchOptions;
+  const layoutSizes = [];
   const writes = new Map();
   let frame = 0;
   let capture = 0;
@@ -62,8 +65,12 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return canvas;
     },
     getByRole: () => ({ count: async () => 1, click: async () => {} }),
-    mouse: { click: async (x) => {
-      events.push("click");
+    mouse: { click: async (x, y) => {
+      events.push(`mouse:${x}:${y}`);
+      if (!showcase || x > 100) frame += 1;
+    } },
+    touchscreen: { tap: async (x, y) => {
+      events.push(`touch:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },
   };
@@ -71,7 +78,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   try {
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
       assert, path, fileURLToPath, sourceUrl, URL,
-      process: { env: {} },
+      process: { env },
       spawn: () => ({ kill: () => events.push("server:kill") }),
       mkdir: async () => {},
       writeFile: async (filename, bytes) => {
@@ -85,13 +92,20 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       fetch: async (url) => ({ ok: true, text: async () =>
         String(url).includes("showcase_pointer_selection.py") ? "self.on_click(circle, Indicate(circle))" : "worker" }),
       PNG: { sync: { read: (bytes) => decoded.get(bytes) } },
-      playwright: { chromium: { launch: async () => ({
-        newContext: async () => ({ newPage: async () => page }),
-        close: async () => events.push("browser:close"),
-      }) } },
+      playwright: Object.fromEntries(["chromium", "firefox", "webkit"].map((name) => [name, { launch: async (options) => {
+        launchOptions = options;
+        return {
+          newContext: async (options) => { contextOptions = options; return { newPage: async () => page }; },
+          close: async () => events.push("browser:close"),
+        };
+      } }])),
+      playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {} }),
-      layoutReplayViewport: async () => {},
-      replayViewport: async (_canvas, size) => ({ bitmap: size, bounds: { x: 0, y: 0, ...size }, deviceScaleFactor: 1 }),
+      layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
+      replayViewport: async (_canvas, size, { deviceScaleFactor }) => ({
+        bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
+        bounds: { x: 0, y: 0, ...size }, deviceScaleFactor,
+      }),
       window: { __noonExampleGallery: gallery },
       document: { querySelector: (selector) => {
         if (selector === ".playback-controls") return {
@@ -106,7 +120,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       console: { log: () => events.push("passed"), error: () => events.push("diagnostic:error") },
     });
   } catch (caught) { error = caught; }
-  return { error, writes, events, captures };
+  return { error, writes, events, captures, contextOptions, launchOptions, layoutSizes };
 }
 
 function assertRetained(result, names) {
@@ -134,6 +148,36 @@ test("successful legacy clear and source-declared indication retain their captur
   assert.equal(result.events.at(-1), "passed");
 });
 
+test("default routing preserves desktop Chromium mouse input and 960 by 540 canvas", async () => {
+  const result = await runSmoke();
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.launchOptions, { browser: "chromium", headless: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.contextOptions)), { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
+  assert.ok(result.events.some((event) => event.startsWith("mouse:")));
+  assert.ok(!result.events.some((event) => event.startsWith("touch:")));
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.captureViewport.bitmap, { width: 960, height: 540 });
+  assert.equal(report.captureViewport.deviceScaleFactor, 1);
+});
+
+test("mobile profile uses DPR2 portrait geometry, touch input, and a viewport-fitting canvas", async () => {
+  const result = await runSmoke({ env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" } });
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.launchOptions, { browser: "webkit", headless: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.contextOptions)), {
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+  });
+  assert.ok(result.events.some((event) => event.startsWith("touch:")));
+  assert.ok(!result.events.some((event) => event.startsWith("mouse:")));
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.captureViewport.bitmap, { width: 716, height: 402 });
+  assert.equal(report.captureViewport.deviceScaleFactor, 2);
+  assert.equal(result.layoutSizes.length, 2, "both interaction canvases must use the mobile capture layout");
+  for (const size of result.layoutSizes) {
+    assert.ok(size.width <= 390 && size.height <= 844, "mobile capture canvas must fit the portrait viewport");
+  }
+});
+
 test("21 differing pixels still fail but retain all original evidence", async () => {
   const result = await runSmoke({ clearPixels: 21 });
   assert.equal(result.error?.code, "ERR_ASSERTION");
@@ -152,7 +196,7 @@ test("insufficient selection preserves only the captures actually taken", async 
   assert.equal(report.selectedChanged, 500);
   assert.equal(report.clearDifference, undefined);
   assert.ok(!result.writes.has("cleared.png"));
-  assert.equal(result.events.filter((event) => event === "click").length, 1);
+  assert.equal(result.events.filter((event) => event.startsWith("mouse:") || event.startsWith("touch:")).length, 1);
 });
 
 test("a later screenshot failure cannot discard earlier captures", async () => {

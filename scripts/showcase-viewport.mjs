@@ -7,11 +7,16 @@ function validSize(size) {
     Number.isSafeInteger(size.height) && size.height > 0, "invalid replay viewport");
 }
 
-export function assertReplayViewport(observed, expected) {
+export function assertReplayViewport(observed, expected, deviceScaleFactor = 1) {
   validSize(expected);
-  assert.equal(observed.deviceScaleFactor, 1, "replay requires one device pixel per CSS pixel");
+  assert.ok(Number.isSafeInteger(deviceScaleFactor) && deviceScaleFactor > 0,
+    "invalid replay device scale factor");
+  assert.equal(observed.deviceScaleFactor, deviceScaleFactor, "unexpected replay device scale factor");
   assert.deepEqual(observed.bounds, { x: 0, y: 0, ...expected }, "replay canvas is not integer-aligned");
-  assert.deepEqual(observed.bitmap, expected, "renderer has not resized its backing bitmap");
+  assert.deepEqual(observed.bitmap, {
+    width: expected.width * deviceScaleFactor,
+    height: expected.height * deviceScaleFactor,
+  }, "renderer has not resized its backing bitmap");
 }
 
 export async function layoutReplayViewport(canvas, size) {
@@ -34,7 +39,7 @@ export async function layoutReplayViewport(canvas, size) {
   }, size);
 }
 
-export async function replayViewport(canvas, expected, { attempts = 120 } = {}) {
+export async function replayViewport(canvas, expected, { attempts = 120, deviceScaleFactor = 1 } = {}) {
   validSize(expected);
   assert.ok(Number.isSafeInteger(attempts) && attempts > 0, "invalid replay viewport wait");
   let observed;
@@ -46,7 +51,7 @@ export async function replayViewport(canvas, expected, { attempts = 120 } = {}) 
         bitmap: { width: element.width, height: element.height }, deviceScaleFactor: window.devicePixelRatio };
     });
     try {
-      assertReplayViewport(observed, expected);
+      assertReplayViewport(observed, expected, deviceScaleFactor);
       return observed;
     } catch (error) {
       lastError = error;

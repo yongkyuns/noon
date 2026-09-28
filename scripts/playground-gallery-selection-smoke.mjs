@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
+import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
@@ -17,13 +18,32 @@ const artifacts = path.resolve(
   process.env.NOON_GALLERY_SELECTION_ARTIFACTS ??
     "browser-smoke-artifacts/gallery-pointer-selection",
 );
+const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
+const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
+const profiles = {
+  // Preserve the original gallery-selection smoke's viewport exactly.
+  "desktop-dpr1": { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 },
+  "desktop-dpr2": { viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2 },
+  "mobile-dpr2": { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
+};
+assert.ok(["chromium", "firefox", "webkit"].includes(browserName), `unknown playground browser: ${browserName}`);
+assert.ok(profileName in profiles, `unknown playground profile: ${profileName}`);
+const profile = profiles[profileName];
+const browserType = playwright[browserName];
+const captureSize = profileName.startsWith("mobile")
+  ? { width: profile.viewport.width - 32, height: Math.floor((profile.viewport.width - 32) * 9 / 16) }
+  : { width: 960, height: 540 };
+const tap = (page, x, y) => profile.hasTouch ? page.touchscreen.tap(x, y) : page.mouse.click(x, y);
 await mkdir(artifacts, { recursive: true });
 
 let server;
 let browser;
 let runtimeCache;
 const captures = {};
-const report = { legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate" };
+const report = {
+  browser: browserName, profile: profileName, input: profile.hasTouch ? "touch" : "mouse",
+  legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate",
+};
 let failure;
 
 function changedPixels(leftBytes, rightBytes) {
@@ -103,11 +123,8 @@ try {
   assert.ok(worker.ok, "python worker source is unavailable");
   runtimeCache = createPyodideResourceCache(await worker.text());
 
-  browser = await playwright.chromium.launch({
-    headless: true,
-    args: ["--disable-gpu-sandbox", "--disable-dev-shm-usage"],
-  });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  browser = await browserType.launch(playgroundLaunchOptions(browserName));
+  const context = await browser.newContext(profile);
   await runtimeCache.install(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
@@ -124,7 +141,6 @@ try {
     "noon-pointer-selection",
   );
   const canvas = page.locator("#scene");
-  const captureSize = { width: 960, height: 540 };
   // Compare the renderer's pixels, not rounded-corner browser antialiasing.
   // Keep real host pointer events enabled on the existing canvas.
   await layoutReplayViewport(canvas, captureSize);
@@ -143,7 +159,7 @@ try {
     "gallery manifest must enable selection on the public runtime",
   );
 
-  report.captureViewport = await replayViewport(canvas, captureSize);
+  report.captureViewport = await replayViewport(canvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 0 && box.height > 0, "gallery canvas is not drawable");
   const baseline = await canvas.screenshot();
@@ -152,7 +168,7 @@ try {
   const beforeSelect = await page.evaluate(async () =>
     Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
   );
-  await page.mouse.click(
+  await tap(page,
     box.x + box.width / 2 - box.height / 4,
     box.y + box.height / 2,
   );
@@ -166,7 +182,7 @@ try {
   const beforeClear = await page.evaluate(async () =>
     Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
   );
-  await page.mouse.click(box.x + 18, box.y + 18);
+  await tap(page, box.x + 18, box.y + 18);
   await waitForPresentation(page, beforeClear);
   const cleared = await canvas.screenshot();
   captures.cleared = cleared;
@@ -220,7 +236,7 @@ try {
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
   const authoredBaseline = await authoredCanvas.screenshot();
   captures.authoredBaseline = authoredBaseline;
-  const clickCircle = () => page.mouse.click(
+  const clickCircle = () => tap(page,
     authoredBox.x + authoredBox.width * 0.36,
     authoredBox.y + authoredBox.height * 0.5,
   );
@@ -245,11 +261,12 @@ try {
   await waitForExactPixels(authoredCanvas, authoredBaseline, "repeated authored click");
   await assertSettled(page, "repeated authored click");
   const beforeBackground = await presentedFrames(page);
-  await page.mouse.click(authoredBox.x + 12, authoredBox.y + 12);
+  await tap(page, authoredBox.x + 12, authoredBox.y + 12);
   await page.waitForTimeout(150);
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
+  assert.deepEqual(errors, []);
 } catch (error) {
   failure = error;
   throw error;
