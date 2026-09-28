@@ -1,8 +1,8 @@
 //! Filled morph and reveal-continuity examples shared by native and direct WASM.
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession, Mobject, RateFunction,
-    Scene, SemanticPaint, SemanticStyle, TransformToRequest, Vec2, VectorPath, BLUE, PINK, PURPLE,
-    WHITE,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, ExecutionSession,
+    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticPaint,
+    SemanticStyle, TransformToRequest, Vec2, VectorPath, BLUE, PINK, PURPLE, WHITE,
 };
 
 fn style(fill: Option<Color>, stroke: Color, width: f64) -> SemanticStyle {
@@ -107,7 +107,7 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
 
 /// One retained path concurrently follows point correspondence and Create reveal.
 /// Pair: `web/python/examples/ordinary_morph_reveal.py`.
-pub fn morph_reveal() -> Result<ExecutionSession, String> {
+pub fn morph_reveal() -> Result<LiveProgram<MorphReveal>, String> {
     let mut scene = Scene::new();
     let source = VectorPath::new()
         .move_to(Vec2::new(-2.4, -0.8))
@@ -131,30 +131,55 @@ pub fn morph_reveal() -> Result<ExecutionSession, String> {
     let target = scene
         .path(target, style(None, PINK, 0.09))
         .map_err(|error| error.to_string())?;
-    let options = AnimationOptions::new()
-        .run_time(3.0)
-        .rate_func(RateFunction::Linear);
-    let request = AnimationCompositionRequest::Composition {
-        kind: crate::SemanticAnimationCompositionKind::Parallel,
-        children: vec![
-            AnimationCompositionRequest::Create {
-                target: &shape,
-                options,
-            },
-            AnimationCompositionRequest::TransformTo(TransformToRequest::point_correspondence(
-                &shape, &target, options,
-            )),
-        ],
-        options: AnimationOptions::new(),
-    };
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
     scene
-        .live(&mut session)
-        .declare_and_activate_composition(&request, AnimationOptions::new())
-        .map_err(|error| error.to_string())?;
-    Ok(session)
+        .into_live_program(MorphReveal {
+            shape,
+            target,
+            started: false,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Complete the same source-owned segment as the paired Python Scene.play.
+/// Sampling an uncompleted ExecutionSession at its endpoint would retain the
+/// interpolated mesh instead of publishing the authored target geometry.
+pub struct MorphReveal {
+    shape: Mobject,
+    target: Mobject,
+    started: bool,
+}
+
+impl LiveContinuation for MorphReveal {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        if self.started {
+            return Ok(ContinuationStep::Finished);
+        }
+        let options = AnimationOptions::new()
+            .run_time(3.0)
+            .rate_func(RateFunction::Linear);
+        let request = AnimationCompositionRequest::Composition {
+            kind: crate::SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                AnimationCompositionRequest::Create {
+                    target: &self.shape,
+                    options,
+                },
+                AnimationCompositionRequest::TransformTo(TransformToRequest::point_correspondence(
+                    &self.shape,
+                    &self.target,
+                    options,
+                )),
+            ],
+            options: AnimationOptions::new(),
+        };
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .map_err(|error| error.to_string())?;
+        self.started = true;
+        Ok(ContinuationStep::Await(segment))
+    }
 }
 
 /// Pair: `web/python/examples/ordinary_create_shapes.py`.
@@ -328,7 +353,6 @@ mod tests {
                 1,
             ),
             (create_shapes, 4),
-            (morph_reveal, 1),
             (|| morph_stress(96), 96),
         ] {
             let mut forward = build().unwrap();
@@ -346,16 +370,44 @@ mod tests {
     }
 
     #[test]
-    fn morph_reveal_fixture_publishes_two_independent_exact_driver_rows() {
-        let mut session = morph_reveal().unwrap();
-        session.seek(1.5).unwrap();
-        assert_eq!(session.frame().objects.len(), 1);
-        assert!((session.frame().morph(0) - 0.5).abs() < 1.0e-6);
-        assert!((session.frame().reveal(0) - 0.5).abs() < 1.0e-6);
-        let midpoint = session.frame().clone();
+    fn morph_reveal_fixture_publishes_independent_drivers_and_completes_the_target() {
+        use crate::{LiveProgramStatus, RustHostCallbackTable};
+        let mut program = morph_reveal().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.take_renderer_publication();
+        program.drive_to(&mut callbacks, 1.5).unwrap();
+        assert_eq!(program.session().frame().objects.len(), 1);
+        assert!((program.session().frame().morph(0) - 0.5).abs() < 1.0e-6);
+        assert!((program.session().frame().reveal(0) - 0.5).abs() < 1.0e-6);
+        program.take_renderer_publication();
 
-        session.seek(0.25).unwrap();
-        session.seek(1.5).unwrap();
-        assert_eq!(session.frame(), &midpoint);
+        let LiveProgramStatus::PublicationPending(expected) =
+            program.drive_to(&mut callbacks, 3.0).unwrap()
+        else {
+            panic!("morph/reveal endpoint must publish completion");
+        };
+        let context = program.take_renderer_publication().context();
+        assert_eq!(context, expected);
+        program.admit_publication(context).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        let Some(crate::GeometryRef::VectorPath(path)) =
+            program.session().frame().render_geometry(0)
+        else {
+            panic!("completed morph must retain its target path");
+        };
+        assert!(
+            path.morph_target().is_none(),
+            "completion must retire interpolation geometry"
+        );
+        assert_eq!(
+            path.commands().last(),
+            Some(&crate::PathCommand::LineTo {
+                to: Vec2::new(2.0, -1.4)
+            })
+        );
     }
 }

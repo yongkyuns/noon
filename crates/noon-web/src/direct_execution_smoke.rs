@@ -42,8 +42,8 @@ pub async fn create_direct_filled_path_transform_renderer(
 pub async fn create_direct_morph_reveal_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let session = noon::example_scenes::renderer_fixtures::morph_reveal().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    let program = noon::example_scenes::renderer_fixtures::morph_reveal().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Analytic and vector-path Create endpoints use the same typed native scene.
