@@ -40,7 +40,10 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),
   };
   const canvas = {
-    evaluate: async (fn) => fn({ style: { setProperty() {} } }),
+    evaluate: async (fn, argument) => fn({ style: { setProperty() {} },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      dispatchEvent: event => { event.defaultPrevented = true; frame += 1; events.push("DOM:wheel"); },
+    }, argument),
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
     screenshot: async () => {
       const name = names[capture];
@@ -121,15 +124,16 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         } };
       } },
       Event: class Event { constructor() {} },
+      WheelEvent: class WheelEvent { constructor() {} },
       console: { log: () => events.push("passed"), error: () => events.push("diagnostic:error") },
     });
   } catch (caught) { error = caught; }
-  return { error, writes, events, captures, contextOptions, launchOptions, layoutSizes };
+  return { error, writes, events, captures, captureNames: names, contextOptions, launchOptions, layoutSizes };
 }
 
 function assertRetained(result, names) {
   for (const name of names) {
-    const index = ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"].indexOf(name);
+    const index = result.captureNames.indexOf(name);
     assert.equal(result.writes.get(`${name}.png`), result.captures[index]);
   }
   assert.equal(result.events.filter((event) => event === "browser:close").length, 1);
@@ -143,11 +147,13 @@ function assertRetained(result, names) {
 test("successful legacy clear and source-declared indication retain their captures and measurements", async () => {
   const result = await runSmoke();
   assert.equal(result.error, undefined);
-  const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"]);
+  const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated",
+    "zoomed", "zoomIndicated", "zoomRestored", "zoomReset"]);
   assert.equal(report.selectedChanged, 501);
   assert.equal(report.clearDifference, 0);
   assert.equal(report.indicatedChanged, 501);
   assert.equal(report.authoredInteraction, "click-indicate");
+  assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
 });
@@ -174,6 +180,8 @@ test("mobile profile uses DPR2 portrait geometry, touch input, and a viewport-fi
   assert.ok(result.events.some((event) => event.startsWith("touch:")));
   assert.ok(!result.events.some((event) => event.startsWith("mouse:")));
   const report = JSON.parse(result.writes.get("result.json"));
+  assert.equal(report.wheelInput, "DOM wheel (mobile WebKit automation limitation)");
+  assert.equal(result.events.filter(event => event === "DOM:wheel").length, 2);
   assert.deepEqual(report.captureViewport.bitmap, { width: 716, height: 402 });
   assert.equal(report.captureViewport.deviceScaleFactor, 2);
   assert.equal(result.layoutSizes.length, 2, "both interaction canvases must use the mobile capture layout");

@@ -266,9 +266,26 @@ try {
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
   // Exercise the actual gallery opt-in, not a manually constructed client.
+  const domWheel = browserName === "webkit" && profile.hasTouch;
+  report.wheelInput = domWheel ? "DOM wheel (mobile WebKit automation limitation)" : "browser mouse wheel";
+  const wheel = async delta => {
+    if (domWheel) {
+      // Playwright cannot drive a wheel in mobile WebKit. Keep the same DOM
+      // collector and real touch picking, without claiming native wheel input.
+      await authoredCanvas.evaluate((canvas, deltaY) => {
+        const rect = canvas.getBoundingClientRect();
+        const event = new WheelEvent("wheel", { cancelable: true, deltaMode: 0, deltaY,
+          clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+        canvas.dispatchEvent(event);
+        if (!event.defaultPrevented) throw new Error("gallery inspection did not consume DOM wheel");
+      }, delta);
+    } else {
+      await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
+      await page.mouse.wheel(0, delta);
+    }
+  };
   const beforeZoom = await presentedFrames(page);
-  await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
-  await page.mouse.wheel(0, -500 * Math.log(2));
+  await wheel(-500 * Math.log(2));
   await waitForPresentation(page, beforeZoom);
   const zoomed = await authoredCanvas.screenshot();
   captures.zoomed = zoomed;
@@ -279,8 +296,7 @@ try {
   captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
   await assertSettled(page, "zoomed authored click");
   const beforeZoomOut = await presentedFrames(page);
-  await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
-  await page.mouse.wheel(0, 500 * Math.log(2));
+  await wheel(500 * Math.log(2));
   await waitForPresentation(page, beforeZoomOut);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
