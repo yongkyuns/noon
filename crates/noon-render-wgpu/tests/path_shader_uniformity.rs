@@ -1,37 +1,56 @@
+const SHADER: &str = include_str!("../src/path.wgsl");
+
+fn shader_function(name: &str) -> &'static str {
+    let start = SHADER
+        .find(&format!("fn {name}("))
+        .expect("shader function");
+    let function = &SHADER[start..];
+    &function[..function.find("\n}").expect("function end")]
+}
+
 #[test]
 fn reveal_derivative_runs_before_reveal_control_flow() {
-    let shader = include_str!("../src/path.wgsl");
-    let derivative = shader
-        .find("let edge = max(fwidth(input.path_progress)")
-        .expect("path shader must evaluate a reveal derivative");
-    let hidden_branch = shader
-        .find("if input.reveal <= 0.0")
-        .expect("path shader must handle a fully hidden reveal");
-    let complete_branch = shader
-        .find("if input.reveal >= 1.0")
-        .expect("path shader must handle a complete reveal");
-
+    for entry in ["fs_path", "fs_path_compact"] {
+        let fragment = shader_function(entry);
+        let derivative = fragment
+            .find("let edge = max(fwidth(input.path_progress)")
+            .expect("path fragment must evaluate a reveal derivative");
+        let reveal = fragment
+            .find("revealed_path_color(")
+            .expect("path fragment must apply shared reveal coverage");
+        assert!(
+            derivative < reveal,
+            "derive coverage before reveal control flow"
+        );
+        if let Some(branch) = fragment.find("if ") {
+            assert!(
+                derivative < branch,
+                "derive coverage before fragment branches"
+            );
+        }
+    }
+    let reveal = shader_function("revealed_path_color");
     assert!(
-        derivative < hidden_branch && derivative < complete_branch,
-        "fragment derivatives must execute before reveal-dependent control flow"
+        !reveal.contains("fwidth("),
+        "the conditional helper takes a precomputed derivative"
     );
+    assert!(reveal.contains("if reveal <= 0.0"));
+    assert!(reveal.contains("if reveal >= 1.0"));
 }
 
 #[test]
 fn fill_only_partial_reveal_derives_a_visible_outline() {
-    let shader = include_str!("../src/path.wgsl");
-    assert!(shader
+    assert!(SHADER
         .contains("let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;"));
     assert!(
-        shader.contains("let enabled = authored_enabled || (is_stroke && derive_creation_stroke);")
+        SHADER.contains("let enabled = authored_enabled || (is_stroke && derive_creation_stroke);")
     );
-    assert!(shader.contains("creation_outline_alpha = 1.0 - smoothstep(0.75, 1.0, reveal);"));
+    assert!(SHADER.contains("creation_outline_alpha = 1.0 - smoothstep(0.75, 1.0, reveal);"));
 }
 
 #[test]
 fn partial_reveal_smoothly_fades_fill_instead_of_waiting_for_completion() {
-    let shader = include_str!("../src/path.wgsl");
-    assert!(shader.contains("if input.is_stroke < 0.5"));
-    assert!(shader.contains("let fill_alpha = smoothstep(0.0, 1.0, input.reveal);"));
-    assert!(shader.contains("return input.color * fill_alpha;"));
+    let reveal = shader_function("revealed_path_color");
+    assert!(reveal.contains("if is_stroke < 0.5"));
+    assert!(reveal.contains("return color * smoothstep(0.0, 1.0, reveal);"));
 }
