@@ -128,11 +128,41 @@ try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext(profile);
   await runtimeCache.install(context);
+  // Temporary CI-only GPU diagnosis for the WebKit inverse-zoom failure.
+  function traceTextWrites() {
+    const queue = globalThis.GPUQueue?.prototype;
+    if (!queue) return;
+    const original = queue.writeBuffer;
+    const last = new WeakMap();
+    queue.writeBuffer = function(buffer, offset, data, dataOffset, size) {
+      const result = original.apply(this, arguments);
+      if (!buffer.label?.includes("text") && !buffer.label?.toLowerCase().includes("camera")) return result;
+      const element = data.BYTES_PER_ELEMENT ?? 1;
+      const start = (data.byteOffset ?? 0) + (dataOffset ?? 0) * element;
+      const count = size === undefined ? data.byteLength - (dataOffset ?? 0) * element : size * element;
+      const bytes = new Uint8Array(data.buffer ?? data, start, count);
+      let hash = 2166136261;
+      for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+      if (last.get(buffer) !== hash) {
+        last.set(buffer, hash);
+        const values = Array.from(new Float32Array(bytes.slice(0, Math.min(count, 64)).buffer));
+        console.log("NOON_TEXT_WRITE " + JSON.stringify({ label: buffer.label, offset, count, hash, values }));
+      }
+      return result;
+    };
+  }
+  await context.addInitScript(traceTextWrites);
+  await context.route("**/authoring-render-worker.js*", async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `(${traceTextWrites.toString()})();\n${await response.text()}` });
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
+  report.textWrites = [];
   page.on("console", (message) => {
+    if (message.text().startsWith("NOON_TEXT_WRITE ")) report.textWrites.push(JSON.parse(message.text().slice(16)));
     if (message.type() === "error") errors.push(message.text());
   });
 

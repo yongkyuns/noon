@@ -107,7 +107,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       playwright: Object.fromEntries(["chromium", "firefox", "webkit"].map((name) => [name, { launch: async (options) => {
         launchOptions = options;
         return {
-          newContext: async (options) => { contextOptions = options; return { newPage: async () => page }; },
+          newContext: async (options) => { contextOptions = options; return { addInitScript: async () => {}, route: async () => {}, newPage: async () => page }; },
           close: async () => events.push("browser:close"),
         };
       } }])),
