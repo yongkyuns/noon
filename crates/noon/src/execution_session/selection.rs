@@ -162,6 +162,9 @@ impl ExecutionSession {
     /// A later reattachment cannot revive it. Ordinary effective frame advance
     /// is compatible; successful seek/backward evaluation clears session state.
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
+        if !self.pointer_selection.enabled() {
+            return None;
+        }
         let selected = self.pointer_selection.selected?;
         (compatible_revisions(selected.publication, self.publication_context())
             && self.semantic_object_is_reachable(selected.node))
@@ -225,7 +228,11 @@ impl ExecutionSession {
             click: None,
             changed: false,
         };
-        let Some(max_movement) = prepared.state.max_movement else {
+        let Some(max_movement) = prepared
+            .state
+            .max_movement
+            .or_else(|| (!self.interaction_bindings.is_empty()).then_some(4.0))
+        else {
             return Ok(prepared);
         };
         let previous_selection = self.selected_pointer_target();

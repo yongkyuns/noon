@@ -1,4 +1,4 @@
-use crate::{GeometryRef, SemanticImageContent, TextResourceHandle};
+use crate::{Color, GeometryRef, SemanticImageContent, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry,
@@ -365,6 +365,58 @@ pub struct SemanticObjectState {
     /// not carry a BarChart-sized role variant.
     bar_metadata: Option<Arc<SemanticBarMetadata>>,
     signal_bindings: Vec<SemanticSignalBinding>,
+    /// One authored primary-click indication. The runtime owns any active
+    /// invocation; this declaration is only the language-neutral trigger/action.
+    /// Unbound objects pay one pointer, with allocation only for declared actions.
+    click_indicate: Option<Arc<SemanticClickIndicate>>,
+}
+
+/// Typed authored `click -> Indicate` declaration for one analytic object.
+///
+/// The action is always restoring (`there_and_back`); only its scale, color,
+/// and duration are authored. Keeping this value on its target makes overwrite,
+/// cloning, and node retirement bounded by that object's lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticClickIndicate {
+    scale_factor: f64,
+    color: Color,
+    run_time: f64,
+}
+
+impl SemanticClickIndicate {
+    pub const fn new(scale_factor: f64, color: Color, run_time: f64) -> Self {
+        Self {
+            scale_factor,
+            color,
+            run_time,
+        }
+    }
+
+    pub const fn scale_factor(self) -> f64 {
+        self.scale_factor
+    }
+    pub const fn color(self) -> Color {
+        self.color
+    }
+    pub const fn run_time(self) -> f64 {
+        self.run_time
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.scale_factor.is_finite()
+            && (self.scale_factor as f32) > 0.0
+            && self.scale_factor <= f64::from(f32::MAX)
+            && self.run_time.is_finite()
+            && self.run_time > 0.0
+            && [
+                self.color.red,
+                self.color.green,
+                self.color.blue,
+                self.color.alpha,
+            ]
+            .into_iter()
+            .all(|component| component.is_finite() && (0.0..=1.0).contains(&component))
+    }
 }
 
 impl SemanticObjectState {
@@ -379,6 +431,7 @@ impl SemanticObjectState {
             text_presentation_baseline: None,
             bar_metadata: None,
             signal_bindings: Vec::new(),
+            click_indicate: None,
         }
     }
 
@@ -402,6 +455,7 @@ impl SemanticObjectState {
             text_presentation_baseline: self.text_presentation_baseline,
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
+            click_indicate: self.click_indicate.clone(),
         }
     }
 
@@ -464,6 +518,14 @@ impl SemanticObjectState {
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {
         &self.signal_bindings
+    }
+
+    pub fn click_indicate(&self) -> Option<SemanticClickIndicate> {
+        self.click_indicate.as_deref().copied()
+    }
+
+    pub fn set_click_indicate(&mut self, binding: Option<SemanticClickIndicate>) {
+        self.click_indicate = binding.map(Arc::new);
     }
 
     pub(crate) fn signal_bindings_mut(&mut self) -> &mut Vec<SemanticSignalBinding> {

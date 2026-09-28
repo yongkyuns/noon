@@ -214,6 +214,8 @@ Hit testing uses the execution-owned spatial index as broad phase and performs p
 
 Selection/editor highlighting is a session overlay and must not mutate the authored object, family order, compatibility output or serialized scene. A scene-authored click action that changes style, signals or animation is different: it is an authored interaction binding whose action executes through the normal Rust runtime/semantic contracts.
 
+The initial authored `click -> Indicate` action keeps one optional declaration on its object and projects it into the session's existing pointer lane. It reuses ordinary Rust Indicate lowering and interpolation, with at most one active invocation per target. A platform monotonic timestamp advances only these effective values; it does not advance authored time or append replay tracks. Completion restores the captured effective appearance, while seek or a superseding authored publication retires the invocation. The first supported targets are filled analytic circles and rectangles without signal drivers; clicks cannot interrupt an active authored segment or host driver. Platforms schedule a wake from Rust-owned activity and return to idle when it settles.
+
 Pointer capture has split ownership: the platform shell owns OS/DOM capture mechanics, while `InteractiveSession` owns the semantic captured target and gesture lifecycle. Release, cancellation, lost platform capture, target retirement/replacement, seek/reload policy and stale generations must terminate or reconcile the gesture deterministically.
 
 ### Live-session control plane

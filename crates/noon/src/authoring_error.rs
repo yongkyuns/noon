@@ -188,6 +188,9 @@ pub enum AuthoringError {
     },
     /// Grid alignment, sizing or flow options are inconsistent.
     InvalidGridOption(&'static str),
+    /// Click indication has one restoring timing shape; other animation options
+    /// would imply a distinct authored action.
+    InvalidClickIndicateOptions,
     /// A planar flip needs a nonzero XY axis or a pure Z axis.
     InvalidFlipAxis,
     /// An internal arrangement plan has not observed all required bounds.
@@ -323,6 +326,9 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("too few grid rows and columns to fit all members")
             }
             Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
+            Self::InvalidClickIndicateOptions => {
+                f.write_str("click Indicate only accepts there-and-back timing without lag, path arc, reversal, lifecycle options")
+            }
             Self::InvalidFlipAxis => {
                 f.write_str("flip axis must be nonzero and lie in the XY plane or along Z")
             }

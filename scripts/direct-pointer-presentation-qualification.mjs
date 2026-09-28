@@ -20,8 +20,8 @@ try {
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
   for (const backend of ["webgpu", "webgl"]) {
     browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend), channel: "chromium" });
-    for (const program of [false, true]) {
-      const name = `${backend}-${program ? "program" : "session"}`;
+    for (const { program, animated } of [false, true].flatMap(program => [false, true].map(animated => ({ program, animated })))) {
+      const name = `${backend}-${program ? "program" : "session"}${animated ? "-indicate" : ""}`;
       const result = { name, status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
       page.setDefaultTimeout(60_000);
@@ -47,15 +47,15 @@ try {
       };
       try {
         await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-        const first = await page.evaluate(async program => {
+        const first = await page.evaluate(async ({ program, animated }) => {
           globalThis.Worker = class { constructor() { throw new Error("direct receipt qualification attempted a Worker"); } };
           const { default: init, createDirectPointerSelectionRenderer } = await import("./pkg/noon_web.js");
           await init();
           const { attachNativeInputs } = await import("./native-inputs.js");
           const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
           const canvas = document.querySelector("#scene"), errors = [], trace = [];
-          const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), program);
-          renderer.setPointerFillSelection(4);
+          const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), program, animated);
+          if (!animated) renderer.setPointerFillSelection(4);
           const original = renderer.nativePointerInput.bind(renderer);
           renderer.nativePointerInput = (...args) => {
             const before = JSON.parse(renderer.debugPointerPresentationJson());
@@ -75,7 +75,7 @@ try {
           driver = createDirectExecutionWakeDriver(renderer);
           globalThis.receiptTest = { canvas, renderer, driver, detach, trace, errors, event };
           return { unpainted, beforePaint };
-        }, program);
+        }, { program, animated });
         assert.equal(first.unpainted.presented, null);
         assert.equal(first.beforePaint.length, 1, "rejected press must suppress its release");
         assert.equal(first.beforePaint[0].admitted, false);
@@ -85,6 +85,43 @@ try {
         result.checks.push("unpresented-input-rejected", "successful-presentation-installs-exact-receipt");
         const baseline = await image("baseline");
         const authored = await page.evaluate(() => receiptTest.renderer.debugSelectionFrameJson());
+        if (animated) {
+          await page.evaluate(() => receiptTest.driver.stop());
+          const rect = await page.locator("#scene").boundingBox();
+          const point = shapeSurfaceCenter(SHAPES[0]);
+          const trigger = () => page.mouse.click(rect.x + point.x, rect.y + point.y);
+          const step = time => page.evaluate(time => {
+            receiptTest.renderer.advanceDirectRealtime(time);
+            receiptTest.renderer.render();
+          }, time);
+          await trigger();
+          const anchor = await page.evaluate(() => performance.now());
+          await step(anchor); await step(anchor + 200);
+          const middle = await image("indicate-midpoint");
+          assert.notDeepEqual(middle.data, baseline.data, "source-bound click must animate the shape");
+          assert.equal(await page.evaluate(() => receiptTest.renderer.time()), 0, "interaction must leave source time fixed");
+          await trigger(); // Repeated contact must not capture the enlarged state.
+          await step(anchor + 450);
+          assertExactPixels(await image("indicate-restored"), baseline, "indication restores exact base pixels");
+          await page.waitForFunction(anchor => performance.now() >= anchor + 450, anchor);
+          await page.evaluate(async () => {
+            const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+            receiptTest.driver = createDirectExecutionWakeDriver(receiptTest.renderer);
+          });
+          const beforeFrames = await page.evaluate(() => receiptTest.driver.stats().presentedFrames);
+          await trigger();
+          // The attachment's closure owns the original stopped driver. Wake the
+          // replacement once; subsequent frames must schedule themselves in Rust.
+          await page.evaluate(() => receiptTest.driver.wake());
+          await settled();
+          assert.ok(await page.evaluate(() => receiptTest.driver.stats().presentedFrames) >= beforeFrames + 3,
+            "one click must autonomously schedule multiple animation frames");
+          assertExactPixels(await image("indicate-autonomous-restored"), baseline, "autonomous completion restores pixels");
+          result.checks.push("source-declared-click", "shared-indicate-midpoint", "exact-restoration", "bounded-retrigger", "autonomous-wake-and-settle");
+          result.status = "passed";
+          console.log(`[PASS] ${name}: ${result.checks.join(", ")}`);
+          continue;
+        }
         await click(SHAPES[0]);
         const selected = await image("selected");
         result.pixels = assertSelectionPixels(baseline, selected, SHAPES[0]);

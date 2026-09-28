@@ -435,6 +435,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::SetClickIndicate { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
                 | SemanticMutation::ReplaceStyle { .. }
@@ -1070,7 +1071,8 @@ fn lower_semantic_publication(
             | SemanticMutation::SetForegroundMembers { .. }
             | SemanticMutation::SetGraphDeclaration { .. }
             | SemanticMutation::SetTableLayout { .. }
-            | SemanticMutation::SetInset2DView { .. } => {}
+            | SemanticMutation::SetInset2DView { .. }
+            | SemanticMutation::SetClickIndicate { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
@@ -1084,7 +1086,10 @@ fn lower_semantic_publication(
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };
-        let (transform, style, content, z_index, numeric) = domains[&node];
+        // Object-owned interaction/metadata declarations have no render-value patch.
+        let Some(&(transform, style, content, z_index, numeric)) = domains.get(&node) else {
+            continue;
+        };
         if numeric {
             numeric_text.push(CompiledNumericTextDriverRevisionEntry {
                 object,

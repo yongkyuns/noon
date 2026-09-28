@@ -694,6 +694,25 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn bind_click_indicate(
+        &mut self,
+        target: &noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_bind_click_indicate(target, indication, options),
+            None => self
+                .scene
+                .on_click_indicate(target, indication, options)
+                .map_err(AuthoringFailure::from),
+        }
+    }
+
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
     fn create_value_tracker(
@@ -6905,6 +6924,43 @@ mod wasm {
             self.inner
                 .prepare_family_subset_display(&family.semantic_family()?)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveBindClickIndicate)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_bind_click_indicate(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            run_time: f64,
+            rate_function: &str,
+            lag_ratio: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            let rate = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| js_error("unsupported click indication rate function"))?;
+            self.inner
+                .bind_click_indicate(
+                    target.semantic_mobject(),
+                    noon::IndicateOptions::new(scale_factor, color),
+                    noon_core::AnimationOptions::new()
+                        .run_time(run_time)
+                        .rate_func(rate)
+                        .lag_ratio(lag_ratio),
+                )
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetTranslation)]

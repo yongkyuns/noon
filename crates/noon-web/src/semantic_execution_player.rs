@@ -440,6 +440,27 @@ impl SemanticExecutionPlayer {
         self.session.publication_context().scene_revision()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_bind_click_indicate(
+        &mut self,
+        target: &noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .on_click_indicate(target, indication, options)
+        .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_translation(
         &mut self,
@@ -1983,6 +2004,9 @@ impl SemanticExecutionPlayer {
                 wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
             }
         }
+        if !callback_blocked && self.session.interactions_active() {
+            wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
+        }
         BrowserExecutionWakePlan::from_runtime(wake)
     }
 
@@ -2858,6 +2882,9 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         let phase = self.advance_to_callback_phase(requested)?;
         if phase.is_none() {
+            self.session
+                .advance_interactions(timestamp_ms / 1_000.0)
+                .map_err(|error| error.to_string())?;
             self.clock = clock;
         }
         Ok(phase)
@@ -3192,6 +3219,9 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
         self.session.evaluate(time).map_err(|e| e.to_string())?;
+        self.session
+            .advance_interactions(timestamp_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
         self.clock = clock;
         self.encoded_delta(false)
     }

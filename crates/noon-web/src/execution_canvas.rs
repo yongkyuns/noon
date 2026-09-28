@@ -83,6 +83,7 @@ mod wasm {
     /// only drive its current segment, consume a renderer publication, admit that
     /// exact publication after presentation, and forward typed platform input.
     trait DirectLiveProgram: BrowserPointerTarget {
+        fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue>;
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue>;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
         fn query_viewports(&mut self, bounds: &[Rect])
@@ -150,6 +151,13 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
+        fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue> {
+            self.program
+                .advance_interactions(wall_time_seconds)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue> {
             self.program
                 .set_pointer_fill_selection(max_movement)
@@ -322,6 +330,18 @@ mod wasm {
                     session.renderer_viewport_query(query)
                 }
                 DirectSourceAuthority::Program(program) => program.query_viewports(bounds),
+            }
+        }
+
+        fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .advance_interactions(wall_time_seconds)
+                    .map(|_| ())
+                    .map_err(js_error),
+                DirectSourceAuthority::Program(program) => {
+                    program.advance_interactions(wall_time_seconds)
+                }
             }
         }
 
@@ -839,10 +859,14 @@ mod wasm {
                 .direct_wake_clock
                 .directive(plan, wall_time_ms, scene_time)
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
-            let (cadence, delay_ms) = match directive.wake() {
-                BrowserHostWake::AnimationFrame => ("animation-frame", None),
-                BrowserHostWake::TimerAfterMilliseconds(delay_ms) => ("timer", Some(delay_ms)),
-                BrowserHostWake::Idle => ("idle", None),
+            let (cadence, delay_ms) = if self.source.session().interactions_active() {
+                ("animation-frame", None)
+            } else {
+                match directive.wake() {
+                    BrowserHostWake::AnimationFrame => ("animation-frame", None),
+                    BrowserHostWake::TimerAfterMilliseconds(delay_ms) => ("timer", Some(delay_ms)),
+                    BrowserHostWake::Idle => ("idle", None),
+                }
             };
             serde_json::to_string(&DirectWakeDirectiveJson {
                 present_now: self.drawable
@@ -891,11 +915,13 @@ mod wasm {
             };
 
             let Some(target_time) = target_time else {
-                return Ok(false);
+                self.source.advance_interactions(wall_time_ms / 1_000.0)?;
+                return Ok(self.source.session().wake_state().frame_pending());
             };
             let (pending, camera, outcome) = {
                 let direct = &mut self.source;
                 let outcome = direct.drive_to(target_time)?;
+                direct.advance_interactions(wall_time_ms / 1_000.0)?;
                 let camera = direct.session().camera().map_err(js_error)?;
                 (
                     direct.session().wake_state().frame_pending(),

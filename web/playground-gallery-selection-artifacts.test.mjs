@@ -12,12 +12,15 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure, writeFailure = false, deferWrites = false } = {}) {
-  const names = ["baseline", "selected", "cleared"];
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false } = {}) {
+  const names = [
+    "baseline", "selected", "cleared",
+    "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
+  ];
   const captures = names.map((name) => Buffer.from(name));
   const decoded = new Map(captures.map((bytes, index) => {
     const data = new Uint8Array(32 * 32 * 4);
-    const changed = [0, selectedPixels, clearPixels][index];
+    const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0][index];
     for (let i = 0; i < changed; i += 1) data[i * 4] = 1;
     return [bytes, { width: 32, height: 32, data }];
   }));
@@ -25,6 +28,11 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
   const writes = new Map();
   let frame = 0;
   let capture = 0;
+  let showcase = false;
+  const gallery = {
+    selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
+    executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),
+  };
   const canvas = {
     evaluate: async (fn) => fn({ style: { setProperty() {} } }),
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
@@ -36,11 +44,28 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
     },
   };
   const page = {
-    setDefaultTimeout() {}, on() {}, goto: async () => {},
+    setDefaultTimeout() {}, on() {},
+    goto: async (url) => {
+      showcase = String(url).includes("catalog=showcase");
+      gallery.selectedExampleId = showcase ? "showcase-pointer-selection" : "noon-pointer-selection";
+    },
     evaluate: async (fn) => fn(),
     waitForFunction: async (fn, argument) => assert.ok(await fn(argument)),
-    locator: () => canvas,
-    mouse: { click: async () => { events.push("click"); frame += 1; } },
+    waitForTimeout: async () => {},
+    locator: (selector) => {
+      if (selector === "#scene") return canvas;
+      if (selector === "#patch-status") return { getAttribute: async () => "applied" };
+      if (selector === ".playback-scrubber") return {
+        getAttribute: async () => "2.6",
+        evaluate: async (fn, value) => fn({ value: "", dispatchEvent() {} }, value),
+      };
+      return canvas;
+    },
+    getByRole: () => ({ count: async () => 1, click: async () => {} }),
+    mouse: { click: async (x) => {
+      events.push("click");
+      if (!showcase || x > 100) frame += 1;
+    } },
   };
   let error;
   try {
@@ -57,7 +82,8 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
         writes.set(name, bytes);
         events.push(`stored:${name}`);
       },
-      fetch: async () => ({ ok: true, text: async () => "worker" }),
+      fetch: async (url) => ({ ok: true, text: async () =>
+        String(url).includes("showcase_pointer_selection.py") ? "self.on_click(circle, Indicate(circle))" : "worker" }),
       PNG: { sync: { read: (bytes) => decoded.get(bytes) } },
       playwright: { chromium: { launch: async () => ({
         newContext: async () => ({ newPage: async () => page }),
@@ -66,13 +92,17 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
       createPyodideResourceCache: () => ({ install: async () => {} }),
       layoutReplayViewport: async () => {},
       replayViewport: async (_canvas, size) => ({ bitmap: size, bounds: { x: 0, y: 0, ...size }, deviceScaleFactor: 1 }),
-      window: { __noonExampleGallery: {
-        selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
-        executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),
+      window: { __noonExampleGallery: gallery },
+      document: { querySelector: (selector) => {
+        if (selector === ".playback-controls") return {
+          dataset: { busy: "false", elapsedSeconds: "2.6" },
+          querySelector: () => ({ getAttribute: () => "Play animation" }),
+        };
+        return { dataset: {
+          state: "applied", interaction: showcase ? "none" : "pointer-fill-selection", rendererBackend: "test-only",
+        } };
       } },
-      document: { querySelector: () => ({ dataset: {
-        state: "applied", interaction: "pointer-fill-selection", rendererBackend: "test-only",
-      } }) },
+      Event: class Event { constructor() {} },
       console: { log: () => events.push("passed"), error: () => events.push("diagnostic:error") },
     });
   } catch (caught) { error = caught; }
@@ -81,7 +111,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, captureFailure,
 
 function assertRetained(result, names) {
   for (const name of names) {
-    const index = ["baseline", "selected", "cleared"].indexOf(name);
+    const index = ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"].indexOf(name);
     assert.equal(result.writes.get(`${name}.png`), result.captures[index]);
   }
   assert.equal(result.events.filter((event) => event === "browser:close").length, 1);
@@ -92,12 +122,14 @@ function assertRetained(result, names) {
   return JSON.parse(result.writes.get("result.json"));
 }
 
-test("successful exact clear retains original captures and measurements", async () => {
+test("successful legacy clear and source-declared indication retain their captures and measurements", async () => {
   const result = await runSmoke();
   assert.equal(result.error, undefined);
-  const report = assertRetained(result, ["baseline", "selected", "cleared"]);
+  const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"]);
   assert.equal(report.selectedChanged, 501);
   assert.equal(report.clearDifference, 0);
+  assert.equal(report.indicatedChanged, 501);
+  assert.equal(report.authoredInteraction, "click-indicate");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
 });

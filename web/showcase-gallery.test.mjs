@@ -78,9 +78,13 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
     assert.ok(source.includes("from noon import *"));
     assert.equal(/^\s*assert\b/m.test(source), false, `${entry.id}: no embedded regression assertions`);
   }
-  const pointer = gallery.examples.find((entry) => entry.interaction);
-  assert.equal(pointer.interaction.type, "pointer-fill-selection");
-  assert.match(pointer.summary, /copying the Python scene alone/i);
+  const pointer = gallery.examples.find((entry) => entry.id === "showcase-pointer-selection");
+  const pointerSource = manifest.entries.find((entry) => entry.id === "showcase-pointer-selection");
+  assert.ok(pointer.features.includes("on_click"));
+  assert.ok(pointer.features.includes("Indicate"));
+  assert.equal(pointer.interaction, null);
+  assert.equal(pointerSource.interaction, undefined);
+  assert.equal(pointerSource.host_setup, undefined);
   assert.equal(parityLabel("noon-showcase"), "Noon showcase");
   assert.equal(parityLabel("parity-qualified"), "Parity qualified");
 });
@@ -94,12 +98,16 @@ test("invalid or misleading publication metadata is rejected", () => {
     (value) => { value.entries[0].thumbnail = "https://example.test/invented.svg"; },
     (value) => { value.entries[0].thumbnail_time = 1e9; },
     (value) => { value.entries[0].beats = []; },
-    (value) => { value.entries.find((entry) => entry.interaction).host_setup = ""; },
   ]) {
     const value = copy();
     mutate(value);
     assert.throws(() => normalizeShowcaseManifest(value));
   }
+
+  const legacyInteraction = copy();
+  legacyInteraction.entries[0].interaction = { type: "pointer-fill-selection" };
+  legacyInteraction.entries[0].host_setup = "";
+  assert.throws(() => normalizeShowcaseManifest(legacyInteraction), /interactive scenes must disclose/);
 });
 
 test("playback capability is finite and nonreplayable capabilities require an explanation", () => {

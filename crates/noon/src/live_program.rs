@@ -195,6 +195,23 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.scene.owned_execution_mut().query_viewport(bounds)
     }
 
+    /// Feed a platform monotonic tick to input-driven animations, including after source completion.
+    pub fn advance_interactions(
+        &mut self,
+        wall_time_seconds: f64,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        if !self.session().interactions_active() {
+            return Ok(());
+        }
+        self.ensure_host_input_available("advance interaction")?;
+        self.scene
+            .owned_execution_mut()
+            .advance_interactions(wall_time_seconds)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
     /// Configure transient selection without exposing a mutable execution session.
     pub fn set_pointer_fill_selection(
         &mut self,

@@ -10,7 +10,14 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 pub async fn create_direct_pointer_selection_renderer(
     canvas: OffscreenCanvas,
     live_program: bool,
+    animated: bool,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let scene = if animated {
+        noon::example_scenes::pointer_selection::click_indicate_scene()
+    } else {
+        noon::example_scenes::pointer_selection::scene()
+    }
+    .map_err(js_error)?;
     if live_program {
         struct Finished;
         impl noon::LiveContinuation for Finished {
@@ -22,13 +29,10 @@ pub async fn create_direct_pointer_selection_renderer(
                 Ok(noon::ContinuationStep::Finished)
             }
         }
-        let program = noon::example_scenes::pointer_selection::scene()
-            .map_err(js_error)?
-            .into_live_program(Finished)
-            .map_err(js_error)?;
+        let program = scene.into_live_program(Finished).map_err(js_error)?;
         WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
     } else {
-        let session = noon::example_scenes::pointer_selection::session().map_err(js_error)?;
+        let session = scene.execution_session().map_err(js_error)?;
         WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
     }
 }

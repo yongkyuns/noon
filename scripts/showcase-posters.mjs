@@ -25,7 +25,14 @@ export function posterEvidence(manifest, report) {
       const sample = result.samples.find(sample => sample.requestedTime === time);
       assert.ok(sample, `${entry.id}: representative sample is missing`);
       const { requestedTime, publishedTime, authoredDuration, sourceCompleted, sourceState, completionProbe } = sample;
-      if (entry.interaction) {
+      const sourceDeclaredClick = entry.features.includes("on_click");
+      const interactive = entry.interaction || sourceDeclaredClick;
+      if (sourceDeclaredClick) {
+        assert.equal(result.interaction?.automaticRestore, true);
+        assert.equal(result.interaction?.backgroundNoOp, true);
+        assert.equal(result.interaction?.restartRestoresBase, true);
+        assert.equal(result.posterImage.pngSha256, result.interaction.selectedImage.pngSha256);
+      } else if (entry.interaction) {
         assert.equal(result.interaction?.exactClear, true);
         assert.equal(result.interaction?.restartRestoresBase, true);
         assert.equal(result.posterImage.pngSha256, result.interaction.selectedImage.pngSha256);
@@ -34,7 +41,7 @@ export function posterEvidence(manifest, report) {
         id: entry.id, sourceSha256: result.sourceSha256, thumbnailTime: entry.thumbnail_time,
         image: result.posterImage,
         sample: { requestedTime, publishedTime, authoredDuration, sourceCompleted, sourceState, completionProbe },
-        ...(entry.interaction ? { interaction: result.interaction } : {}),
+        ...(interactive ? { interaction: result.interaction } : {}),
       };
     }),
   };
@@ -60,7 +67,13 @@ export function assertRetainedPoster(entry, record, source, png) {
   if (record.sample.completionProbe) {
     assertCompletedCapture(entry, record.sample, captureSchedule(entry).posterTime);
   } else assertCaptureTime(entry, record.sample, entry.thumbnail_time);
-  if (entry.interaction) {
+  if (entry.features.includes("on_click")) {
+    assert.equal(record.interaction?.automaticRestore, true);
+    assert.equal(record.interaction?.backgroundNoOp, true);
+    assert.equal(record.interaction?.restartRestoresBase, true);
+    assert.equal(record.image.pngSha256, record.interaction.selectedImage.pngSha256);
+    assert.ok(record.interaction.recipe.includes("click"), `${entry.id}: actual selection recipe is missing`);
+  } else if (entry.interaction) {
     assert.equal(record.interaction?.exactClear, true);
     assert.equal(record.interaction?.restartRestoresBase, true);
     assert.equal(record.image.pngSha256, record.interaction.selectedImage.pngSha256);

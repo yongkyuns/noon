@@ -12,6 +12,7 @@ pub use input::{
 };
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
+mod interactions;
 mod selection;
 pub use selection::{
     pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
@@ -742,6 +743,7 @@ pub struct ExecutionSession {
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
+    interaction_bindings: interactions::InteractionBindings,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
     next_callback_sequence: Option<u64>,
@@ -783,6 +785,7 @@ impl Clone for ExecutionSession {
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
+            interaction_bindings: self.interaction_bindings.clone(),
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),
@@ -849,6 +852,7 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -868,6 +872,7 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -902,6 +907,7 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -950,6 +956,7 @@ impl ExecutionSession {
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
+            interaction_bindings: Default::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
             next_callback_sequence: Some(0),

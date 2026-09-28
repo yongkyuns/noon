@@ -115,7 +115,7 @@ try {
       assert.ok(new Set(result.samples.map((sample) => sample.pixelSha256)).size >= 3, `${entry.id}: temporal samples did not change`);
       await page.evaluate(() => window.noonHostRaster.close());
       assert.deepEqual(result.pageErrors, []);
-      if (entry.interaction) {
+      if (entry.interaction || entry.features.includes("on_click")) {
         poster = await captureSelection(context, entry, result);
       }
       assert.ok(poster, `${entry.id}: poster not captured`);
@@ -175,6 +175,8 @@ async function captureSelection(context, entry, result) {
   const page = await context.newPage();
   page.setDefaultTimeout(120000);
   const errors = [];
+  const sourceDeclaredClick = entry.features.includes("on_click");
+  const legacyOverlay = Boolean(entry.interaction) && !sourceDeclaredClick;
   let stage = "open playground";
   page.on("pageerror", (error) => errors.push(String(error)));
   try {
@@ -212,18 +214,37 @@ async function captureSelection(context, entry, result) {
       await page.waitForTimeout(50);
     }
     assert.ok(selected, "actual pointer click did not change the displayed image");
+    const basePixels = PNG.sync.read(before).data;
+    const indicationStrength = bytes => PNG.sync.read(bytes).data.reduce(
+      (sum, value, index) => sum + Math.abs(value - basePixels[index]), 0,
+    );
+    let selectedStrength = sourceDeclaredClick ? indicationStrength(selected) : 0;
     await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
-    stage = "clear the selection";
-    await click(0.05, 0.5);
-    let cleared, lastClear;
+    stage = sourceDeclaredClick ? "wait for automatic indication restoration" : "clear the selection";
+    if (!sourceDeclaredClick) await click(0.05, 0.5);
+    let restored, lastRestore;
     for (let attempt = 0; attempt < 40; attempt++) {
       const bytes = await canvas.screenshot();
-      lastClear = bytes;
-      if (samePixels(before, bytes)) { cleared = bytes; break; }
+      lastRestore = bytes;
+      if (samePixels(before, bytes)) { restored = bytes; break; }
+      // Retain the strongest actually observed indication, not its barely changed
+      // first frame. Sampling never controls or reconstructs the animation.
+      if (sourceDeclaredClick) {
+        const strength = indicationStrength(bytes);
+        if (strength > selectedStrength) { selected = bytes; selectedStrength = strength; }
+      }
       await page.waitForTimeout(50);
     }
-    if (lastClear) await writeFile(path.join(output, `${entry.id}-${cleared ? "cleared" : "clear-last"}.png`), lastClear);
-    assert.ok(cleared, "background click did not restore the base pixels exactly");
+    await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
+    const restorationName = sourceDeclaredClick ? "restored" : "cleared";
+    if (lastRestore) await writeFile(path.join(output, `${entry.id}-${restored ? restorationName : `${restorationName}-last`}.png`), lastRestore);
+    assert.ok(restored, sourceDeclaredClick ? "click indication did not restore the base pixels exactly" : "background click did not restore the base pixels exactly");
+    if (sourceDeclaredClick) {
+      stage = "ignore a background click";
+      await click(0.05, 0.5);
+      await page.waitForTimeout(100);
+      assert.ok(samePixels(before, await canvas.screenshot()), "background click changed the restored base pixels");
+    }
     stage = "restart and restore the same resolved frame";
     await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
     await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
@@ -234,11 +255,18 @@ async function captureSelection(context, entry, result) {
     assert.ok(samePixels(before, restarted), "restart/seek did not restore the base pixels exactly");
     assert.deepEqual(errors, []);
     result.interaction = {
-      recipe: "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
+      recipe: sourceDeclaredClick
+        ? "completed introduction -> click normalized (0.36, 0.5) -> automatic restoration -> background no-op (0.05, 0.5)"
+        : "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
       requestedTime, publishedTime: metrics.metrics.time,
-      rendererBackend: actualBackend, exactClear: true, restartRestoresBase: true, baseMetrics: metrics,
+      rendererBackend: actualBackend,
+      ...(sourceDeclaredClick ? { automaticRestore: true, backgroundNoOp: true } : {}),
+      ...(legacyOverlay ? { exactClear: true } : {}),
+      restartRestoresBase: true, baseMetrics: metrics,
       baseImage, selectedImage: validateImage(selected, `${entry.id}: selected`),
-      clearedImage: validateImage(cleared, `${entry.id}: cleared`),
+      ...(sourceDeclaredClick
+        ? { restoredImage: validateImage(restored, `${entry.id}: restored`) }
+        : { clearedImage: validateImage(restored, `${entry.id}: cleared`) }),
     };
     return selected;
   } catch (error) {
