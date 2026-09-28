@@ -11,6 +11,14 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-zero-size-smoke.mjs"
       - "web/**"
+  pull_request:
+    paths:
+      - ".github/workflows/playground-resize-recovery.yml"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-web/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/playground-zero-size-smoke.mjs"
+      - "web/**"
   workflow_dispatch:
 
 permissions:
