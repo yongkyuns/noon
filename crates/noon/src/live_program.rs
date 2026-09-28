@@ -8,6 +8,8 @@
 
 use std::error::Error;
 
+mod inspection;
+
 use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
     NativeStateSource, PublicationContext, Rect,
@@ -80,6 +82,7 @@ pub enum LiveProgramError<E> {
     CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
+    Inspection(crate::InspectionNavigationError),
     Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
     Continuation(E),
@@ -109,6 +112,7 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::Inspection(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Continuation(error) => error.fmt(formatter),
@@ -121,6 +125,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
         match self {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::Inspection(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Continuation(error) => Some(error),

@@ -265,6 +265,25 @@ try {
   await page.waitForTimeout(150);
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
+  // Exercise the actual gallery opt-in, not a manually constructed client.
+  const beforeZoom = await presentedFrames(page);
+  await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
+  await page.mouse.wheel(0, -500 * Math.log(2));
+  await waitForPresentation(page, beforeZoom);
+  const zoomed = await authoredCanvas.screenshot();
+  captures.zoomed = zoomed;
+  report.zoomChanged = changedPixels(authoredBaseline, zoomed);
+  assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
+  await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
+  captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
+  captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
+  await assertSettled(page, "zoomed authored click");
+  const beforeZoomOut = await presentedFrames(page);
+  await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
+  await page.mouse.wheel(0, 500 * Math.log(2));
+  await waitForPresentation(page, beforeZoomOut);
+  captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
+  await assertSettled(page, "inverse gallery zoom");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
   assert.deepEqual(errors, []);
 } catch (error) {

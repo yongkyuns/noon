@@ -248,6 +248,16 @@ mod wasm {
         fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
             self.program.pointer_token()
         }
+        fn scroll_inspection(
+            &mut self,
+            frame: &noon::integration::PointerFrameSnapshot,
+            view: noon::integration::PointerFrameView,
+            surface: Vec2,
+            delta_pixels: f64,
+        ) -> Result<bool, String> {
+            self.program
+                .scroll_inspection(frame, view, surface, delta_pixels)
+        }
         fn submit_pointer(
             &mut self,
             token: &NativePointerInputToken,
@@ -428,6 +438,31 @@ mod wasm {
                 DirectSourceAuthority::Program(program) => {
                     presentation.submit(program.as_mut(), binding, sequence, input)
                 }
+            }
+            .map_err(js_error)
+        }
+
+        fn scroll_inspection(
+            &mut self,
+            presentation: &mut DirectPointerPresentation,
+            revision: u64,
+            viewport: Vec2,
+            surface: Vec2,
+            delta_pixels: f64,
+        ) -> Result<Option<bool>, JsValue> {
+            let binding = &mut self.browser_pointer_binding;
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    presentation.scroll(session, binding, revision, viewport, surface, delta_pixels)
+                }
+                DirectSourceAuthority::Program(program) => presentation.scroll(
+                    program.as_mut(),
+                    binding,
+                    revision,
+                    viewport,
+                    surface,
+                    delta_pixels,
+                ),
             }
             .map_err(js_error)
         }
@@ -841,7 +876,7 @@ mod wasm {
                     ));
                 }
                 session.seek(time).map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
+                let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
@@ -922,7 +957,7 @@ mod wasm {
                 let direct = &mut self.source;
                 let outcome = direct.drive_to(target_time)?;
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
-                let camera = direct.session().camera().map_err(js_error)?;
+                let camera = direct.session().inspection_camera().map_err(js_error)?;
                 (
                     direct.session().wake_state().frame_pending(),
                     camera,
@@ -1012,6 +1047,41 @@ mod wasm {
             Ok(admitted.then_some(pending))
         }
 
+        /// Explicit viewer scroll opt-in. No semantic wheel event, animation
+        /// track, authored-time advancement or serialized engine boundary.
+        #[wasm_bindgen(js_name = nativeInspectionScroll)]
+        pub fn native_inspection_scroll(
+            &mut self,
+            revision: f64,
+            width: f32,
+            height: f32,
+            x: f32,
+            y: f32,
+            delta_pixels: f64,
+        ) -> Result<Option<bool>, JsValue> {
+            let revision =
+                browser_pointer_input::dom_integer(revision, 0.0, 9_007_199_254_740_991.0)
+                    .map_err(js_error)? as u64;
+            if !self.drawable
+                || self.webgl_context_lost.get()
+                || self.webgl_recovery_pending.get()
+                || self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
+                self.pointer_presentation.invalidate();
+            }
+            let changed = self.source.scroll_inspection(
+                &mut self.pointer_presentation,
+                revision,
+                Vec2::new(width, height),
+                Vec2::new(x, y),
+                delta_pixels,
+            )?;
+            self.finish_direct_native_input()?;
+            Ok(changed)
+        }
+
         /// Register the DOM content view before presentation. JavaScript supplies
         /// only platform coordinates; the Rust host captures its own frame.
         #[wasm_bindgen(js_name = setPointerView)]
@@ -1061,6 +1131,10 @@ mod wasm {
                     frame.publication().frame_epoch().get().to_string()),
                 "refreshPending": self.pointer_presentation.needs_refresh(self.source.session()),
                 "view": self.pointer_presentation.viewport().map(|view| [view.x, view.y]),
+                "inspectionRevision": self.source.session().inspection_view_revision().to_string(),
+                "presentedInspectionRevision": self.pointer_presentation.presented.as_ref()
+                    .map(|frame| frame.inspection_revision().to_string()),
+                "camera": [self.camera_center.x, self.camera_center.y, self.camera_height],
             }).to_string()
         }
 
@@ -1174,7 +1248,7 @@ mod wasm {
             callbacks
                 .advance_to(&mut session, initial_time)
                 .map_err(js_error)?;
-            let camera = session.camera().map_err(js_error)?;
+            let camera = session.inspection_camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
                 DirectExecutionSource::from_session(session, callbacks),
@@ -1222,7 +1296,7 @@ mod wasm {
         {
             let source =
                 DirectExecutionSource::from_live_program_with_callbacks(program, callbacks)?;
-            let camera = source.session().camera().map_err(js_error)?;
+            let camera = source.session().inspection_camera().map_err(js_error)?;
             Self::create_with_source(canvas, source, camera.center, camera.height).await
         }
 
@@ -1239,7 +1313,7 @@ mod wasm {
                     ));
                 }
                 session.evaluate(time).map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
+                let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
@@ -1261,7 +1335,7 @@ mod wasm {
                 session
                     .set_reactive_input(signal, value)
                     .map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
+                let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
@@ -1305,7 +1379,7 @@ mod wasm {
         fn finish_direct_native_input(&mut self) -> Result<bool, JsValue> {
             let session = self.source.session();
             let pending = session.wake_state().frame_pending();
-            let camera = session.camera().map_err(js_error)?;
+            let camera = session.inspection_camera().map_err(js_error)?;
             self.sync_camera(camera)?;
             Ok(pending
                 || self.selection_pending()
@@ -1554,6 +1628,11 @@ mod wasm {
                 draw
             };
             self.queue.present(surface_texture);
+            if let Some(frame) = pointer_frame.as_ref() {
+                frame
+                    .validate_presentation(self.source.session(), frame.view())
+                    .map_err(js_error)?;
+            }
             self.pointer_presentation.did_present(pointer_frame);
             self.surface_frame_pending = false;
             self.last_selection_presentation = presentation;

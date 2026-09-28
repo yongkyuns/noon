@@ -454,3 +454,5 @@ fn disabling_last_pointer_subscriber_clears_once_then_settles() {
     p.session.advance_to(0.5).unwrap();
     assert!(p.drain_delta_json().unwrap().is_none());
 }
+
+mod inspection;

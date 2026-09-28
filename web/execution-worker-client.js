@@ -639,6 +639,15 @@ export class ExecutionWorkerClient {
     });
   }
 
+  // View navigation is occurrence-bound input too. The receipt and normalized
+  // cursor are copied by the existing bounded ingress before any readiness yield.
+  async scrollInspectionView(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("inspection_scroll", {
+      input, presentation: this.pointerPresentation,
+    });
+  }
+
   // Forward one normalized semantic native-event source to the canonical session.
   async emitNativeEvent(source) {
     this.#requireStarted();

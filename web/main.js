@@ -373,6 +373,7 @@ function currentExample() {
 async function applyExampleInteraction(example, target = player) {
   if (target === null) return;
   const interaction = example?.interaction ?? null;
+  target.setInspectionZoom(example?.inspectionZoom === true);
   // Semantic replacement does not replay pointer configuration. Ordinary
   // examples therefore remain at the runtime's default-disabled interaction
   // state; only the explicitly interactive gallery example opts in.

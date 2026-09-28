@@ -16,11 +16,13 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
+    "zoomed", "zoomIndicated", "zoomRestored", "zoomReset",
   ];
   const captures = names.map((name) => Buffer.from(name));
   const decoded = new Map(captures.map((bytes, index) => {
     const data = new Uint8Array(32 * 32 * 4);
-    const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0][index];
+    const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0,
+      1000, 400, 1000, 0][index];
     for (let i = 0; i < changed; i += 1) data[i * 4] = 1;
     return [bytes, { width: 32, height: 32, data }];
   }));
@@ -65,7 +67,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return canvas;
     },
     getByRole: () => ({ count: async () => 1, click: async () => {} }),
-    mouse: { click: async (x, y) => {
+    mouse: { move: async () => {}, wheel: async () => { frame += 1; }, click: async (x, y) => {
       events.push(`mouse:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },

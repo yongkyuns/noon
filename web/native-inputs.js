@@ -1,39 +1,10 @@
 import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 
 // Lifetimes belong to the host, not a listener attachment. Retired DOM callbacks
 // cannot reuse a source ID when the same direct renderer is attached again.
 const pointerLifetimes = new WeakMap();
 const MAX_DIRECT_POINTER_SAMPLES = 64;
-
-function wheelLinePixels(canvas) {
-  const view = canvas.ownerDocument?.defaultView;
-  if (typeof view?.getComputedStyle !== "function") {
-    throw new TypeError("canvas must provide computed style for line-mode wheel input");
-  }
-  const style = view.getComputedStyle(canvas);
-  const lineHeight = Number.parseFloat(style.lineHeight);
-  if (Number.isFinite(lineHeight) && lineHeight > 0) return lineHeight;
-  const fontSize = Number.parseFloat(style.fontSize);
-  if (Number.isFinite(fontSize) && fontSize > 0) return fontSize;
-  throw new TypeError("canvas must have a positive CSS line-height or font-size");
-}
-
-function wheelDeltaCssPixels(canvas, event, resolveLinePixels) {
-  switch (event.deltaMode) {
-    case 0:
-      return { x: event.deltaX, y: event.deltaY };
-    case 1: {
-      const linePixels = resolveLinePixels();
-      return { x: event.deltaX * linePixels, y: event.deltaY * linePixels };
-    }
-    case 2: {
-      const rect = canvas.getBoundingClientRect();
-      return { x: event.deltaX * rect.width, y: event.deltaY * rect.height };
-    }
-    default:
-      throw new RangeError(`unsupported WheelEvent.deltaMode ${event.deltaMode}`);
-  }
-}
 
 /**
  * Attach browser pointer/keyboard/wheel input to one canonical execution host.
@@ -51,12 +22,18 @@ export function attachNativeInputs(
     onError = defaultInputError,
     onInput = () => {},
     pointer = true,
+    inspectionZoom = false,
   } = {},
 ) {
   validateHost(host, pointer ? ["nativePointerInput", "nativeKey", "nativeWheel"] : ["nativeKey", "nativeWheel"]);
   if (!canvas) throw new TypeError("host and canvas are required");
   if (typeof onError !== "function") throw new TypeError("onError must be a function");
   if (typeof onInput !== "function") throw new TypeError("onInput must be a function");
+  if (typeof inspectionZoom !== "boolean") throw new TypeError("inspectionZoom must be boolean");
+  if (inspectionZoom && (!pointer || typeof host.setPointerView !== "function" ||
+      typeof host.nativeInspectionScroll !== "function")) {
+    throw new TypeError("inspection zoom requires the direct presented-view host and pointer collector");
+  }
   let attached = true;
   let failing = false;
   let collector = null;
@@ -123,6 +100,9 @@ export function attachNativeInputs(
     onError: fail,
     // Only the same-context canvas can synchronously associate this platform
     // view with its Rust presentation. Worker receipts remain a transport concern.
+    onWheel: inspectionZoom ? sample => invokePointer("nativeInspectionScroll",
+      sample.view_revision, sample.viewport_width, sample.viewport_height,
+      sample.surface_x, sample.surface_y, sample.delta_pixels) : undefined,
     onView: directPointer
       ? (revision, width, height) => invokePointer("setPointerView", revision, width, height)
       : undefined,
@@ -151,7 +131,9 @@ export function attachNativeInputs(
     guarded("nativeWheel", delta.x, delta.y);
   };
 
-  canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault, signal: controller.signal });
+  // Inspection consumes this wheel exclusively; do not also publish a separate
+  // semantic wheel occurrence or split one gesture into two transactions.
+  if (!inspectionZoom) canvas.addEventListener("wheel", wheel, { passive: !preventWheelDefault, signal: controller.signal });
   keyboardTarget.addEventListener("keydown", keyDown, { signal: controller.signal });
   keyboardTarget.addEventListener("keyup", keyUp, { signal: controller.signal });
 

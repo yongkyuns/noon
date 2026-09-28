@@ -83,6 +83,8 @@ live.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new
 
 The action uses restoring `there_and_back` timing. A click on an already active target is ignored. Clicks do not interrupt an active authored segment or signal/host driver. Input remains available after the introduction, including when playback is paused at its endpoint or its source program has completed; the runtime drives and settles the short effective animation without advancing authored time.
 
+The selection gallery and native `pointer_selection` example also enable cursor-anchored inspection zoom. Scroll over the canvas to zoom, including during an indication. Rust composes a bounded session adjustment with the effective camera for both rendering and picking; authored camera values and playback remain unchanged. Native hosts opt in with `NativeViewportConfig { inspection_zoom: true, ..Default::default() }`; browser hosts use `inspectionZoom: true`. Other gallery lessons leave page scrolling available. Inspection persists across same-session seeks and resets with a replacement session; stale wheel receipts and excess in-flight worker samples are rejected rather than queued.
+
 ### Live authoring and integration boundaries
 
 The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.
