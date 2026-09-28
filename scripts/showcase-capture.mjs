@@ -214,6 +214,11 @@ async function captureSelection(context, entry, result) {
       await page.waitForTimeout(50);
     }
     assert.ok(selected, "actual pointer click did not change the displayed image");
+    const basePixels = PNG.sync.read(before).data;
+    const indicationStrength = bytes => PNG.sync.read(bytes).data.reduce(
+      (sum, value, index) => sum + Math.abs(value - basePixels[index]), 0,
+    );
+    let selectedStrength = sourceDeclaredClick ? indicationStrength(selected) : 0;
     await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
     stage = sourceDeclaredClick ? "wait for automatic indication restoration" : "clear the selection";
     if (!sourceDeclaredClick) await click(0.05, 0.5);
@@ -222,8 +227,15 @@ async function captureSelection(context, entry, result) {
       const bytes = await canvas.screenshot();
       lastRestore = bytes;
       if (samePixels(before, bytes)) { restored = bytes; break; }
+      // Retain the strongest actually observed indication, not its barely changed
+      // first frame. Sampling never controls or reconstructs the animation.
+      if (sourceDeclaredClick) {
+        const strength = indicationStrength(bytes);
+        if (strength > selectedStrength) { selected = bytes; selectedStrength = strength; }
+      }
       await page.waitForTimeout(50);
     }
+    await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
     const restorationName = sourceDeclaredClick ? "restored" : "cleared";
     if (lastRestore) await writeFile(path.join(output, `${entry.id}-${restored ? restorationName : `${restorationName}-last`}.png`), lastRestore);
     assert.ok(restored, sourceDeclaredClick ? "click indication did not restore the base pixels exactly" : "background click did not restore the base pixels exactly");
