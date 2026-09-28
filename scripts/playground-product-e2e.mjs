@@ -357,7 +357,15 @@ try {
   const endpoint = await synchronizeFinalFrame(page, PRODUCT_FIRST_PASS_SECONDS);
   const screenshotName = "frame-final.png";
   const screenshotPath = path.join(artifactDir, screenshotName);
-  const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
+  const canvas = page.locator("#scene");
+  await canvas.scrollIntoViewIfNeeded();
+  const bounds = await canvas.boundingBox();
+  assert.ok(bounds?.width > 0 && bounds?.height > 0, "product canvas must have positive bounds");
+  // Element screenshots round both edges outwards, so moving identical content
+  // to a fractional page offset can add a row. Compare the same pixel-sized
+  // region in both runs; genuine canvas size changes still fail comparison.
+  const captureBounds = Object.fromEntries(Object.entries(bounds).map(([key, value]) => [key, Math.round(value)]));
+  const screenshot = await page.screenshot({ path: screenshotPath, clip: captureBounds });
   const visual = changedPixelStats(screenshot);
   assert.ok(visual.changedPixels > 100, `product frame is effectively blank (${visual.changedPixels} changed pixels)`);
 
@@ -384,6 +392,7 @@ try {
       presentation: endpoint,
     },
     screenshot: screenshotName,
+    captureBounds,
     runtime: {
       backend: cold.state.backend,
       executionMode: cold.state.executionMode,
