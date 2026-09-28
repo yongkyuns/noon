@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "90da4d4546b5be89e664435b7501c616974eb201",
+  "captureRevision": "ca4634861fd69434ec4c73e9aa6c6a685825c025",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "90da4d4546b5be89e664435b7501c616974eb201",
+    "sourceRevision": "ca4634861fd69434ec4c73e9aa6c6a685825c025",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -13,18 +13,18 @@
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "d7dd621792ea99c4cf89d7e998dd6355d67396cc7e43f400701b042474ef673c"
+        "sha256": "65c84d3b9da5d44c517a9022dd49d50e8849224377a989a56cd033b8bded91d6"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "f13f954c40b0ef00e02a64118d2b9198b5bd70bedcda9fb127a6ae8752c20423"
+        "sha256": "42f1c53cc2881eb26f1d4ff9ea97bc18c78ac3717c2e6e8228ef939228bd8d52"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "c50d8194795809b6cffa26bfa578b140f0eec2c16924efab4e28fa05f6304f37"
+    "buildId": "6725f1ba1425d36312b91f52ae65ae08b2b5eb7e4b03c642fdfd8a276ea1bb18"
   },
   "posters": [
     {
@@ -49,18 +49,18 @@
     },
     {
       "id": "showcase-dynamic-scene",
-      "sourceSha256": "7990b9fb0560214a678a99a724c83878a844d2c6028e283c09806afc8f3d8762",
-      "thumbnailTime": 15.3,
+      "sourceSha256": "a6a04c116de3686c41f4b9c718ece51e48bcca8d13f663508314d56090debeec",
+      "thumbnailTime": 12.4,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 83559,
-        "pngSha256": "13f277409414bb9419c06070db6a51f61b724c9379ce0f348fbe187de4088c3f",
-        "pixelSha256": "83bc0ea3aa816ecc9c32e6810f05484948983720362e48f7031bd2903df2bf6f"
+        "foregroundPixels": 83472,
+        "pngSha256": "0f6de46e76ca5ec1987254bf54e83f430fbb4bf29c09f6c5829f0a8281ba1091",
+        "pixelSha256": "370354e4e6382a80c175c5e73b4950313413c1aaf1284cd6c00243667a889287"
       },
       "sample": {
-        "requestedTime": 15.3,
-        "publishedTime": 15.3,
+        "requestedTime": 12.4,
+        "publishedTime": 12.4,
         "authoredDuration": null,
         "completionProbe": false
       }
@@ -294,7 +294,7 @@
         "baseMetrics": {
           "channel": "noon.render",
           "protocolVersion": 1,
-          "requestId": 8,
+          "requestId": 9,
           "type": "metrics",
           "metrics": {
             "ready": true,
@@ -302,11 +302,12 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 34,
+            "presentedFrames": 41,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
+            "sampledAtMs": 6994.199999988079,
             "transitionMode": null,
-            "lastFrameTimestamp": 7105.100000023842,
+            "lastFrameTimestamp": 6116.199999988079,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGPU",

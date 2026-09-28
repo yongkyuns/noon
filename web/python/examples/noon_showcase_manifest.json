@@ -19,11 +19,11 @@
       "lesson": "Explore dense animation through six coordinated sequences: assembly, morphs, waves, a spiral, an object exchange, and a resolved finale.",
       "primary_feature": "dense-dynamic-composition", "category": "Dynamic scenes", "performance": true,
       "path": "python/examples/showcase_dynamic_scene.py", "features": ["600 shapes", "24 animated labels", "Transform", "simultaneous motion", "lifecycle exchange", "live renderer counters"],
-      "duration": 23.4, "thumbnail_time": 15.3,
+      "duration": 19.0, "thumbnail_time": 12.4,
       "thumbnail": "thumbnails/showcase/showcase-dynamic-scene.png",
       "thumbnail_alt": "The actual 600-shape field recomposing into a colorful spiral beside 24 animated labels",
-      "still_intervals": [[3.2, 3.6], [21.8, 23.4]],
-      "beats": [{"time": 3.1, "label": "Assemble"}, {"time": 5.4, "label": "Morph"}, {"time": 9.6, "label": "Waves"}, {"time": 15.3, "label": "Spiral"}, {"time": 16.6, "label": "Exchange"}, {"time": 21.7, "label": "Finale"}]
+      "still_intervals": [[2.6, 2.9], [17.7, 19.0]],
+      "beats": [{"time": 2.5, "label": "Assemble"}, {"time": 4.4, "label": "Morph"}, {"time": 7.8, "label": "Waves"}, {"time": 12.4, "label": "Spiral"}, {"time": 13.5, "label": "Exchange"}, {"time": 17.6, "label": "Finale"}]
     },
     {
       "id": "showcase-entrances-exits",

@@ -44,7 +44,7 @@ export function replayOracle(entry, report, expected) {
     assert.equal(sample.filename, `${entry.id}-${String(sample.requestedTime).replace(".", "_")}.png`,
       `${entry.id}: first-pass image path differs from its sample`);
     assert.ok(Number.isSafeInteger(sample.objectCount) && sample.objectCount > 0);
-    if (entry.performance && sample.requestedTime >= 3.1) {
+    if (entry.performance && sample.requestedTime >= entry.beats[0].time) {
       assert.ok(sample.objectCount >= 600, "dense first-pass sample lost its geometry workload");
     }
     return { ...sample,
@@ -71,7 +71,7 @@ export function assertReplaySample(entry, sample, requestedTime, metrics) {
   const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
   assert.ok(Math.abs(metrics.time - requestedTime) <= roundoff, "replay published stale/future pixels");
   assert.ok(Number.isSafeInteger(metrics.objectCount) && metrics.objectCount > 0);
-  if (entry.performance && requestedTime >= 3.1) {
+  if (entry.performance && requestedTime >= entry.beats[0].time) {
     assert.ok(metrics.objectCount >= 600, "dense replay sample lost its geometry workload");
   }
 }
