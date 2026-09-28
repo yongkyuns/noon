@@ -100,7 +100,7 @@ jobs:
 
   browser:
     name: ${{ matrix.browser }} / ${{ matrix.profile }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: build
     strategy:
       fail-fast: false
@@ -108,10 +108,16 @@ jobs:
         include:
           - browser: chromium
             profile: desktop-dpr1
+            os: ubuntu-latest
+            display: "xvfb-run -a"
           - browser: firefox
             profile: desktop-dpr2
+            os: ubuntu-latest
+            display: "xvfb-run -a"
           - browser: webkit
             profile: mobile-dpr2
+            os: macos-latest
+            display: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -123,7 +129,9 @@ jobs:
       - name: Cache Playwright browser
         uses: actions/cache@v6
         with:
-          path: ~/.cache/ms-playwright
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
           key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
       - name: Install browser E2E dependencies
         run: |
@@ -137,22 +145,38 @@ jobs:
         run: node scripts/playground-example-browser-smoke.mjs
       - name: Test public playground workflow
         env:
+          NOON_PLAYGROUND_REQUIRE_RUNTIME: ${{ matrix.browser == 'webkit' && '1' || '0' }}
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: xvfb-run -a node scripts/playground-browser-matrix-smoke.mjs
+        run: ${{ matrix.display }} node scripts/playground-browser-matrix-smoke.mjs
       - name: Test Python unequal-family return capture
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-family-transform
-        run: xvfb-run -a node scripts/playground-python-family-transform-smoke.mjs
+        run: ${{ matrix.display }} node scripts/playground-python-family-transform-smoke.mjs
       - name: Test every selectable gallery example
+        timeout-minutes: 20
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/gallery
-        run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
+        run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Repeat WebKit optional-compiler cold starts
+        if: matrix.browser == 'webkit'
+        timeout-minutes: 10
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_GALLERY_CASES: noon-ordinary-matrix,noon-ordinary-table,noon-ordinary-variable
+        # Every cold start must pass. This is repeated admission, not a retry of
+        # failures; each invocation retains its own diagnostics and native stacks.
+        run: |
+          for iteration in 1 2 3; do
+            NOON_PLAYGROUND_MATRIX_ARTIFACTS="browser-smoke-artifacts/playground-matrix/webkit-${{ matrix.profile }}/cold-start-${iteration}" \
+              node scripts/playground-gallery-runtime-smoke.mjs
+          done
       - name: Test main-thread mobile render fallback
         if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
         env:

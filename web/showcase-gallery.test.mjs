@@ -17,11 +17,42 @@ test("catalog navigation preserves the served page path", () => {
       createElement: () => ({}),
       querySelector: selector => selector === ".topbar" ? { append(value) { link = value; } } : null,
     };
-    installShowcasePresentation(document, [], showcase);
+    installShowcasePresentation(document, showcase);
     for (const pathname of ["/", "/web/", "/web/index.html"]) {
       const destination = new URL(link.href, `https://noon.test${pathname}?example=old`);
       assert.equal(destination.pathname, pathname);
       assert.equal(destination.search, showcase ? "?catalog=reference" : "?catalog=showcase");
+    }
+  }
+});
+
+test("live renderer metrics, including labeled FPS, appear in both catalogs", () => {
+  for (const showcase of [false, true]) {
+    const outputs = new Map(["metric-fps", "metric-objects", "metric-draws", "metric-upload", "metric-time"]
+      .map((id) => [id, { id, textContent: "—", replaceWith(label) { this.replacedBy = label; } }]));
+    const metrics = {
+      hidden: true,
+      classList: { values: new Set(), add(name) { this.values.add(name); } },
+      setAttribute(name, value) { this[name] = value; },
+    };
+    const link = {};
+    const document = {
+      documentElement: { dataset: {} }, head: { append() {} },
+      getElementById: (id) => outputs.get(id) ?? null,
+      createElement: () => ({ append(output) { this.output = output; } }),
+      querySelector: (selector) => selector === ".topbar" ? { append(value) { link.value = value; } }
+        : selector === ".metrics" ? metrics : null,
+    };
+    installShowcasePresentation(document, showcase);
+    const fps = outputs.get("metric-fps").replacedBy;
+    assert.equal(fps.textContent, "FPS · target 60");
+    assert.match(fps.title, /presentations per second/);
+    assert.match(fps.title, /Static holds can show 0/);
+    assert.equal(metrics.hidden, false);
+    assert.equal(metrics["aria-hidden"], "false");
+    assert.ok(metrics.classList.values.has("catalog-live-metrics"));
+    for (const id of ["metric-objects", "metric-draws", "metric-upload", "metric-time"]) {
+      assert.ok(outputs.get(id).replacedBy, `${id} remains visible`);
     }
   }
 });

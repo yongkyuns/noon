@@ -915,7 +915,7 @@ impl NativeGpu {
             })?;
         surface.configure(&device, &config);
 
-        let mut renderer = GpuRenderer::new(&device, config.format);
+        let mut renderer = GpuRenderer::new(&device, &queue, config.format);
         renderer.set_viewport(&device, &queue, width, height);
         renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 

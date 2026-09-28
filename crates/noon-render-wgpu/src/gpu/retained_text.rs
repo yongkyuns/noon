@@ -3339,6 +3339,7 @@ impl GpuRenderer {
                 }
                 let target = super::inset_capture::InsetCaptureTarget::new(
                     device,
+                    queue,
                     self.target_format,
                     size,
                     images,
@@ -4792,7 +4793,7 @@ mod tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let initial_text_generation;
 
@@ -4935,7 +4936,7 @@ mod tests {
         assert!(!observed.glyph_ranges.is_empty());
 
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut renderer = GpuRenderer::new(&device, format);
+        let mut renderer = GpuRenderer::new(&device, &queue, format);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let mut writes = Vec::new();

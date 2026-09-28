@@ -17,7 +17,7 @@ export async function loadGalleryManifest(
     ? await loadShowcaseGallery(fetchImpl)
     : await loadReferenceGallery(url, fetchImpl);
   if (typeof document !== "undefined") {
-    installShowcasePresentation(document, gallery.examples, showcase);
+    installShowcasePresentation(document, showcase);
   }
   return gallery;
 }

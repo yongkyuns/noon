@@ -2,6 +2,8 @@ import init, {
   createDirectRecoverySmokeRenderer,
   createDirectTransformMatchingShapesBreadthSmokeRenderer,
   createDirectTransformMatchingShapesSmokeRenderer,
+  RetainedExecutionCanvasRenderer,
+  WasmAuthoringStore,
 } from "./pkg/noon_web.js";
 import {
   drainRendererGpuDiagnostics,
@@ -25,6 +27,8 @@ let rendererCanvas = null;
 let webglContextRecovery = null;
 let matchingShapesQualification = null;
 let matchingShapesBreadthQualification = null;
+let retainedRecoveryFixture = null;
+let retainedDisposalFixture = null;
 
 window.noonSmoke = {
   state,
@@ -35,6 +39,15 @@ window.noonSmoke = {
     throw new Error("Noon browser smoke harness is not ready");
   },
   webglContextControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  async retainedContextLossControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  retainedDeviceDisposalControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  disposeDirectRenderer() {
     throw new Error("Noon browser smoke harness is not ready");
   },
   metrics() {
@@ -472,6 +485,154 @@ async function start() {
       restore: () => extension.restoreContext(),
     };
     return webglContextRecovery;
+  };
+  window.noonSmoke.retainedContextLossControl = async () => {
+    if (retainedRecoveryFixture !== null) return retainedRecoveryFixture.control;
+    const retainedCanvas = document.createElement("canvas");
+    retainedCanvas.id = "retained-scene";
+    retainedCanvas.width = 960;
+    retainedCanvas.height = 540;
+    document.body.append(retainedCanvas);
+    const offscreen = retainedCanvas.transferControlToOffscreen();
+    const authoring = new WasmAuthoringStore();
+    const context = authoring.createSceneContext();
+    const circle = authoring.createManimCircle(0.75);
+    context.beginLiveExecution(2);
+    context.liveAdd("1", circle);
+    const player = context.createExecutionPlayer(2, 17);
+    const resourceBundle = player.resourceBundleBytes();
+    const initialDelta = player.initialDeltaJson();
+    const retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+    retained.resize(retainedCanvas.width, retainedCanvas.height);
+    if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+      retained.free();
+      player.free();
+      context.free();
+      authoring.free();
+      throw new Error("retained recovery fixture did not publish its initial scene");
+    }
+    const state = { lost: 0, restored: 0, recovery: "idle", error: null };
+    const gl = offscreen.getContext("webgl2");
+    const extension = gl?.getExtension("WEBGL_lose_context");
+    if (!extension) throw new Error("retained renderer has no WEBGL_lose_context extension");
+    offscreen.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      state.lost += 1;
+    });
+    offscreen.addEventListener("webglcontextrestored", async () => {
+      state.restored += 1;
+      state.recovery = "pending";
+      try {
+        if (!(await retained.recoverWebGlContext())) {
+          throw new Error("retained renderer declined WebGL context recovery");
+        }
+        state.recovery = "ready";
+      } catch (error) {
+        state.error = String(error?.message ?? error);
+        state.recovery = "error";
+      }
+    });
+    const control = {
+      state,
+      canvas: retainedCanvas,
+      lose: () => extension.loseContext(),
+      restore: () => extension.restoreContext(),
+      applyPendingDelta(time) {
+        const delta = player.seekDeltaJson(time);
+        return delta === undefined ? false : retained.applyDeltaJson(delta);
+      },
+      metrics() {
+        return {
+          backend: retained.rendererBackend(),
+          generation: retained.gpuGeneration(),
+          objectCount: retained.objectCount(),
+          time: retained.time(),
+          drawCalls: retained.lastDrawCalls(),
+        };
+      },
+      render() {
+        const presented = retained.render();
+        return {
+          ...this.metrics(),
+          presented,
+        };
+      },
+      async rejectCreationWhileLost() {
+        const creation = RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+        creation.then((unexpected) => unexpected.free(), () => {});
+        const outcome = await Promise.race([
+          creation.then(
+            () => ({ rejected: false, error: null, wasmTrap: false }),
+            (error) => {
+              const message = String(error?.message ?? error);
+              return {
+                rejected: true,
+                error: message,
+                wasmTrap: error instanceof WebAssembly.RuntimeError ||
+                  /unreachable executed/i.test(message),
+              };
+            },
+          ),
+          new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 5_000)),
+        ]);
+        return outcome;
+      },
+    };
+    retainedRecoveryFixture = { control, retained, player, context, authoring };
+    return control;
+  };
+  window.noonSmoke.retainedDeviceDisposalControl = async () => {
+    if (retainedDisposalFixture !== null) return retainedDisposalFixture;
+    const canvas = document.createElement("canvas");
+    canvas.id = "retained-disposal-scene";
+    canvas.width = 960;
+    canvas.height = 540;
+    document.body.append(canvas);
+    const offscreen = canvas.transferControlToOffscreen();
+    let authoring = null;
+    let context = null;
+    let circle = null;
+    let player = null;
+    let retained = null;
+    let ready = false;
+    try {
+      authoring = new WasmAuthoringStore();
+      context = authoring.createSceneContext();
+      circle = authoring.createManimCircle(0.75);
+      context.beginLiveExecution(2);
+      context.liveAdd("1", circle);
+      player = context.createExecutionPlayer(2, 23);
+      const resourceBundle = player.resourceBundleBytes();
+      const initialDelta = player.initialDeltaJson();
+      retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+      retained.resize(canvas.width, canvas.height);
+      if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+        throw new Error("retained disposal fixture did not publish its initial scene");
+      }
+      const control = {
+        dispose() {
+          try { retained.free(); }
+          finally { canvas.remove(); retainedDisposalFixture = null; }
+        },
+      };
+      retainedDisposalFixture = control;
+      ready = true;
+      return control;
+    } finally {
+      player?.free();
+      context?.free();
+      circle?.free();
+      authoring?.free();
+      if (!ready) {
+        retained?.free();
+        canvas.remove();
+      }
+    }
+  };
+  window.noonSmoke.disposeDirectRenderer = () => {
+    if (renderer === null) throw new Error("direct renderer has already been disposed");
+    renderer.free();
+    renderer = null;
   };
   window.noonSmoke.metrics = metrics;
   state.ready = true;

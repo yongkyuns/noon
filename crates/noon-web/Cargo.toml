@@ -34,7 +34,7 @@ js-sys = "0.3"
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }
+web-sys = { version = "0.3", features = ["console", "Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "WebGl2RenderingContext", "Window"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"], optional = true }
 
 [dev-dependencies]

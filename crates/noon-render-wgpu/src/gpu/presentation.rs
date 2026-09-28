@@ -90,6 +90,11 @@ impl PresentationBridge {
         self.view.as_ref().unwrap_or(surface_view)
     }
 
+    #[cfg(test)]
+    pub(super) fn scene_target_for_tests(&self) -> Option<&wgpu::Texture> {
+        self.texture.as_ref()
+    }
+
     pub(crate) fn encode_present(
         &self,
         encoder: &mut wgpu::CommandEncoder,

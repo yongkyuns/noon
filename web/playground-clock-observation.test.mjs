@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { PresentationRate } from "./frame-metrics.js";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const start = main.indexOf("async function updateWorkerMetrics() {");
@@ -38,6 +39,7 @@ function fixture() {
   const context = {
     player: initial, metricsPending: null, playbackPending: null, metricsNextPollAt: 0,
     metricsEpoch: 0, metricsTimer: null, rendererBackend: "WebGPU",
+    presentationRate: new PresentationRate(), patchStatus: { dataset: { state: "running" } },
     document: { visibilityState: "visible" },
     busyDepth: 1, activeSourceContinuation: {}, playerNeedsRestart: false,
     generations: { diagnostics: { runGeneration: 1 } },
@@ -47,11 +49,38 @@ function fixture() {
     playbackControls: { observe: value => observations.push({ ...value }) },
     showError: error => errors.push(error), clearTimeout() {},
   };
-  for (const key of ["metricObjects", "metricDraws", "metricUpload", "metricTime"]) context[key] = { value: "—" };
+  for (const key of ["metricObjects", "metricDraws", "metricUpload", "metricTime", "metricFps"]) context[key] = { value: "—" };
   const api = vm.runInNewContext(`${source}\n({ poll: updateWorkerMetrics, stop: stopMetricsPolling })`, context);
   return { context, api, initial, makePlayer, observations, errors, telemetry,
     setWall(value) { wall = value; } };
 }
+
+test("live FPS uses the renderer snapshot clock and clears on pause and polling retirement", async () => {
+  const f = fixture();
+  async function sample(wall, presentedFrames, sampledAtMs) {
+    f.setWall(wall);
+    await f.api.poll();
+    const value = report(600);
+    Object.assign(value.metrics, { ready: true, presentedFrames, sampledAtMs });
+    f.telemetry.at(-1).resolve(value);
+    await flush();
+    assert.deepEqual(f.errors, []);
+    return f.context.metricFps.value;
+  }
+  assert.equal(await sample(0, 10, 100), "—");
+  assert.equal(await sample(3000, 70, 1100), "60.0", "message delay is not frame time");
+  f.context.activeSourceContinuation = null;
+  f.context.busyDepth = 0;
+  f.initial.setState({ time: 1, playing: false });
+  f.setWall(3100);
+  await f.api.poll();
+  assert.equal(f.context.metricFps.value, "—", "pause clears before the next telemetry poll");
+  f.initial.setState({ time: 1, playing: true });
+  assert.equal(await sample(4000, 75, 3000), "—");
+  assert.equal(await sample(5000, 105, 4000), "30.0");
+  f.api.stop();
+  assert.equal(f.context.metricFps.value, "—", "hidden or retired sessions cannot leave a stale rate");
+});
 
 test("a slow renderer reply cannot hold or freeze current Rust clock observations", async () => {
   const f = fixture();

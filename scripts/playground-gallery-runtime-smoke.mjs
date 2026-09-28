@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
@@ -22,6 +23,33 @@ await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
 const results = [];
+async function captureWebKitFailure(name) {
+  if (browserName !== 'webkit' || process.platform !== 'darwin' || !process.env.CI) return null;
+  // macOS launches WebContent/GPU XPC services under launchd, outside Node's
+  // process tree. On the isolated CI host, restrict sampling to this Playwright
+  // installation; never sample the system Safari or another installed WebKit.
+  const exec = promisify(execFile);
+  const installation = `${path.dirname(playwright.webkit.executablePath())}${path.sep}`;
+  try {
+    const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 1024 * 1024 });
+    const processes = stdout.split('\n').flatMap(line => {
+      const match = line.trim().match(/^(\d+)\s+(.+)$/);
+      return match?.[2].startsWith(installation) ? [{ pid: match[1], executable: match[2] }] : [];
+    }).slice(0, 4);
+    return await Promise.all(processes.map(async entry => {
+      const file = `${name}-process-${entry.pid}.txt`;
+      try {
+        await exec('/usr/bin/sample', [entry.pid, '2', '10', '-file', path.join(artifacts, file)],
+          { timeout: 10000, maxBuffer: 64 * 1024 });
+        return { ...entry, file };
+      } catch (error) {
+        return { ...entry, file, error: String(error).slice(0, 500) };
+      }
+    }));
+  } catch (error) {
+    return { error: String(error).slice(0, 500) };
+  }
+}
 async function json(relative) {
   const response = await fetch(new URL(relative, base), { signal: AbortSignal.timeout(20000), headers: { 'Cache-Control': 'no-cache' } });
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
@@ -51,7 +79,7 @@ try {
   for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);
   const engine = playwright[browserName];
   assert.ok(engine, `unknown browser ${browserName}`);
-  browser = await engine.launch(playgroundLaunchOptions(browserName));
+  if (browserName !== 'webkit') browser = await engine.launch(playgroundLaunchOptions(browserName));
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
   const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
@@ -70,9 +98,9 @@ try {
     if (affected.includes(entry.id)) queue.push({ entry, noJspi: true });
   }
   let next = 0;
-  async function check({ entry, noJspi }) {
+  async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
-    const context = await browser.newContext({ ...options });
+    const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
@@ -80,6 +108,7 @@ try {
     // Renderer time may precede completion of an authored static wait.
     await context.addInitScript(({ channel, protocolVersion, noJspi }) => {
       window.__galleryAuthoringResults = [];
+      window.__galleryWorkerMessages = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
           const workerArgs = [...args];
@@ -90,8 +119,16 @@ try {
               window.__galleryNoJspiWorkerWrapped = true;
             }
           }
+          const workerScriptUrl = new URL(workerArgs[0], window.location.href).href;
           const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', ({ data }) => {
+            window.__galleryWorkerMessages.push({
+              workerScriptUrl: workerScriptUrl.slice(0, 500),
+              channel: typeof data?.channel === "string" ? data.channel.slice(0, 100) : null,
+              type: typeof data?.type === "string" ? data.type.slice(0, 100) : null,
+              time: performance.now(),
+            });
+            if (window.__galleryWorkerMessages.length > 20) window.__galleryWorkerMessages.shift();
             if (data?.channel === channel && data.type === 'result') {
               if (data.protocolVersion !== protocolVersion) {
                 window.__galleryAuthoringCaptureError = 'unexpected authoring protocol version';
@@ -106,7 +143,7 @@ try {
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     if (noJspi) await context.route('**/python-worker-no-jspi-test.js', async route => {
       await route.fulfill({
@@ -120,75 +157,133 @@ try {
         ].join('\n'),
       });
     });
-    page.on('pageerror', error => result.errors.push(String(error)));
-    page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
+    const pendingRequests = new Map();
+    context.on('request', request => pendingRequests.set(request, {
+      url: request.url(), resourceType: request.resourceType(), startedAt: performance.now(),
+    }));
+    context.on('requestfinished', request => pendingRequests.delete(request));
+    context.on('requestfailed', request => {
+      result.failedRequests.push({
+        url: request.url(), resourceType: request.resourceType(), error: request.failure()?.errorText,
+      });
+      pendingRequests.delete(request);
+    });
+    page.on('pageerror', error => result.errors.push(error.stack || String(error)));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        result.errors.push(msg.text());
+      }
+    });
+    // A browser call can stall before the polling loop checks its own deadline.
+    // Bound the whole case from Node so the job still publishes its diagnostics.
+    let caseTimer;
+    let lastWorkerMessages = [];
     try {
-      await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
-      let completed = false;
-      // Longer authored examples can run materially slower than real time in Firefox CI.
-      // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
-      const deadline = Date.now() + 105000;
-      while (Date.now() < deadline) {
-        const state = await page.evaluate(() => {
-          const gallery = window.__noonExampleGallery;
-          if (!window.__galleryMetricsPending) {
-            window.__galleryMetricsPending = true;
-            Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
-              .finally(() => { window.__galleryMetricsPending = false; });
+      await Promise.race([
+        (async () => {
+          await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
+          let completed = false;
+          // Longer authored examples can run materially slower than real time in Firefox CI.
+          // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
+          const deadline = Date.now() + 105000;
+          while (Date.now() < deadline) {
+            const { workerMessages, ...state } = await page.evaluate(() => {
+              const gallery = window.__noonExampleGallery;
+              if (!window.__galleryMetricsPending) {
+                window.__galleryMetricsPending = true;
+                Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
+                  .finally(() => { window.__galleryMetricsPending = false; });
+              }
+              return { workerMessages: window.__galleryWorkerMessages ?? [],
+                selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
+                patch: { ...document.querySelector('#patch-status')?.dataset },
+                text: document.querySelector('#patch-status')?.value,
+                runtimeStatus: document.querySelector('#status-text')?.textContent,
+                rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
+                renderHost: document.querySelector('#status')?.dataset.renderHost,
+                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
+            });
+            lastWorkerMessages = workerMessages;
+            result.state = state;
+            assert.equal(state.selected, entry.id);
+            assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
+            assert.equal(state.metricsError, undefined);
+            const metric = state.metrics?.metrics;
+            if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
+            if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
+            await page.waitForTimeout(100);
           }
-          return { selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
-            patch: { ...document.querySelector('#patch-status')?.dataset },
-            text: document.querySelector('#patch-status')?.value,
-            runtimeStatus: document.querySelector('#status-text')?.textContent,
-            metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
-        });
-        result.state = state;
-        assert.equal(state.selected, entry.id);
-        assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
-        assert.equal(state.metricsError, undefined);
-        const metric = state.metrics?.metrics;
-        if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
-        if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
-        await page.waitForTimeout(100);
-      }
-      assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
-      if (noJspi && browserName === 'chromium') {
-        assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
-          'no-JSPI smoke did not wrap the production authoring worker');
-      }
-      const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-      result.finalMetrics = metrics;
-      assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
-      const authoring = await page.evaluate(() => ({
-        results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
-      }));
-      assert.equal(authoring.error, undefined);
-      assert.equal(authoring.results.length, 1, 'expected exactly one final shared authoring result');
-      const parsed = parseAuthoringResult(authoring.results[0]);
-      assert.ok(parsed.semanticExecution, 'missing final shared execution descriptor');
-      result.semanticExecution = parsed.semanticExecution;
-      result.authoredDuration = parsed.duration;
-      assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
-      if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
-        `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
-      if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
-      assert.deepEqual(result.errors, []);
-      if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
+          assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+          if (noJspi && browserName === 'chromium') {
+            assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
+              'no-JSPI smoke did not wrap the production authoring worker');
+          }
+          const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+          result.finalMetrics = metrics;
+          assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
+          const authoring = await page.evaluate(() => ({
+            results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
+          }));
+          assert.equal(authoring.error, undefined);
+          assert.equal(authoring.results.length, 1, 'expected exactly one final shared authoring result');
+          const parsed = parseAuthoringResult(authoring.results[0]);
+          assert.ok(parsed.semanticExecution, 'missing final shared execution descriptor');
+          result.semanticExecution = parsed.semanticExecution;
+          result.authoredDuration = parsed.duration;
+          assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
+          if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
+            `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
+          if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
+          assert.deepEqual(result.errors, []);
+          if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
+        })(),
+        new Promise((_, reject) => {
+          caseTimer = setTimeout(() => reject(new Error(`${name}: browser case exceeded 150 seconds`)), 150000);
+        }),
+      ]);
       result.outcome = 'pass';
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
+      result.failureDiagnostics = {
+        pendingRequestCount: pendingRequests.size,
+        pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
+          url: request.url.slice(0, 500),
+          resourceType: request.resourceType,
+          elapsedMs: performance.now() - request.startedAt,
+        })),
+        workerMessages: lastWorkerMessages,
+      };
+      // Capture outside the browser protocol: even page.evaluate can be stuck.
+      // Failure remains a failure regardless of whether stack collection works.
+      result.failureDiagnostics.nativeSamples = await captureWebKitFailure(name);
     } finally {
+      clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
-      await context.close();
       result.elapsedMs = performance.now() - caseStartedAt;
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
-      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors }));
+      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors, failedRequests: result.failedRequests, failureDiagnostics: result.failureDiagnostics }));
+      await context.close();
     }
   }
-  await Promise.all(Array.from({ length: 2 }, async () => { while (next < queue.length) await check(queue[next++]); }));
+  async function check(spec) {
+    if (browserName !== 'webkit') return runCase(browser, spec);
+    // Independent examples must not inherit GPU-process state from closed cases.
+    // The public workflow separately covers repeated playback in one live page.
+    let caseBrowser = null;
+    try {
+      caseBrowser = await engine.launch(playgroundLaunchOptions(browserName));
+      await runCase(caseBrowser, spec);
+    } finally {
+      await caseBrowser?.close();
+    }
+  }
+  // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
+  // Cold startup itself is covered by the public playground workflow.
+  const concurrency = browserName === 'webkit' ? 1 : 2;
+  await Promise.all(Array.from({ length: concurrency }, async () => { while (next < queue.length) await check(queue[next++]); }));
   assert.equal(results.length, queue.length, 'incomplete inventory');
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');

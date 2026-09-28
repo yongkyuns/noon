@@ -4819,7 +4819,7 @@ mod tests {
             )
         };
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut preparer = FramePreparer::for_individual_path_draws();
         preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
         let stale = make_frame(0, CACHE_LIMIT);

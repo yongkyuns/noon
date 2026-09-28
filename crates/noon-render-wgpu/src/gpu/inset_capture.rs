@@ -83,6 +83,7 @@ pub(super) struct InsetCaptureTarget {
 impl InsetCaptureTarget {
     pub(super) fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         size: [u32; 2],
         images: &RasterImageGpuRenderer,
@@ -111,7 +112,7 @@ impl InsetCaptureTarget {
         let view = color.create_view(&Default::default());
         let msaa = texture(PATH_SAMPLE_COUNT, wgpu::TextureUsages::RENDER_ATTACHMENT);
         let msaa_view = msaa.create_view(&Default::default());
-        let image = images.bind_external(device, &view, uniform);
+        let image = images.bind_external(device, queue, &view, uniform);
         Self {
             size,
             _texture: color,

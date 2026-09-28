@@ -37,7 +37,7 @@ impl Raster {
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .unwrap();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, SIZE, SIZE);
         // The oracle explicitly uses an 8x8 world. Never compare it with the
         // low-level renderer's unrelated default 2x2 camera.

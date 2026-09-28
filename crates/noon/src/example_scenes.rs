@@ -2599,6 +2599,9 @@ mod continuation_tests {
                 (noon_core::PathCommand::Close, noon_core::PathCommand::Close) => continue,
                 _ => panic!("square correspondence changed command shape"),
             };
+            // Resource points live in the reusable fixed frame; verify the
+            // point-correspondence midpoint in world space, as it is rendered.
+            let point = frame.render_transform(0).transform_point(point);
             assert!((point.x + 2.0).abs() < 1e-5);
             assert!(point.y.abs() < 1e-5);
         }

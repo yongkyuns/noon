@@ -1,11 +1,11 @@
 //! Disposable image texture/instance residency in the existing retained renderer.
 use super::{
+    create_buffer_with_data,
     raster_image_prepare::{ImageUniform, RasterImageFramePreparer},
     CameraUniform, PATH_SAMPLE_COUNT,
 };
 use noon_core::RasterImageResourceHandle;
 use std::{collections::HashMap, mem::size_of, sync::Arc};
-use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RasterImageUploadStats {
@@ -138,6 +138,7 @@ impl RasterImageGpuRenderer {
     pub(super) fn bind_external(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         uniform: ImageUniform,
     ) -> ExternalImageBinding {
@@ -149,11 +150,13 @@ impl RasterImageGpuRenderer {
                 resource: wgpu::BindingResource::TextureView(view),
             }],
         });
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noon inset image placement"),
-            contents: bytemuck::bytes_of(&uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon inset image placement"),
+            bytemuck::bytes_of(&uniform),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let object = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Noon inset image placement binding"),
             layout: &self.object_layout,
@@ -310,11 +313,13 @@ impl RasterImageGpuRenderer {
                 }
             });
             texture.references += 1;
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Noon retained image instance"),
-                contents: bytemuck::bytes_of(&row.uniform),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+            let buffer = create_buffer_with_data(
+                device,
+                queue,
+                Some("Noon retained image instance"),
+                bytemuck::bytes_of(&row.uniform),
+                wgpu::BufferUsages::UNIFORM,
+            );
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Noon image instance binding"),
                 layout: &self.object_layout,

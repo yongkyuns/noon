@@ -81,6 +81,7 @@ export function createAuthoringRenderController(host) {
   let modeSwitches = 0;
   let rendererRebuilds = 0;
   let webglRecoveryPromise = null;
+  let webglContextLost = false;
 
     return Object.freeze({
       dispatch: dispatchAuthoringRenderMessage,
@@ -172,7 +173,7 @@ export function createAuthoringRenderController(host) {
     await initializeWasmModule();
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
-    canvas.addEventListener("webglcontextlost", invalidatePointerReceipt);
+    canvas.addEventListener("webglcontextlost", suspendForWebGlContextLoss);
     canvas.addEventListener("webglcontextcreationerror", recordSurfaceCreationError);
     return true;
   }
@@ -181,23 +182,36 @@ export function createAuthoringRenderController(host) {
     surfaceCreationError = event.statusMessage || "WebGL context creation failed";
   }
 
+  function suspendForWebGlContextLoss(event) {
+    event.preventDefault();
+    webglContextLost = true;
+    invalidatePointerReceipt();
+    cancelScheduledFrame();
+  }
+
   function wakeAfterWebGlContextRestored() {
     invalidatePointerReceipt();
-    // Rust records context restoration synchronously. Defer the platform wake
-    // until every restore listener has run, then rebuild before presenting even
-    // when the execution owner has settled to idle.
-    queueMicrotask(() => void recoverAndPresentWebGlContext());
+    // Browsers can checkpoint microtasks between event listeners. Use a new
+    // task so Rust's later-registered restoration listener has recorded the
+    // loss/restoration before recovery checks it, including while idle.
+    setTimeout(() => void recoverAndPresentWebGlContext(), 0);
   }
 
   async function recoverAndPresentWebGlContext() {
     const restoringRenderer = renderer;
-    if (stopped || restoringRenderer === null || webglRecoveryPromise !== null) return;
-    const recovery = Promise.resolve(restoringRenderer.recoverWebGlContext?.());
+    if (stopped || webglRecoveryPromise !== null) return;
+    if (restoringRenderer === null) {
+      webglContextLost = false;
+      drainTransport();
+      return;
+    }
+    const recovery = Promise.resolve().then(() => restoringRenderer.recoverWebGlContext());
     webglRecoveryPromise = recovery;
     try {
-      await recovery;
-      if (stopped || renderer !== restoringRenderer) return;
+      const recovered = await recovery;
+      if (stopped || renderer !== restoringRenderer || !recovered) return;
       webglRecoveryPromise = null;
+      webglContextLost = false;
       renderer.resize(width, height);
       if (!drainGpuDiagnostics()) return;
       needsPresent = true;
@@ -207,7 +221,7 @@ export function createAuthoringRenderController(host) {
       }
       scheduleFrame();
     } catch (error) {
-      fail(error, null);
+      if (!stopped && renderer === restoringRenderer) fail(error, null);
     } finally {
       if (webglRecoveryPromise === recovery) webglRecoveryPromise = null;
     }
@@ -322,7 +336,7 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
-    if (webglRecoveryPromise !== null) {
+    if (webglContextLost || webglRecoveryPromise !== null) {
       needsPresent = true;
       return;
     }
@@ -349,7 +363,7 @@ export function createAuthoringRenderController(host) {
     transitionFrameLoopWasRunning = false;
     detachRenderPort();
     canvas?.removeEventListener?.("webglcontextrestored", wakeAfterWebGlContextRestored);
-    canvas?.removeEventListener?.("webglcontextlost", invalidatePointerReceipt);
+    canvas?.removeEventListener?.("webglcontextlost", suspendForWebGlContextLoss);
     canvas?.removeEventListener?.("webglcontextcreationerror", recordSurfaceCreationError);
     disposeRenderer();
     canvas = null;
@@ -503,6 +517,9 @@ export function createAuthoringRenderController(host) {
   }
 
   function consumeDelta(json, publication = null) {
+    // Backpressure applies to bootstrap and replay handoff too: constructing a
+    // new GPU device against a lost canvas can trap inside the WebGL backend.
+    if (webglContextLost || webglRecoveryPromise !== null) return false;
     if (transitionMode !== null) {
       return commitRendererTransition(json, publication);
     }
@@ -519,10 +536,6 @@ export function createAuthoringRenderController(host) {
       }
       bootstrapQueue.push({ json, publication });
       return true;
-    }
-
-    if (webglRecoveryPromise !== null) {
-      return false;
     }
 
     if (mode === MODE_RETAINED && reconnectResourceBundlePending) {
@@ -656,6 +669,7 @@ export function createAuthoringRenderController(host) {
   function tryPresent() {
     if (
       renderer === null ||
+      webglContextLost ||
       webglRecoveryPromise !== null ||
       !needsPresent ||
       !drainGpuDiagnostics()
@@ -747,7 +761,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function flushBootstrapQueue() {
-    if (renderer === null) {
+    if (renderer === null || webglContextLost || webglRecoveryPromise !== null) {
       return;
     }
     while (!needsPresent && bootstrapQueue.length > 0) {
@@ -841,7 +855,7 @@ export function createAuthoringRenderController(host) {
 
   function scheduleFrame(generation = frameLoopGeneration) {
     cancelScheduledFrame();
-    if (!running || webglRecoveryPromise !== null) return;
+    if (!running || webglContextLost || webglRecoveryPromise !== null) return;
     const needsAnimationFrame = needsPresent || engineWake === null ||
       engineWake.cadence === "animation_frame";
     if (!needsAnimationFrame && engineWake.cadence === "idle") return;
@@ -863,7 +877,7 @@ export function createAuthoringRenderController(host) {
   function frame(timestamp, generation, ticket) {
     if (ticket !== scheduleTicket || generation !== frameLoopGeneration || !running) return;
     scheduledFrame = null;
-    if (webglRecoveryPromise !== null || !drainGpuDiagnostics()) return;
+    if (webglContextLost || webglRecoveryPromise !== null || !drainGpuDiagnostics()) return;
     lastFrameTimestamp = timestamp;
     if (needsPresent && tryPresent()) {
       flushBootstrapQueue();
@@ -927,6 +941,7 @@ export function createAuthoringRenderController(host) {
       presentedFrames,
       modeSwitches,
       rendererRebuilds,
+      sampledAtMs: performance.now(),
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
@@ -962,8 +977,17 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
-    renderer.free?.();
+    const retiredRenderer = renderer;
     renderer = null;
+    if (webglRecoveryPromise !== null) {
+      // An async WASM recovery holds a mutable borrow until it settles.
+      void webglRecoveryPromise.then(
+        () => retiredRenderer.free?.(),
+        () => retiredRenderer.free?.(),
+      );
+    } else {
+      retiredRenderer.free?.();
+    }
   }
 
   function modeFlags() {

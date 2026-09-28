@@ -56,6 +56,8 @@ test("captures the device configured for #scene rather than a probe device", asy
     installCaptureState();
     const capture = globalThis.__noonWebGpuDeviceCapture;
     const patchedAdapter = await gpu.requestAdapter();
+    const sameAdapter = await gpu.requestAdapter();
+    assert.equal(sameAdapter, patchedAdapter, "fake navigator reuses the adapter object");
 
     // The first device belongs to an unowned capability probe.
     const probe = new OffscreenCanvas();
@@ -83,6 +85,11 @@ test("captures the device configured for #scene rather than a probe device", asy
     sceneContext.configure({ device: owner });
     assert.equal(capture.devices.length, 2);
     assert.equal(capture.ownerDeviceIndex, 1);
+    await Promise.resolve();
+    assert.deepEqual(capture.lost, [
+      { reason: "unknown", message: "" },
+      { reason: "unknown", message: "" },
+    ], "each device loss promise must still be tracked once");
   } finally {
     if (previous.navigator === undefined) delete globalThis.navigator;
     else Object.defineProperty(globalThis, "navigator", { configurable: true, value: previous.navigator });

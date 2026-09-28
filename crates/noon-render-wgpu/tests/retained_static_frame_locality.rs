@@ -125,7 +125,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
 
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_gpu = renderer.create_retained_text_state(&device, &queue);
     let first_upload = {
         let prepared = preparer

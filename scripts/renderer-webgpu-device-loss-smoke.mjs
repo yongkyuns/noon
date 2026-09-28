@@ -97,7 +97,10 @@ async function destroyAndRecover(
     device.destroy();
   }, deviceIndex);
   await page.waitForFunction(
-    (index) => window.__noonWebGpuDeviceCapture?.lost[index] !== null,
+    (index) => {
+      const info = window.__noonWebGpuDeviceCapture?.lost[index];
+      return info !== null && info !== undefined;
+    },
     deviceIndex,
     { timeout: 10_000 },
   );
@@ -155,7 +158,7 @@ async function destroyAndRecover(
 
   const recoveryCapture = await page.evaluate((lostIndex) => {
     const capture = window.__noonWebGpuDeviceCapture;
-    const replacementIndex = capture.devices.length - 1;
+    const replacementIndex = capture.ownerDeviceIndex;
     return {
       deviceCount: capture.devices.length,
       lost: capture.lost,
@@ -179,6 +182,34 @@ async function destroyAndRecover(
     path: path.join(artifactDir, `${screenshotName}.png`),
   });
   return { duringLoss, recovered, recoveryCapture, screenshot };
+}
+
+async function assertDeviceDestroyed(page, deviceIndex, label) {
+  assert.ok(Number.isInteger(deviceIndex) && deviceIndex >= 0, `${label}: GPUDevice was not captured`);
+  await page.waitForFunction(
+    (index) => {
+      const capture = window.__noonWebGpuDeviceCapture;
+      const info = capture?.lost[index];
+      return capture?.devices[index] !== undefined && info !== null && info !== undefined;
+    },
+    deviceIndex,
+    { timeout: 10_000 },
+  );
+  const lost = await page.evaluate((index) => {
+    const info = window.__noonWebGpuDeviceCapture.lost[index];
+    return info === null ? null : { ...info };
+  }, deviceIndex);
+  assert.equal(lost?.reason, "destroyed", `${label}: GPUDevice.lost did not resolve as destroyed`);
+  return lost;
+}
+
+async function assertDeviceLive(page, deviceIndex, label) {
+  const live = await page.evaluate((index) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    return capture?.devices[index] !== undefined && capture.lost[index] === null;
+  }, deviceIndex);
+  assert.equal(live, true,
+    `${label}: GPUDevice must still be live before renderer.free(): ${JSON.stringify(await readWebGpuCapture(page))}`);
 }
 
 function changedPixelCount(leftBuffer, rightBuffer) {
@@ -236,11 +267,39 @@ try {
   const captureBefore = await readWebGpuCapture(page);
   assert.equal(captureBefore.patched, true, `WebGPU capture patch failed: ${captureBefore.patchError}`);
   assert.ok(captureBefore.deviceCount >= 1, "Noon's WebGPU device creation was not captured");
+  const directDeviceIndex = captureBefore.ownerDeviceIndex;
+  assert.ok(Number.isInteger(directDeviceIndex) && directDeviceIndex >= 0,
+    "capture did not identify the GPUDevice configured for #scene");
 
   const baseline = await renderAndCapture(page, "baseline");
+  // Camera updates at the existing viewport must not allocate full-size targets.
+  const stableViewport = await page.evaluate(async (time) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    const device = capture.devices[capture.ownerDeviceIndex];
+    const ownDescriptor = Object.getOwnPropertyDescriptor(device, "createTexture");
+    const createTexture = device.createTexture;
+    let allocations = 0;
+    Object.defineProperty(device, "createTexture", {
+      configurable: true,
+      value(...args) {
+        allocations += 1;
+        return createTexture.apply(this, args);
+      },
+    });
+    try {
+      const frames = [];
+      for (let i = 0; i < 3; i += 1) frames.push(await window.noonSmoke.renderAt(time));
+      return { allocations, presented: frames.every(frame => frame.presented) };
+    } finally {
+      if (ownDescriptor) Object.defineProperty(device, "createTexture", ownDescriptor);
+      else delete device.createTexture;
+    }
+  }, sampleTime);
+  assert.equal(stableViewport.presented, true, "same-size camera updates stopped presenting");
+  assert.equal(stableViewport.allocations, 0, "same-size camera updates recreated GPU textures");
   const firstRecovery = await destroyAndRecover(page, {
-    deviceIndex: 0,
-    minimumDeviceCount: 2,
+    deviceIndex: directDeviceIndex,
+    minimumDeviceCount: captureBefore.deviceCount + 1,
     screenshotName: "recovered",
     baselineMetrics: baseline.metrics,
   });
@@ -288,6 +347,22 @@ try {
     "fresh/recovered time mismatch",
   );
 
+  await assertDeviceLive(page, secondRecovery.recoveryCapture.replacementIndex, "direct renderer");
+  await page.evaluate(() => window.noonSmoke.disposeDirectRenderer());
+  const directDisposedDevice = await assertDeviceDestroyed(page,
+    secondRecovery.recoveryCapture.replacementIndex, "direct renderer.free()");
+  await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl());
+  const retainedDeviceIndex = await page.evaluate(() =>
+    window.__noonWebGpuDeviceCapture.configuredCanvasIds
+      .findIndex((ids) => ids.includes("retained-disposal-scene")),
+  );
+  assert.ok(retainedDeviceIndex > secondRecovery.recoveryCapture.replacementIndex,
+    "retained disposal fixture did not create a separately owned GPUDevice");
+  await assertDeviceLive(page, retainedDeviceIndex, "retained renderer");
+  await page.evaluate(() => window.noonSmoke.retainedDeviceDisposalControl().then((control) => control.dispose()));
+  const retainedDisposedDevice = await assertDeviceDestroyed(page,
+    retainedDeviceIndex, "retained renderer.free()");
+
   assert.deepEqual(browserErrors.pageErrors, [], "device-loss recovery emitted page errors");
   assert.deepEqual(freshErrors.pageErrors, [], "fresh comparison renderer emitted page errors");
   const unexpectedConsoleErrors = browserErrors.consoleErrors.filter(
@@ -304,6 +379,7 @@ try {
     browserVersion: browser.version(),
     initial,
     baseline: baseline.metrics,
+    stableViewport,
     duringLoss: firstRecovery.duringLoss,
     recovered: firstRecovery.recovered,
     recoveryCapture: firstRecovery.recoveryCapture,
@@ -312,6 +388,10 @@ try {
       recovered: secondRecovery.recovered,
       recoveryCapture: secondRecovery.recoveryCapture,
     },
+    directDeviceIndex,
+    directDisposedDevice,
+    retainedDeviceIndex,
+    retainedDisposedDevice,
     fresh: fresh.metrics,
     captureBefore,
     changedPixels,
@@ -322,7 +402,7 @@ try {
   await freshPage.close();
   await page.close();
   console.log(
-    "✓ repeated WebGPU device loss advances GPU generations and preserves scene, time, and exact output",
+    "✓ repeated WebGPU recovery preserves exact output; direct and retained disposal destroy owned devices",
   );
 } catch (error) {
   await writeDiagnostics("failure", {

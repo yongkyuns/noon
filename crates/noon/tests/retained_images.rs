@@ -47,7 +47,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
     let mut session = scene.execution_session().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     let first = upload(
@@ -161,7 +161,7 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
     let mut session = scene.execution_session().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -294,7 +294,7 @@ fn skipped_image_generation_reconciles_without_reuploading_pixels() {
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
     let mut session = scene.execution_session().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     upload(
@@ -367,7 +367,7 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         foreground.disable_stroke().unwrap();
         scene.add(&foreground).unwrap();
         let mut session = scene.execution_session().unwrap();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text = renderer.create_retained_text_state(&device, &queue);
         let mut preparer = RetainedFramePreparer::new();

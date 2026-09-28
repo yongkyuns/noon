@@ -140,7 +140,7 @@ fn overlay_upload_is_lazy_fixed_size_and_reuses_unchanged_instances() {
 #[test]
 fn overlay_draw_is_explicit_and_uses_no_stable_instance_storage() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut overlay = OverlayGpuState::default();
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
