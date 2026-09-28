@@ -40,8 +40,14 @@ async function waitForServer() {
 async function layout(page) {
   const canvas = await page.locator("#scene").boundingBox();
   const wrap = await page.locator(".canvas-wrap").boundingBox();
+  const metrics = await page.locator(".metrics").boundingBox();
   assert.ok(canvas, "playground canvas must be laid out");
   assert.ok(wrap, "canvas wrapper must be laid out");
+  assert.ok(metrics, "live metrics must be laid out");
+  assert.ok(canvas.y >= wrap.y - 1 && canvas.y + canvas.height <= wrap.y + wrap.height + 1,
+    "canvas must fit vertically inside its wrapper");
+  assert.ok(metrics.y >= canvas.y + canvas.height - 1,
+    "canvas must not cover the live FPS and metrics row");
   const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const viewportWidth = await page.evaluate(() => window.innerWidth);
   return { canvas, wrap, documentWidth, viewportWidth };

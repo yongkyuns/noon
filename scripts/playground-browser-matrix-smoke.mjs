@@ -269,6 +269,15 @@ async function runShowcaseFromPublicUi(page, exampleId) {
   await page.waitForFunction(() => Number(document.querySelector("#metric-fps")?.value) > 0,
     null, { timeout: 180_000 });
   const sourceFps = await page.locator("#metric-fps").evaluate(output => output.value);
+  const visibility = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene").getBoundingClientRect();
+    const fps = document.querySelector("#metric-fps").getBoundingClientRect();
+    const preview = document.querySelector(".preview-pane").getBoundingClientRect();
+    return { canvasBottom: canvas.bottom, fpsTop: fps.top, fpsBottom: fps.bottom, previewBottom: preview.bottom };
+  });
+  assert.ok(visibility.fpsTop >= visibility.canvasBottom && visibility.fpsBottom <= visibility.previewBottom,
+    `FPS must be visible below the canvas: ${JSON.stringify(visibility)}`);
+  await page.screenshot({ path: path.join(artifactDir, "fps-running.png"), fullPage: true });
   await waitForAppliedScene(page, exampleId, 180_000);
   const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
   return { runtime: await runtimeSnapshot(page), metrics, sourceFps };
@@ -517,6 +526,8 @@ ${consoleErrors.join("\n")}`,
         playbackEndpoint: showcasePlayback.controls.elapsedSeconds,
         replayAdmitted: showcasePlayback.controls.controllable === "true",
         replayLoops,
+        sourceFps: showcaseSourcePass.sourceFps,
+        replayFps: showcasePlayback.fps,
         metrics: showcaseMetrics,
       },
       pageErrors,

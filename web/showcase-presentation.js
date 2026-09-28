@@ -55,7 +55,7 @@ export function installShowcasePresentation(documentLike, showcase) {
     html[data-noon-catalog="showcase"] .selected-example { display: flex !important; }
     html[data-noon-catalog="showcase"] .selected-tag.parity,
     html[data-noon-catalog="showcase"] .example-browser-more-filters { display: none; }
-    .metrics.catalog-live-metrics { display: flex !important; gap: 1rem; flex-wrap: wrap; padding: .75rem; border-top: 1px solid var(--border); }
+    .metrics.catalog-live-metrics { display: flex !important; flex: none; gap: 1rem; flex-wrap: wrap; padding: .75rem; border-top: 1px solid var(--border); }
     .catalog-live-metrics label { display: grid; gap: .15rem; color: var(--muted); font-size: .7rem; }
     .catalog-live-metrics output { color: var(--accent); font-variant-numeric: tabular-nums; }
   `;

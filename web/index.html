@@ -305,7 +305,6 @@
         min-height: 0;
         border: 0;
       }
-      .preview-pane:fullscreen .canvas-wrap { container-type: size; }
       .preview-pane:fullscreen .canvas-frame::before { padding-top: 56.25%; }
       .preview-pane:fullscreen .canvas-frame {
         max-width: none;
@@ -341,6 +340,7 @@
 
       .canvas-wrap {
         display: grid;
+        container-type: size;
         min-height: 0;
         flex: 1;
         place-items: center;
@@ -349,7 +349,7 @@
 
       .canvas-frame {
         position: relative;
-        width: 100%;
+        width: min(100cqw, calc(100cqh * 16 / 9));
         max-width: 44rem;
         align-self: center;
         justify-self: center;
@@ -458,6 +458,9 @@
 
         .canvas-frame::before {
           padding-top: 75%;
+        }
+        .canvas-frame {
+          width: min(100cqw, calc(100cqh * 4 / 3));
         }
       }
     </style>
