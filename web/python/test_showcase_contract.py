@@ -32,7 +32,8 @@ class ShowcaseSourceContract(unittest.TestCase):
     def test_dynamic_scene_is_not_the_unchanged_regression_workload(self):
         entry = next(item for item in MANIFEST["entries"] if item.get("performance"))
         self.assertEqual(len(entry["beats"]), 6)
-        self.assertGreater(entry["duration"], 20, "allow viewers to perceive the distinct animation sequences")
+        self.assertGreater(entry["duration"], 15, "allow viewers to perceive the six animation sequences")
+        self.assertLessEqual(entry["duration"], 20, "keep the featured composition brisk")
         source = (WEB / entry["path"]).read_text()
         self.assertIn("ROWS = 20", source)
         self.assertIn("COLS = 30", source)

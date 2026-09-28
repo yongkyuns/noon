@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,8 @@ import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-play
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const showcaseManifest = JSON.parse(await readFile(path.join(repoRoot, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+const denseShowcase = showcaseManifest.entries.find(entry => entry.id === "showcase-dynamic-scene");
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const port = Number(process.env.NOON_PLAYGROUND_MATRIX_PORT ?? "4175");
@@ -332,8 +334,8 @@ async function completeShowcasePlayback(page, replayLoops) {
     return samples;
   });
   assert.ok(fps.some(sample => sample.fps > 0), "replay must expose live renderer FPS");
-  const endpoint = await seekPausedGallery(page, 23.4);
-  await waitForPublishedGalleryFrame(page, endpoint, 23.4);
+  const endpoint = await seekPausedGallery(page, denseShowcase.duration);
+  await waitForPublishedGalleryFrame(page, endpoint, denseShowcase.duration);
   await page.waitForFunction(() => document.querySelector("#metric-fps")?.value === "—");
   return page.evaluate(async (fps) => ({
     controls: { ...document.querySelector(".playback-controls").dataset },
@@ -481,15 +483,15 @@ try {
     await editAndRerun(page, selectedExampleId);
     await exerciseResize(page);
     console.log(`→ ${browserName}/${profileName}: public workflow passed; running full showcase`);
-    const showcaseSourcePass = await runShowcaseFromPublicUi(page, "showcase-dynamic-scene");
+    const showcaseSourcePass = await runShowcaseFromPublicUi(page, denseShowcase.id);
     assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
-    assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - 23.4) < 1e-7,
-      `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of 23.4s`);
+    assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - denseShowcase.duration) < 1e-7,
+      `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of ${denseShowcase.duration}s`);
     console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
     const replayLoops = browserName === "webkit" ? 3 : 1;
     const showcasePlayback = await completeShowcasePlayback(page, replayLoops);
     const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
-    assert.ok(Math.abs(Number(showcasePlayback.duration) - 23.4) < 1e-7,
+    assert.ok(Math.abs(Number(showcasePlayback.duration) - denseShowcase.duration) < 1e-7,
       `showcase authored duration changed: ${showcasePlayback.duration}`);
     assert.ok(Number(showcaseMetrics.objectCount) > 600,
       `showcase retained only ${showcaseMetrics.objectCount} objects`);
@@ -519,7 +521,7 @@ ${consoleErrors.join("\n")}`,
       capabilities,
       runtime: finalRuntime,
       showcase: {
-        exampleId: "showcase-dynamic-scene",
+        exampleId: denseShowcase.id,
         sourcePassState: showcaseSourcePass.runtime.patchState,
         sourcePassTime: showcaseSourcePass.metrics?.metrics?.time,
         playbackDuration: showcasePlayback.duration,
