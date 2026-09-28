@@ -130,19 +130,15 @@ test("replay requires the exact checkpoint and backend, not stale pixels at a ma
   assert.throws(() => assertReplaySample(entry, sample, 0.5, { ...metrics, backend: "WebGL2" }));
 });
 
-test("dense-scene evidence and replay cannot silently reduce the workload", () => {
+test("dense-scene workload is protected from the first authored beat, even before 3.1 seconds", () => {
   const { entry, expected, report } = fixture();
   entry.performance = true;
-  entry.duration = 4;
-  const end = entry.duration + 1e-9;
-  Object.assign(report.results[0].samples.at(-1), {
-    requestedTime: end, publishedTime: 4, authoredDuration: 4,
-    filename: `example-${String(end).replace(".", "_")}.png`,
-  });
-  entry.beats.at(-1).time = 4;
+  const time = entry.beats[0].time;
   assert.throws(() => replayOracle(entry, report, expected), /workload/);
-  report.results[0].samples.at(-1).objectCount = 600;
-  const sample = replayOracle(entry, report, expected).at(-1);
-  assert.throws(() => assertReplaySample(entry, sample, 4, { time: 4, backend: "WebGPU", objectCount: 599 }), /workload/);
-  assertReplaySample(entry, sample, 4, { time: 4, backend: "WebGPU", objectCount: 600 });
+  for (const sample of report.results[0].samples) {
+    if (sample.requestedTime >= time) sample.objectCount = 600;
+  }
+  const sample = replayOracle(entry, report, expected).find(sample => sample.replayTime === time);
+  assert.throws(() => assertReplaySample(entry, sample, time, { time, backend: "WebGPU", objectCount: 599 }), /workload/);
+  assertReplaySample(entry, sample, time, { time, backend: "WebGPU", objectCount: 600 });
 });

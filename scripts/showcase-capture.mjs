@@ -110,7 +110,7 @@ try {
         await writeFile(path.join(output, filename), bytes);
         result.samples.push({ ...sample, completionProbe, ...image, filename });
         if (time === posterTime) poster = bytes;
-        if (entry.performance && time >= 3.1) assert.ok(sample.objectCount >= 600, `${entry.id}: dense phases must retain the geometry workload`);
+        if (entry.performance && time >= entry.beats[0].time) assert.ok(sample.objectCount >= 600, `${entry.id}: dense phases must retain the geometry workload`);
       }
       assert.ok(new Set(result.samples.map((sample) => sample.pixelSha256)).size >= 3, `${entry.id}: temporal samples did not change`);
       await page.evaluate(() => window.noonHostRaster.close());
