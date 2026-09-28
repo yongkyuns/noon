@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
@@ -22,6 +23,33 @@ await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
 const results = [];
+async function captureWebKitFailure(name) {
+  if (browserName !== 'webkit' || process.platform !== 'darwin' || !process.env.CI) return null;
+  // macOS launches WebContent/GPU XPC services under launchd, outside Node's
+  // process tree. On the isolated CI host, restrict sampling to this Playwright
+  // installation; never sample the system Safari or another installed WebKit.
+  const exec = promisify(execFile);
+  const installation = `${path.dirname(playwright.webkit.executablePath())}${path.sep}`;
+  try {
+    const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 1024 * 1024 });
+    const processes = stdout.split('\n').flatMap(line => {
+      const match = line.trim().match(/^(\d+)\s+(.+)$/);
+      return match?.[2].startsWith(installation) ? [{ pid: match[1], executable: match[2] }] : [];
+    }).slice(0, 4);
+    return await Promise.all(processes.map(async entry => {
+      const file = `${name}-process-${entry.pid}.txt`;
+      try {
+        await exec('/usr/bin/sample', [entry.pid, '2', '10', '-file', path.join(artifacts, file)],
+          { timeout: 10000, maxBuffer: 64 * 1024 });
+        return { ...entry, file };
+      } catch (error) {
+        return { ...entry, file, error: String(error).slice(0, 500) };
+      }
+    }));
+  } catch (error) {
+    return { error: String(error).slice(0, 500) };
+  }
+}
 async function json(relative) {
   const response = await fetch(new URL(relative, base), { signal: AbortSignal.timeout(20000), headers: { 'Cache-Control': 'no-cache' } });
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
@@ -226,6 +254,9 @@ try {
         })),
         workerMessages: lastWorkerMessages,
       };
+      // Capture outside the browser protocol: even page.evaluate can be stuck.
+      // Failure remains a failure regardless of whether stack collection works.
+      result.failureDiagnostics.nativeSamples = await captureWebKitFailure(name);
     } finally {
       clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});

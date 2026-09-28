@@ -163,6 +163,20 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/gallery
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Repeat WebKit optional-compiler cold starts
+        if: matrix.browser == 'webkit'
+        timeout-minutes: 10
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_GALLERY_CASES: noon-ordinary-matrix,noon-ordinary-table,noon-ordinary-variable
+        # Every cold start must pass. This is repeated admission, not a retry of
+        # failures; each invocation retains its own diagnostics and native stacks.
+        run: |
+          for iteration in 1 2 3; do
+            NOON_PLAYGROUND_MATRIX_ARTIFACTS="browser-smoke-artifacts/playground-matrix/webkit-${{ matrix.profile }}/cold-start-${iteration}" \
+              node scripts/playground-gallery-runtime-smoke.mjs
+          done
       - name: Test main-thread mobile render fallback
         if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
         env:
