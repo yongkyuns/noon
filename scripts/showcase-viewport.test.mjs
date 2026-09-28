@@ -17,9 +17,23 @@ test("exact integer-origin CSS bounds and actual backing dimensions are required
   }
 });
 
-test("scaled output is rejected instead of being resized into a passing image", () => {
+test("unexpected scaled output is rejected instead of being resized into a passing image", () => {
   const changed = observation(); changed.deviceScaleFactor = 2;
-  assert.throws(() => assertReplayViewport(changed, size), /one device pixel/);
+  assert.throws(() => assertReplayViewport(changed, size), /device scale factor/);
+});
+
+test("high-DPI qualification requires the original full-resolution backing bitmap", async () => {
+  const mobile = { width: 384, height: 216 };
+  const observed = {
+    bounds: { x: 0, y: 0, ...mobile },
+    bitmap: { width: 768, height: 432 },
+    deviceScaleFactor: 2,
+  };
+  assert.doesNotThrow(() => assertReplayViewport(observed, mobile, 2));
+  assert.throws(() => assertReplayViewport({ ...observed, bitmap: mobile }, mobile, 2), /backing bitmap/);
+  assert.throws(() => assertReplayViewport(observed, mobile, 0), /invalid replay device scale factor/);
+  const canvas = { evaluate: async () => observed };
+  assert.deepEqual(await replayViewport(canvas, mobile, { deviceScaleFactor: 2 }), observed);
 });
 
 test("invalid viewport requests cannot modify the page", async () => {
