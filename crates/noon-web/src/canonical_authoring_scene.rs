@@ -1607,8 +1607,26 @@ impl CanonicalAuthoringScene {
             play_options,
         )
         .map_err(|error| error.to_string())?;
-        let mut ids = BTreeSet::new();
-        let mut entering_nodes = BTreeSet::new();
+        // Multiple retained channels may introduce the same detached wrapper in
+        // one composition (for example, Create plus Transform).  Those leaves
+        // share one derived wrapper identity; only conflicting id-to-node
+        // mappings are invalid.
+        let mut entering_bindings = BTreeMap::new();
+        let mut entering_identities = BTreeMap::new();
+        let mut register_entering = |id, node| {
+            let id_matches = entering_bindings
+                .get(&id)
+                .is_none_or(|bound_node| *bound_node == node);
+            let node_matches = entering_identities
+                .get(&node)
+                .is_none_or(|bound_id| *bound_id == id);
+            if !id_matches || !node_matches {
+                return false;
+            }
+            entering_bindings.insert(id, node);
+            entering_identities.insert(node, id);
+            true
+        };
         for child in children {
             let (entering_id, target, options) = match child {
                 // Value-only requests have no wrapper identity to validate. Shared
@@ -1706,8 +1724,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err(
                                 "ordinary subset-display entering identity is already bound".into(),
@@ -1792,8 +1809,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err("ordinary family entering identity is already bound".into());
                         }
@@ -1850,8 +1866,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err("ordinary family DrawBorderThenFill entering identity is already bound".into());
                         }
@@ -2069,8 +2084,11 @@ impl CanonicalAuthoringScene {
                             }
                             _ => false,
                         };
-                    if !binding_available || !ids.insert(id) || !entering_nodes.insert(node) {
-                        return Err("ordinary composition requires unique detached targets and wrapper identities".into());
+                    if !binding_available || !register_entering(id, node) {
+                        return Err(
+                            "ordinary composition requires consistent detached target and wrapper identities"
+                                .into(),
+                        );
                     }
                 }
                 None if !self.identities.contains_key(&target.node_id()) => {
@@ -9911,6 +9929,95 @@ mod tests {
             context.scene.integration_store().borrow().scene_revision(),
             revision
         );
+    }
+
+    #[test]
+    fn ordinary_composition_reuses_one_detached_wrapper_for_retained_channels() {
+        let mut context = CanonicalAuthoringScene::default();
+        let shape = context.scene.circle(0.4).unwrap();
+        // A changed geometry keeps this in Noon's retained morph-and-reveal
+        // channel, which is the paired browser fixture's admission shape.
+        let target = context.scene.square(0.8).unwrap();
+        let id = ObjectId::new(0);
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            OrdinaryCompositionChild::Create {
+                entering_id: Some(id),
+                target: shape.clone(),
+                options,
+            },
+            OrdinaryCompositionChild::TransformTo {
+                entering_id: Some(id),
+                source: shape.clone(),
+                target,
+                interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                complete_priority: false,
+                options,
+            },
+        ];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        assert!(context.live_contains_mobject(&shape).unwrap());
+        assert_eq!(context.bindings.len(), 1);
+        assert_eq!(context.bindings.get(&id), Some(&shape.node_id()));
+        assert_eq!(context.identities.get(&shape.node_id()), Some(&id));
+    }
+
+    #[test]
+    fn ordinary_composition_rejects_conflicting_detached_wrapper_bindings_atomically() {
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        for (first_id, second_id, same_target) in [(0, 0, false), (0, 1, true)] {
+            let mut context = CanonicalAuthoringScene::default();
+            let first = context.scene.circle(0.4).unwrap();
+            let second = if same_target {
+                first.clone()
+            } else {
+                context.scene.square(0.4).unwrap()
+            };
+            let revision = context.scene.integration_store().borrow().scene_revision();
+            let children = [
+                OrdinaryCompositionChild::Create {
+                    entering_id: Some(ObjectId::new(first_id)),
+                    target: first,
+                    options,
+                },
+                OrdinaryCompositionChild::Create {
+                    entering_id: Some(ObjectId::new(second_id)),
+                    target: second,
+                    options,
+                },
+            ];
+            assert!(context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .is_err());
+            assert!(context.bindings.is_empty());
+            assert!(context.identities.is_empty());
+            assert!(context.player_ownership.is_unstarted());
+            assert_eq!(
+                context.scene.integration_store().borrow().scene_revision(),
+                revision
+            );
+        }
     }
 
     #[test]

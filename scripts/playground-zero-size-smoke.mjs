@@ -70,19 +70,18 @@ async function snapshot(page) {
   });
 }
 
-async function startDeferredRuntime(page) {
-  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  const deferred = await snapshot(page);
-  assert.equal(deferred.runtimeStartup, "deferred", "resize page load must leave runtime deferred");
-  assert.equal(deferred.rendererBackend, "", "deferred resize page must not initialize renderer");
-  assert.equal(deferred.presentedFrames, 0, "deferred resize page must not present frames");
-  await page.locator("#replace-scene").click();
+async function waitForInitialRuntime(page) {
+  // Live authoring starts the selected source after the first paint. Join that
+  // run before resizing; a later driver snapshot can already be past deferred
+  // startup, and clicking Run here races the same automatic source execution.
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
       const patch = document.querySelector("#patch-status");
       return (
         status?.dataset.rendererBackend === "WebGL2" &&
+        status?.dataset.liveAuthoring === "ready" &&
+        window.__noonExampleGallery?.runInFlight === false &&
         patch?.dataset.state === "applied" &&
         Number(status?.dataset.presentedFrames ?? "0") > 0
       );
@@ -266,7 +265,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
-  await startDeferredRuntime(page);
+  await waitForInitialRuntime(page);
 
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.ok(diagnostics.snapshots.baseline.cssWidth >= 320, "baseline canvas must be visible");

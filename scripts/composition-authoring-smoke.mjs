@@ -162,6 +162,6 @@ await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_MORPH_REVEAL_ARTIFACTS ?? "morph-reveal-artifacts",
   cases: [1.5, 2.5, 3].map(sampleTime => ({
     id: `morph-reveal-${sampleTime}`, file: "ordinary_morph_reveal.py",
-    factory: "createDirectMorphRevealRenderer", objectCount: 1, duration: 3, sampleTime,
+    factory: "createDirectMorphRevealRenderer", playback: "live", objectCount: 1, duration: 3, sampleTime,
   })),
 });

@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-  # Exercise changed CI infrastructure and editor harnesses before they reach master.
+  # Qualify authoring/replay boundaries and CI harnesses before they reach master.
   pull_request:
     paths:
       - ".github/actions/dev-wasm-build/**"
@@ -13,6 +13,19 @@ on:
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
       - "scripts/python-editor-*.mjs"
+      - "scripts/composition-authoring-smoke.mjs"
+      - "scripts/shared-authoring-smoke.mjs"
+      - "scripts/paired-authoring-qualification.mjs"
+      - "web/python/**"
+      - "web/semantic-engine-endpoint.js"
+      - "crates/noon-web/src/canonical_authoring_scene*"
+      - "crates/noon-web/src/canonical_authoring_scene/**"
+      - "crates/noon-web/src/semantic_execution_player*"
+      - "crates/noon-web/src/semantic_execution_player/**"
+      - "crates/noon-web/src/direct_execution_smoke.rs"
+      - "crates/noon/src/execution_session/**"
+      - "crates/noon/src/example_scenes/**"
+      - "crates/noon-runtime/src/replay.rs"
   workflow_dispatch:
 
 permissions:
