@@ -22,7 +22,9 @@ on:
       - "crates/noon-web/src/canonical_authoring_scene/**"
       - "crates/noon-web/src/semantic_execution_player*"
       - "crates/noon-web/src/semantic_execution_player/**"
+      - "crates/noon-web/src/direct_execution_smoke.rs"
       - "crates/noon/src/execution_session/**"
+      - "crates/noon/src/example_scenes/**"
       - "crates/noon-runtime/src/replay.rs"
   workflow_dispatch:
 
