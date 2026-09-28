@@ -280,6 +280,13 @@ try {
         assert.ok(Math.abs(z.y - (200 + 2 * (b.y - 200))) < 0.75, "cursor anchored y projection");
         assert.deepEqual(await page.evaluate(() => workerInspection.execution.debugFrame()), authored);
         assert.equal((await page.evaluate(() => workerInspection.execution.state())).playing, false);
+        for (const operation of ["seek", "restartPlayback"]) {
+          await page.evaluate(operation => operation === "seek"
+            ? workerInspection.execution.seek(0) : workerInspection.execution.restartPlayback(), operation);
+          await settled();
+          assertExactPixels(await image(`${operation}-preserves-view`), zoomed,
+            `${operation} preserves session inspection`, { width: 800, height: 400, cameraHeight: 4 });
+        }
         const rect = await page.locator("#scene").boundingBox();
         before = (await metrics()).presentedFrames;
         await page.mouse.click(rect.x + z.x, rect.y + z.y); await settled(before);
