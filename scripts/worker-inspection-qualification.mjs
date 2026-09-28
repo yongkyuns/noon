@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { assertExactPixels, assertSelectionPixels } from "./pointer-selection-raster-contract.mjs";
 
@@ -55,7 +56,7 @@ try {
       };
       const metrics = () => page.evaluate(async () => (await workerInspection.execution.metrics()).metrics);
       const settled = async before => {
-        await page.waitForFunction(async before => {
+        await waitForBrowserObservation(page, async before => {
           if (workerInspection.errors.length) throw new Error(workerInspection.errors.join("; "));
           const { metrics: m } = await workerInspection.execution.metrics();
           return m.ready && m.retained && m.presentedFrames > (before ?? 0) && !m.needsPresent && m.bufferedDeltas === 0;
@@ -123,7 +124,7 @@ try {
               throw new Error("inspection fixture must return a static shared context");
             }
             await execution.startSemanticExecution(authored.semanticExecution, {
-              authoringClient: authoring, initiallyPaused: mode !== "click-indicate", transportMode,
+              authoringClient: authoring, initiallyPaused: true, transportMode,
             });
             await execution.advanceTo(0);
           }
@@ -213,11 +214,11 @@ try {
           const rect = await page.locator("#scene").boundingBox();
           let before = (await metrics()).presentedFrames;
           await page.mouse.click(rect.x + b.x, rect.y + b.y);
-          await page.waitForFunction(async ({ before, authoredStable }) => {
+          await waitForBrowserObservation(page, async before => {
             const { metrics: m } = await workerInspection.execution.metrics();
             const frame = await workerInspection.execution.debugFrame();
-            return m.presentedFrames > before && JSON.stringify({ time: frame.time, objects: frame.objects }) !== authoredStable;
-          }, { before, authoredStable });
+            return m.presentedFrames > before && frame.objects[0].transform.scale.x > 1.1;
+          }, before);
           assert.equal((await page.evaluate(() => workerInspection.execution.state())).time, 0,
             "source-declared click Indicate must not advance authored time");
           const active = await image("active-click-indicate");
@@ -230,7 +231,7 @@ try {
           assert.equal((await page.evaluate(() => workerInspection.execution.state())).time, 0);
           const zoomed = await image("active-click-indicate-zoom"), z = coloredPixels(zoomed, bright);
           assert.ok(z.n > a.n, "zoomed active click Indicate must remain visibly rendered while its autonomous clock advances");
-          await page.waitForFunction(async authoredStable => {
+          await waitForBrowserObservation(page, async authoredStable => {
             const frame = await workerInspection.execution.debugFrame();
             return JSON.stringify({ time: frame.time, objects: frame.objects }) === authoredStable;
           }, authoredStable);
@@ -240,24 +241,26 @@ try {
           assert.deepEqual(await page.evaluate(() => workerInspection.outcomes), [true], "the active wheel must be accepted exactly once");
           before = (await metrics()).presentedFrames;
           await page.mouse.click(rect.x + r.x, rect.y + r.y);
-          await page.waitForFunction(async ({ before, authoredStable }) => {
+          await waitForBrowserObservation(page, async before => {
             const { metrics: m } = await workerInspection.execution.metrics();
             const frame = await workerInspection.execution.debugFrame();
-            return m.presentedFrames > before && JSON.stringify({ time: frame.time, objects: frame.objects }) !== authoredStable;
-          }, { before, authoredStable });
+            return m.presentedFrames > before && frame.objects[0].transform.scale.x > 1.1;
+          }, before);
           assert.equal((await page.evaluate(() => workerInspection.execution.state())).time, 0);
-          await page.waitForFunction(async authoredStable => {
+          await waitForBrowserObservation(page, async authoredStable => {
             const frame = await workerInspection.execution.debugFrame();
             return JSON.stringify({ time: frame.time, objects: frame.objects }) === authoredStable;
           }, authoredStable);
           await settled();
           assertExactPixels(await image("retrigger-restored-click-indicate-zoom"), restored,
-            "retriggered click Indicate restores the per-mode zoomed baseline");
+            "retriggered click Indicate restores the per-mode zoomed baseline",
+            { width: 800, height: 400, cameraHeight: 4 });
           before = (await metrics()).presentedFrames;
           assert.equal(await page.evaluate(() => workerInspection.wheel(500 * Math.log(2))), true);
           await page.evaluate(() => Promise.all(workerInspection.pending)); await settled(before);
           assertExactPixels(await image("click-indicate-original-view"), baseline,
-            "completed click effects and inverse zoom restore the original authored pixels");
+            "completed click effects and inverse zoom restore the original authored pixels",
+            { width: 800, height: 400, cameraHeight: 8 });
           const idleFrame = await page.evaluate(() => workerInspection.execution.debugFrame());
           const idlePresented = (await metrics()).presentedFrames;
           await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));

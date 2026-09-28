@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
-import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
@@ -71,7 +71,7 @@ async function waitForPresentation(page, previous) {
       window.__noonExampleGallery !== undefined &&
       document.querySelector("#patch-status")?.dataset.state !== "error",
   );
-  await page.waitForFunction(
+  await waitForBrowserObservation(page,
     async (prior) => {
       const metrics = await window.__noonExampleGallery.executionMetrics();
       return Number(metrics?.metrics?.presentedFrames ?? 0) > prior;

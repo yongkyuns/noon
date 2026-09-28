@@ -58,8 +58,8 @@ function inside(shape, x, y, marginPixels, view) {
     Math.abs(point.y) <= shape.height / 2 + margin / Math.abs(shape.scaleY);
 }
 
-export function assertExactPixels(actual, expected, label) {
-  requireImage(actual); requireImage(expected);
+export function assertExactPixels(actual, expected, label, view = VIEW) {
+  requireImage(actual, view); requireImage(expected, view);
   const firstDifference = actual.data.findIndex((value, index) => value !== expected.data[index]);
   assert.equal(firstDifference, -1, `${label}: RGBA pixels must be identical`);
 }

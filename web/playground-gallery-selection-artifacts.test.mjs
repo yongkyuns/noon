@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { waitForBrowserObservation } from "../scripts/playground-browser-support.mjs";
 import test from "node:test";
 
 const sourceUrl = new URL("../scripts/playground-gallery-selection-smoke.mjs", import.meta.url).href;
@@ -54,7 +55,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       showcase = String(url).includes("catalog=showcase");
       gallery.selectedExampleId = showcase ? "showcase-pointer-selection" : "noon-pointer-selection";
     },
-    evaluate: async (fn) => fn(),
+    evaluate: async (fn, argument) => fn(argument),
     waitForFunction: async (fn, argument) => assert.ok(await fn(argument)),
     waitForTimeout: async () => {},
     locator: (selector) => {
@@ -101,6 +102,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
           close: async () => events.push("browser:close"),
         };
       } }])),
+      waitForBrowserObservation,
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {} }),
       layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
@@ -233,4 +235,14 @@ test("one failed write cannot abandon other pending capture writes", async () =>
   assert.equal(result.writes.size, 3);
   assert.ok(result.events.findLastIndex((event) => event.startsWith("stored:")) <
     result.events.indexOf("browser:close"));
+});
+
+test("async browser observations poll resolved false values and propagate failures", async () => {
+  let reads = 0, waits = 0;
+  const page = { evaluate: async (fn, argument) => fn(argument), waitForTimeout: async () => { waits++; } };
+  await waitForBrowserObservation(page, async limit => ++reads >= limit, 3);
+  assert.equal(reads, 3);
+  assert.equal(waits, 2);
+  await assert.rejects(waitForBrowserObservation(page, async () => false, null, { timeout: 0 }), /Timed out/);
+  await assert.rejects(waitForBrowserObservation(page, async () => { throw new Error("worker failed"); }), /worker failed/);
 });
