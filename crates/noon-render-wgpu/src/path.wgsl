@@ -57,6 +57,17 @@ struct CompactPathVertexInput {
     @location(10) path_params: vec2<f32>,
 };
 
+// Ordinary tessellated paths never use polygon coverage. Keep their stage
+// interface small instead of transporting four unused polygon corners and
+// routing every fragment through the polygon clipping shader.
+struct CompactPathVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) path_progress: f32,
+    @location(2) reveal: f32,
+    @location(3) is_stroke: f32,
+};
+
 fn cairo_source_color(color: vec4<f32>, opacity: f32) -> vec4<f32> {
     // Cairo stores solid-pattern channels through a rounded 16-bit intermediate,
     // then takes the high byte of the premultiplied result. Quantize the source
@@ -162,7 +173,7 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
 }
 
 @vertex
-fn vs_path_compact(input: CompactPathVertexInput) -> PathVertexOutput {
+fn vs_path_compact(input: CompactPathVertexInput) -> CompactPathVertexOutput {
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
     let encoded_progress = (input.surface_and_progress & PATH_PROGRESS_MASK) >> 1u;
     let path_progress = f32(encoded_progress) / 16777215.0;
@@ -183,7 +194,7 @@ fn vs_path_compact(input: CompactPathVertexInput) -> PathVertexOutput {
     if is_stroke && derive_creation_stroke {
         creation_outline_alpha = 1.0 - smoothstep(0.75, 1.0, reveal);
     }
-    var output: PathVertexOutput;
+    var output: CompactPathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
     output.color = select(
         vec4<f32>(0.0),
@@ -193,12 +204,27 @@ fn vs_path_compact(input: CompactPathVertexInput) -> PathVertexOutput {
     output.path_progress = path_progress;
     output.reveal = reveal;
     output.is_stroke = select(0.0, 1.0, is_stroke);
-    output.polygon_a = vec2<f32>(0.0);
-    output.polygon_b = vec2<f32>(0.0);
-    output.polygon_c = vec2<f32>(0.0);
-    output.polygon_d = vec2<f32>(0.0);
-    output.polygon_count = 0u;
     return output;
+}
+
+fn revealed_path_color(color: vec4<f32>, reveal: f32, is_stroke: f32, progress: f32, edge: f32) -> vec4<f32> {
+    if reveal <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    if reveal >= 1.0 {
+        return color;
+    }
+    if is_stroke < 0.5 {
+        // Bring in the fill while the authored border is revealed.
+        return color * smoothstep(0.0, 1.0, reveal);
+    }
+    return color * (1.0 - smoothstep(reveal, reveal + edge, progress));
+}
+
+@fragment
+fn fs_path_compact(input: CompactPathVertexOutput) -> @location(0) vec4<f32> {
+    let edge = max(fwidth(input.path_progress), 0.00001);
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
 }
 
 @fragment
@@ -225,17 +251,5 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
         let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
         return input.color * coverage * fill_alpha;
     }
-    if input.reveal >= 1.0 {
-        return input.color;
-    }
-
-    if input.is_stroke < 0.5 {
-        // Manim-like Create polish: reveal the border while smoothly bringing in
-        // the authored fill instead of popping the complete fill on the last frame.
-        let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
-        return input.color * fill_alpha;
-    }
-
-    let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
-    return input.color * coverage;
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
 }

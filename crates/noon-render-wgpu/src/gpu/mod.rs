@@ -226,6 +226,7 @@ struct PathPipelineDescriptor {
     instance_layout: wgpu::VertexBufferLayout<'static>,
     vertex_layout: wgpu::VertexBufferLayout<'static>,
     vertex_entry: &'static str,
+    fragment_entry: &'static str,
     label: &'static str,
 }
 
@@ -1774,6 +1775,7 @@ fn create_path_pipeline(
             label: "Noon vector path pipeline",
             vertex_layout: path_vertex_layout(),
             vertex_entry: "vs_path_compact",
+            fragment_entry: "fs_path_compact",
         },
     )
 }
@@ -1794,6 +1796,7 @@ fn create_mega_path_pipeline(
             label: "Noon packed mega-path pipeline",
             vertex_layout: path_vertex_layout(),
             vertex_entry: "vs_path_compact",
+            fragment_entry: "fs_path_compact",
         },
     )
 }
@@ -1814,6 +1817,7 @@ fn create_full_path_pipeline(
             label: "Noon full path pipeline",
             vertex_layout: polygon_path_vertex_layout(),
             vertex_entry: "vs_path",
+            fragment_entry: "fs_path",
         },
     )
 }
@@ -1839,7 +1843,7 @@ fn create_path_pipeline_with_instance_layout(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_path"),
+            entry_point: Some(descriptor.fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
