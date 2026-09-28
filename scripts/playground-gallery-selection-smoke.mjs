@@ -186,11 +186,6 @@ try {
     await page.evaluate(() => window.__noonExampleGallery.selectedExampleId),
     "showcase-pointer-selection",
   );
-  assert.equal(
-    await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
-    "none",
-    "source-declared click actions must not require manifest interaction policy",
-  );
   const source = await fetch(new URL("python/examples/showcase_pointer_selection.py", base)).then((response) => response.text());
   assert.match(source, /\.on_click\s*\(/, "showcase source must declare its click action");
   const authoredCanvas = page.locator("#scene");
@@ -201,6 +196,11 @@ try {
     () => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight,
     null,
     { timeout: 60000 },
+  );
+  assert.equal(
+    await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
+    "none",
+    "source-declared click actions must not require manifest interaction policy",
   );
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
   if (await pause.count()) await pause.click();
