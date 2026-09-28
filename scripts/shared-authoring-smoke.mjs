@@ -95,6 +95,13 @@ class SharedAuthoringSmoke(Scene):
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
 
+        # Replay is bounded by completed authored history. Record the interval
+        # exercised by the transport pause/seek/resume checks below; a host loop
+        # duration alone does not extend a time-zero live mutation history.
+        endpoint = live.wait(2.0)
+        assert live.advance_to(endpoint)
+        live.complete()
+
         # These compatibility views are deliberately corrupt after the typed scene
         # is complete. Semantic finalization must neither inspect nor export them.
         assert not hasattr(self, "_objects")
@@ -837,6 +844,7 @@ try {
       expectedDuration: 0.2,
       endpointTime: null,
       expectText: true,
+      staticTextColor: "range",
     },
   ]) {
     const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
@@ -1031,12 +1039,27 @@ try {
     }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
-      const pixels = staticTextColor === "yellow"
-        ? visiblePixelStats(screenshot, (red, green, blue) =>
-            red > 180 && green > 140 && red > blue + 40 && green > blue + 30)
-        : textPixelStats(screenshot);
+      const pixels = staticTextColor === "range"
+        ? visiblePixelStats(screenshot, (red, green, blue) => Math.max(red, green, blue) > 160)
+        : staticTextColor === "yellow"
+          ? visiblePixelStats(screenshot, (red, green, blue) =>
+              red > 180 && green > 140 && red > blue + 40 && green > blue + 30)
+          : textPixelStats(screenshot);
       assert.ok(pixels.count > 100, `${filename}: glyphs were not rendered: ${JSON.stringify(pixels)}`);
       assert.ok(pixels.width > 50, `${filename}: text has no glyph extent`);
+      if (staticTextColor === "range") {
+        // This example intentionally colors most glyphs. A white-only bounding
+        // box measures the remaining "on", not the whole multiline label.
+        for (const [color, predicate] of [
+          ["red", (r, g, b) => r > 160 && r > g + 60 && r > b + 60],
+          ["blue", (r, g, b) => b > 160 && b > r + 60 && b > g + 40],
+          ["green", (r, g, b) => g > 140 && g > r + 60 && g > b + 40],
+        ]) {
+          const colored = visiblePixelStats(screenshot, predicate);
+          assert.ok(colored.count > 10, `${filename}: missing ${color} source-range glyphs`);
+        }
+        assert.ok(textPixelStats(screenshot).count > 100, `${filename}: default-colored glyphs disappeared`);
+      }
       if (staticTextColor === null) {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
