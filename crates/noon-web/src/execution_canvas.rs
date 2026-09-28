@@ -1063,8 +1063,8 @@ mod wasm {
                 browser_pointer_input::dom_integer(revision, 0.0, 9_007_199_254_740_991.0)
                     .map_err(js_error)? as u64;
             if !self.drawable
-                || self.webgl_context_lost.get()
-                || self.webgl_recovery_pending.get()
+                || self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
                 || self
                     .gpu_diagnostics
                     .device_loss_pending(self.gpu_generation)
