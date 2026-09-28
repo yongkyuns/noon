@@ -15,6 +15,7 @@ export async function readBounded(stream, maximum, signal) {
   const reader = stream.getReader();
   const chunks = [];
   let length = 0;
+  let exhausted = false;
   let abortReason = null;
   const onAbort = () => {
     abortReason = signal.reason ?? new Error("LaTeX asset request was aborted");
@@ -26,7 +27,7 @@ export async function readBounded(stream, maximum, signal) {
     while (true) {
       const { done, value } = await reader.read();
       if (abortReason !== null) throw abortReason;
-      if (done) break;
+      if (done) { exhausted = true; break; }
       length += value.length;
       if (length > maximum) throw new Error(`LaTeX asset exceeds ${maximum} bytes`);
       chunks.push(value);
@@ -36,7 +37,10 @@ export async function readBounded(stream, maximum, signal) {
     throw error;
   } finally {
     signal?.removeEventListener("abort", onAbort);
-    reader.releaseLock();
+    // These are single-use asset streams. Once drained, reader and stream can
+    // be collected together. Avoid redundant release: WebKit cold-start samples
+    // have stalled inside releaseLock during garbage collection.
+    if (!exhausted) reader.releaseLock();
   }
   const result = new Uint8Array(length);
   let offset = 0;

@@ -384,7 +384,13 @@ impl GpuRenderer {
     ) -> (DrawStats, usize) {
         let Some(insertions) = anchors.get(&resolved.batch.primitive) else {
             return (
-                self.draw_resolved_ordered_batch(pass, stable, resolved, single_sample_analytics),
+                self.draw_resolved_ordered_batch(
+                    pass,
+                    stable,
+                    resolved,
+                    single_sample_analytics,
+                    &mut None,
+                ),
                 0,
             );
         };
@@ -411,6 +417,7 @@ impl GpuRenderer {
                     stable,
                     &segment,
                     single_sample_analytics,
+                    &mut None,
                 );
                 stats.draw_calls += drawn.draw_calls;
                 stats.instances_drawn += drawn.instances_drawn;
@@ -427,8 +434,13 @@ impl GpuRenderer {
         if cursor < resolved.batch.instance_range.end {
             let mut segment = resolved.clone();
             segment.batch.instance_range = cursor..resolved.batch.instance_range.end;
-            let drawn =
-                self.draw_resolved_ordered_batch(pass, stable, &segment, single_sample_analytics);
+            let drawn = self.draw_resolved_ordered_batch(
+                pass,
+                stable,
+                &segment,
+                single_sample_analytics,
+                &mut None,
+            );
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }

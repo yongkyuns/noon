@@ -34,8 +34,8 @@ use super::raster_image_gpu::{
 };
 use super::raster_image_prepare::{ImagePreparation, ImageUniform, RasterImageFramePreparer};
 use super::{
-    path_batch_uses_polygon_coverage, push_upload_write, Camera2D, CameraUniform, DrawStats,
-    GpuRenderer, Inset2DGpuView, RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
+    push_upload_write, Camera2D, CameraUniform, DrawStats, GpuRenderer, Inset2DGpuView,
+    RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
 };
 use crate::{
     FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive, VisibleRenderError,
@@ -3708,8 +3708,18 @@ impl GpuRenderer {
         rendered_insets: &mut HashSet<ObjectId>,
     ) -> Result<RetainedDrawStats, RetainedDrawError> {
         let mut stats = RetainedDrawStats::default();
+        let mut binding = None;
         let mut images = prepared.image_draw.items().iter().peekable();
-        for item in prepared.render_items {
+        let batch_paths = prepared.image_draw.items().is_empty()
+            && self.inset_views.is_empty()
+            && excluded.is_empty()
+            && text_camera_index.is_none();
+        let pixel = Vec2::new(
+            self.camera.world_size.x / self.viewport_size[0].max(1) as f32,
+            self.camera.world_size.y / self.viewport_size[1].max(1) as f32,
+        );
+        let mut items = prepared.render_items.iter().peekable();
+        while let Some(item) = items.next() {
             let item_rank = prepared
                 .object_indices
                 .get(&item.object_id())
@@ -3726,6 +3736,7 @@ impl GpuRenderer {
                 if !excluded.contains(&image.object_id())
                     && self.draw_retained_image_with_camera(pass, image, sample_count, camera)?
                 {
+                    binding = None;
                     stats.images += 1;
                     if render_insets {
                         stats += self.draw_inset_for_display(
@@ -3743,6 +3754,9 @@ impl GpuRenderer {
                 continue;
             }
             if render_insets {
+                if self.inset_camera_by_display.contains_key(&item.object_id()) {
+                    binding = None;
+                }
                 stats += self.draw_inset_for_display(
                     pass,
                     prepared,
@@ -3755,21 +3769,42 @@ impl GpuRenderer {
             match item {
                 RetainedRenderItem::Image { .. } => {
                     if self.draw_retained_image_with_camera(pass, item, sample_count, camera)? {
+                        binding = None;
                         stats.images += 1;
                     }
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
-                    stats.geometry += self.draw_retained_geometry_batch_with_camera(
-                        pass,
-                        &prepared.geometry,
+                    pass.set_bind_group(0, camera, &[]);
+                    let groups = super::path_batching::DisjointPathBatches::collect(
                         batch,
-                        sample_count == 1,
-                        camera,
+                        &mut items,
+                        &prepared.geometry,
+                        pixel,
+                        batch_paths,
                     );
+                    for batch in groups.batches() {
+                        let mega = match batch.primitive {
+                            RenderPrimitive::MegaPath { batch } => {
+                                Some(prepared.geometry.mega_path_batches[batch].clone())
+                            }
+                            _ => None,
+                        };
+                        stats.geometry += self.draw_resolved_ordered_batch(
+                            pass,
+                            &prepared.geometry,
+                            &super::ResolvedOrderedBatch {
+                                batch: batch.clone(),
+                                mega,
+                            },
+                            sample_count == 1,
+                            &mut binding,
+                        );
+                    }
                 }
                 RetainedRenderItem::Glyph {
                     text_item_index, ..
                 } => {
+                    binding = None;
                     stats.text += match text_camera_index {
                         Some(index) => text_state.glyphs.draw_item_with_inset_camera(
                             pass,
@@ -3853,101 +3888,6 @@ impl GpuRenderer {
         images
             .draw_if_resident(pass, camera, *object_index, sample_count)
             .map_err(Into::into)
-    }
-
-    fn draw_retained_geometry_batch_with_camera<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        prepared: &PreparedFrame<'_>,
-        batch: &OrderedRenderBatch,
-        single_sample_analytics: bool,
-        camera: &'a wgpu::BindGroup,
-    ) -> DrawStats {
-        let mut stats = DrawStats::default();
-        pass.set_bind_group(0, camera, &[]);
-        match batch.primitive {
-            RenderPrimitive::Circle => {
-                pass.set_pipeline(if single_sample_analytics {
-                    &self.circle_pipeline_single_sample
-                } else {
-                    &self.circle_pipeline
-                });
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Rectangle => {
-                pass.set_pipeline(if single_sample_analytics {
-                    &self.rectangle_pipeline_single_sample
-                } else {
-                    &self.rectangle_pipeline
-                });
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Line => {
-                pass.set_pipeline(if single_sample_analytics {
-                    &self.line_pipeline_single_sample
-                } else {
-                    &self.line_pipeline
-                });
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Path {
-                batch: path_batch_index,
-            } => {
-                let path_batch = &prepared.path_batches[path_batch_index];
-                if path_batch.index_range.is_empty() {
-                    return stats;
-                }
-                let exact_polygon = path_batch_uses_polygon_coverage(prepared, path_batch);
-                pass.set_pipeline(if exact_polygon {
-                    &self.full_path_pipeline
-                } else {
-                    &self.path_pipeline
-                });
-                pass.set_vertex_buffer(
-                    0,
-                    if exact_polygon {
-                        self.path_vertex_buffer.slice(..)
-                    } else {
-                        self.compact_path_vertex_buffer.slice(..)
-                    },
-                );
-                pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-                pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(
-                    path_batch.index_range.clone(),
-                    0,
-                    batch.instance_range.clone(),
-                );
-            }
-            RenderPrimitive::MegaPath {
-                batch: mega_batch_index,
-            } => {
-                let mega_batch = &prepared.mega_path_batches[mega_batch_index];
-                if mega_batch.index_range.is_empty() {
-                    return stats;
-                }
-                pass.set_pipeline(&self.mega_path_pipeline);
-                pass.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
-                pass.set_index_buffer(
-                    self.mega_path_index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                pass.draw_indexed(mega_batch.index_range.clone(), 0, 0..1);
-                stats.draw_calls = 1;
-                stats.instances_drawn = mega_batch.path_count;
-                return stats;
-            }
-        }
-        stats.draw_calls = 1;
-        stats.instances_drawn = batch.instance_range.len();
-        stats
     }
 }
 

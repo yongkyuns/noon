@@ -5,6 +5,7 @@ use noon_core::{Inset2DViewState, Vec2};
 
 mod derived_display;
 mod overlay;
+mod path_batching;
 mod presentation;
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod inset_capture;
@@ -403,6 +404,17 @@ pub(crate) type UploadWriteTrace<'a> =
 pub struct DrawStats {
     pub draw_calls: usize,
     pub instances_drawn: usize,
+}
+
+// Valid only within one pass/camera/sample-count run; foreign draws invalidate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeometryBinding {
+    Circle,
+    Rectangle,
+    Line,
+    Path,
+    Polygon,
+    MegaPath,
 }
 
 #[derive(Clone, Debug)]
@@ -1449,6 +1461,7 @@ impl GpuRenderer {
         let mut stats = DrawStats::default();
         pass.set_bind_group(0, camera_bind_group, &[]);
         let mut pending = None::<ResolvedOrderedBatch>;
+        let mut binding = None;
         for resolved in prepared.ordered_render_batches() {
             let next = ResolvedOrderedBatch {
                 batch: resolved.batch.clone(),
@@ -1463,14 +1476,20 @@ impl GpuRenderer {
                     prepared,
                     &current,
                     single_sample_analytics,
+                    &mut binding,
                 );
                 stats.draw_calls += drawn.draw_calls;
                 stats.instances_drawn += drawn.instances_drawn;
             }
         }
         if let Some(current) = pending {
-            let drawn =
-                self.draw_resolved_ordered_batch(pass, prepared, &current, single_sample_analytics);
+            let drawn = self.draw_resolved_ordered_batch(
+                pass,
+                prepared,
+                &current,
+                single_sample_analytics,
+                &mut binding,
+            );
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }
@@ -1483,86 +1502,111 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         resolved: &ResolvedOrderedBatch,
         single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
-        let circle_pipeline = if single_sample_analytics {
-            &self.circle_pipeline_single_sample
-        } else {
-            &self.circle_pipeline
-        };
-        let rectangle_pipeline = if single_sample_analytics {
-            &self.rectangle_pipeline_single_sample
-        } else {
-            &self.rectangle_pipeline
-        };
-        let line_pipeline = if single_sample_analytics {
-            &self.line_pipeline_single_sample
-        } else {
-            &self.line_pipeline
-        };
         let batch = &resolved.batch;
-        match batch.primitive {
-            RenderPrimitive::Circle => {
-                pass.set_pipeline(circle_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Rectangle => {
-                pass.set_pipeline(rectangle_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Line => {
-                pass.set_pipeline(line_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::MegaPath { .. } => {
-                let mega = resolved
-                    .mega
-                    .as_ref()
-                    .expect("resolved mega-path draw must carry metadata");
-                if mega.index_range.is_empty() {
+        let (next, pipeline, vertices, instances, indices) = match batch.primitive {
+            RenderPrimitive::Circle => (
+                GeometryBinding::Circle,
+                if single_sample_analytics {
+                    &self.circle_pipeline_single_sample
+                } else {
+                    &self.circle_pipeline
+                },
+                &self.quad_buffer,
+                &self.circle_buffer,
+                None,
+            ),
+            RenderPrimitive::Rectangle => (
+                GeometryBinding::Rectangle,
+                if single_sample_analytics {
+                    &self.rectangle_pipeline_single_sample
+                } else {
+                    &self.rectangle_pipeline
+                },
+                &self.quad_buffer,
+                &self.rectangle_buffer,
+                None,
+            ),
+            RenderPrimitive::Line => (
+                GeometryBinding::Line,
+                if single_sample_analytics {
+                    &self.line_pipeline_single_sample
+                } else {
+                    &self.line_pipeline
+                },
+                &self.quad_buffer,
+                &self.line_buffer,
+                None,
+            ),
+            RenderPrimitive::Path { batch } => {
+                let path = &prepared.path_batches[batch];
+                if path.index_range.is_empty() {
                     return DrawStats::default();
                 }
-                pass.set_pipeline(&self.mega_path_pipeline);
-                pass.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
-                pass.set_index_buffer(
-                    self.mega_path_index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
+                if path_batch_uses_polygon_coverage(prepared, path) {
+                    (
+                        GeometryBinding::Polygon,
+                        &self.full_path_pipeline,
+                        &self.path_vertex_buffer,
+                        &self.path_instance_buffer,
+                        Some(&self.path_index_buffer),
+                    )
+                } else {
+                    (
+                        GeometryBinding::Path,
+                        &self.path_pipeline,
+                        &self.compact_path_vertex_buffer,
+                        &self.path_instance_buffer,
+                        Some(&self.path_index_buffer),
+                    )
+                }
+            }
+            RenderPrimitive::MegaPath { .. } => {
+                if resolved
+                    .mega
+                    .as_ref()
+                    .expect("resolved mega metadata")
+                    .index_range
+                    .is_empty()
+                {
+                    return DrawStats::default();
+                }
+                (
+                    GeometryBinding::MegaPath,
+                    &self.mega_path_pipeline,
+                    &self.compact_path_vertex_buffer,
+                    &self.mega_path_vertex_instance_buffer,
+                    Some(&self.mega_path_index_buffer),
+                )
+            }
+        };
+        if *binding != Some(next) {
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.set_vertex_buffer(1, instances.slice(..));
+            if let Some(indices) = indices {
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            }
+            *binding = Some(next);
+        }
+        match batch.primitive {
+            RenderPrimitive::Path { batch: path } => {
+                pass.draw_indexed(
+                    prepared.path_batches[path].index_range.clone(),
+                    0,
+                    batch.instance_range.clone(),
                 );
+            }
+            RenderPrimitive::MegaPath { .. } => {
+                let mega = resolved.mega.as_ref().expect("resolved mega metadata");
                 pass.draw_indexed(mega.index_range.clone(), 0, 0..1);
                 return DrawStats {
                     draw_calls: 1,
                     instances_drawn: mega.path_count,
                 };
             }
-            RenderPrimitive::Path { batch: path_batch } => {
-                let path = &prepared.path_batches[path_batch];
-                if path.index_range.is_empty() {
-                    return DrawStats::default();
-                }
-                let exact_polygon = path_batch_uses_polygon_coverage(prepared, path);
-                pass.set_pipeline(if exact_polygon {
-                    &self.full_path_pipeline
-                } else {
-                    &self.path_pipeline
-                });
-                pass.set_vertex_buffer(
-                    0,
-                    if exact_polygon {
-                        self.path_vertex_buffer.slice(..)
-                    } else {
-                        self.compact_path_vertex_buffer.slice(..)
-                    },
-                );
-                pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-                pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(path.index_range.clone(), 0, batch.instance_range.clone());
-            }
+            _ => pass.draw(0..6, batch.instance_range.clone()),
         }
         DrawStats {
             draw_calls: 1,

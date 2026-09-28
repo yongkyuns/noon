@@ -528,6 +528,8 @@ fn projected_frame<'a>(
         path_vertices: &preparer.path_vertices,
         path_indices: &preparer.path_indices,
         path_batches: &preparer.path_batches,
+        path_mesh_cache: &preparer.path_mesh_cache,
+        path_batch_cache_indices: &preparer.path_batch_cache_indices,
         mega_path_indices: &preparer.mega_path_indices,
         mega_path_vertex_instances: &preparer.mega_path_vertex_instances,
         mega_path_batches,
