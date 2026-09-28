@@ -13,7 +13,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, wheelReplies = [], env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -39,10 +39,16 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
     executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),
   };
+  const inspection = { pending: [], samples: [] };
+  const acceptWheel = () => {
+    const changed = wheelReplies.length ? wheelReplies.shift() : true;
+    if (changed) frame += 1;
+    inspection.pending.push(Promise.resolve({ inspectionScrollChanged: changed }));
+  };
   const canvas = {
     evaluate: async (fn, argument) => fn({ style: { setProperty() {} },
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
-      dispatchEvent: event => { event.defaultPrevented = true; frame += 1; events.push("DOM:wheel"); },
+      dispatchEvent: event => { event.defaultPrevented = true; acceptWheel(); events.push("DOM:wheel"); },
     }, argument),
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
     screenshot: async () => {
@@ -58,7 +64,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       showcase = String(url).includes("catalog=showcase");
       gallery.selectedExampleId = showcase ? "showcase-pointer-selection" : "noon-pointer-selection";
     },
-    evaluate: async (fn, argument) => fn(argument),
+    evaluate: async (fn, argument) => String(fn).includes("await import(") ? undefined : fn(argument),
     waitForFunction: async (fn, argument) => assert.ok(await fn(argument)),
     waitForTimeout: async () => {},
     locator: (selector) => {
@@ -71,7 +77,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return canvas;
     },
     getByRole: () => ({ count: async () => 1, click: async () => {} }),
-    mouse: { move: async () => {}, wheel: async () => { frame += 1; }, click: async (x, y) => {
+    mouse: { move: async () => {}, wheel: async () => { acceptWheel(); }, click: async (x, y) => {
       events.push(`mouse:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },
@@ -113,7 +119,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
         bounds: { x: 0, y: 0, ...size }, deviceScaleFactor,
       }),
-      window: { __noonExampleGallery: gallery },
+      window: { __noonExampleGallery: gallery, __noonInspectionTest: inspection },
       document: { querySelector: (selector) => {
         if (selector === ".playback-controls") return {
           dataset: { busy: "false", elapsedSeconds: "2.6" },
@@ -253,4 +259,19 @@ test("async browser observations poll resolved false values and propagate failur
   assert.equal(waits, 2);
   await assert.rejects(waitForBrowserObservation(page, async () => false, null, { timeout: 0 }), /Timed out/);
   await assert.rejects(waitForBrowserObservation(page, async () => { throw new Error("worker failed"); }), /worker failed/);
+});
+
+test("gallery qualification observes rejection before offering a distinct fresh wheel", async () => {
+  const result = await runSmoke({ wheelReplies: [null, true, true] });
+  assert.equal(result.error, undefined);
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.wheelAcknowledgements, [null, true, true]);
+});
+
+test("gallery qualification bounds fresh wheel attempts and never claims rejected zoom", async () => {
+  const result = await runSmoke({ wheelReplies: Array(8).fill(null) });
+  assert.match(result.error?.message, /did not admit a fresh wheel/);
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.wheelAcknowledgements, Array(8).fill(null));
+  assert.equal(result.writes.has("zoomed.png"), false);
 });

@@ -226,8 +226,26 @@ try {
           const a = coloredPixels(active, bright);
           assert.ok(a.n / b.n > 1.05, "autonomous worker click Indicate must visibly enlarge its target");
           before = (await metrics()).presentedFrames;
-          assert.equal(await page.evaluate(() => workerInspection.wheel(-500 * Math.log(2))), true);
-          await page.evaluate(() => Promise.all(workerInspection.pending)); await settled(before);
+          // Shape animation may retire a collected receipt before delivery.
+          // Offer distinct new DOM occurrences, never replay or retag a packet.
+          entry.wheelOutcomes = await page.evaluate(async () => {
+            const h = workerInspection, outcomes = [];
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const count = h.pending.length;
+              h.wheel(-500 * Math.log(2));
+              const accepted = h.pending.length === count ? null : (await h.pending.at(-1)).inspectionScrollChanged;
+              outcomes.push(accepted);
+              if (accepted === true) {
+                const frame = await h.execution.debugFrame();
+                if (frame.objects[0].transform.scale.x <= 1) throw new Error("click effect ended before active zoom was observed");
+                return outcomes;
+              }
+              if (accepted !== null) throw new Error("active inspection unexpectedly admitted a no-op");
+              await new Promise(resolve => setTimeout(resolve, 25));
+            }
+            throw new Error(`no fresh wheel was admitted: ${JSON.stringify(outcomes)}`);
+          });
+          await settled(before);
           assert.equal((await page.evaluate(() => workerInspection.execution.state())).time, 0);
           const zoomed = await image("active-click-indicate-zoom"), z = coloredPixels(zoomed, bright);
           assert.ok(z.n > a.n, "zoomed active click Indicate must remain visibly rendered while its autonomous clock advances");
@@ -238,7 +256,7 @@ try {
           await settled();
           const restored = await image("restored-click-indicate-zoom"), r = coloredPixels(restored);
           assert.ok(r.n / b.n > 3.6 && r.n / b.n < 4.4, "completion restores the target while retaining inspection zoom");
-          assert.deepEqual(await page.evaluate(() => workerInspection.outcomes), [true], "the active wheel must be accepted exactly once");
+          assert.deepEqual(entry.wheelOutcomes.filter(value => value !== null), [true], "the active zoom must be accepted exactly once");
           before = (await metrics()).presentedFrames;
           await page.mouse.click(rect.x + r.x, rect.y + r.y);
           await waitForBrowserObservation(page, async before => {
