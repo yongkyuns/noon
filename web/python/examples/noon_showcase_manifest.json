@@ -168,6 +168,18 @@
       "thumbnail": "thumbnails/showcase/showcase-pointer-selection.png", "thumbnail_alt": "The actual blue circle briefly indicated beside the green rectangle after the animated introduction",
       "still_intervals": [[2.1, 2.6]],
       "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to interact"}]
+    },
+    {
+      "id": "showcase-translation-drag", "title": "Move a shape",
+      "lesson": "Click the fixed blue circle to indicate it, then drag the green rectangle to translate it directly.",
+      "primary_feature": "native-translation-drag", "category": "Interaction",
+      "path": "python/examples/showcase_translation_drag.py", "features": ["Create", "on_click", "set_drag_targets"],
+      "duration": 2.6, "thumbnail_time": 2.6,
+      "thumbnail": "thumbnails/showcase/showcase-translation-drag.png", "thumbnail_alt": "A fixed blue circle beside a green rectangle ready for direct manipulation",
+      "still_intervals": [[2.1, 2.6]],
+      "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to drag"}],
+      "playback_capability": "nonreplayable-native-input",
+      "playback_limitation": "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable."
     }
   ]
 }

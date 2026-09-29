@@ -188,9 +188,14 @@ async function captureSelection(context, entry, result) {
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
+    const nativeInput = entry.playbackCapability === "nonreplayable-native-input";
+    if (nativeInput) await page.waitForFunction((duration) => {
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+    }, entry.duration);
     await replayViewport(canvas, report.viewport);
-    stage = "pause and seek to the authored endpoint";
-    const requestedTime = await seekPausedGallery(page, entry.duration);
+    stage = nativeInput ? "verify completed native-input introduction" : "pause and seek to the authored endpoint";
+    const requestedTime = nativeInput ? entry.duration : await seekPausedGallery(page, entry.duration);
     assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
@@ -244,6 +249,61 @@ async function captureSelection(context, entry, result) {
       await click(0.05, 0.5);
       await page.waitForTimeout(100);
       assert.ok(samePixels(before, await canvas.screenshot()), "background click changed the restored base pixels");
+    }
+    if (nativeInput) {
+      stage = "drag the green rectangle with real pointer input";
+      const dragStart = { x: bounds.x + bounds.width * 0.68, y: bounds.y + bounds.height * 0.5 };
+      const dragEnd = { x: bounds.x + bounds.width * 0.82, y: bounds.y + bounds.height * 0.5 };
+      await page.mouse.move(dragStart.x, dragStart.y);
+      await page.mouse.down();
+      await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 });
+      await page.mouse.up();
+      let dragged;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const bytes = await canvas.screenshot();
+        if (!samePixels(before, bytes)) { dragged = bytes; break; }
+        await page.waitForTimeout(50);
+      }
+      assert.ok(dragged, "actual pointer drag did not change the displayed image");
+      const beforeImage = PNG.sync.read(before), draggedImage = PNG.sync.read(dragged);
+      assert.equal(draggedImage.width, beforeImage.width);
+      assert.equal(draggedImage.height, beforeImage.height);
+      let changed = 0, outsideExpectedRoi = 0;
+      for (let y = 0; y < beforeImage.height; y++) for (let x = 0; x < beforeImage.width; x++) {
+        const offset = (y * beforeImage.width + x) * 4;
+        if (beforeImage.data[offset] === draggedImage.data[offset] &&
+            beforeImage.data[offset + 1] === draggedImage.data[offset + 1] &&
+            beforeImage.data[offset + 2] === draggedImage.data[offset + 2]) continue;
+        changed++;
+        if (x < beforeImage.width * 0.52) outsideExpectedRoi++;
+      }
+      assert.ok(changed > 0, "rectangle drag produced no pixel changes");
+      assert.equal(outsideExpectedRoi, 0, "drag changed pixels outside the rectangle's right-side region");
+      await writeFile(path.join(output, `${entry.id}-dragged.png`), dragged);
+      stage = "Run to restore the authored scene";
+      await page.getByRole("button", { name: "Run", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
+      await page.waitForFunction((duration) => {
+        const controls = document.querySelector(".playback-controls")?.dataset;
+        return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+      }, entry.duration);
+      const resetMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      assertCaptureTime(entry, { requestedTime: entry.duration, publishedTime: resetMetrics.metrics.time }, entry.duration);
+      const reset = await canvas.screenshot();
+      await writeFile(path.join(output, `${entry.id}-run-reset.png`), reset);
+      assert.ok(samePixels(before, reset), "public Run did not restore the original scene pixels");
+      assert.deepEqual(errors, []);
+      result.interaction = {
+        recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> public Run",
+        requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend,
+        automaticRestore: true, pointerDrag: true, changedPixels: changed,
+        changedPixelsOutsideRightSideRoi: outsideExpectedRoi, runRestoresBase: true,
+        baseMetrics: metrics, baseImage,
+        selectedImage: validateImage(selected, `${entry.id}: selected`),
+        restoredImage: validateImage(restored, `${entry.id}: restored`),
+        draggedImage: validateImage(dragged, `${entry.id}: dragged`),
+      };
+      return selected;
     }
     stage = "restart and restore the same resolved frame";
     await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));

@@ -114,7 +114,7 @@ test("invalid or misleading publication metadata is rejected", () => {
   assert.throws(() => normalizeShowcaseManifest(legacyInteraction), /interactive scenes must disclose/);
 });
 
-test("playback capability is finite and nonreplayable capabilities require an explanation", () => {
+test("playback capability is finite and all nonreplayable capabilities require an explanation", () => {
   const unsupported = copy();
   unsupported.entries[0].playback_capability = "best-effort-replay";
   assert.throws(() => normalizeShowcaseManifest(unsupported), /unsupported playback capability/);
@@ -129,15 +129,18 @@ test("playback capability is finite and nonreplayable capabilities require an ex
   const normalizedReactive = gallery.examples.find((entry) => entry.id === "showcase-reactive-relationships");
   assert.equal(normalizedReactive.playbackCapability, "nonreplayable-host-callbacks");
   assert.match(normalizedReactive.summary, /cannot be retained for deterministic replay/);
-  assert.ok(gallery.examples.filter((entry) => entry.id !== normalizedReactive.id)
+  const nativeDrag = gallery.examples.find((entry) => entry.id === "showcase-translation-drag");
+  assert.equal(nativeDrag.playbackCapability, "nonreplayable-native-input");
+  assert.equal(nativeDrag.playbackLimitation, "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable.");
+  assert.ok(gallery.examples.filter((entry) => ![normalizedReactive.id, nativeDrag.id].includes(entry.id))
     .every((entry) => entry.playbackCapability === "deterministic-retained-replay"));
 });
 
-test("the checked-in catalog declares only the reactive-relationships lesson nonreplayable", () => {
+test("the checked-in catalog declares only the callback and native-input lessons nonreplayable", () => {
   assert.deepEqual(
-    manifest.entries.filter((entry) => entry.playback_capability === "nonreplayable-host-callbacks")
-      .map((entry) => entry.id),
-    ["showcase-reactive-relationships"],
+    manifest.entries.filter((entry) => entry.playback_capability?.startsWith("nonreplayable-"))
+      .map((entry) => [entry.id, entry.playback_capability]),
+    [["showcase-reactive-relationships", "nonreplayable-host-callbacks"], ["showcase-translation-drag", "nonreplayable-native-input"]],
   );
 });
 

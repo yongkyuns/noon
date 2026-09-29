@@ -116,7 +116,7 @@ test("successful first execution cannot substitute for unavailable replay", () =
   assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
 });
 
-test("only the declared callback lesson accepts the exact idle UnsupportedDomain denial", () => {
+test("declared nonreplayable lessons accept the exact idle UnsupportedDomain denial", () => {
   const entry = {
     id: "showcase-reactive-relationships", duration: 9.2,
     playbackCapability: "nonreplayable-host-callbacks",
@@ -141,6 +141,11 @@ test("only the declared callback lesson accepts the exact idle UnsupportedDomain
   assert.doesNotThrow(() => assertNonreplayableHostCallbacks(anotherLesson, {
     ...state, selectedExampleId: anotherLesson.id,
   }, "WebGPU"));
+  const nativeInput = { ...entry, id: "showcase-translation-drag", playbackCapability: "nonreplayable-native-input" };
+  assert.doesNotThrow(() => assertNonreplayableHostCallbacks(nativeInput, {
+    ...state, selectedExampleId: nativeInput.id,
+  }, "WebGPU"));
+  assert.throws(() => assertNonreplayableHostCallbacks({ ...nativeInput, playbackCapability: "deterministic-retained-replay" }, state, "WebGPU"));
 });
 
 test("unexpected denial stays fatal and expected nonreplayable reruns have separate counters", () => {
