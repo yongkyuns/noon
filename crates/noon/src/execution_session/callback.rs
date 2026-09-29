@@ -137,6 +137,7 @@ pub(super) struct CallbackSchedule {
     // Semantic target preorder, then registration order. Derived occurrence IDs
     // remain stable for unrelated targets when a local target is revised.
     active_occurrences: BTreeSet<(usize, usize)>,
+    detached_targets: BTreeSet<SemanticNodeId>,
     completed_time: Option<f64>,
     completed_publication: Option<PublicationContext>,
 }
@@ -153,6 +154,7 @@ impl CallbackSchedule {
             plan,
             processed_through: None,
             active_occurrences: BTreeSet::new(),
+            detached_targets: BTreeSet::new(),
             completed_time: None,
             completed_publication: None,
         }
@@ -181,7 +183,8 @@ impl CallbackSchedule {
             for index in self.plan.target_occurrences(target) {
                 let occurrence = self.plan.occurrence(index);
                 let activation = occurrence.activation();
-                if activation.active_from() <= time
+                if !self.detached_targets.contains(&target)
+                    && activation.active_from() <= time
                     && activation.inactive_from().is_none_or(|end| time < end)
                 {
                     self.active_occurrences.insert((occurrence.order(), index));
@@ -194,6 +197,32 @@ impl CallbackSchedule {
 
     pub(super) fn is_empty(&self) -> bool {
         self.plan.is_empty()
+    }
+
+    fn set_target_live(&mut self, target: SemanticNodeId, live: bool, time: f64) {
+        if self.plan.target_occurrences(target).next().is_none() {
+            return;
+        }
+        if live {
+            self.detached_targets.remove(&target);
+        } else {
+            self.detached_targets.insert(target);
+        }
+        for index in self.plan.target_occurrences(target) {
+            let occurrence = self.plan.occurrence(index);
+            let activation = occurrence.activation();
+            let key = (occurrence.order(), index);
+            if live
+                && activation.active_from() <= time
+                && activation.inactive_from().is_none_or(|end| time < end)
+            {
+                self.active_occurrences.insert(key);
+            } else {
+                self.active_occurrences.remove(&key);
+            }
+        }
+        self.completed_time = None;
+        self.completed_publication = None;
     }
 
     fn preview(&self, requested: f64, current: f64) -> CallbackSchedulePreview {
@@ -212,7 +241,12 @@ impl CallbackSchedule {
             let key = (self.plan.occurrence(index).order(), index);
             match event.kind() {
                 SemanticHostCallbackEventKind::Activate => {
-                    active_occurrences.insert(key);
+                    if !self
+                        .detached_targets
+                        .contains(&self.plan.occurrence(index).target())
+                    {
+                        active_occurrences.insert(key);
+                    }
                 }
                 SemanticHostCallbackEventKind::Deactivate => {
                     active_occurrences.remove(&key);
@@ -595,6 +629,7 @@ pub enum ExecutionSessionCallbackError {
     Evaluation(EvaluationError),
     InvalidEffectiveWrite(CompilePatchError),
     Commit(PreparedFrameCommitError),
+    Publication(super::ExecutionSessionPublicationError),
 }
 
 impl std::fmt::Display for ExecutionSessionCallbackError {
@@ -639,6 +674,7 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
             Self::Evaluation(error) => error.fmt(formatter),
             Self::InvalidEffectiveWrite(error) => error.fmt(formatter),
             Self::Commit(error) => error.fmt(formatter),
+            Self::Publication(error) => error.fmt(formatter),
         }
     }
 }
@@ -672,12 +708,29 @@ impl From<ExecutionSessionCallbackReadError> for ExecutionSessionCallbackError {
 #[derive(Clone, Debug)]
 pub(super) struct PendingCallbackPhase {
     token: CallbackPhaseToken,
-    prepared: PreparedFrameEvaluation,
+    pub(super) prepared: PreparedFrameEvaluation,
+    schedule: Option<CallbackSchedulePreview>,
+    signal_timeline: Option<SignalTimelinePreview>,
+}
+
+pub(super) struct CallbackCompletion {
+    token: CallbackPhaseToken,
+    time: f64,
     schedule: Option<CallbackSchedulePreview>,
     signal_timeline: Option<SignalTimelinePreview>,
 }
 
 impl PendingCallbackPhase {
+    pub(super) fn into_parts(self) -> (PreparedFrameEvaluation, CallbackCompletion) {
+        let completion = CallbackCompletion {
+            token: self.token,
+            time: self.prepared.time(),
+            schedule: self.schedule,
+            signal_timeline: self.signal_timeline,
+        };
+        (self.prepared, completion)
+    }
+
     pub(super) fn interrupted_clone(&self, runtime: RuntimeIdentity) -> CallbackTermination {
         CallbackTermination::interrupted_clone(self.token, runtime)
     }
@@ -1076,6 +1129,29 @@ impl ExecutionSession {
         &mut self,
         batch: EffectivePropertyBatch,
     ) -> Result<&FrameState, ExecutionSessionCallbackError> {
+        let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
+        let pending = self
+            .pending_callback
+            .take()
+            .expect("pending phase remained live throughout preflight");
+        let (frame, completion) = pending.into_parts();
+        self.runtime
+            .commit_prepared_frame(frame, effective)
+            .expect("preflighted callback phase cannot stale before synchronous commit");
+        self.finish_callback_publication(completion, receipt_domains);
+        Ok(self.runtime.frame())
+    }
+
+    fn prepare_callback_writes(
+        &self,
+        batch: EffectivePropertyBatch,
+    ) -> Result<
+        (
+            noon_runtime::PreparedEffectivePropertyBatch,
+            BTreeMap<SemanticNodeId, u8>,
+        ),
+        ExecutionSessionCallbackError,
+    > {
         let pending = self
             .pending_callback
             .as_ref()
@@ -1086,9 +1162,6 @@ impl ExecutionSession {
                 actual: batch.token,
             });
         }
-        let token = batch.token;
-
-        let receipt_time = pending.prepared.time();
         let mut receipt_domains = BTreeMap::new();
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
@@ -1113,20 +1186,43 @@ impl ExecutionSession {
         self.runtime
             .preflight_prepared_frame_commit(&pending.prepared, &effective)?;
 
-        let pending = self
-            .pending_callback
-            .take()
-            .expect("pending phase remained live throughout preflight");
-        self.runtime
-            .commit_prepared_frame(pending.prepared, effective)
-            .expect("preflighted callback phase cannot stale before synchronous commit");
-        if let Some(signal_timeline) = pending.signal_timeline {
+        Ok((effective, receipt_domains))
+    }
+
+    pub(super) fn reconcile_callback_membership(
+        &mut self,
+        objects: &[noon_core::ObjectId],
+        live: bool,
+    ) {
+        for &object in objects {
+            if let Some(target) = self.execution_index.semantic_object_id(object) {
+                self.callback_schedule
+                    .set_target_live(target, live, self.frame().time);
+                if !live {
+                    if let Some(receipt) = self.last_callback_receipt.as_mut() {
+                        receipt.domains.remove(&target);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn commit_callback_progress(&mut self, completion: &mut CallbackCompletion) {
+        if let Some(signal_timeline) = completion.signal_timeline.take() {
             self.signal_timeline.commit(signal_timeline);
         }
-        if let Some(schedule) = pending.schedule {
+        if let Some(schedule) = completion.schedule.take() {
             self.callback_schedule
                 .commit(schedule, self.runtime.publication_context());
         }
+    }
+
+    fn finish_callback_publication(
+        &mut self,
+        mut completion: CallbackCompletion,
+        mut receipt_domains: BTreeMap<SemanticNodeId, u8>,
+    ) {
+        self.commit_callback_progress(&mut completion);
         if !self.callback_schedule.is_empty() {
             if let Some(previous) = self.last_callback_receipt.as_ref() {
                 for (&object, &domains) in &previous.domains {
@@ -1136,13 +1232,59 @@ impl ExecutionSession {
                 }
             }
         }
+        receipt_domains
+            .retain(|object, _| self.execution_index.execution_object_id(*object).is_some());
         self.last_callback_receipt = Some(CallbackPublicationReceipt {
-            token,
-            time: receipt_time,
+            token: completion.token,
+            time: completion.time,
             publication: self.runtime.publication_context(),
             domains: receipt_domains,
         });
-        Ok(self.runtime.frame())
+    }
+
+    /// Publish a required host phase and a shared semantic transaction atomically.
+    /// Prepared transaction-local handles/read views use the ordinary semantic
+    /// allocator. Failed semantic/lowering preflight leaves this phase retryable.
+    /// Active animation segment completion retains its existing publication gate.
+    pub fn commit_required_callback_transaction(
+        &mut self,
+        store: &mut noon_core::SemanticStore,
+        batch: EffectivePropertyBatch,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionCallbackError> {
+        let prepared = transaction.prepare(store).map_err(|error| {
+            ExecutionSessionCallbackError::Publication(
+                super::ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        self.commit_prepared_required_callback_transaction(batch, prepared)
+    }
+
+    /// Commit after inspecting provisional objects through the existing semantic
+    /// transaction read view. No provisional node becomes globally visible until
+    /// the callback token, lowering and runtime publication have all validated.
+    pub fn commit_prepared_required_callback_transaction(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionCallbackError> {
+        let token = batch.token;
+        let (effective, domains) = self.prepare_callback_writes(batch)?;
+        let (result, completion) = self
+            .apply_prepared_semantic_transaction_with_execution_contract(
+                prepared,
+                Vec::new(),
+                Some(effective).into(),
+                super::publication::SemanticPublicationPurpose::Callback(token),
+                None,
+                None,
+            )
+            .map_err(ExecutionSessionCallbackError::Publication)?;
+        self.finish_callback_publication(
+            completion.expect("callback publication consumed the exact pending phase"),
+            domains,
+        );
+        Ok(result)
     }
 
     /// Discard one exact pending phase without changing coherent runtime state.
@@ -1300,6 +1442,265 @@ mod tests {
         assert!(matches!(
             session.advance_to_callback_barrier(0.0).unwrap(),
             CallbackAdvance::Ready(frame) if frame.time == 0.0
+        ));
+    }
+
+    #[test]
+    fn structural_callback_commits_provisional_object_and_effective_frame_once() {
+        use noon_core::{SemanticNodeCreation, SemanticVec3};
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.add_member(root, object).unwrap();
+        store.attach_to_scene(root).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let mut overlay = session
+            .begin_required_callback_phase(0.5, [object])
+            .unwrap();
+        overlay
+            .set_transform(
+                object,
+                Transform2D {
+                    translation: Vec2::new(3.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            )
+            .unwrap();
+        let batch = overlay.finish();
+        let mut tx = SemanticMutationTransaction::new();
+        let provisional = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 0.25 },
+        )));
+        tx.set_property(
+            provisional,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(2.0, 4.0, 0.0),
+        );
+        tx.add_member(root, provisional);
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert_eq!(
+            prepared
+                .object_state(provisional)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            2.0
+        );
+        let planned = prepared.planned_node_id(provisional).unwrap();
+        let result = session
+            .commit_prepared_required_callback_transaction(batch, prepared)
+            .unwrap();
+        assert_eq!(result.resolve(provisional), Some(planned));
+        assert_eq!(session.pending_callback_token(), None);
+        assert_eq!(session.frame().time, 0.5);
+        assert_eq!(
+            session
+                .effective_semantic_object(&store, object)
+                .unwrap()
+                .object
+                .transform
+                .translation
+                .x,
+            3.0
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(object)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            0.0,
+            "effective driver writes do not become authored values"
+        );
+        assert_eq!(
+            session
+                .effective_semantic_object(&store, planned)
+                .unwrap()
+                .object
+                .transform
+                .translation,
+            Vec2::new(2.0, 4.0)
+        );
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            session.last_structural_publication_stats().entered_objects,
+            1
+        );
+    }
+
+    #[test]
+    fn structural_callback_can_detach_its_own_target_without_leaking_driver_or_wake() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.add_member(root, object).unwrap();
+        store.attach_to_scene(root).unwrap();
+        let mut register = SemanticMutationTransaction::new();
+        register.add_updater(object, HostCallbackId::new(1), 0.0, None);
+        register.apply(&mut store).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let CallbackAdvance::HostRequired { mut overlay, .. } =
+            session.advance_to_callback_barrier(0.0).unwrap()
+        else {
+            panic!("required updater");
+        };
+        overlay
+            .set_transform(
+                object,
+                Transform2D {
+                    translation: Vec2::new(3.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            )
+            .unwrap();
+        let mut tx = SemanticMutationTransaction::new();
+        tx.remove_member(root, object);
+        session
+            .commit_required_callback_transaction(&mut store, overlay.finish(), tx)
+            .unwrap();
+        assert!(session.effective_semantic_object(&store, object).is_err());
+        assert_eq!(
+            session.callback_schedule.wake_timeline(0.0),
+            TimelineWakeState::Quiescent
+        );
+        assert!(matches!(
+            session.advance_to_callback_barrier(0.5).unwrap(),
+            CallbackAdvance::Ready(_)
+        ));
+        let mut tx = SemanticMutationTransaction::new();
+        tx.add_member(root, object);
+        session.apply_semantic_transaction(&mut store, tx).unwrap();
+        assert!(matches!(
+            session.advance_to_callback_barrier(0.5).unwrap(),
+            CallbackAdvance::HostRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn callback_reentry_restores_target_after_committing_the_prior_schedule_preview() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let objects = [0, 1].map(|_| {
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }))
+        });
+        for object in objects {
+            store.add_member(root, object).unwrap();
+        }
+        store.attach_to_scene(root).unwrap();
+        let mut register = SemanticMutationTransaction::new();
+        for (index, object) in objects.into_iter().enumerate() {
+            register.add_updater(object, HostCallbackId::new(index as u64), 0.0, None);
+        }
+        register.apply(&mut store).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(0.0).unwrap()
+        else {
+            panic!("callbacks");
+        };
+        let mut detach = SemanticMutationTransaction::new();
+        detach.remove_member(root, objects[1]);
+        session
+            .commit_required_callback_transaction(&mut store, overlay.finish(), detach)
+            .unwrap();
+        let CallbackAdvance::HostRequired {
+            overlay,
+            invocations,
+        } = session.advance_to_callback_barrier(0.5).unwrap()
+        else {
+            panic!("remaining callback");
+        };
+        assert_eq!(invocations.len(), 1);
+        let mut reentry = SemanticMutationTransaction::new();
+        reentry.add_member(root, objects[1]);
+        session
+            .commit_required_callback_transaction(&mut store, overlay.finish(), reentry)
+            .unwrap();
+        let CallbackAdvance::HostRequired { invocations, .. } =
+            session.advance_to_callback_barrier(0.6).unwrap()
+        else {
+            panic!("restored callbacks");
+        };
+        assert_eq!(
+            invocations
+                .iter()
+                .map(|invocation| invocation.target())
+                .collect::<Vec<_>>(),
+            objects
+        );
+    }
+
+    #[test]
+    fn failed_structural_callback_keeps_same_token_frame_and_semantic_allocator_retryable() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let frame = session.frame().clone();
+        let overlay = session
+            .begin_required_callback_phase(1.0, [object])
+            .unwrap();
+        let batch = overlay.finish();
+        let token = batch.token;
+        let mut invalid = SemanticMutationTransaction::new();
+        invalid.set_property(object, SemanticObjectProperty::RotationZ, f64::MAX);
+        assert!(matches!(
+            session.commit_required_callback_transaction(&mut store, batch.clone(), invalid),
+            Err(ExecutionSessionCallbackError::Publication(
+                super::super::ExecutionSessionPublicationError::Lowering(_)
+            ))
+        ));
+        assert_eq!(session.pending_callback_token(), Some(token));
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(store.scene_revision(), before.scene_revision());
+        assert!(session.take_frame_changes().is_empty());
+        let mut valid = SemanticMutationTransaction::new();
+        valid.set_property(object, SemanticObjectProperty::RotationZ, 0.5);
+        session
+            .commit_required_callback_transaction(&mut store, batch.clone(), valid)
+            .unwrap();
+        assert_eq!(session.frame().time, 1.0);
+        assert_eq!(
+            session
+                .effective_semantic_object(&store, object)
+                .unwrap()
+                .object
+                .transform
+                .rotation,
+            0.5
+        );
+        assert!(matches!(
+            session.commit_required_callback_transaction(
+                &mut store,
+                batch,
+                SemanticMutationTransaction::new()
+            ),
+            Err(ExecutionSessionCallbackError::NoPendingPhase)
         ));
     }
 

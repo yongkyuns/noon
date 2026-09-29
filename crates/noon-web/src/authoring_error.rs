@@ -670,6 +670,7 @@ impl From<ExecutionSessionCallbackError> for AuthoringFailure {
             E::UnknownObject(_) => Self::new("stale_handle", "callback.unknown_object", message),
             E::Read(cause) => Self::caused_by("callback.read", message, cause.into()),
             E::Evaluation(cause) => Self::caused_by("callback.evaluation", message, cause.into()),
+            E::Publication(cause) => Self::caused_by("callback.publication", message, cause.into()),
             E::InvalidEffectiveWrite(cause) => Self::caused_by(
                 "callback.invalid_effective_write",
                 message,
