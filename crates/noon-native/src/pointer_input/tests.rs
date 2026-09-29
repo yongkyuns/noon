@@ -734,6 +734,7 @@ fn binding_reset_that_changes_publication_cannot_retag_the_first_positional_inpu
 fn hover_tracks_static_pointer_motion_and_presented_geometry_without_new_input() {
     let mut f = Fixture::new();
     f.move_to(400.0, 200.0);
+    f.present();
     let target = f
         .app
         .session()
@@ -766,6 +767,7 @@ fn hover_tracks_static_pointer_motion_and_presented_geometry_without_new_input()
     assert_eq!(f.app.next_input_sequence, sequence);
     assert_eq!(f.app.session().frame().time, 0.0);
     f.move_to(600.0, 200.0);
+    f.present();
     assert_eq!(f.app.session().hovered_pointer_target(), Some(target));
     f.app.pointer_focus_lost().unwrap();
     assert_eq!(f.app.session().hovered_pointer_target(), None);
