@@ -38,7 +38,7 @@ pub use semantic_scene_restructure::{
     semantic_scene_root_contains, stage_prepared_semantic_scene_membership,
     stage_semantic_foreground_removal, stage_semantic_scene_admission,
     stage_semantic_scene_lifecycle_membership, PreparedSemanticMembershipError,
-    SemanticSceneMembershipRequest,
+    PreparedSemanticMembershipErrorKind, SemanticSceneMembershipRequest,
 };
 
 mod semantic_declarations;

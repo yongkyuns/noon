@@ -237,19 +237,6 @@ impl FamilyEdgePreflight {
             .unwrap_or_else(|| catalog.contains(family, member))
     }
 
-    pub(super) fn added_parents(
-        &self,
-        catalog: &TransactionNodeCatalog<'_>,
-        member: SemanticTransactionNodeRef,
-    ) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
-        self.added_parents
-            .get(&member)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(move |family| self.contains(catalog, *family, member))
-    }
-
     pub(super) fn contains_existing(
         &self,
         store: &crate::SemanticStore,
@@ -297,7 +284,7 @@ impl FamilyEdgePreflight {
             .get(&member.into())
             .into_iter()
             .flatten()
-            .filter_map(|family| {
+            .filter_map(move |family| {
                 let family = family.existing()?;
                 self.contains_existing_placeholder(family, member)
                     .then_some(family)
@@ -313,32 +300,6 @@ impl FamilyEdgePreflight {
             .get(&(family.into(), member.into()))
             .copied()
             .unwrap_or(false)
-    }
-
-    pub(super) fn first_member(
-        &self,
-        catalog: &TransactionNodeCatalog<'_>,
-        family: SemanticTransactionNodeRef,
-    ) -> Option<SemanticTransactionNodeRef> {
-        self.order.first(catalog, family)
-    }
-
-    pub(super) fn next_member(
-        &self,
-        catalog: &TransactionNodeCatalog<'_>,
-        family: SemanticTransactionNodeRef,
-        member: SemanticTransactionNodeRef,
-    ) -> Option<SemanticTransactionNodeRef> {
-        self.order.next(catalog, family, member)
-    }
-
-    pub(super) fn previous_member(
-        &self,
-        catalog: &TransactionNodeCatalog<'_>,
-        family: SemanticTransactionNodeRef,
-        member: SemanticTransactionNodeRef,
-    ) -> Option<SemanticTransactionNodeRef> {
-        self.order.previous(catalog, family, member)
     }
 
     fn reaches(
@@ -423,17 +384,6 @@ impl FamilyOrderOverlay {
                 .and_then(|node| node.previous_member(member)),
         }
     }
-    fn first(
-        &self,
-        catalog: &TransactionNodeCatalog<'_>,
-        family: SemanticTransactionNodeRef,
-    ) -> Option<SemanticTransactionNodeRef> {
-        self.first
-            .get(&family)
-            .copied()
-            .unwrap_or_else(|| catalog.first_member(family))
-    }
-
     fn last(
         &self,
         catalog: &TransactionNodeCatalog<'_>,

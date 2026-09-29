@@ -96,7 +96,7 @@ pub(super) fn project_members<V: MembershipView>(
     let roots = previous.iter().copied().collect::<HashSet<_>>();
     let mut members = Vec::new();
     let mut unique = HashSet::new();
-    for &root in previous {
+    for root in previous {
         let mut promoted = HashSet::new();
         let mut projected = Vec::new();
         collect_root_replacements(

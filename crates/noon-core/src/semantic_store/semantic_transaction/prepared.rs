@@ -63,25 +63,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         transaction: SemanticMutationTransaction,
         store: &'a mut SemanticStore,
     ) -> Result<Self, SemanticMutationTransactionError> {
-        let preflight = transaction.preflight(store)?;
-        let next_revision = if preflight.changed.iter().any(|changed| *changed) {
-            Some(
-                store
-                    .scene_revision()
-                    .checked_next()
-                    .ok_or(SemanticMutationTransactionError::SceneRevisionExhausted)?,
-            )
-        } else {
-            None
-        };
-        let tokens = transaction.mutations.iter().filter_map(|mutation| match mutation {
-            SemanticMutation::AddNode { token, .. } if !preflight.removed_pending.contains(token) => Some(*token),
-            SemanticMutation::AddAnimation { token, animation }
-                if !preflight.removed_pending.contains(token) && !animation.intent().node_references().any(|reference|
-                    matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))) => Some(*token),
-            _ => None,
-        });
-        let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
+        let (preflight, next_revision, planned_nodes) = Self::preflight_parts(&transaction, store)?;
         Ok(Self {
             store,
             transaction,
@@ -103,7 +85,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub(crate) fn with_existing_plan(
         self,
         plan: SemanticMutationTransaction,
-    ) -> Result<Self, SemanticMutationTransactionError> {
+    ) -> Result<Self, (Self, SemanticMutationTransactionError)> {
         debug_assert!(plan.mutations.iter().all(|mutation| {
             !matches!(
                 mutation,
@@ -115,11 +97,122 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }));
         let Self {
             store,
-            mut transaction,
-            ..
+            transaction,
+            preflight,
+            next_revision,
+            planned_nodes,
         } = self;
-        transaction.mutations.extend(plan.mutations);
-        Self::new(transaction, store)
+        // This candidate is never exposed or committed independently. It keeps
+        // the original transaction provenance while proving the extension; on
+        // failure the original prepared proof is reconstructed unchanged.
+        let mut candidate = SemanticMutationTransaction {
+            id: transaction.id,
+            next_token: transaction.next_token,
+            mutations: transaction.mutations.clone(),
+        };
+        for mutation in plan.mutations {
+            let replacement = match &mutation {
+                SemanticMutation::AddMember { family, member }
+                | SemanticMutation::RemoveMember { family, member } => {
+                    candidate.mutations.iter().position(|existing| {
+                        matches!(
+                            existing,
+                            SemanticMutation::AddMember {
+                                family: existing_family,
+                                member: existing_member,
+                            }
+                                | SemanticMutation::RemoveMember {
+                                    family: existing_family,
+                                    member: existing_member,
+                                } if existing_family == family && existing_member == member
+                        )
+                    })
+                }
+                SemanticMutation::ReorderMember { family, member, .. } => {
+                    candidate.mutations.iter().position(|existing| {
+                        matches!(
+                            existing,
+                            SemanticMutation::ReorderMember {
+                                family: existing_family,
+                                member: existing_member,
+                                ..
+                            } if existing_family == family && existing_member == member
+                        )
+                    })
+                }
+                _ => None,
+            };
+            if let Some(index) = replacement {
+                candidate.mutations[index] = mutation;
+            } else {
+                candidate.mutations.push(mutation);
+            }
+        }
+        let (candidate_preflight, candidate_next_revision, candidate_planned_nodes) =
+            match Self::preflight_parts(&candidate, store) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    return Err((
+                        Self {
+                            store,
+                            transaction,
+                            preflight,
+                            next_revision,
+                            planned_nodes,
+                        },
+                        error,
+                    ));
+                }
+            };
+        Ok(Self {
+            store,
+            transaction: candidate,
+            preflight: candidate_preflight,
+            next_revision: candidate_next_revision,
+            planned_nodes: candidate_planned_nodes,
+        })
+    }
+
+    fn preflight_parts(
+        transaction: &SemanticMutationTransaction,
+        store: &SemanticStore,
+    ) -> Result<
+        (
+            SemanticTransactionPreflight,
+            Option<SceneRevision>,
+            HashMap<SemanticLocalNodeToken, SemanticNodeId>,
+        ),
+        SemanticMutationTransactionError,
+    > {
+        let preflight = transaction.preflight(store)?;
+        let next_revision = if preflight.changed.iter().any(|changed| *changed) {
+            Some(
+                store
+                    .scene_revision()
+                    .checked_next()
+                    .ok_or(SemanticMutationTransactionError::SceneRevisionExhausted)?,
+            )
+        } else {
+            None
+        };
+        let tokens = transaction.mutations.iter().filter_map(|mutation| match mutation {
+            SemanticMutation::AddNode { token, .. } if !preflight.removed_pending.contains(token) => {
+                Some(*token)
+            }
+            SemanticMutation::AddAnimation { token, animation }
+                if !preflight.removed_pending.contains(token)
+                    && !animation.intent().node_references().any(|reference|
+                        matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))) =>
+            {
+                Some(*token)
+            }
+            _ => None,
+        });
+        Ok((
+            preflight,
+            next_revision,
+            tokens.zip(store.preview_node_allocations()).collect(),
+        ))
     }
 
     /// Allocator-derived identity for fallible execution preparation under this
@@ -1121,17 +1214,6 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             },
             store,
         )
-    }
-}
-
-fn existing_read_node(
-    node: SemanticTransactionNodeRef,
-) -> Result<SemanticNodeId, SemanticTransactionReadError> {
-    match node {
-        SemanticTransactionNodeRef::Existing(node) => Ok(node),
-        SemanticTransactionNodeRef::Pending(token) => {
-            Err(SemanticTransactionReadError::UnknownPendingNode(token))
-        }
     }
 }
 

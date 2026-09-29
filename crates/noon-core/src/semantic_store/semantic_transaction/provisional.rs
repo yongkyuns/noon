@@ -84,17 +84,6 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
-    pub(super) fn first_member(
-        &self,
-        family: SemanticTransactionNodeRef,
-    ) -> Option<SemanticTransactionNodeRef> {
-        family
-            .existing()
-            .and_then(|family| self.store.node(family))
-            .and_then(|node| node.first_member())
-            .map(Into::into)
-    }
-
     pub(super) fn last_member(
         &self,
         family: SemanticTransactionNodeRef,

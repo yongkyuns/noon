@@ -27,13 +27,41 @@ pub enum SemanticSceneMembershipRequest<'a> {
     },
 }
 
+/// A rejected prepared-membership stage together with the still-valid prior
+/// transaction. Callers that handle an operation failure can continue staging
+/// later callback operations or commit the work already prepared.
+pub struct PreparedSemanticMembershipError<'a> {
+    prepared: PreparedSemanticMutationTransaction<'a>,
+    kind: PreparedSemanticMembershipErrorKind,
+}
+
 #[derive(Debug)]
-pub enum PreparedSemanticMembershipError {
+pub enum PreparedSemanticMembershipErrorKind {
     Operation(SemanticSceneOperationError),
     Transaction(crate::SemanticMutationTransactionError),
 }
 
-impl std::fmt::Display for PreparedSemanticMembershipError {
+impl<'a> PreparedSemanticMembershipError<'a> {
+    /// Recover the prior prepared transaction after a caught staging error.
+    pub fn into_prepared(self) -> PreparedSemanticMutationTransaction<'a> {
+        self.prepared
+    }
+
+    /// The operation or transaction preflight error that rejected this stage.
+    pub fn kind(&self) -> &PreparedSemanticMembershipErrorKind {
+        &self.kind
+    }
+}
+
+impl std::fmt::Debug for PreparedSemanticMembershipError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedSemanticMembershipError")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for PreparedSemanticMembershipErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Operation(error) => error.fmt(f),
@@ -41,7 +69,18 @@ impl std::fmt::Display for PreparedSemanticMembershipError {
         }
     }
 }
-impl std::error::Error for PreparedSemanticMembershipError {}
+impl std::error::Error for PreparedSemanticMembershipErrorKind {}
+
+impl std::fmt::Display for PreparedSemanticMembershipError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+impl std::error::Error for PreparedSemanticMembershipError<'_> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.kind)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct MembershipTarget {
@@ -183,8 +222,12 @@ impl MembershipView for PreparedMembershipView<'_, '_> {
         &self,
         n: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
-        let mut parents = StoreMembershipView(self.prepared.store()).parents(n)?;
-        parents.retain(|parent| self.contains(*parent, n).unwrap_or(false));
+        let mut parents = Vec::new();
+        for parent in StoreMembershipView(self.prepared.store()).parents(n)? {
+            if self.contains(parent, n)? {
+                parents.push(parent);
+            }
+        }
         for parent in self
             .prepared
             .staged_parent_additions_existing(n)
@@ -266,7 +309,7 @@ pub fn semantic_scene_root_contains(
         if !visited.insert(node) {
             continue;
         }
-        for parent in view.parents(node)? {
+        for &parent in target_node_checked(store, node)?.parents() {
             if parent == scene_root {
                 return Ok(true);
             }
@@ -301,17 +344,28 @@ pub fn plan_prepared_semantic_scene_membership(
 }
 
 /// Extend one prepared transaction with an ordered existing-handle membership
-/// operation. Failure drops the unpublished proof and publishes nothing.
+/// operation. A rejected stage returns the prior unpublished proof unchanged.
 pub fn stage_prepared_semantic_scene_membership<'a>(
     prepared: PreparedSemanticMutationTransaction<'a>,
     scene_root: SemanticNodeId,
     request: SemanticSceneMembershipRequest<'_>,
-) -> Result<PreparedSemanticMutationTransaction<'a>, PreparedSemanticMembershipError> {
-    let plan = plan_prepared_semantic_scene_membership(&prepared, scene_root, request)
-        .map_err(PreparedSemanticMembershipError::Operation)?;
-    prepared
-        .with_existing_plan(plan)
-        .map_err(PreparedSemanticMembershipError::Transaction)
+) -> Result<PreparedSemanticMutationTransaction<'a>, PreparedSemanticMembershipError<'a>> {
+    let plan = match plan_prepared_semantic_scene_membership(&prepared, scene_root, request) {
+        Ok(plan) => plan,
+        Err(kind) => {
+            return Err(PreparedSemanticMembershipError {
+                prepared,
+                kind: PreparedSemanticMembershipErrorKind::Operation(kind),
+            });
+        }
+    };
+    match prepared.with_existing_plan(plan) {
+        Ok(prepared) => Ok(prepared),
+        Err((prepared, kind)) => Err(PreparedSemanticMembershipError {
+            prepared,
+            kind: PreparedSemanticMembershipErrorKind::Transaction(kind),
+        }),
+    }
 }
 
 fn plan_membership_in_view<V: MembershipView>(
@@ -352,7 +406,7 @@ fn plan_membership_in_view<V: MembershipView>(
             let members = foreground::add_order(&foreground, &explicit);
             let mut tx = plan_add_members(view, scene_root, &members)?;
             if members != foreground {
-                tx.set_foreground_members(scene_root, members)
+                tx.set_foreground_members(scene_root, members);
             };
             Ok(tx)
         }
@@ -414,7 +468,7 @@ fn plan_membership_in_view<V: MembershipView>(
             )?;
             let members = foreground::replace_members(view, scene_root, old, new)?;
             if members != foreground {
-                tx.set_foreground_members(scene_root, members)
+                tx.set_foreground_members(scene_root, members);
             };
             Ok(tx)
         }
@@ -445,7 +499,7 @@ fn projected_root_path_count<V: MembershipView>(
     let mut count = 0usize;
     let mut stack = vec![target];
     while let Some(node) = stack.pop() {
-        for &parent in target_node_checked(store, node)?.parents() {
+        for parent in view.parents(node)? {
             if parent == scene_root {
                 count += 1;
                 if count > 1 {
@@ -1150,6 +1204,71 @@ mod tests {
             store.semantic_family_members_checked(family).unwrap(),
             vec![child, sibling]
         );
+    }
+
+    #[test]
+    fn caught_prepared_stage_error_retains_prior_callback_overlay() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let family = store.insert_family();
+        let child = object(&mut store, 1.0);
+        store.add_semantic_family_member(family, child).unwrap();
+
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut store)
+            .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[family]),
+        )
+        .unwrap();
+        let error = match stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[family, family]),
+        ) {
+            Ok(_) => panic!("duplicate callback stage unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.kind(),
+            PreparedSemanticMembershipErrorKind::Operation(
+                SemanticSceneOperationError::DuplicateMembershipTarget(id)
+            ) if *id == family
+        ));
+
+        let prepared = error.into_prepared();
+        assert_eq!(
+            prepared.family_first_member_existing(root).unwrap(),
+            Some(family)
+        );
+        prepared.commit();
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            vec![family]
+        );
+    }
+
+    #[test]
+    fn prepared_membership_view_merges_staged_nested_reparent_parents() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let outer = store.insert_family();
+        let nested = store.insert_family();
+        let child = object(&mut store, 1.0);
+        store.add_semantic_family_member(root, outer).unwrap();
+        store.add_semantic_family_member(outer, nested).unwrap();
+        store.add_semantic_family_member(nested, child).unwrap();
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(root, nested);
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let view = PreparedMembershipView {
+            prepared: &prepared,
+        };
+
+        assert_eq!(view.parents(nested).unwrap(), vec![outer, root]);
     }
 
     #[test]
