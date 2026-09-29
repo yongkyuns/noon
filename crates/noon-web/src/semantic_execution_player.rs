@@ -1629,23 +1629,6 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
-    /// Prove that a typed callback request still belongs to this exact player
-    /// before the WASM membership batch reads any of its handles. The returned
-    /// `Rc` is the canonical store already retained by this player; it does not
-    /// create a scene or transfer ownership.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn callback_membership_store(
-        &self,
-        token: CallbackPhaseToken,
-    ) -> Result<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>, AuthoringFailure> {
-        self.pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback membership does not match the player pending phase")?;
-        self.semantics
-            .clone()
-            .ok_or("callback membership requires a live semantic store")
-    }
-
     /// Route callback declarations through the same shared semantic publication
     /// as native authoring. The browser host owns no callback schedule mirror.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3162,32 +3145,6 @@ impl SemanticExecutionPlayer {
         batch_json: &str,
     ) -> Result<(), wasm_bindgen::JsValue> {
         self.commit_callback_phase_json(batch_json)
-            .map_err(crate::authoring_error::js_error)
-    }
-
-    /// Commit one existing-handle root membership edit for the exact pending
-    /// callback phase. The callback token is decoded only at this host boundary;
-    /// member handles remain typed in Rust and stage through the shared prepared
-    /// semantic transaction before one callback publication.
-    #[cfg(target_arch = "wasm32")]
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = commitRequiredCallbackMembership)]
-    pub fn commit_required_callback_membership_wasm(
-        &mut self,
-        token_json: &str,
-        batch: crate::WasmSceneMembershipBatch,
-    ) -> Result<(), wasm_bindgen::JsValue> {
-        let token =
-            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
-        let store = self
-            .callback_membership_store(token)
-            .map_err(crate::authoring_error::js_error)?;
-        batch
-            .with_existing_callback_membership(&store, |request| {
-                self.commit_required_callback_membership(
-                    EffectivePropertyBatch::new(token, []),
-                    request,
-                )
-            })
             .map_err(crate::authoring_error::js_error)
     }
 
