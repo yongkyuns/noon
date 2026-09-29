@@ -1,16 +1,16 @@
 use super::*;
 use noon::ExecutionSession;
-use noon_core::{
-    NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
-    SemanticMutationTransaction, SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticVec3, StoredGeometry,
-};
+use noon_core::{NativeInputValue, NativeStateSource, ReactiveValue, SemanticNodeId};
 use noon_core::{NativePointerCancellation, NativePointerId};
 
 const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
 
+#[path = "../../../../noon/tests/support/pointer_input_trace.rs"]
+mod shared_trace;
+
 pub(super) struct PointerFixture {
     pub(super) player: SemanticExecutionPlayer,
+    target: SemanticNodeId,
     position: SemanticNodeId,
     button: SemanticNodeId,
     down: SemanticNodeId,
@@ -18,42 +18,18 @@ pub(super) struct PointerFixture {
 }
 
 pub(super) fn pointer_fixture() -> PointerFixture {
-    let mut store = SemanticStore::new();
-    let root = store.insert_family();
-    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-        radius: 0.5,
-    }));
-    store.add_semantic_family_member(root, target).unwrap();
-    let mut add_signal = |source, initial| {
-        let mut tx = SemanticMutationTransaction::new();
-        let pending =
-            tx.create_node(SemanticNodeCreation::native_input_signal(initial, source).unwrap());
-        tx.scope_signal(root, pending);
-        tx.apply(&mut store).unwrap().resolve(pending).unwrap()
-    };
-    let position = add_signal(
-        SemanticNativeInputSource::State(NativeStateSource::PointerPosition),
-        SemanticSignalValue::Vec3(SemanticVec3::ZERO),
-    );
-    let button = add_signal(
-        SemanticNativeInputSource::State(NativeStateSource::PointerButton { button: 0 }),
-        SemanticSignalValue::Bool(false),
-    );
-    let down = add_signal(
-        SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button: 0 }),
-        SemanticSignalValue::Scalar(0.0),
-    );
-    let up = add_signal(
-        SemanticNativeInputSource::Event(NativeEventSource::PointerUp { button: 0 }),
-        SemanticSignalValue::Scalar(0.0),
-    );
-    let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let fixture = shared_trace::Fixture::new();
+    let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+    let mut player = SemanticExecutionPlayer::from_session(session, 1.0, 1).unwrap();
+    player.pause();
+    player.set_pointer_fill_selection(Some(4.0)).unwrap();
     PointerFixture {
-        player: SemanticExecutionPlayer::from_session(session, 1.0, 1).unwrap(),
-        position,
-        button,
-        down,
-        up,
+        player,
+        target: fixture.target,
+        position: fixture.position,
+        button: fixture.button,
+        down: fixture.down,
+        up: fixture.up,
     }
 }
 
@@ -85,17 +61,16 @@ fn browser_pointer_json(
 #[test]
 fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
     let mut f = pointer_fixture();
-    for json in [
-        browser_pointer_json("move", Some(200.0), Some(100.0), None, 0),
-        browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 0),
-        browser_pointer_json("move", Some(600.0), Some(300.0), None, 0),
-        browser_pointer_json("release", Some(600.0), Some(300.0), Some(0), 0),
-    ] {
+    for step in shared_trace::TRACE {
+        let json = browser_pointer_json(step.kind, Some(step.x), Some(step.y), step.button, 0);
         f.player.submit_test_frame_json(&json).unwrap();
     }
     assert_eq!(
         f.player.session.effective_signal_value(f.position),
-        Some(&ReactiveValue::Vec2(Vec2::new(4.0, -2.0)))
+        Some(&ReactiveValue::Vec2(Vec2::new(
+            shared_trace::EXPECTED_POSITION.0,
+            shared_trace::EXPECTED_POSITION.1,
+        )))
     );
     assert_eq!(
         f.player.session.effective_signal_value(f.button),
@@ -103,14 +78,24 @@ fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
     );
     assert_eq!(
         f.player.session.effective_signal_value(f.down),
-        Some(&ReactiveValue::Scalar(1.0))
+        Some(&ReactiveValue::Scalar(shared_trace::EXPECTED_DOWN_COUNT))
     );
     assert_eq!(
         f.player.session.effective_signal_value(f.up),
-        Some(&ReactiveValue::Scalar(1.0))
+        Some(&ReactiveValue::Scalar(shared_trace::EXPECTED_UP_COUNT))
     );
-    assert_eq!(f.player.next_native_event_sequence, 4);
-    assert_eq!(f.player.session.frame().time, 0.0);
+    assert_eq!(
+        f.player.next_native_event_sequence,
+        shared_trace::EXPECTED_SEQUENCE
+    );
+    assert_eq!(
+        f.player.session.frame().time,
+        shared_trace::EXPECTED_FRAME_TIME
+    );
+    assert_eq!(
+        f.player.session.selected_pointer_target(),
+        shared_trace::EXPECTED_SELECTED.then_some(f.target)
+    );
 }
 
 #[test]
