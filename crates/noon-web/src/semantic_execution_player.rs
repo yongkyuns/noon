@@ -6609,7 +6609,7 @@ mod callback_mixed_provisional_membership_regression {
                 ),
             )
             .unwrap_err();
-        assert_eq!(error.category, "foreign_store");
+        assert_eq!(error.category, "foreign_handle");
         assert_eq!(
             player.callback_membership_root_keys(token).unwrap(),
             vec![format!(
