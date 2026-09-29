@@ -53,6 +53,25 @@ fn zoom_transports_one_composed_view_without_scene_rows_or_authored_time() {
 }
 
 #[test]
+fn inspection_camera_change_cancels_a_captured_translation_drag() {
+    let (mut p, circle, displayed) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(displayed), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+
+    assert_eq!(scroll(&mut p, Some(displayed), zoom_in()), Ok(Some(true)));
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    assert!(!input(&mut p, "move", 1, Some(displayed), 1, 450.0).unwrap());
+}
+
+#[test]
 fn capture_consumption_and_delayed_acknowledgement_never_authorize_old_scroll() {
     let mut p = player();
     register(&mut p, 1);

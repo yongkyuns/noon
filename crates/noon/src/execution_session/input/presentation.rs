@@ -220,6 +220,38 @@ impl PointerFrameSnapshot {
         Ok(())
     }
 
+    /// Validate the immutable mapping retained by an already captured gesture.
+    ///
+    /// This deliberately does not compare publications: captured motion may
+    /// publish a local effective write before the host presents that newer
+    /// frame. It still requires the same runtime, inspection view, camera and
+    /// direct-input admission barriers. Callers must use this only after the
+    /// session has already acquired its own gesture capture; it is not an
+    /// alternative admission path for a new positional input or a new pick.
+    pub fn validate_captured_gesture(
+        &self,
+        session: &ExecutionSession,
+        current_view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        session
+            .ensure_direct_input_ingress_available()
+            .map_err(PointerFrameError::Input)?;
+        if self.runtime != session.runtime_identity() {
+            return Err(PointerFrameError::Input(
+                ExecutionSessionInputError::ForeignPointerRuntime,
+            ));
+        }
+        if self.view != current_view
+            || self.inspection_revision != session.inspection_view_revision()
+        {
+            return Err(PointerFrameError::ViewChanged);
+        }
+        if self.view.camera != session.inspection_camera()? {
+            return Err(PointerFrameError::CameraMismatch);
+        }
+        Ok(())
+    }
+
     /// Obtain the existing input token only while this captured frame is current.
     ///
     /// This never refreshes a stale snapshot to the session's newer publication.

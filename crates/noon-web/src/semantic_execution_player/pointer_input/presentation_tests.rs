@@ -519,6 +519,78 @@ fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_releas
 }
 
 #[test]
+fn captured_drag_continues_with_its_presented_receipt_until_release() {
+    let (mut p, circle, presented) = drag_player();
+    let before = p.session.publication_context();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
+
+    // Draining publishes a newer worker delta, but it has not reached the
+    // render host. Later physical records retain the collection-time receipt.
+    let unpresented_motion = delta(&mut p);
+    assert_eq!(unpresented_motion.retained.objects.len(), 1);
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 500.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(presented), 1, 550.0).unwrap());
+
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation.x,
+        0.75,
+        "release uses its own final collection-time coordinates"
+    );
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap(),
+        "motion stays effective-only and release authors one change"
+    );
+    let release = delta(&mut p);
+    assert_eq!(release.retained.objects.len(), 1);
+}
+
+#[test]
+fn a_new_pointer_source_cancels_a_captured_drag_before_rebinding() {
+    let (mut p, circle, presented) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+
+    assert!(
+        !input(&mut p, "move", 2, Some(presented), 1, 450.0).unwrap(),
+        "a new source cannot inherit the old source's captured hit"
+    );
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+}
+
+#[test]
+fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
+    let (mut p, circle, presented) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+
+    let mut unrelated = wire("release", 1, 1, 400.0);
+    unrelated["button"] = 1.into();
+    assert!(p
+        .submit_browser_pointer_input_json(
+            &serde_json::json!({"input": unrelated, "presentation": presented}).to_string(),
+        )
+        .unwrap());
+    assert!(p.session.translation_drag_active());
+
+    assert!(input(&mut p, "release", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+}
+
+#[test]
 fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
     let (mut p, circle, r) = drag_player();
     let before = p.session.publication_context().scene_revision();
