@@ -172,10 +172,27 @@ impl ExecutionSession {
         }))
     }
 
-    pub(super) fn finish_translation_drag_cancellation(
+    /// Commit cancellation through the same prepared frame used by view/input
+    /// publication. The lease is restored if the runtime rejects that frame.
+    pub(super) fn commit_translation_drag_cancellation(
         &mut self,
         cancellation: PreparedTranslationDragCancellation,
-    ) {
+        frame: noon_runtime::PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<(), ExecutionSessionInputError> {
+        let held = self
+            .runtime
+            .suspend_translation_drag(cancellation.object)
+            .ok_or_else(|| {
+                ExecutionSessionInputError::Interaction(
+                    "captured translation drag target is no longer live".into(),
+                )
+            })?;
+        if let Err(error) = self.runtime.commit_prepared_frame(frame, effective) {
+            self.runtime
+                .restore_translation_drag(cancellation.object, held);
+            return Err(ExecutionSessionInputError::PreparedCommit(error));
+        }
         debug_assert!(self
             .translation_drag
             .active
@@ -183,35 +200,18 @@ impl ExecutionSession {
         self.translation_drag.active = None;
         self.runtime
             .clear_translation_drag_effective_driver(cancellation.object);
+        Ok(())
     }
 
     pub fn cancel_translation_drag(&mut self) -> Result<(), TranslationDragError> {
-        if let Some(active) = self.translation_drag.active {
+        if let Some(cancellation) = self.prepare_translation_drag_cancellation()? {
             self.ensure_direct_input_ingress_available()?;
-            let base = self
-                .runtime
-                .translation_drag_base(active.object)
-                .ok_or(TranslationDragError::RetiredTarget)?;
-            let effective = self.prepared_drag_batch(active.object, base)?;
-            // Cancellation without a pointer occurrence still needs to restore
-            // the base frame; use the existing prepared input evaluation rather
-            // than mutating the live row directly.
-            let time = self.frame().time;
+            let effective = self.prepared_drag_batch(cancellation.object, cancellation.base)?;
             let frame = self
                 .runtime
-                .prepare_advance_to(time)
+                .prepare_advance_to(self.frame().time)
                 .map_err(ExecutionSessionInputError::Evaluation)?;
-            let held = self
-                .runtime
-                .suspend_translation_drag(active.object)
-                .ok_or(TranslationDragError::RetiredTarget)?;
-            if let Err(error) = self.runtime.commit_prepared_frame(frame, effective) {
-                self.runtime.restore_translation_drag(active.object, held);
-                return Err(ExecutionSessionInputError::PreparedCommit(error).into());
-            }
-            self.runtime
-                .clear_translation_drag_effective_driver(active.object);
-            self.translation_drag.active = None;
+            self.commit_translation_drag_cancellation(cancellation, frame, effective)?;
         }
         Ok(())
     }
