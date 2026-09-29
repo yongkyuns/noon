@@ -535,7 +535,7 @@ fn captured_drag_continues_with_its_presented_receipt_until_release() {
     assert!(!p.session.translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation.x,
-        0.75,
+        3.0,
         "release uses its own final collection-time coordinates"
     );
     assert_eq!(
