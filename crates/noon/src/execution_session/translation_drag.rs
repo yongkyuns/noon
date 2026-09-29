@@ -50,6 +50,7 @@ pub enum TranslationDragError {
     RetiredTarget,
     StaleUndo,
     ReplaySealed,
+    Publication(super::ExecutionSessionPublicationError),
     Semantic(String),
 }
 impl std::fmt::Display for TranslationDragError {
@@ -68,6 +69,7 @@ impl std::fmt::Display for TranslationDragError {
             Self::ReplaySealed => f.write_str(
                 "discard sealed replay before configuring or acquiring a translation drag",
             ),
+            Self::Publication(error) => error.fmt(f),
             Self::Semantic(error) => f.write_str(error),
         }
     }
@@ -210,6 +212,10 @@ impl ExecutionSession {
             if self.runtime.replay_is_sealed() {
                 return Err(TranslationDragError::ReplaySealed);
             }
+            // A release must be able to publish its one authored reconciliation.
+            // Reject before capture if an unfinished segment owns that lane.
+            self.require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)
+                .map_err(TranslationDragError::Publication)?;
             let object = self
                 .execution_object_id(node)
                 .ok_or(TranslationDragError::RetiredTarget)?;
@@ -370,7 +376,7 @@ impl ExecutionSession {
         );
         if let Err(error) = publication {
             self.translation_drag.active = Some(active);
-            return Err(TranslationDragError::Semantic(error.to_string()));
+            return Err(TranslationDragError::Publication(error));
         }
         let input = self
             .commit_prepared_native_pointer_metadata(timeline, metadata)
@@ -404,7 +410,7 @@ impl ExecutionSession {
         transaction.set_property(node, SemanticObjectProperty::Translation, value);
         self.apply_semantic_transaction(store, transaction)
             .map(|_| ())
-            .map_err(|error| TranslationDragError::Semantic(error.to_string()))
+            .map_err(TranslationDragError::Publication)
     }
 
     fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {

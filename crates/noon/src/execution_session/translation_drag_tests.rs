@@ -582,3 +582,51 @@ fn sealed_history_rejects_drag_configuration_without_changing_policy_or_frame() 
     assert!(!session.has_native_pointer_subscribers());
     assert!(session.replay_is_sealed());
 }
+
+#[test]
+fn drag_waits_for_pending_segment_before_acquiring_a_persistent_edit() {
+    use noon_core::AnimationOptions;
+    let (mut store, target, unrelated, mut session) = fixture();
+    let endpoint = store.insert_semantic_object(circle(12.0));
+    let animation = store
+        .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
+        .unwrap();
+    let segment = session
+        .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+        .unwrap();
+    let before = session.publication_context();
+    let token = session.native_pointer_input_token().unwrap();
+    assert_eq!(
+        submit(
+            &mut session,
+            &mut store,
+            1,
+            NativePointerInputKind::Press {
+                position: position(0.0),
+                button: 0,
+            }
+        ),
+        Err(TranslationDragError::Publication(
+            ExecutionSessionPublicationError::SegmentCompletionPending
+        ))
+    );
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.native_pointer_input_token().unwrap(), token);
+    assert!(!session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::ZERO);
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert!(session.translation_drag_active());
+}

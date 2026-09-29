@@ -176,7 +176,7 @@ impl ExecutionSession {
         Ok(())
     }
 
-    fn require_publication_ready(
+    pub(super) fn require_publication_ready(
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
