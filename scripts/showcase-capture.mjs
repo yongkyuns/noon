@@ -296,7 +296,7 @@ async function captureSelection(context, entry, result) {
       result.interaction = {
         recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> public Run",
         requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend,
-        automaticRestore: true, pointerDrag: true, changedPixels: changed,
+        automaticRestore: true, backgroundNoOp: true, pointerDrag: true, changedPixels: changed,
         changedPixelsOutsideRightSideRoi: outsideExpectedRoi, runRestoresBase: true,
         baseMetrics: metrics, baseImage,
         selectedImage: validateImage(selected, `${entry.id}: selected`),

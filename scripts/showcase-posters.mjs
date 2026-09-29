@@ -4,6 +4,24 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
+function assertInteractionEvidence(entry, interaction, image) {
+  if (entry.playback_capability === "nonreplayable-native-input") {
+    assert.equal(interaction?.automaticRestore, true, `${entry.id}: automaticRestore evidence is missing`);
+    assert.equal(interaction?.backgroundNoOp, true, `${entry.id}: backgroundNoOp evidence is missing`);
+    assert.equal(interaction?.pointerDrag, true, `${entry.id}: pointerDrag evidence is missing`);
+    assert.equal(interaction?.changedPixelsOutsideRightSideRoi, 0, `${entry.id}: ROI confinement evidence is missing`);
+    assert.equal(interaction?.runRestoresBase, true, `${entry.id}: runRestoresBase evidence is missing`);
+  } else if (entry.features.includes("on_click")) {
+    assert.equal(interaction?.automaticRestore, true);
+    assert.equal(interaction?.backgroundNoOp, true);
+    assert.equal(interaction?.restartRestoresBase, true);
+  } else if (entry.interaction) {
+    assert.equal(interaction?.exactClear, true);
+    assert.equal(interaction?.restartRestoresBase, true);
+  } else return;
+  assert.equal(image.pngSha256, interaction?.selectedImage?.pngSha256);
+}
+
 export function posterEvidence(manifest, report) {
   assert.equal(manifest.publication, "curated");
   assert.equal(report.checkoutRevision, report.servedBuildIdentity?.sourceRevision);
@@ -27,16 +45,8 @@ export function posterEvidence(manifest, report) {
       const { requestedTime, publishedTime, authoredDuration, sourceCompleted, sourceState, completionProbe } = sample;
       const sourceDeclaredClick = entry.features.includes("on_click");
       const interactive = entry.interaction || sourceDeclaredClick;
-      if (sourceDeclaredClick) {
-        assert.equal(result.interaction?.automaticRestore, true);
-        assert.equal(result.interaction?.backgroundNoOp, true);
-        assert.equal(result.interaction?.restartRestoresBase, true);
-        assert.equal(result.posterImage.pngSha256, result.interaction.selectedImage.pngSha256);
-      } else if (entry.interaction) {
-        assert.equal(result.interaction?.exactClear, true);
-        assert.equal(result.interaction?.restartRestoresBase, true);
-        assert.equal(result.posterImage.pngSha256, result.interaction.selectedImage.pngSha256);
-      } else assert.equal(result.posterImage.pngSha256, sample.pngSha256);
+      if (interactive) assertInteractionEvidence(entry, result.interaction, result.posterImage);
+      else assert.equal(result.posterImage.pngSha256, sample.pngSha256);
       return {
         id: entry.id, sourceSha256: result.sourceSha256, thumbnailTime: entry.thumbnail_time,
         image: result.posterImage,
@@ -67,16 +77,8 @@ export function assertRetainedPoster(entry, record, source, png) {
   if (record.sample.completionProbe) {
     assertCompletedCapture(entry, record.sample, captureSchedule(entry).posterTime);
   } else assertCaptureTime(entry, record.sample, entry.thumbnail_time);
-  if (entry.features.includes("on_click")) {
-    assert.equal(record.interaction?.automaticRestore, true);
-    assert.equal(record.interaction?.backgroundNoOp, true);
-    assert.equal(record.interaction?.restartRestoresBase, true);
-    assert.equal(record.image.pngSha256, record.interaction.selectedImage.pngSha256);
-    assert.ok(record.interaction.recipe.includes("click"), `${entry.id}: actual selection recipe is missing`);
-  } else if (entry.interaction) {
-    assert.equal(record.interaction?.exactClear, true);
-    assert.equal(record.interaction?.restartRestoresBase, true);
-    assert.equal(record.image.pngSha256, record.interaction.selectedImage.pngSha256);
+  if (entry.features.includes("on_click") || entry.interaction) {
+    assertInteractionEvidence(entry, record.interaction, record.image);
     assert.ok(record.interaction.recipe.includes("click"), `${entry.id}: actual selection recipe is missing`);
   }
 }

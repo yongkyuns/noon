@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { posterEvidence, assertRetainedPoster } from "./showcase-posters.mjs";
 
 const web = new URL("../web/", import.meta.url);
@@ -28,6 +29,50 @@ test("source, image, timing and framing changes cannot silently reuse a poster",
   assert.throws(() => assertRetainedPoster({ ...entry, thumbnail_time: 1 }, record, source, png), /time changed/);
   assert.throws(() => assertRetainedPoster(entry, { ...record, image: { ...record.image, width: 100 } }, source, png));
   assert.throws(() => assertRetainedPoster(entry, { ...record, sample: { ...record.sample, publishedTime: 0 } }, source, png));
+});
+
+test("native-input posters require drag, background no-op, reset, and current source evidence", async () => {
+  const entry = manifest.entries.find(item => item.playback_capability === "nonreplayable-native-input");
+  assert.ok(entry, "native-input lesson is in the showcase manifest");
+  const source = await read(entry.path);
+  // The native-input capture is awaiting its first retained poster; use an existing
+  // decoded showcase PNG only to exercise this metadata contract.
+  const png = await read(manifest.entries[0].thumbnail);
+  const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
+  const posterHash = sha256(png);
+  const record = {
+    id: entry.id,
+    sourceSha256: sha256(source),
+    thumbnailTime: entry.thumbnail_time,
+    image: { pngSha256: posterHash, width: png.readUInt32BE(16), height: png.readUInt32BE(20) },
+    sample: { requestedTime: entry.thumbnail_time, publishedTime: entry.thumbnail_time },
+    interaction: {
+      recipe: "click, drag, then Run",
+      automaticRestore: true,
+      backgroundNoOp: true,
+      pointerDrag: true,
+      changedPixelsOutsideRightSideRoi: 0,
+      runRestoresBase: true,
+      selectedImage: { pngSha256: posterHash },
+    },
+  };
+  assertRetainedPoster(entry, record, source, png);
+  for (const field of ["automaticRestore", "pointerDrag", "backgroundNoOp", "runRestoresBase"]) {
+    const interaction = { ...record.interaction };
+    delete interaction[field];
+    assert.throws(() => assertRetainedPoster(entry, { ...record, interaction }, source, png),
+      new RegExp(field));
+  }
+  assert.throws(() => assertRetainedPoster(entry, {
+    ...record,
+    interaction: { ...record.interaction, changedPixelsOutsideRightSideRoi: 1 },
+  }, source, png), /ROI confinement/);
+  assert.throws(() => assertRetainedPoster(entry, {
+    ...record,
+    interaction: { ...record.interaction, selectedImage: { pngSha256: "0".repeat(64) } },
+  }, source, png));
+  assert.throws(() => assertRetainedPoster(entry, record,
+    Buffer.concat([source, Buffer.from("\\n# stale-source check")]), png), /source changed/);
 });
 
 test("failed or mixed-build reports cannot generate a retained evidence record", () => {
