@@ -4601,7 +4601,7 @@ mod tests {
         cache.admit_outline(make_key(font(3), 3), test_path(4.0, 2));
         assert_eq!(cache.total_entries(), 2);
         assert!(!cache.face_entry_counts.contains_key(&shared_font));
-        assert!(!cache.face_entry_counts.contains_key(&font(2)));
+        assert_eq!(cache.face_entry_counts.get(&font(2)), Some(&1));
         assert_eq!(cache.face_entry_counts.get(&font(3)), Some(&1));
 
         for id in 4..100 {
@@ -4628,6 +4628,20 @@ mod tests {
         cache.set_limits(GlyphOutlineCacheLimits::new(0, usize::MAX));
         assert_eq!(cache.stats().outline_entries, 0);
         assert_eq!(cache.stats().font_faces, 0);
+    }
+
+    #[test]
+    fn rejected_outline_admission_releases_its_uncached_face() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(0, usize::MAX));
+
+        cache.outline(&artifact.fonts, run, glyph.glyph_id).unwrap();
+
+        assert_eq!(cache.stats().outline_entries, 0);
+        assert_eq!(cache.stats().font_faces, 0);
+        assert_eq!(cache.stats().rejected_admissions, 1);
     }
 
     #[test]

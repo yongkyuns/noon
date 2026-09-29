@@ -949,6 +949,8 @@ Async preparation normally remains staged while the old resource/execution versi
 
 Renderer/GPU lifetime is decoupled from semantic publication: an old resource version may remain physically resident while already-submitted GPU work still references it. Resource retirement occurs only when the relevant `SubmissionSerial`/fence indicates it is safe. New content must not overwrite buffers/resources still referenced by in-flight frames.
 
+For managed wgpu handles, renderer/cache eviction drops Noon references while wgpu and its backend track submitted use and ordered queue writes; this is logical eviction, not proof of immediate physical GPU destruction. Additional Noon fencing is needed only when Noon reuses or externally owns resources beyond those guarantees.
+
 Long-running interactive/hot-reload churn must have a bounded reclamation/compaction strategy. Stable/tombstoned execution identities and retained caches are allowed, but memory usage must not grow indefinitely with historical mutations when the corresponding semantic/execution/resource state is no longer live or deliberately cached. Explicit maintenance compaction may use the deliberate maintenance-barrier exception defined above.
 
 Text, Graph, 3D and interaction are features of the same scene/runtime architecture, not separate scene engines.
