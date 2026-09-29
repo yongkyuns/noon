@@ -666,3 +666,46 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         await second.prefetch_captured_scalars([callback], self.Tracker)
         self.assertEqual(first.scalar((2, 3)), 2.0)
         self.assertEqual(second.scalar((2, 3)), 5.0)
+
+
+class CallbackMembershipFinalizerTests(unittest.TestCase):
+    class Player:
+        def __init__(self) -> None:
+            self.staged = []
+
+        def stageCallbackMembership(self, token, batch) -> None:
+            self.staged.append((token, batch))
+
+        def callbackMembershipRootKeys(self, token):
+            self.token = token
+            return ["1:2", "3:4"]
+
+    def context(self):
+        return updaters._CanonicalCallbackContext(
+            {"time": 0.0, "delta_time": 0.0, "token": {"generation": 9}, "objects": []},
+            object(),
+            callback_player=self.Player(),
+        )
+
+    def test_caught_callback_exception_discards_delayed_membership_finalizers(self) -> None:
+        context = self.context()
+        finalized = []
+        context.stage_membership("first", lambda: finalized.append("first"))
+        try:
+            raise RuntimeError("callback body failed")
+        except RuntimeError:
+            context.discard_membership()
+        self.assertEqual(context._callback_player.staged, [("{\"generation\":9}", "first")])
+        self.assertEqual(finalized, [])
+        self.assertEqual(context._membership_finalizers, [])
+
+    def test_delayed_membership_finalizers_run_only_after_callback_completion(self) -> None:
+        context = self.context()
+        finalized = []
+        context.stage_membership("first", lambda: finalized.append("first"))
+        context.stage_membership("second", lambda: finalized.append("second"))
+        self.assertEqual(finalized, [])
+        self.assertEqual(context.membership_root_keys(), ["1:2", "3:4"])
+        context.finalize_membership()
+        self.assertEqual(finalized, ["first", "second"])
+        self.assertEqual(context._membership_finalizers, [])

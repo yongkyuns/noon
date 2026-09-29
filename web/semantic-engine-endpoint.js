@@ -35,6 +35,8 @@ export async function attachSemanticEngine(
   onStop = () => {},
   runRequiredCallbackPhase = null,
   continuation = null,
+  completeRequiredCallbackPhase = null,
+  discardRequiredCallbackPhase = null,
 ) {
   const {
     controlPort,
@@ -344,14 +346,17 @@ export async function attachSemanticEngine(
       const phaseGeneration = callbackGeneration;
       pendingPhaseJson = phaseJson;
       try {
-        const batchJson = await runRequiredCallbackPhase(phase);
+        const batchJson = await runRequiredCallbackPhase(phase, player);
         if (stopped || phaseGeneration !== callbackGeneration || player === null) {
+          try { await discardRequiredCallbackPhase?.(phase); } catch { /* endpoint teardown owns termination */ }
           return { phaseToken, publication: null, interrupted: true };
         }
         player.commitCallbackPhaseJson(batchJson);
+        await completeRequiredCallbackPhase?.(phase);
         pendingPhaseJson = null;
       } catch (error) {
         if (!stopped && phaseGeneration === callbackGeneration && player !== null) {
+          try { await discardRequiredCallbackPhase?.(phase); } catch { /* Rust phase failure wins */ }
           try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve callback failure */ }
           pendingPhaseJson = null;
           callbackFault = error instanceof Error ? error : new Error(String(error));
