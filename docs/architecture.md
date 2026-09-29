@@ -949,6 +949,8 @@ Replacing persistent semantic content prepares a new `ResourceVersion`, validate
 
 Runtime/effective content drivers, where supported for compatibility such as redraw-style behavior, must use an explicit effective resource/publication path rather than implicitly rewriting authored semantic content every frame. They remain subject to resource-version, stale-result and retirement rules, but do not create a `SceneRevision` merely because the effective resource changed.
 
+A held effective resource is resident state, not recurring frame work. Preparing an unrelated frame must not visit every held content lease or copy its path payload; only changed objects and their dependents may be prepared.
+
 Async preparation normally remains staged while the old resource/execution version remains active. If a feature deliberately publishes a semantic pending state, that state is explicit and queryable; it does not imply that incomplete resource data has become the active execution representation.
 
 Renderer/GPU lifetime is decoupled from semantic publication: an old resource version may remain physically resident while already-submitted GPU work still references it. Resource retirement occurs only when the relevant `SubmissionSerial`/fence indicates it is safe. New content must not overwrite buffers/resources still referenced by in-flight frames.
@@ -1220,7 +1222,7 @@ Every supported Python feature must use shared semantic behavior and add represe
 - make retained family/text updates resident and dirty-member-local;
 - complete spatial culling and dirty GPU upload locality;
 - add editor/session state above semantic identity (selection, hover, drag, undo grouping);
-- implement hot reload by reconciling stable source/semantic identities and preserving compatible runtime/resource state; source-language recompilation/re-execution and semantic reconciliation remain distinct steps;
+- keep source hot reload under the separate #64 live-authoring contract; Phase C provides the shared mutation and resource-versioning prerequisites, while normal Python Run remains an explicit restart;
 - make stale async host/content results revision-safe and bind resource retirement to GPU completion rather than semantic publication alone.
 
 ### Ownership of the live-session/scalability contracts
