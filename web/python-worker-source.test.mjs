@@ -170,7 +170,7 @@ test("semantic continuation delivers required callback work to its suspended sou
   assert.match(source, /pending\.resolve\(continuationEvent\("callback",\s*\{ phase \}\)\)/);
   assert.match(source, /callback\.resolve\(patchBatchJson\)/);
   assert.match(source, /callback\.reject\(new Error\(message\)\)/);
-  assert.match(source, /continuationOnly\s*\?\s*\(frame\)\s*=>\s*requestContinuationCallback/);
+  assert.match(source, /continuationOnly\s*\?\s*\(frame, player\)\s*=>\s*requestContinuationCallback\(continuation, frame, player\)/);
 });
 
 test("suspended callback reads stay token-pinned and cannot settle after cancellation", () => {
