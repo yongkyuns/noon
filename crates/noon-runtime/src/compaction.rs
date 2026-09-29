@@ -71,7 +71,10 @@ impl SceneInstance {
         if self.replay_history.is_some() && self.compiled.retired_object_slot_count() != 0 {
             return Err(RuntimeCompactionError::ReplayRetentionActive);
         }
-        if !self.effective_driver_rows.is_empty() || self.interactions_active() {
+        if !self.effective_driver_rows.is_empty()
+            || !self.translation_drag_rows.is_empty()
+            || self.interactions_active()
+        {
             return Err(RuntimeCompactionError::EffectiveDriverActive);
         }
         if self

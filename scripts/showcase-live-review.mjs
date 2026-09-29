@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-replay-checks.mjs";
 import { waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
+import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -33,8 +34,8 @@ export function assertReplayAvailable(observed) {
     observed.replayReason || "completed source did not admit retained replay");
 }
 
-export function assertNonreplayableHostCallbacks(entry, observed, expectedBackend) {
-  assert.equal(entry.playbackCapability, "nonreplayable-host-callbacks", "wrong declared nonreplayable capability");
+export function assertNonreplayableShowcase(entry, observed, expectedBackend) {
+  assert.ok(NONREPLAYABLE_SHOWCASE_CAPABILITIES.includes(entry.playbackCapability), "wrong declared nonreplayable capability");
   assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
   assertFirstPass(entry, observed, expectedBackend);
   assert.equal(observed.replayReason, "Replay unavailable: UnsupportedDomain",
@@ -230,10 +231,10 @@ async function main() {
         }));
         result.firstPassPixelSha256 = hash(firstPass.data);
         result.firstPassOutcome = "pass";
-        if (entry.playbackCapability === "nonreplayable-host-callbacks") {
+        if (entry.playbackCapability !== "deterministic-retained-replay") {
           result.stage = "expected nonreplayable capability";
           result.replayOutcome = "fail";
-          assertNonreplayableHostCallbacks(entry, result.firstPass, expectedBackend);
+          assertNonreplayableShowcase(entry, result.firstPass, expectedBackend);
           result.replayOutcome = "expected-denial";
           result.intermediateReplayOutcome = "not-applicable";
           result.stage = "fresh Run after expected replay denial";
@@ -242,7 +243,7 @@ async function main() {
           result.nonreplayableRerunWallMsIncludingAuthoring = await runOrdinaryGallery(page);
           await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
           const rerunState = await readLiveState(page);
-          assertNonreplayableHostCallbacks(entry, rerunState, expectedBackend);
+          assertNonreplayableShowcase(entry, rerunState, expectedBackend);
           const rerunImage = PNG.sync.read(await canvas.screenshot({
             path: path.join(output, `${entry.id}-nonreplayable-rerun.png`),
           }));
@@ -345,7 +346,7 @@ async function main() {
         console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
       } catch (error) {
         result.error = String(error.stack ?? error);
-        result.unexpectedReplayDenial = entry.playbackCapability !== "nonreplayable-host-callbacks" &&
+        result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
           result.firstPass?.controls?.controllable === "false";
         result.failureState = await page.evaluate(() => ({
           patch: document.querySelector("#patch-status")?.value,

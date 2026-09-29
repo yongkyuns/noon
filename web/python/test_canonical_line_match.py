@@ -109,9 +109,8 @@ class CanonicalLineMatchTests(unittest.TestCase):
                 updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
             writes = context.effective_batch()["writes"]
-            assert len(writes) == 1
-            assert writes[0]["kind"] == "transform"
-            assert writes[0]["transform"]["translation"] == {"x": 3.0, "y": 4.0}
+            assert [write["kind"] for write in writes] == ["translation", "rotation", "scale"]
+            assert writes[0]["translation"] == {"x": 3.0, "y": 4.0}
             assert "style" not in writes[0]
             try:
                 target.to_ir()

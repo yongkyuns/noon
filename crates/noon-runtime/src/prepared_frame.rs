@@ -405,6 +405,19 @@ impl SceneInstance {
             }
         }
 
+        // Pointer translation leases join after ordinary timeline/reactive
+        // evaluation. They own only Position, retaining the rest of the row's
+        // current effective channels and requiring no frame tick while idle.
+        for (&object_index, &translation) in &self.translation_drag_rows {
+            if !self.object_slot_is_live(object_index) {
+                continue;
+            }
+            let row = rows
+                .entry(object_index)
+                .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
+            row.transform.translation = translation;
+        }
+
         let numeric_text = match reactive.as_ref() {
             Some(reactive) => self
                 .prepare_changed_numeric_text(reactive)
@@ -518,15 +531,7 @@ impl SceneInstance {
                 actual: self.frame.time,
             });
         }
-        let may_publish = prepared.time != self.frame.time
-            || !prepared.rows.is_empty()
-            || !prepared.requested_family_animations.is_empty()
-            || prepared
-                .reactive
-                .as_ref()
-                .is_some_and(|update| !update.is_empty())
-            || !prepared.numeric_text.is_empty()
-            || !effective.writes.is_empty();
+        let may_publish = self.prepared_frame_may_change(prepared) || !effective.writes.is_empty();
         if may_publish && self.publication.frame_epoch().checked_next().is_none() {
             return Err(PreparedFrameCommitError::FrameEpochExhausted(
                 self.publication.frame_epoch(),
@@ -535,13 +540,8 @@ impl SceneInstance {
         Ok(())
     }
 
-    pub fn commit_prepared_frame(
-        &mut self,
-        prepared: PreparedFrameEvaluation,
-        effective: PreparedEffectivePropertyBatch,
-    ) -> Result<&FrameState, PreparedFrameCommitError> {
-        self.preflight_prepared_frame_commit(&prepared, &effective)?;
-        let may_publish = prepared.time != self.frame.time
+    pub(crate) fn prepared_frame_may_change(&self, prepared: &PreparedFrameEvaluation) -> bool {
+        prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
             || prepared
@@ -549,7 +549,35 @@ impl SceneInstance {
                 .as_ref()
                 .is_some_and(|update| !update.is_empty())
             || !prepared.numeric_text.is_empty()
-            || !effective.writes.is_empty();
+    }
+
+    pub fn commit_prepared_frame(
+        &mut self,
+        prepared: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<&FrameState, PreparedFrameCommitError> {
+        self.commit_prepared_frame_inner(prepared, effective, true)?;
+        Ok(&self.frame)
+    }
+
+    /// The caller holds the complete authored-publication proof and publishes
+    /// its final context in the same exclusive call. Never expose this suffix.
+    pub(crate) fn commit_prepared_frame_unpublished(
+        &mut self,
+        prepared: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<bool, PreparedFrameCommitError> {
+        self.commit_prepared_frame_inner(prepared, effective, false)
+    }
+
+    fn commit_prepared_frame_inner(
+        &mut self,
+        prepared: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+        publish: bool,
+    ) -> Result<bool, PreparedFrameCommitError> {
+        self.preflight_prepared_frame_commit(&prepared, &effective)?;
+        let may_publish = self.prepared_frame_may_change(&prepared) || !effective.writes.is_empty();
         let next_frame = if may_publish {
             Some(self.publication.frame_epoch().checked_next().ok_or(
                 PreparedFrameCommitError::FrameEpochExhausted(self.publication.frame_epoch()),
@@ -631,12 +659,13 @@ impl SceneInstance {
         self.effective_driver_rows = next_drivers;
         self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
-        if time_changed || changed || reactive_changed {
+        let changed = time_changed || changed || reactive_changed;
+        if publish && changed {
             self.publication = self.publication.with_frame_epoch(
                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
             );
         }
-        Ok(&self.frame)
+        Ok(changed)
     }
 }
 

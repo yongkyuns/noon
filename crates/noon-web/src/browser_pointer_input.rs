@@ -98,7 +98,35 @@ pub(crate) fn submit_presented_browser_pointer_input(
     wire: BrowserPointerInput,
     frame: &PointerFrameSnapshot,
 ) -> Result<(), BrowserPointerAdmissionError> {
-    submit_pointer(target, binding, next_sequence, wire, Some(frame))
+    submit_pointer(
+        target,
+        binding,
+        next_sequence,
+        wire,
+        Some((frame, PositionalAdmission::Presented)),
+    )
+}
+
+/// Continue an already captured gesture using its last acknowledged mapping.
+///
+/// The session still mints the current pointer token and admits the occurrence
+/// in its normal sequence domain. The retained frame only maps the DOM point;
+/// it cannot authorize a new pick, rebind a source, or make ordinary input
+/// accept an older publication.
+pub(crate) fn submit_captured_browser_pointer_input(
+    target: &mut (impl BrowserPointerTarget + ?Sized),
+    binding: &mut Option<BrowserPointerBinding>,
+    next_sequence: &mut u64,
+    wire: BrowserPointerInput,
+    frame: &PointerFrameSnapshot,
+) -> Result<(), BrowserPointerAdmissionError> {
+    submit_pointer(
+        target,
+        binding,
+        next_sequence,
+        wire,
+        Some((frame, PositionalAdmission::CapturedGesture)),
+    )
 }
 
 /// Cancel the current gesture through the ordinary binding/sequence/program gates.
@@ -231,6 +259,24 @@ impl BrowserPointerBinding {
     /// tail after the shared session has cancelled this contact during navigation.
     pub(crate) fn identity_and_view(self) -> (NativePointerId, u64, Vec2) {
         (self.pointer, self.view_revision, self.viewport)
+    }
+
+    /// Whether a valid newer contact would invalidate a held captured gesture.
+    /// Older source packets stay retired tails; they must not cancel a newer
+    /// contact. This is only a worker lifecycle predicate, never pointer-input
+    /// admission or source rebinding.
+    pub(crate) fn changes_captured_contact(
+        self,
+        pointer: NativePointerId,
+        view_revision: u64,
+        coordinates: Option<(Vec2, Vec2)>,
+    ) -> bool {
+        !self.retired
+            && (pointer.source > self.pointer.source
+                || (pointer.source == self.pointer.source
+                    && (pointer != self.pointer
+                        || view_revision != self.view_revision
+                        || coordinates.is_some_and(|(_, viewport)| viewport != self.viewport))))
     }
 
     /// Shared navigation has already cancelled the semantic gesture. Retain the
@@ -396,12 +442,18 @@ impl BrowserPointerInput {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PositionalAdmission {
+    Presented,
+    CapturedGesture,
+}
+
 fn submit_pointer(
     target: &mut (impl BrowserPointerTarget + ?Sized),
     binding: &mut Option<BrowserPointerBinding>,
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
-    presented: Option<&PointerFrameSnapshot>,
+    presented: Option<(&PointerFrameSnapshot, PositionalAdmission)>,
 ) -> Result<(), BrowserPointerAdmissionError> {
     // Validate the entire wire record before even configuring a source. A bad
     // press, overflowed coordinate or exhausted sequence must not clear buttons.
@@ -419,9 +471,14 @@ fn submit_pointer(
             .session()
             .inspection_camera()
             .map_err(BrowserPointerAdmissionError::Frame)?;
-        if let Some(frame) = presented {
+        if let Some((frame, admission)) = presented {
             let view = PointerFrameView::new(wire.view_revision, viewport, camera)?;
-            frame.validate_current(target.session(), view)?;
+            match admission {
+                PositionalAdmission::Presented => frame.validate_current(target.session(), view)?,
+                PositionalAdmission::CapturedGesture => {
+                    frame.validate_captured_gesture(target.session(), view)?
+                }
+            }
             frame.position(surface)?;
         } else {
             return Err("positional browser input requires a presented frame".into());
@@ -450,11 +507,20 @@ fn submit_pointer(
             .session()
             .inspection_camera()
             .map_err(BrowserPointerAdmissionError::Frame)?;
-        let position = if let Some(frame) = presented {
+        let position = if let Some((frame, admission)) = presented {
             // Revalidate after configuration. Never retag an occurrence to the
-            // publication or camera produced by clearing an older source.
+            // publication or camera produced by clearing an older source. A
+            // captured gesture may only retain its original mapping after the
+            // session has already acquired the matching drag lease.
             let view = PointerFrameView::new(wire.view_revision, viewport, camera)?;
-            frame.input_token(target.session(), view)?;
+            match admission {
+                PositionalAdmission::Presented => {
+                    frame.input_token(target.session(), view)?;
+                }
+                PositionalAdmission::CapturedGesture => {
+                    frame.validate_captured_gesture(target.session(), view)?;
+                }
+            }
             frame.position(surface)?
         } else {
             return Err("positional browser input requires a presented frame".into());

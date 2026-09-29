@@ -1210,6 +1210,52 @@ mod tests {
     }
 
     #[test]
+    fn callback_numeric_reentry_reads_the_prepared_signal_value() {
+        use noon_core::{SemanticMutationTransaction, TextResourceLookup};
+        let mut backend = RuleBackend;
+        let mut scene = crate::Scene::new();
+        let tracker = scene.value_tracker(1.25).unwrap();
+        let mut number = DecimalNumber::new(
+            Rc::clone(scene.integration_store()),
+            &mut backend,
+            1.25,
+            DecimalFormat::default(),
+        )
+        .unwrap();
+        number.bind_to_tracker(&mut backend, &tracker).unwrap();
+        scene.add(number.mobject()).unwrap();
+        let mut timeline = SemanticMutationTransaction::new();
+        timeline.set_scalar_signal_at(tracker.node_id(), 7.5, 1.0);
+        timeline
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        scene.live(&mut session).remove(number.mobject()).unwrap();
+        let overlay = session.begin_required_callback_phase(1.0, []).unwrap();
+        let mut reentry = SemanticMutationTransaction::new();
+        reentry.add_member(scene.root(), number.mobject().node_id());
+        session
+            .commit_required_callback_transaction(
+                &mut scene.integration_store().borrow_mut(),
+                overlay.finish(),
+                reentry,
+            )
+            .unwrap();
+        let handle = session.frame().objects[0].text().unwrap();
+        assert_eq!(
+            session
+                .text_resources()
+                .get(handle)
+                .unwrap()
+                .source
+                .as_ref(),
+            "7.50"
+        );
+        assert_eq!(number.value().unwrap(), 1.25);
+        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+    }
+
+    #[test]
     fn live_binding_survives_detach_reentry_and_reuses_effective_slot() {
         use noon_core::TextResourceLookup;
 

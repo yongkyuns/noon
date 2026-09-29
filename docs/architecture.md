@@ -592,6 +592,21 @@ Noon distinguishes clocks/sequences that must not be conflated:
 
 Compatibility updater `dt` is defined from authored/simulation-time advancement. A paused scene may process pointer/keyboard/editor input while authored `dt == 0`. Behavior that explicitly reads wall time, network time or another external clock is externally timed/non-deterministic unless the source is recorded and replayed by an explicit policy.
 
+Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move. `LiveSession` and `LiveProgram` accept ordinary `Mobject` handles, retain the existing store gate, and route each occurrence to the same session policy:
+
+```rust
+program.set_translation_drag_targets([&circle])?;
+let token = program.configure_native_pointer_input(pointer, view_revision)?;
+let press = NativePointerInput::new(1, token.pointer(), token.context(), modifiers, press_kind);
+program.submit_native_pointer_input(&token, press)?;
+```
+
+Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition. Acquisition also checks the shared persistent-publication barriers before taking a lease; an unfinished animation segment must complete first. Stale or failed releases retain the lease without acknowledging the occurrence. The receipt-returning `submit_translation_drag_input` entry exposes the single release undo action to editor hosts.
+
+The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable scene using the ordinary native host.
+
+Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired. Captured moves and primary release may use the last acknowledged displayed mapping while local motion awaits presentation; runtime, source, view and camera must still match. A fresh press and ordinary picking retain exact current-presentation admission. Configured unrecorded drag input rejects replay explicitly; Run recreates the authored scene.
+
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 
 ### Historical execution and object lifetime
@@ -842,6 +857,8 @@ The ordered callback barrier is a transaction, not a sequence of scalar bridge c
 ![Sequence: runtime pins a coherent callback read view, host code reads through an overlay and stages effective/authored writes, compiler/runtime prepare fallible work, then one new FrameEpoch publishes atomically.](diagrams/callback-transaction.svg)
 
 [D2 source](diagrams/callback-transaction.d2). The callback invocation is pinned to one coherent scene/execution/frame context. Reads consult pending overlay writes first and then the revision-pinned read view; writes accumulate in one `StagedUpdateBatch` as effective driver writes and/or authored semantic mutations. Fallible semantic/resource preparation completes before the next publication becomes visible.
+
+The shared session can commit a required callback's effective writes and a semantic transaction together through `commit_required_callback_transaction`. Provisional construction and reads use the existing prepared semantic transaction; validation or lowering failure leaves both the published frame and the pending callback token unchanged. Scoped translation, rotation, scale and style writes retain their order and ownership, so completion does not overwrite unrelated animation channels. Python currently returns these scoped effective writes; Python provisional construction, arbitrary effective-content replacement and mixed native/host regions remain follow-up work. Active animation segments retain their structural-publication gate.
 
 If compatibility semantics require updater order `native A -> Python B -> native C`, callback B observes A's effective writes and C observes B's overlay writes regardless of whether B produced effective driver writes, authored semantic mutations or both. Structural changes still do not mutate the traversal currently being enumerated; their structural visibility follows the staged publication rule.
 

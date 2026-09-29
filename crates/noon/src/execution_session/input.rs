@@ -10,7 +10,7 @@ use noon_core::{
     NativeStateSource, NativeStateUpdate, PublicationContext, ReactiveError, ReactiveValue,
     SemanticNodeId, SignalId,
 };
-use noon_runtime::{EvaluationError, FrameState, RuntimeIdentity};
+use noon_runtime::{EffectivePropertyWrite, EvaluationError, FrameState, RuntimeIdentity};
 
 use super::ExecutionSession;
 
@@ -226,6 +226,29 @@ pub(super) struct PreparedInputPublication {
     pub(super) frame: noon_runtime::PreparedFrameEvaluation,
     effective: noon_runtime::PreparedEffectivePropertyBatch,
     timeline: Option<noon_runtime::SignalTimelinePreview>,
+    pub(super) drag_cancellation:
+        Option<super::translation_drag::PreparedTranslationDragCancellation>,
+}
+
+/// One fully validated native occurrence split at the existing runtime
+/// publication boundary.  It owns no queue or snapshot: the prepared frame is
+/// still the runtime's sparse evaluation and metadata is committed only after
+/// that frame (or a shared authored publication) succeeds.
+pub(super) struct PreparedNativePointerPublication {
+    frame: Option<noon_runtime::PreparedFrameEvaluation>,
+    effective: Option<noon_runtime::PreparedEffectivePropertyBatch>,
+    timeline: Option<noon_runtime::SignalTimelinePreview>,
+    input: NativePointerInput,
+    previous: PublicationContext,
+    selection: super::selection::PreparedPointerSelection,
+    action: Option<noon_runtime::PreparedTransientAnimation>,
+}
+
+pub(super) struct PreparedNativePointerMetadata {
+    input: NativePointerInput,
+    previous: PublicationContext,
+    selection: super::selection::PreparedPointerSelection,
+    action: Option<noon_runtime::PreparedTransientAnimation>,
 }
 
 impl ExecutionSession {
@@ -237,6 +260,7 @@ impl ExecutionSession {
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
         !self.interaction_bindings.is_empty()
+            || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self
                 .reactive_projection
@@ -273,6 +297,11 @@ impl ExecutionSession {
         view_revision: u64,
     ) -> Result<NativePointerInputToken, ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
+        if self.translation_drag_active() {
+            return Err(ExecutionSessionInputError::Interaction(
+                "cancel the active translation drag before replacing its pointer mapping".into(),
+            ));
+        }
         let generation = self
             .pointer_input
             .next_generation
@@ -331,9 +360,45 @@ impl ExecutionSession {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let effective = self
+            .runtime
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        self.submit_native_pointer_input_with_effective(token, input, effective, false)
+    }
+
+    /// Commit one typed native occurrence and a preflighted scoped effective
+    /// write in the same prepared-frame publication. Gesture policy lives in
+    /// sibling session modules; this remains the sole pointer admission lane.
+    pub(super) fn submit_native_pointer_input_with_effective(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        effective: noon_runtime::PreparedEffectivePropertyBatch,
+        suppress_click_action: bool,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let prepared = self.prepare_native_pointer_input_with_effective(
+            token,
+            input,
+            effective,
+            suppress_click_action,
+        )?;
+        self.commit_prepared_native_pointer_input(prepared)
+    }
+
+    pub(super) fn prepare_native_pointer_input_with_effective(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        effective: noon_runtime::PreparedEffectivePropertyBatch,
+        suppress_click_action: bool,
+    ) -> Result<PreparedNativePointerPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
         let selection = self.prepare_pointer_selection(token, input)?;
-        let action = self.prepare_click_animation(selection.click)?;
+        let action = (!suppress_click_action)
+            .then(|| self.prepare_click_animation(selection.click))
+            .transpose()?
+            .flatten();
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -346,9 +411,58 @@ impl ExecutionSession {
         if let Some(event) = input.button_event() {
             self.append_native_event_inputs(&event, &mut inputs);
         }
-        if !inputs.is_empty() {
-            self.apply_reactive_input_batch(inputs)?;
+        let (frame, effective, timeline) = if inputs.is_empty() && effective.is_empty() {
+            (None, None, None)
+        } else {
+            let mut prepared = self.prepare_reactive_input_batch(inputs)?;
+            prepared.effective = effective;
+            self.runtime
+                .preflight_prepared_frame_commit(&prepared.frame, &prepared.effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
+            (
+                Some(prepared.frame),
+                Some(prepared.effective),
+                prepared.timeline,
+            )
+        };
+        Ok(PreparedNativePointerPublication {
+            frame,
+            effective,
+            timeline,
+            input,
+            previous,
+            selection,
+            action,
+        })
+    }
+
+    pub(super) fn commit_prepared_native_pointer_input(
+        &mut self,
+        prepared: PreparedNativePointerPublication,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        if let (Some(frame), Some(effective)) = (frame, effective) {
+            self.runtime
+                .commit_prepared_frame(frame, effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
         }
+        self.commit_prepared_native_pointer_metadata(timeline, metadata)
+    }
+
+    pub(super) fn commit_prepared_native_pointer_metadata(
+        &mut self,
+        timeline: Option<noon_runtime::SignalTimelinePreview>,
+        metadata: PreparedNativePointerMetadata,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        if let Some(preview) = timeline {
+            self.signal_timeline.commit(preview);
+        }
+        let PreparedNativePointerMetadata {
+            input,
+            previous,
+            selection,
+            action,
+        } = metadata;
         self.last_native_event_sequence = Some(input.sequence());
         self.pointer_selection = selection.state;
         self.pointer_selection.hover.accept(input);
@@ -553,6 +667,7 @@ impl ExecutionSession {
             frame,
             effective,
             timeline: signal_timeline,
+            drag_cancellation: None,
         })
     }
 
@@ -560,10 +675,20 @@ impl ExecutionSession {
         &mut self,
         prepared: PreparedInputPublication,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        self.runtime
-            .commit_prepared_frame(prepared.frame, prepared.effective)
-            .map_err(ExecutionSessionInputError::PreparedCommit)?;
-        if let Some(preview) = prepared.timeline {
+        let PreparedInputPublication {
+            frame,
+            effective,
+            timeline,
+            drag_cancellation,
+        } = prepared;
+        if let Some(cancellation) = drag_cancellation {
+            self.commit_translation_drag_cancellation(cancellation, frame, effective)?;
+        } else {
+            self.runtime
+                .commit_prepared_frame(frame, effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        }
+        if let Some(preview) = timeline {
             self.signal_timeline.commit(preview);
         }
         Ok(self.runtime.frame())
@@ -577,16 +702,55 @@ impl ExecutionSession {
         // No input publication is needed for already released buttons. In
         // particular inspection alone must not invalidate finite replay history.
         inputs.retain(|(signal, value)| self.runtime.reactive_value(*signal) != Some(value));
-        if inputs.is_empty() {
+        let drag_cancellation = self.prepare_translation_drag_cancellation()?;
+        if inputs.is_empty() && drag_cancellation.is_none() {
             Ok(None)
         } else {
-            self.prepare_reactive_input_batch(inputs).map(Some)
+            let mut prepared = self.prepare_reactive_input_batch(inputs)?;
+            if let Some(cancellation) = drag_cancellation {
+                prepared.effective = self
+                    .runtime
+                    .prepare_effective_property_batch(&[EffectivePropertyWrite::Translation {
+                        object: cancellation.object,
+                        translation: cancellation.base,
+                    }])
+                    .map_err(|_| {
+                        ExecutionSessionInputError::Interaction(
+                            "captured translation drag conflicts with cancellation".into(),
+                        )
+                    })?;
+                prepared.drag_cancellation = Some(cancellation);
+            }
+            Ok(Some(prepared))
         }
     }
 
     pub(super) fn retire_pointer_view_binding(&mut self) {
         self.pointer_input.binding = None;
         self.pointer_selection.cancel_press();
+    }
+}
+
+impl PreparedNativePointerPublication {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        Option<noon_runtime::PreparedFrameEvaluation>,
+        Option<noon_runtime::PreparedEffectivePropertyBatch>,
+        Option<noon_runtime::SignalTimelinePreview>,
+        PreparedNativePointerMetadata,
+    ) {
+        (
+            self.frame,
+            self.effective,
+            self.timeline,
+            PreparedNativePointerMetadata {
+                input: self.input,
+                previous: self.previous,
+                selection: self.selection,
+                action: self.action,
+            },
+        )
     }
 }
 

@@ -334,3 +334,50 @@ fn click_action_runs_while_an_unrelated_source_segment_is_pending() {
     );
     assert_eq!(session.frame().time, 0.2);
 }
+
+#[test]
+fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.9).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 0.78).unwrap();
+    let mut rectangle = scene.rectangle(2.2, 1.6).unwrap();
+    rectangle.set_translation(4.0, 0.0).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session.begin_replay_retention(Default::default()).unwrap();
+    let segment = scene
+        .live(&mut session)
+        .declare_and_activate_create_parallel(
+            &[
+                (&circle, AnimationOptions::new()),
+                (&rectangle, AnimationOptions::new()),
+            ],
+            AnimationOptions::new().run_time(1.4),
+        )
+        .unwrap();
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    let wait = scene.live(&mut session).wait_segment(0.5).unwrap();
+    session.advance_segment_to(wait, wait.end_time()).unwrap();
+    scene.live(&mut session).complete_segment(wait).unwrap();
+    scene
+        .live(&mut session)
+        .on_click_indicate(
+            &circle,
+            IndicateOptions::default(),
+            AnimationOptions::new().run_time(0.4),
+        )
+        .unwrap();
+    scene
+        .live(&mut session)
+        .set_translation_drag_targets([&rectangle])
+        .unwrap();
+    assert!(session.seal_replay().is_err());
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    click(&mut session, 1, 0.0);
+    assert!(
+        session.interactions_active(),
+        "first-pass completed Create must not suppress native click"
+    );
+}

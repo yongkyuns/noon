@@ -6,7 +6,7 @@
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
 
-use std::error::Error;
+use std::{error::Error, rc::Rc};
 
 mod inspection;
 
@@ -17,6 +17,7 @@ use noon_core::{
 
 use crate::execution_session::{
     ExecutionViewportQuery, NativePointerInputPublication, NativePointerInputToken,
+    TranslationDragError, TranslationDragReceipt,
 };
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
@@ -82,6 +83,7 @@ pub enum LiveProgramError<E> {
     CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
+    TranslationDrag(TranslationDragError),
     Inspection(crate::InspectionNavigationError),
     Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
@@ -112,6 +114,7 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
             Self::Inspection(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
@@ -125,6 +128,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
         match self {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::TranslationDrag(error) => Some(error),
             Self::Inspection(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
@@ -231,6 +235,35 @@ impl<C: LiveContinuation> LiveProgram<C> {
         .map_err(LiveProgramError::Input)
     }
 
+    /// Configure the semantic objects eligible for session-owned native
+    /// translation dragging. Native callers still route every occurrence to
+    /// [`Self::submit_translation_drag_input`]; they do not select an object
+    /// identity for a press or move.
+    pub fn set_translation_drag_targets<'target>(
+        &mut self,
+        targets: impl IntoIterator<Item = &'target crate::Mobject>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure translation drag targets")?;
+        let mut nodes = Vec::new();
+        for target in targets {
+            if !Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+                return Err(LiveProgramError::TranslationDrag(
+                    TranslationDragError::ForeignStore,
+                ));
+            }
+            target.validate().map_err(|error| {
+                LiveProgramError::TranslationDrag(TranslationDragError::Semantic(error.to_string()))
+            })?;
+            nodes.push(target.node_id());
+        }
+        self.scene
+            .owned_execution_mut()
+            .set_translation_drag_targets(nodes)
+            .map_err(LiveProgramError::TranslationDrag)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
     /// Configure the platform pointer projected into the existing unkeyed native signals.
     pub fn configure_native_pointer_input(
         &mut self,
@@ -263,12 +296,31 @@ impl<C: LiveContinuation> LiveProgram<C> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, LiveProgramError<C::Error>> {
-        self.ensure_host_input_available("deliver contextual pointer input")?;
+        self.submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+    }
+
+    /// Deliver one typed pointer occurrence through the configured translation
+    /// drag policy and the existing native pointer publication lane.
+    ///
+    /// Misses and non-captured occurrences retain ordinary pointer, hover, and
+    /// click behavior. A captured primary drag alone publishes its scoped
+    /// effective translation and reconciles the authored value on release.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver translation drag input")?;
+        let store = Rc::clone(self.scene.integration_store());
         let publication = self
             .scene
             .owned_execution_mut()
-            .submit_native_pointer_input(token, input)
-            .map_err(LiveProgramError::Input)?;
+            .submit_translation_drag_input(&mut store.borrow_mut(), token, input)
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => LiveProgramError::Input(error),
+                error => LiveProgramError::TranslationDrag(error),
+            })?;
         self.refresh_pending_publication();
         Ok(publication)
     }

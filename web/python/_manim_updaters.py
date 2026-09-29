@@ -762,14 +762,13 @@ class _CanonicalCallbackContext:
     def transform_changed(
         self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow
     ) -> None:
-        if before != row.transform:
-            self._writes.append(
-                {
-                    "kind": "transform",
-                    "object": _phase_node_json(key),
-                    "transform": row.transform.to_wire(),
-                }
-            )
+        # These are non-authoritative property deltas. Rust owns validation,
+        # driver arbitration and application to the prepared effective row.
+        old, new = before.to_wire(), row.transform.to_wire()
+        for channel in ("translation", "rotation", "scale"):
+            if old[channel] != new[channel]:
+                self._writes.append({"kind": channel, "object": _phase_node_json(key),
+                                     channel: new[channel]})
 
     def rotate_transform_about_point(
         self,
@@ -872,14 +871,11 @@ class _CanonicalCallbackContext:
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
     ) -> None:
-        if before != row.style:
-            self._writes.append(
-                {
-                    "kind": "style",
-                    "object": _phase_node_json(key),
-                    "style": row.style.to_wire(),
-                }
-            )
+        old, new = before.to_wire(), row.style.to_wire()
+        for channel in ("fill", "stroke", "stroke_width", "opacity"):
+            if old[channel] != new[channel]:
+                self._writes.append({"kind": channel, "object": _phase_node_json(key),
+                                     channel: new[channel]})
 
     def effective_batch(self) -> dict[str, Any]:
         return {"token": self.token, "writes": self._writes}

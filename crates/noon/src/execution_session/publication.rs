@@ -24,6 +24,24 @@ use prepared_value::PreparedPublication;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+    Callback(super::CallbackPhaseToken),
+}
+
+/// Runtime half of the shared authored publication. Native ingress and host
+/// callbacks can supply a speculative frame without publishing it first.
+#[derive(Default)]
+pub(super) struct PreparedRuntimePublication {
+    pub effective: Option<PreparedEffectivePropertyBatch>,
+    pub frame: Option<noon_runtime::PreparedFrameEvaluation>,
+}
+
+impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication {
+    fn from(effective: Option<PreparedEffectivePropertyBatch>) -> Self {
+        Self {
+            effective,
+            frame: None,
+        }
+    }
 }
 
 pub(crate) struct PreparedReactiveEnrollmentBatch {
@@ -31,7 +49,7 @@ pub(crate) struct PreparedReactiveEnrollmentBatch {
     pub runtime_enrollment: PreparedReactiveSignalEnrollmentBatch,
 }
 
-struct PreparedScalarPublicationContract {
+pub(super) struct PreparedScalarPublicationContract {
     handled_signals: std::collections::HashSet<SemanticNodeId>,
     reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
 }
@@ -40,6 +58,7 @@ struct PreparedScalarPublicationContract {
 pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
     SegmentCompletionPending,
+    TranslationDragActive,
     ForeignSemanticStore,
     ReplaySealed,
     StaleSceneRevision {
@@ -63,6 +82,9 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             }
             Self::SegmentCompletionPending => f.write_str(
                 "an active animation segment must be completed before authored publication",
+            ),
+            Self::TranslationDragActive => f.write_str(
+                "cancel or release the active translation drag before authored publication",
             ),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
@@ -98,6 +120,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::RequiredCallbackPending
             | Self::ReplaySealed
             | Self::SegmentCompletionPending
+            | Self::TranslationDragActive
             | Self::ForeignSemanticStore
             | Self::StaleSceneRevision { .. }
             | Self::UnknownObject(_) => None,
@@ -153,20 +176,30 @@ impl ExecutionSession {
         Ok(())
     }
 
-    fn require_publication_ready(
+    pub(super) fn require_publication_ready(
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
         if self.runtime.replay_is_sealed() {
             return Err(ExecutionSessionPublicationError::ReplaySealed);
         }
-        if self.pending_callback.is_some() {
+        if self
+            .pending_callback_token()
+            .is_some_and(|token| purpose != SemanticPublicationPurpose::Callback(token))
+        {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
         if self.pending_segment_completion.is_some()
             && purpose != SemanticPublicationPurpose::SegmentCompletion
         {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
+        // A drag owns the target's effective Position until it either commits
+        // one authored reconciliation or is explicitly cancelled.  This bounded
+        // session policy rejects concurrent source edits rather than allowing a
+        // later release to overwrite a newly authored value.
+        if self.translation_drag.is_active() {
+            return Err(ExecutionSessionPublicationError::TranslationDragActive);
         }
         Ok(())
     }
@@ -236,11 +269,12 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             Vec::new(),
-            None,
+            None.into(),
             SemanticPublicationPurpose::AuthoredMutation,
             None,
             Some(root),
         )
+        .map(|(result, _)| result)
     }
 
     pub(crate) fn apply_semantic_transaction_with_execution(
@@ -283,11 +317,12 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
-            effective,
+            effective.into(),
             purpose,
             None,
             None,
         )
+        .map(|(result, _)| result)
     }
 
     pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
@@ -302,7 +337,7 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
-            None,
+            None.into(),
             purpose,
             Some(PreparedScalarPublicationContract {
                 handled_signals: handled_scalar_signals,
@@ -310,6 +345,7 @@ impl ExecutionSession {
             }),
             order_root,
         )
+        .map(|(result, _)| result)
     }
 
     pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
@@ -323,7 +359,7 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
-            effective,
+            effective.into(),
             purpose,
             Some(PreparedScalarPublicationContract {
                 handled_signals: handled_scalar_signals,
@@ -331,6 +367,7 @@ impl ExecutionSession {
             }),
             None,
         )
+        .map(|(result, _)| result)
     }
 
     pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution_at_root(
@@ -345,7 +382,7 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
-            effective,
+            effective.into(),
             purpose,
             Some(PreparedScalarPublicationContract {
                 handled_signals: handled_scalar_signals,
@@ -353,25 +390,47 @@ impl ExecutionSession {
             }),
             Some(order_root),
         )
+        .map(|(result, _)| result)
     }
 
-    fn apply_prepared_semantic_transaction_with_execution_contract(
+    pub(super) fn apply_prepared_semantic_transaction_with_execution_contract(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
         execution_prefix: Vec<ExecutionPatch>,
-        effective: Option<PreparedEffectivePropertyBatch>,
+        runtime: PreparedRuntimePublication,
         purpose: SemanticPublicationPurpose,
         scalar: Option<PreparedScalarPublicationContract>,
         order_root: Option<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+    ) -> Result<
+        (
+            SemanticMutationTransactionResult,
+            Option<super::callback::CallbackCompletion>,
+        ),
+        ExecutionSessionPublicationError,
+    > {
+        let PreparedRuntimePublication { effective, frame } = runtime;
+        debug_assert!(
+            frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
+        );
+        let prepared_frame = match purpose {
+            SemanticPublicationPurpose::Callback(_) => self
+                .pending_callback
+                .as_ref()
+                .map(|pending| &pending.prepared),
+            _ => frame.as_ref(),
+        };
         if purpose == SemanticPublicationPurpose::AuthoredMutation
             && execution_prefix.is_empty()
             && effective.is_none()
+            && frame.is_none()
             && scalar.is_none()
             && !self.runtime.replay_scope_active()
             && PreparedPublication::supports(&prepared)
         {
-            return Ok(PreparedPublication::prepare(self, prepared, order_root)?.publish());
+            return Ok((
+                PreparedPublication::prepare(self, prepared, order_root)?.publish(),
+                None,
+            ));
         }
 
         self.require_publication_ready(purpose)?;
@@ -487,13 +546,26 @@ impl ExecutionSession {
         let mut numeric_patches = conservative.mutations().to_vec();
         numeric_patches.extend(publication.conservative_entry_patches(&prepared));
         let numeric_transaction = ExecutionMutationTransaction::from_mutations(numeric_patches);
-        let pending_numeric_signals = scalar
+        let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())
             .into_iter()
             .flat_map(|enrollment| &enrollment.projection_enrollments)
             .map(|enrollment| (enrollment.execution_signal(), enrollment.value().clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
+        if let Some(frame) = prepared_frame {
+            for declaration in numeric_entries
+                .iter()
+                .filter_map(|entry| entry.declaration.as_ref())
+            {
+                if let Some(value) = self
+                    .runtime
+                    .prepared_reactive_value(frame, declaration.signal)
+                {
+                    pending_numeric_signals.insert(declaration.signal, value);
+                }
+            }
+        }
         let prepared_numeric = self
             .runtime
             .prepare_numeric_text_driver_revision(
@@ -526,6 +598,20 @@ impl ExecutionSession {
             publication.possible_entry_count(),
         )
         .map_err(ExecutionSessionPublicationError::ExecutionSlot)?;
+
+        if let Some(frame) = prepared_frame {
+            let empty = self
+                .runtime
+                .prepare_effective_property_batch(&[])
+                .expect("empty effective writes are valid");
+            self.runtime
+                .preflight_prepared_frame_commit(frame, effective.as_ref().unwrap_or(&empty))
+                .map_err(|error| {
+                    ExecutionSessionPublicationError::Runtime(
+                        AuthoredPublicationError::PreparedFrame(error),
+                    )
+                })?;
+        }
 
         let (result, store) = prepared.commit_with_store();
         let membership = self
@@ -563,24 +649,44 @@ impl ExecutionSession {
             self.runtime
                 .commit_reactive_signal_enrollment_batch(reactive_enrollment.runtime_enrollment);
         }
+        let callback = match purpose {
+            SemanticPublicationPurpose::Callback(_) => Some(
+                self.pending_callback
+                    .take()
+                    .expect("callback remained pending through semantic preflight")
+                    .into_parts(),
+            ),
+            _ => None,
+        };
+        let (frame, mut completion) = callback.map_or((frame, None), |(frame, completion)| {
+            (Some(frame), Some(completion))
+        });
         self.runtime
-            .apply_authored_execution_transaction_with_effective(
+            .apply_authored_execution_transaction_with_frame(
                 &execution,
                 resource_additions,
                 effective,
+                frame,
                 self.publication_context(),
                 store.scene_revision(),
             )
             .expect("runtime publication was fully preflighted before semantic commit");
+        // Publish the frame's schedule preview before reconciling membership.
+        // Otherwise that old preview could undo an enter/exit in this batch.
+        if let Some(completion) = completion.as_mut() {
+            self.commit_callback_progress(completion);
+        }
         if let Some(revision) = revised_callbacks {
             self.callback_schedule
                 .apply_revision(revision, self.frame().time);
             self.last_callback_receipt = None;
         }
         self.publish_replay_membership(&exited, &entered);
+        self.reconcile_callback_membership(&exited, false);
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
+        self.reconcile_callback_membership(&entered, true);
         self.runtime
             .commit_numeric_text_driver_revision(prepared_numeric);
         self.sync_inset_2d_view_bindings(store);
@@ -591,7 +697,7 @@ impl ExecutionSession {
             entered_objects: entered.len(),
             exited_objects: exited.len(),
         };
-        Ok(result)
+        Ok((result, completion))
     }
 
     pub const fn last_structural_publication_stats(&self) -> StructuralPublicationStats {

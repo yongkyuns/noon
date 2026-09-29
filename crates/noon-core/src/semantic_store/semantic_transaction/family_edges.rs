@@ -8,7 +8,10 @@ use super::{
 #[derive(Debug, Default)]
 pub(super) struct FamilyEdgePreflight {
     overrides: HashMap<(SemanticTransactionNodeRef, SemanticTransactionNodeRef), bool>,
-    added_order: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
+    // Cycle and detachment queries inspect only this node's staged adjacency,
+    // never all earlier edges in a wide authored batch.
+    added_members: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
+    added_parents: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     events: Vec<FamilyEdgeEvent>,
 }
 
@@ -39,8 +42,10 @@ impl FamilyEdgePreflight {
                 return false;
             }
         }
-        !self.added_order.iter().any(|(family, candidate)| {
-            *candidate == member && self.contains(catalog, *family, member)
+        !self.added_parents.get(&member).is_some_and(|parents| {
+            parents
+                .iter()
+                .any(|family| self.contains(catalog, *family, member))
         })
     }
 
@@ -76,7 +81,8 @@ impl FamilyEdgePreflight {
             });
         }
         self.overrides.insert((family, member), true);
-        self.added_order.push((family, member));
+        self.added_members.entry(family).or_default().push(member);
+        self.added_parents.entry(member).or_default().push(family);
         self.events.push(FamilyEdgeEvent::Add(family, member));
         Ok(true)
     }
@@ -242,13 +248,12 @@ impl FamilyEdgePreflight {
                 .copied()
                 .unwrap_or(true)
         });
-        for (added_family, member) in &self.added_order {
-            if *added_family == family
-                && self
-                    .overrides
-                    .get(&(family, *member))
-                    .copied()
-                    .unwrap_or(false)
+        for member in self.added_members.get(&family).into_iter().flatten() {
+            if self
+                .overrides
+                .get(&(family, *member))
+                .copied()
+                .unwrap_or(false)
                 && !members.contains(member)
             {
                 members.push(*member);

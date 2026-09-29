@@ -19,6 +19,7 @@ mod renderer_publication;
 mod replay;
 mod signal_timeline;
 mod spatial_index;
+mod translation_drag;
 pub use replay::{ReplayError, ReplayLimits, ReplayStats};
 pub use signal_timeline::{
     PreparedSignalTimelineAppend, SignalTimelineAppendError, SignalTimelinePreview,
@@ -199,6 +200,10 @@ pub struct SceneInstance {
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    /// Session-owned pointer translation leases. Unlike ordinary whole-row
+    /// effective writes these own only Position, so unrelated channels continue
+    /// through the normal scheduler while a pointer is held.
+    translation_drag_rows: BTreeMap<usize, Vec2>,
     transient_animations: transient_animation::TransientAnimations,
     active_family_animation_indices: BTreeSet<usize>,
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
@@ -226,6 +231,7 @@ impl Clone for SceneInstance {
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            translation_drag_rows: self.translation_drag_rows.clone(),
             transient_animations: self.transient_animations.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
@@ -276,6 +282,7 @@ impl SceneInstance {
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            translation_drag_rows: BTreeMap::new(),
             transient_animations: Default::default(),
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
@@ -659,6 +666,7 @@ impl SceneInstance {
                 self.frame.render_transforms[object_index] = None;
                 self.clear_family_animation_runtime_state(object_index);
                 self.effective_driver_rows.remove(&object_index);
+                self.translation_drag_rows.remove(&object_index);
                 let position = self.painter_ranks[object_index]
                     .take()
                     .expect("removed row was live") as usize;
@@ -1102,6 +1110,7 @@ impl SceneInstance {
         self.clear_transient_animations();
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
+        self.translation_drag_rows.clear();
         self.active_family_animation_indices.clear();
         self.pending_family_endpoint_expirations.clear();
         self.mark_all_changed();

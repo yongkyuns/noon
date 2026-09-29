@@ -2240,6 +2240,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_translation_drag_targets(
+        &mut self,
+        targets: &[noon::Mobject],
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_translation_drag_targets(targets.iter()))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -2590,6 +2599,34 @@ enum CallbackWriteWire {
         object: CallbackNodeWire,
         style: Style,
     },
+    Translation {
+        object: CallbackNodeWire,
+        translation: noon_core::Vec2,
+    },
+    Rotation {
+        object: CallbackNodeWire,
+        rotation: f32,
+    },
+    Scale {
+        object: CallbackNodeWire,
+        scale: noon_core::Vec2,
+    },
+    Fill {
+        object: CallbackNodeWire,
+        fill: Option<noon_core::Color>,
+    },
+    Stroke {
+        object: CallbackNodeWire,
+        stroke: Option<noon_core::Color>,
+    },
+    StrokeWidth {
+        object: CallbackNodeWire,
+        stroke_width: f32,
+    },
+    Opacity {
+        object: CallbackNodeWire,
+        opacity: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -2684,6 +2721,48 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
                 Ok(EffectiveSemanticPropertyWrite::Style {
                     object: object.into(),
                     style,
+                })
+            }
+            CallbackWriteWire::Translation {
+                object,
+                translation,
+            } => Ok(EffectiveSemanticPropertyWrite::Translation {
+                object: object.into(),
+                translation,
+            }),
+            CallbackWriteWire::Rotation { object, rotation } => {
+                Ok(EffectiveSemanticPropertyWrite::Rotation {
+                    object: object.into(),
+                    rotation,
+                })
+            }
+            CallbackWriteWire::Scale { object, scale } => {
+                Ok(EffectiveSemanticPropertyWrite::Scale {
+                    object: object.into(),
+                    scale,
+                })
+            }
+            CallbackWriteWire::Fill { object, fill } => Ok(EffectiveSemanticPropertyWrite::Fill {
+                object: object.into(),
+                fill,
+            }),
+            CallbackWriteWire::Stroke { object, stroke } => {
+                Ok(EffectiveSemanticPropertyWrite::Stroke {
+                    object: object.into(),
+                    stroke,
+                })
+            }
+            CallbackWriteWire::StrokeWidth {
+                object,
+                stroke_width,
+            } => Ok(EffectiveSemanticPropertyWrite::StrokeWidth {
+                object: object.into(),
+                stroke_width,
+            }),
+            CallbackWriteWire::Opacity { object, opacity } => {
+                Ok(EffectiveSemanticPropertyWrite::Opacity {
+                    object: object.into(),
+                    opacity,
                 })
             }
         })
@@ -3087,10 +3166,22 @@ impl SemanticExecutionPlayer {
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
         let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
-        self.worker_pointer_presentation.submit(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+        };
+        worker_pointer_presentation.submit(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             envelope.input,
             envelope.presentation,
         )
@@ -3103,11 +3194,18 @@ impl SemanticExecutionPlayer {
     pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
         let input = serde_json::from_str(json)
             .map_err(|error| format!("invalid inspection scroll JSON: {error}"))?;
-        self.worker_pointer_presentation.scroll(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            input,
-        )
+        let Self {
+            session,
+            semantics,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+        };
+        worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3115,10 +3213,22 @@ impl SemanticExecutionPlayer {
     pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
         let view =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer view JSON: {e}"))?;
-        self.worker_pointer_presentation.set_view(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+        };
+        worker_pointer_presentation.set_view(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             view,
         )
     }
@@ -3136,10 +3246,22 @@ impl SemanticExecutionPlayer {
     pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
         let receipt =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
-        self.worker_pointer_presentation.invalidate(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+        };
+        worker_pointer_presentation.invalidate(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             receipt,
         )
     }
@@ -3336,22 +3458,20 @@ mod tests {
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
         let row = &phase["objects"][0];
-        let mut transform = row["transform"].clone();
-        transform["translation"]["y"] = serde_json::json!(1.0);
-        let mut style = row["style"].clone();
-        style["opacity"] = serde_json::json!(0.5);
+        let mut translation = row["transform"]["translation"].clone();
+        translation["y"] = serde_json::json!(1.0);
         serde_json::json!({
             "token": phase["token"].clone(),
             "writes": [
                 {
-                    "kind": "transform",
+                    "kind": "translation",
                     "object": row["node"].clone(),
-                    "transform": transform,
+                    "translation": translation,
                 },
                 {
-                    "kind": "style",
+                    "kind": "opacity",
                     "object": row["node"].clone(),
-                    "style": style,
+                    "opacity": 0.5,
                 },
             ],
         })

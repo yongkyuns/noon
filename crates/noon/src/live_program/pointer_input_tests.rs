@@ -63,6 +63,54 @@ fn finished_program_accepts_native_pointer_input_without_resuming_or_advancing_t
     );
 }
 
+#[test]
+fn finished_program_routes_typed_drag_input_without_frontend_target_selection() {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.5).unwrap();
+    circle.set_fill(0.2, 0.6, 1.0, 1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut program = scene.into_live_program(Finish).unwrap();
+    program.set_translation_drag_targets([&circle]).unwrap();
+    program.resume().unwrap();
+
+    let token = program.configure_native_pointer_input(POINTER, 0).unwrap();
+    let press = NativePointerInput::new(
+        1,
+        token.pointer(),
+        token.context(),
+        NativeInputModifiers::default(),
+        NativePointerInputKind::Press {
+            position: NativePointerPosition::new(Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)).unwrap(),
+            button: 0,
+        },
+    );
+    program.submit_native_pointer_input(&token, press).unwrap();
+    assert!(program.session().translation_drag_active());
+
+    let token = program.native_pointer_input_token().unwrap();
+    let release = NativePointerInput::new(
+        2,
+        token.pointer(),
+        token.context(),
+        NativeInputModifiers::default(),
+        NativePointerInputKind::Release {
+            position: NativePointerPosition::new(Vec2::new(2.0, 0.0), Vec2::new(200.0, 0.0))
+                .unwrap(),
+            button: 0,
+        },
+    );
+    let receipt = program
+        .submit_native_pointer_input(&token, release)
+        .unwrap();
+
+    assert_eq!(receipt.input(), release);
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        crate::SemanticVec3::new(2.0, 0.0, 0.0)
+    );
+    assert_eq!(program.status(), LiveProgramStatus::Finished);
+}
+
 struct Animate {
     source: crate::Mobject,
     target: crate::Mobject,

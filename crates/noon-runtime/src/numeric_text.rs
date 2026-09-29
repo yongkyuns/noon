@@ -269,9 +269,9 @@ impl SceneInstance {
                     .reactive
                     .as_ref()
                     .ok_or(NumericTextResourceError::InvalidSourceSpan)?;
-                let value = reactive
-                    .state_value(declaration.signal)
-                    .or_else(|| pending_signals.get(&declaration.signal))
+                let value = pending_signals
+                    .get(&declaration.signal)
+                    .or_else(|| reactive.state_value(declaration.signal))
                     .ok_or(NumericTextResourceError::InvalidSourceSpan)?;
                 let temporary = NumericTextDriverState {
                     tokens: declaration.token_resources.iter().cloned().collect(),

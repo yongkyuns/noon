@@ -456,3 +456,165 @@ fn disabling_last_pointer_subscriber_clears_once_then_settles() {
 }
 
 mod inspection;
+
+fn drag_player() -> (SemanticExecutionPlayer, noon::Mobject, WorkerPointerReceipt) {
+    let mut scene = noon::Scene::new();
+    let mut circle = scene.circle(1.0).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut p = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        2.0,
+        7,
+    )
+    .unwrap();
+    p.set_translation_drag_targets(std::slice::from_ref(&circle))
+        .unwrap();
+    p.pause();
+    register(&mut p, 1);
+    let r = receipt(&delta(&mut p), 1);
+    assert!(acknowledge(&mut p, r));
+    (p, circle, r)
+}
+
+#[test]
+fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_release() {
+    let (mut p, circle, r) = drag_player();
+    let before = p.session.publication_context();
+    let resources = p.resource_bundle_bytes();
+    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+    assert!(
+        p.drain_delta_json().unwrap().is_none(),
+        "stationary capture does not repaint"
+    );
+    assert!(input(&mut p, "move", 1, Some(r), 1, 450.0).unwrap());
+    let moved = delta(&mut p);
+    assert_eq!(moved.retained.objects.len(), 1);
+    assert!(moved.resource_additions.is_none());
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision()
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    let r = receipt(&moved, 3);
+    assert!(acknowledge(&mut p, r));
+    assert!(input(&mut p, "release", 1, Some(r), 1, 500.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert!(circle.state().unwrap().transform.translation.x > 0.0);
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap()
+    );
+    assert_eq!(p.resource_bundle_bytes(), resources);
+    let r = receipt(&delta(&mut p), 4);
+    assert!(acknowledge(&mut p, r));
+    assert!(p.drain_delta_json().unwrap().is_none());
+    assert_eq!(p.execution_wake(50_000.0).unwrap().cadence(), "idle");
+}
+
+#[test]
+fn captured_drag_continues_with_its_presented_receipt_until_release() {
+    let (mut p, circle, presented) = drag_player();
+    let before = p.session.publication_context();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
+
+    // Draining publishes a newer worker delta, but it has not reached the
+    // render host. Later physical records retain the collection-time receipt.
+    let unpresented_motion = delta(&mut p);
+    assert_eq!(unpresented_motion.retained.objects.len(), 1);
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 500.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(presented), 1, 550.0).unwrap());
+
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation.x,
+        3.0,
+        "release uses its own final collection-time coordinates"
+    );
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap(),
+        "motion stays effective-only and release authors one change"
+    );
+    let release = delta(&mut p);
+    assert_eq!(release.retained.objects.len(), 1);
+}
+
+#[test]
+fn a_new_pointer_source_cancels_a_captured_drag_before_rebinding() {
+    let (mut p, circle, presented) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+
+    assert!(
+        !input(&mut p, "move", 2, Some(presented), 1, 450.0).unwrap(),
+        "a new source cannot inherit the old source's captured hit"
+    );
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+}
+
+#[test]
+fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
+    let (mut p, circle, presented) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
+
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
+    let _unpresented_motion = delta(&mut p);
+    let mut unrelated = wire("release", 1, 1, 450.0);
+    unrelated["button"] = 1.into();
+    assert!(p
+        .submit_browser_pointer_input_json(
+            &serde_json::json!({"input": unrelated, "presentation": presented}).to_string(),
+        )
+        .unwrap());
+    assert!(p.session.translation_drag_active());
+
+    assert!(input(&mut p, "release", 1, Some(presented), 1, 400.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+}
+
+#[test]
+fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
+    let (mut p, circle, r) = drag_player();
+    let before = p.session.publication_context().scene_revision();
+    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+    assert!(
+        p.drain_delta_json().unwrap().is_none(),
+        "stationary capture does not repaint"
+    );
+    assert!(input(&mut p, "move", 1, Some(r), 1, 450.0).unwrap());
+    let old = receipt(&delta(&mut p), 3);
+    assert!(acknowledge(&mut p, old));
+    register(&mut p, 2);
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    assert_eq!(p.session.publication_context().scene_revision(), before);
+    assert!(input(&mut p, "release", 1, Some(old), 1, 500.0).is_err());
+    assert_eq!(p.session.publication_context().scene_revision(), before);
+}

@@ -61,7 +61,7 @@ impl ExecutionSession {
         if self.derived_display_plan.is_some() {
             return Err(ExecutionSessionMaintenanceError::DerivedDisplayActive);
         }
-        if self.interactions_active() {
+        if self.interactions_active() || self.translation_drag_active() {
             return Err(ExecutionSessionMaintenanceError::InteractionActive);
         }
         let stats = self

@@ -301,8 +301,10 @@ async function renderAndCapture(page, time, screenshotPath) {
 }
 
 async function directExecutionProof(page, expectedBackend) {
+  // This runs dozens of independent real-GPU scenes, including 100k-object setup.
+  // The bound covers total qualification time, not a playback performance budget.
   await page.waitForFunction(() => window.noonDirectExecutionSmoke?.ready === true, null, {
-    timeout: 60_000,
+    timeout: 120_000,
   });
   const direct = await page.evaluate(() => window.noonDirectExecutionSmoke);
   assert.equal(direct.error, null, `direct Rust/WASM execution proof failed: ${direct.error}`);

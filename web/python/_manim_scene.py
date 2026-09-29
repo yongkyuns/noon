@@ -147,6 +147,45 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
+def _set_translation_drag_targets(
+    scene: _base.Scene, *mobjects: _base.Mobject
+) -> _base.Scene:
+    """Declare source-owned drag eligibility through the canonical Rust context."""
+    handles = []
+    seen = set()
+    for mobject in mobjects:
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Scene.set_drag_targets expects Mobjects")
+        if mobject._scene is not scene:
+            raise ValueError("translation drag target must belong to this Scene")
+        handle = getattr(mobject, "_semantic_handle", None)
+        if handle is None or not bool(getattr(mobject, "_semantic_handle_fresh", False)):
+            raise RuntimeError("translation drag target requires a current semantic handle")
+        if id(handle) in seen:
+            raise ValueError("translation drag targets must be unique")
+        seen.add(id(handle))
+        handles.append(handle)
+    context = _context(scene)
+    batch = engine_call(
+        context.beginMembershipBatch,
+        "add",
+        operation="Scene.set_drag_targets",
+    )
+    for handle in handles:
+        engine_call(
+            batch.appendMobject,
+            "",
+            handle,
+            operation="Scene.set_drag_targets",
+        )
+    engine_call(
+        context.setTranslationDragTargets,
+        batch,
+        operation="Scene.set_drag_targets",
+    )
+    return scene
+
+
 def _semantic_wrapper_key(value: object) -> str:
     if not isinstance(value, (_base.Mobject, _compat.Group)):
         raise TypeError("Scene membership accepts Mobjects and Groups")
@@ -649,6 +688,7 @@ def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
         "remove": _base.Scene.remove,
         "clear": _base.Scene.clear,
         "on_click": _base.Scene.on_click,
+        "set_drag_targets": _base.Scene.set_drag_targets,
     }
     # Keep this conservative and descriptor-safe, like the base-method
     # admission below.  The source compiler admits direct scene calls from its

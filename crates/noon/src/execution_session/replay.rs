@@ -10,11 +10,17 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
-        if self.pending_segment_completion.is_some() || self.pending_callback.is_some() {
+        if self.pending_segment_completion.is_some()
+            || self.pending_callback.is_some()
+            || self.translation_drag_active()
+        {
             return Err(ReplayError::Incomplete);
         }
         self.runtime.begin_replay_retention(limits)?;
-        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
+        if !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+        {
             self.runtime.invalidate_replay_domain();
         }
         self.replay_pinned_exits = Some(Default::default());
@@ -23,10 +29,16 @@ impl ExecutionSession {
     /// Admit backward playback only after all retained revisions and completion
     /// barriers are coherent. Failure never changes the current authored scene.
     pub fn seal_replay(&mut self) -> Result<(), ReplayError> {
-        if self.pending_segment_completion.is_some() || self.pending_callback.is_some() {
+        if self.pending_segment_completion.is_some()
+            || self.pending_callback.is_some()
+            || self.translation_drag_active()
+        {
             return Err(ReplayError::Incomplete);
         }
-        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
+        if !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+        {
             return Err(ReplayError::UnsupportedDomain);
         }
         self.runtime.seal_replay()

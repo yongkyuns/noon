@@ -1,6 +1,11 @@
 export const SHOWCASE_MANIFEST = "./python/examples/noon_showcase_manifest.json";
 export const REPLAYABLE_SHOWCASE = "deterministic-retained-replay";
 export const NONREPLAYABLE_HOST_CALLBACKS = "nonreplayable-host-callbacks";
+export const NONREPLAYABLE_NATIVE_INPUT = "nonreplayable-native-input";
+export const NONREPLAYABLE_SHOWCASE_CAPABILITIES = Object.freeze([
+  NONREPLAYABLE_HOST_CALLBACKS,
+  NONREPLAYABLE_NATIVE_INPUT,
+]);
 
 export function isShowcaseRequest(locationLike) {
   const params = new URLSearchParams(locationLike?.search ?? "");
@@ -37,10 +42,10 @@ export function normalizeShowcaseManifest(manifest) {
     if (entry.inspection_zoom != null && typeof entry.inspection_zoom !== "boolean") throw new Error(`${entry.id}: inspection_zoom must be a boolean`);
     if (entry.inspection_zoom === true && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: inspection zoom must disclose its host setup`);
     const playbackCapability = entry.playback_capability ?? REPLAYABLE_SHOWCASE;
-    if (![REPLAYABLE_SHOWCASE, NONREPLAYABLE_HOST_CALLBACKS].includes(playbackCapability)) {
+    if (![REPLAYABLE_SHOWCASE, ...NONREPLAYABLE_SHOWCASE_CAPABILITIES].includes(playbackCapability)) {
       throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
     }
-    if (playbackCapability === NONREPLAYABLE_HOST_CALLBACKS) {
+    if (NONREPLAYABLE_SHOWCASE_CAPABILITIES.includes(playbackCapability)) {
       if (typeof entry.playback_limitation !== "string" || !entry.playback_limitation.trim()) {
         throw new Error(`${entry.id}: nonreplayable playback requires a user-facing limitation`);
       }
