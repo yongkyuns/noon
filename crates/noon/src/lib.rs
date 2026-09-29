@@ -273,8 +273,9 @@ pub use scene::{Scene, SceneSection, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{
-    SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
-    SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
+    SourceCandidate, SourceCandidateError, SourceFamilyDeclaration, SourceGeneration,
+    SourceObjectDeclaration, SourceReconciler, SourceReconciliationError,
+    SourceReconciliationResult,
 };
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
