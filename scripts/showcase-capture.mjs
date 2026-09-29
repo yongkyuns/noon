@@ -188,7 +188,7 @@ async function captureSelection(context, entry, result) {
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
-    const nativeInput = entry.playbackCapability === "nonreplayable-native-input";
+    const nativeInput = entry.playback_capability === "nonreplayable-native-input";
     if (nativeInput) await page.waitForFunction((duration) => {
       const controls = document.querySelector(".playback-controls")?.dataset;
       return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;

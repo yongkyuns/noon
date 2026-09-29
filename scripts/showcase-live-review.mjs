@@ -46,9 +46,6 @@ export function assertNonreplayableShowcase(entry, observed, expectedBackend) {
     "all replay controls must be disabled after UnsupportedDomain");
 }
 
-// Backwards-compatible export for existing callers; qualification is capability-generic.
-export const assertNonreplayableHostCallbacks = assertNonreplayableShowcase;
-
 export function summarizeLiveReview(results) {
   return {
     firstPassPassed: results.filter((result) => result.firstPassOutcome === "pass").length,
