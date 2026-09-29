@@ -76,7 +76,7 @@ mod admission {
     use super::*;
     use crate::browser_pointer_input::{
         self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
-        BrowserPointerTarget,
+        BrowserPointerKind, BrowserPointerTarget,
     };
     use noon::integration::PointerFrameSnapshot;
     use noon::ExecutionSession;
@@ -96,11 +96,20 @@ mod admission {
         frame: PointerFrameSnapshot,
     }
 
+    /// The one frame the host has actually presented for a held contact. It is
+    /// intentionally separate from `issued`: local drag motion can issue a
+    /// newer, unpresented delta while DOM events still carry this receipt.
+    struct PresentedFrame {
+        receipt: WorkerPointerReceipt,
+        frame: PointerFrameSnapshot,
+    }
+
     #[derive(Default)]
     pub(crate) struct WorkerPointerPresentation {
         view: Option<PointerPresentationView>,
         issued: Option<IssuedFrame>,
         presented: Option<WorkerPointerReceipt>,
+        presented_frame: Option<PresentedFrame>,
         retired_presentation: u64,
         rejected: Option<RejectedSource>,
         refresh_pending: bool,
@@ -136,6 +145,7 @@ mod admission {
             self.view = Some(view);
             self.issued = None;
             self.presented = None;
+            self.presented_frame = None;
             self.refresh_pending = true;
             Ok(())
         }
@@ -209,6 +219,10 @@ mod admission {
                 return Ok(false);
             }
             self.presented = Some(receipt);
+            self.presented_frame = Some(PresentedFrame {
+                receipt,
+                frame: issued.frame.clone(),
+            });
             Ok(true)
         }
 
@@ -228,6 +242,7 @@ mod admission {
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, false)?;
             self.retired_presentation = receipt.presentation;
             self.presented = None;
+            self.presented_frame = None;
             self.refresh_pending = true;
             Ok(true)
         }
@@ -317,6 +332,7 @@ mod admission {
                 BrowserPointerBinding::retire_after_inspection(binding);
                 self.retired_presentation = receipt.presentation;
                 self.presented = None;
+                self.presented_frame = None;
                 self.issued = None;
                 self.refresh_pending = true;
             }
@@ -331,7 +347,7 @@ mod admission {
             input: BrowserPointerInput,
             receipt: Option<WorkerPointerReceipt>,
         ) -> Result<bool, String> {
-            input.pointer()?;
+            let pointer = input.pointer()?;
             let coordinates = input.coordinates()?;
             if let Some(receipt) = receipt {
                 receipt.validate()?;
@@ -354,15 +370,60 @@ mod admission {
                     return Ok(false);
                 }
             }
-            input.needs_binding(*binding)?;
             sequence
                 .checked_add(1)
                 .ok_or("native input event sequence exhausted")?;
+            if target.session().translation_drag_active()
+                && binding.as_ref().is_some_and(|contact| {
+                    contact.changes_captured_contact(pointer, input.view_revision, coordinates)
+                })
+            {
+                // A changed contact mapping cannot inherit the captured hit.
+                // Cancel through the shared input lane before admitting a
+                // replacement source; that source needs a fresh presentation.
+                browser_pointer_input::cancel_browser_pointer_input(
+                    target, binding, sequence, true,
+                )?;
+                if let Some(old) = self.presented {
+                    self.retired_presentation = old.presentation;
+                }
+                self.presented = None;
+                self.presented_frame = None;
+                self.refresh_pending = true;
+                return Ok(false);
+            }
+            let needs_binding = input.needs_binding(*binding)?;
             if input.cancellation().is_some() {
                 browser_pointer_input::submit_browser_pointer_input(
                     target, binding, sequence, input,
                 )?;
                 return Ok(true);
+            }
+            let captured_continuation = !needs_binding
+                && target.session().translation_drag_active()
+                && (matches!(input.kind, BrowserPointerKind::Move)
+                    || (matches!(input.kind, BrowserPointerKind::Release)
+                        && input.button == Some(0)));
+            if captured_continuation {
+                let captured_frame = receipt.and_then(|receipt| {
+                    self.presented_frame.as_ref().and_then(|presented| {
+                        (self.presented == Some(receipt) && presented.receipt == receipt)
+                            .then(|| presented.frame.clone())
+                    })
+                });
+                if let Some(frame) = captured_frame {
+                    match browser_pointer_input::submit_captured_browser_pointer_input(
+                        target, binding, sequence, input, &frame,
+                    ) {
+                        Ok(()) => {
+                            self.rejected = None;
+                            return Ok(true);
+                        }
+                        Err(BrowserPointerAdmissionError::Frame(error))
+                            if browser_pointer_input::recoverable_frame_error(&error) => {}
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
             }
             if let (Some(receipt), Some(issued)) = (receipt, self.issued.as_ref()) {
                 if self.presented == Some(receipt)
