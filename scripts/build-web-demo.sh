@@ -54,6 +54,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/perf-corpus.mjs
   node --check scripts/host-callback-perf.mjs
   node --check scripts/playground-cold-start.mjs
+  node --check scripts/playground-cold-start-memory.mjs
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/browser-test-server.mjs
   node --check scripts/cross-language-parity.mjs
@@ -77,6 +78,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/pr-risk-classifier.mjs
   node --test scripts/build-runtime-identity.test.mjs
   node --test scripts/pyodide-resource-cache.test.mjs
+  node --test scripts/playground-cold-start-memory.test.mjs
   node --test scripts/webgpu-device-capture.test.mjs
   node --test scripts/manim-raster-support.test.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
