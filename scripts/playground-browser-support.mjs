@@ -28,3 +28,12 @@ export function playgroundLaunchOptions(browserName) {
   return { headless: true };
 }
 
+// Playwright's waitForFunction tests a returned Promise for truthiness before
+// resolving it. Async worker observations need polling of the resolved value.
+export async function waitForBrowserObservation(page, predicate, argument, { timeout = 90_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (!await page.evaluate(predicate, argument)) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for browser observation");
+    await page.waitForTimeout(25);
+  }
+}

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
-import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
@@ -71,7 +71,7 @@ async function waitForPresentation(page, previous) {
       window.__noonExampleGallery !== undefined &&
       document.querySelector("#patch-status")?.dataset.state !== "error",
   );
-  await page.waitForFunction(
+  await waitForBrowserObservation(page,
     async (prior) => {
       const metrics = await window.__noonExampleGallery.executionMetrics();
       return Number(metrics?.metrics?.presentedFrames ?? 0) > prior;
@@ -88,7 +88,9 @@ async function waitForExactPixels(canvas, baseline, label) {
     if (changedPixels(baseline, last) === 0) return last;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`${label} did not restore the exact baseline pixels`);
+  const error = new Error(`${label} did not restore the exact baseline pixels`);
+  error.capture = last;
+  throw error;
 }
 
 async function presentedFrames(page) {
@@ -204,6 +206,17 @@ try {
   );
   const source = await fetch(new URL("python/examples/showcase_pointer_selection.py", base)).then((response) => response.text());
   assert.match(source, /\.on_click\s*\(/, "showcase source must declare its click action");
+  await page.evaluate(async () => {
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const original = ExecutionWorkerClient.prototype.scrollInspectionView;
+    window.__noonInspectionTest = { pending: [], samples: [] };
+    ExecutionWorkerClient.prototype.scrollInspectionView = function(...args) {
+      window.__noonInspectionTest.samples.push({ input: { ...args[0] }, receipt: this.pointerPresentation });
+      const pending = original.apply(this, args);
+      window.__noonInspectionTest.pending.push(pending);
+      return pending;
+    };
+  });
   const authoredCanvas = page.locator("#scene");
   await layoutReplayViewport(authoredCanvas, captureSize);
   await authoredCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
@@ -265,10 +278,65 @@ try {
   await page.waitForTimeout(150);
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
+  // Exercise the actual gallery opt-in, not a manually constructed client.
+  const domWheel = browserName === "webkit" && profile.hasTouch;
+  report.wheelInput = domWheel ? "DOM wheel (mobile WebKit automation limitation)" : "browser mouse wheel";
+  const dispatchWheel = async delta => {
+    if (domWheel) {
+      // Playwright cannot drive a wheel in mobile WebKit. Keep the same DOM
+      // collector and real touch picking, without claiming native wheel input.
+      await authoredCanvas.evaluate((canvas, deltaY) => {
+        const rect = canvas.getBoundingClientRect();
+        const event = new WheelEvent("wheel", { cancelable: true, deltaMode: 0, deltaY,
+          clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+        canvas.dispatchEvent(event);
+        if (!event.defaultPrevented) throw new Error("gallery inspection did not consume DOM wheel");
+      }, delta);
+    } else {
+      await page.mouse.move(authoredBox.x + authoredBox.width / 2, authoredBox.y + authoredBox.height / 2);
+      await page.mouse.wheel(0, delta);
+    }
+  };
+  report.wheelAcknowledgements = [];
+  const wheel = async delta => {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const count = await page.evaluate(() => window.__noonInspectionTest.pending.length);
+      await dispatchWheel(delta);
+      const accepted = await page.evaluate(async count => {
+        const pending = window.__noonInspectionTest.pending;
+        return pending.length === count ? null : (await pending.at(-1)).inspectionScrollChanged;
+      }, count);
+      report.wheelAcknowledgements.push(accepted);
+      report.wheelSamples = await page.evaluate(() => window.__noonInspectionTest.samples);
+      if (accepted === true) return;
+      assert.equal(accepted, null, "gallery zoom unexpectedly admitted a no-op");
+      // A new occurrence uses a new collection-time receipt; no rejected input
+      // is queued or relabelled as current by either the test or production host.
+      await page.waitForTimeout(25);
+    }
+    throw new Error("gallery inspection did not admit a fresh wheel occurrence");
+  };
+  const beforeZoom = await presentedFrames(page);
+  await wheel(-500 * Math.log(2));
+  await waitForPresentation(page, beforeZoom);
+  const zoomed = await authoredCanvas.screenshot();
+  captures.zoomed = zoomed;
+  report.zoomChanged = changedPixels(authoredBaseline, zoomed);
+  assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
+  await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
+  captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
+  captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
+  await assertSettled(page, "zoomed authored click");
+  const beforeZoomOut = await presentedFrames(page);
+  await wheel(500 * Math.log(2));
+  await waitForPresentation(page, beforeZoomOut);
+  captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
+  await assertSettled(page, "inverse gallery zoom");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
   assert.deepEqual(errors, []);
 } catch (error) {
   failure = error;
+  if (error.capture) captures.failure = error.capture;
   throw error;
 } finally {
   // Persist the original captures after the verdict, including failed/partial

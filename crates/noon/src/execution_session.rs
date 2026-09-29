@@ -4,12 +4,14 @@ mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
 mod input;
+mod inspection;
 #[cfg(test)]
 mod matching_foreground_tests;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
+pub use inspection::InspectionNavigationError;
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 mod interactions;
@@ -744,6 +746,7 @@ pub struct ExecutionSession {
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
     interaction_bindings: interactions::InteractionBindings,
+    inspection: inspection::SessionInspectionView,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
     next_callback_sequence: Option<u64>,
@@ -786,6 +789,7 @@ impl Clone for ExecutionSession {
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
             interaction_bindings: self.interaction_bindings.clone(),
+            inspection: self.inspection,
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),
@@ -957,6 +961,7 @@ impl ExecutionSession {
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
             interaction_bindings: Default::default(),
+            inspection: inspection::SessionInspectionView::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
             next_callback_sequence: Some(0),

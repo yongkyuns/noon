@@ -115,7 +115,6 @@ impl Raster {
             .preparer
             .prepare_publication(
                 &self.device,
-                &self.queue,
                 publication,
                 TextDeviceMetrics::uniform(SIZE as f32 / WORLD_SIZE).unwrap(),
             )

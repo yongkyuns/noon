@@ -110,6 +110,7 @@ mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
+mod inspection_view;
 pub mod integration;
 #[cfg(feature = "latex")]
 mod latex_authoring;
@@ -193,7 +194,8 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionInset2DError, ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionInset2DError, ExecutionSessionPublicationError, InspectionNavigationError,
+    SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -208,6 +210,7 @@ pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHos
 pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+pub use inspection_view::{InspectionView2D, InspectionViewError};
 #[cfg(feature = "latex")]
 pub use latex_authoring::{
     DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,

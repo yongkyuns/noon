@@ -74,7 +74,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_animation<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -84,7 +83,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_family_animation_with_changes(
-            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+            device, frame, plan, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -92,7 +91,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_animation_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
@@ -104,18 +102,17 @@ impl RetainedFramePreparer {
         match active_family_mode(frame, plan)? {
             Some(FamilyAnimationMode::Reveal) => self
                 .prepare_family_with_changes(
-                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                    device, frame, plan, changes, texts, fonts, geometries, metrics,
                 )
                 .map_err(Into::into),
             Some(FamilyAnimationMode::DrawBorderThenFill) => self
                 .prepare_family_draw_border_then_fill_with_changes(
-                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                    device, frame, plan, changes, texts, fonts, geometries, metrics,
                 )
                 .map_err(Into::into),
             None => self
                 .prepare_with_changes(
                     device,
-                    queue,
                     frame.retained,
                     changes,
                     texts,
@@ -395,7 +392,6 @@ mod operation_selection_tests {
                     preparer
                         .prepare_family_plan_set_with_changes(
                             &device,
-                            &queue,
                             &planned,
                             std::slice::from_ref(&plan),
                             &FrameChanges::all(),
@@ -409,7 +405,6 @@ mod operation_selection_tests {
                     preparer
                         .prepare_family_with_changes(
                             &device,
-                            &queue,
                             &frame,
                             &plan,
                             &FrameChanges::all(),
@@ -476,7 +471,6 @@ mod operation_selection_tests {
         let first = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::all(),
@@ -503,7 +497,6 @@ mod operation_selection_tests {
         let warm = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::objects(vec![0]),
@@ -538,7 +531,6 @@ mod operation_selection_tests {
         let replacement = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::structural(vec![2], vec![2]),
@@ -615,7 +607,7 @@ mod operation_selection_tests {
         let fonts = FontResourceArena::new();
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         preparer.set_scene_path_mesh_cache_budget(resources.len(), 0);
         for (visit, phase) in [0, 0, 1, 1, 0, 0, 1].into_iter().enumerate() {
@@ -627,7 +619,6 @@ mod operation_selection_tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &retained,
                     &FrameChanges::all(),
                     &texts,
@@ -651,7 +642,6 @@ mod operation_selection_tests {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -694,7 +684,6 @@ mod operation_selection_tests {
         let generation = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -721,7 +710,6 @@ mod operation_selection_tests {
         let reused = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::default(),
                 &texts,
@@ -740,7 +728,6 @@ mod operation_selection_tests {
         let rebuilt = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::default(),
                 &texts,
@@ -814,7 +801,6 @@ mod operation_selection_tests {
         let first = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -843,7 +829,6 @@ mod operation_selection_tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &retained,
                     &FrameChanges::all(),
                     &texts,

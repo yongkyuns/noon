@@ -18,6 +18,8 @@ use winit::keyboard::ModifiersState;
 
 use super::{native_pointer_button, NativeApp, NativeHostError};
 
+mod inspection;
+
 const WINDOW_CURSOR: NativePointerId = NativePointerId {
     source: 1,
     pointer: 0,
@@ -103,12 +105,10 @@ impl NativeApp {
     }
 
     fn pointer_frame_view(&self, logical: Vec2) -> Result<PointerFrameView, NativeHostError> {
-        PointerFrameView::new(
-            self.pointer.view_revision,
-            logical,
-            self.execution.camera()?,
-        )
-        .map_err(|error| NativeHostError::Platform(error.to_string()))
+        self.execution
+            .session()
+            .inspection_pointer_view(self.pointer.view_revision, logical)
+            .map_err(|error| NativeHostError::Platform(error.to_string()))
     }
 
     fn reject_pointer_frame(
@@ -193,7 +193,9 @@ impl NativeApp {
         }
         let outcome =
             self.dispatch_presented_pointer(surface, logical, NativePointerInputKind::Move)?;
-        if outcome == PointerDispatch::Admitted {
+        if outcome == PointerDispatch::Admitted
+            || (outcome == PointerDispatch::Unsubscribed && self.config.inspection_zoom)
+        {
             // Rejected samples must not supply coordinates to a later edge.
             self.pointer.surface = Some(surface);
         }

@@ -37,7 +37,7 @@ assert.match(
 );
 assert.match(
   authoringExecutionClient,
-  /constructor\(canvas, \{ onError = null, onRecoverableError = null \} = \{\}\)/,
+  /constructor\(canvas, \{ onError = null, onRecoverableError = null, inspectionZoom = false \} = \{\}\)/,
   "authoring execution must preserve the recoverable error callback boundary",
 );
 assert.equal(

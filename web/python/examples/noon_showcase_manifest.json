@@ -159,7 +159,9 @@
     },
     {
       "id": "showcase-pointer-selection", "title": "Select a shape",
-      "lesson": "Reveal a scene, then click a shape to run a Rust-owned Indicate animation declared in Python.",
+      "lesson": "Click a shape to run the Indicate animation declared in Python, and scroll to inspect it while it animates.",
+      "inspection_zoom": true,
+      "host_setup": "This viewer enables cursor-anchored wheel/trackpad zoom. Inspection leaves the authored camera and playback unchanged.",
       "primary_feature": "authored-pointer-interaction", "category": "Interaction",
       "path": "python/examples/showcase_pointer_selection.py", "features": ["Create", "on_click", "Indicate"],
       "duration": 2.6, "thumbnail_time": 2.6,

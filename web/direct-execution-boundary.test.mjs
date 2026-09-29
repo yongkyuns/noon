@@ -110,7 +110,7 @@ assert.match(
 );
 
 for (const required of [
-  "let camera = session.camera().map_err(js_error)?;",
+  "let camera = session.inspection_camera().map_err(js_error)?;",
   "self.sync_camera(camera)?;",
   "BrowserExecutionWakePlan::from_runtime(self.program.wake_state())",
   "LiveProgram",

@@ -56,13 +56,28 @@ impl WorkerPointerReceipt {
     }
 }
 
+/// One normalized view-navigation occurrence at the genuine worker boundary.
+/// The receipt is captured when the DOM event arrives, never at delivery time.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerInspectionScroll {
+    pub view_revision: u64,
+    pub viewport_width: f32,
+    pub viewport_height: f32,
+    pub surface_x: f32,
+    pub surface_y: f32,
+    pub delta_pixels: f64,
+    pub presentation: Option<WorkerPointerReceipt>,
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 mod admission {
     use super::*;
     use crate::browser_pointer_input::{
         self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
     };
-    use noon::integration::{PointerFrameSnapshot, PointerFrameView};
+    use noon::integration::PointerFrameSnapshot;
     use noon::ExecutionSession;
     use noon_core::Vec2;
 
@@ -131,13 +146,9 @@ mod admission {
             self.view
                 .filter(|view| view.drawable())
                 .map(|view| {
-                    let camera = session.camera().map_err(|e| e.to_string())?;
-                    let view = PointerFrameView::new(
-                        view.revision,
-                        Vec2::new(view.width, view.height),
-                        camera,
-                    )
-                    .map_err(|e| e.to_string())?;
+                    let view = session
+                        .inspection_pointer_view(view.revision, Vec2::new(view.width, view.height))
+                        .map_err(|e| e.to_string())?;
                     session
                         .capture_pointer_frame(view)
                         .map_err(|e| e.to_string())
@@ -218,6 +229,96 @@ mod admission {
             self.presented = None;
             self.refresh_pending = true;
             Ok(true)
+        }
+
+        /// None rejects an obsolete/unpresented occurrence; Some(false) is an
+        /// admitted exact no-op; Some(true) changes only the shared session view
+        /// and any held native buttons. No host camera, clock or input queue.
+        pub(crate) fn scroll(
+            &mut self,
+            session: &mut ExecutionSession,
+            binding: &mut Option<BrowserPointerBinding>,
+            input: WorkerInspectionScroll,
+        ) -> Result<Option<bool>, String> {
+            let registered = PointerPresentationView {
+                revision: input.view_revision,
+                width: input.viewport_width,
+                height: input.viewport_height,
+            };
+            registered.validate()?;
+            if !registered.drawable()
+                || !input.surface_x.is_finite()
+                || !input.surface_y.is_finite()
+                || !input.delta_pixels.is_finite()
+            {
+                return Err(
+                    "worker inspection requires a finite cursor, delta and drawable viewport"
+                        .into(),
+                );
+            }
+            if let Some(receipt) = input.presentation {
+                receipt.validate()?;
+            }
+            let view = session
+                .inspection_pointer_view(
+                    input.view_revision,
+                    Vec2::new(input.viewport_width, input.viewport_height),
+                )
+                .map_err(|error| error.to_string())?;
+            if self.view != Some(registered) {
+                return Ok(None);
+            }
+            let Some(issued) = self.issued.as_ref() else {
+                self.refresh_pending = true;
+                return Ok(None);
+            };
+            // Request a fresh coherent view only when the issued frame itself
+            // is obsolete. A stale packet must not trigger an endless repaint.
+            match issued.frame.validate_current(session, view) {
+                Ok(()) => {}
+                Err(error) if browser_pointer_input::recoverable_frame_error(&error) => {
+                    self.refresh_pending = true;
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+            let Some(receipt) = input.presentation else {
+                return Ok(None);
+            };
+            if self.presented != Some(receipt)
+                || receipt.session != issued.session
+                || receipt.sequence != issued.sequence
+                || receipt.view_revision != input.view_revision
+            {
+                return Ok(None);
+            }
+            let changed = session
+                .scroll_inspection_view(
+                    &issued.frame,
+                    view,
+                    Vec2::new(input.surface_x, input.surface_y),
+                    input.delta_pixels,
+                )
+                .map_err(|error| error.to_string())?;
+            if changed {
+                // Every fallible operation is complete. The session has already
+                // cancelled buttons; never synthesize another release/cancel.
+                if let Some(contact) = *binding {
+                    let (pointer, view, viewport) = contact.identity_and_view();
+                    self.rejected = Some(RejectedSource {
+                        source: pointer.source,
+                        pointer: (pointer.pointer as u32).cast_signed(),
+                        view,
+                        viewport: Some(viewport),
+                    });
+                }
+                BrowserPointerBinding::retire_after_inspection(binding);
+                self.retired_presentation = receipt.presentation;
+                self.presented = None;
+                self.issued = None;
+                self.refresh_pending = true;
+            }
+            Ok(Some(changed))
         }
 
         pub(crate) fn submit(

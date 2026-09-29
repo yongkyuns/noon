@@ -56,7 +56,7 @@ fn noop_device_validates_lazy_mask_and_color_uploads() {
         },
         data: Arc::from([255, 128, 64, 0]),
     });
-    let mask_entry = atlas.insert(&device, &queue, mask_key, &mask).unwrap();
+    let mask_entry = atlas.insert(&device, mask_key, &mask).unwrap();
     let GlyphAtlasEntry::Image(mask_image) = mask_entry else {
         panic!("visible mask glyph must occupy the atlas");
     };
@@ -67,10 +67,7 @@ fn noop_device_validates_lazy_mask_and_color_uploads() {
     assert!(atlas.texture_view(GlyphAtlasPlane::Mask).is_some());
     assert!(atlas.texture_view(GlyphAtlasPlane::Color).is_none());
 
-    assert_eq!(
-        atlas.insert(&device, &queue, mask_key, &mask).unwrap(),
-        mask_entry
-    );
+    assert_eq!(atlas.insert(&device, mask_key, &mask).unwrap(), mask_entry);
 
     let color_key = glyph_key(2);
     let color = GlyphRaster::Image(GlyphRasterImage {
@@ -83,7 +80,7 @@ fn noop_device_validates_lazy_mask_and_color_uploads() {
         },
         data: Arc::from([10, 20, 30, 255]),
     });
-    let color_entry = atlas.insert(&device, &queue, color_key, &color).unwrap();
+    let color_entry = atlas.insert(&device, color_key, &color).unwrap();
     let GlyphAtlasEntry::Image(color_image) = color_entry else {
         panic!("visible color glyph must occupy the atlas");
     };
@@ -92,13 +89,31 @@ fn noop_device_validates_lazy_mask_and_color_uploads() {
     assert_eq!(color_image.origin, [1, 1]);
     assert_eq!(color_image.size, [1, 1]);
     assert!(atlas.texture_view(GlyphAtlasPlane::Color).is_some());
+    assert_eq!(atlas.pending_upload_count(), 2);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Noon glyph atlas upload test"),
+    });
+    assert!(atlas.encode_pending_uploads(&mut encoder));
+    // Encoding alone is retryable; acknowledge only after the enclosing frame succeeds.
+    assert_eq!(atlas.pending_upload_count(), 2);
+    drop(encoder); // A dropped frame must leave cache misses available for retry.
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    assert!(atlas.encode_pending_uploads(&mut encoder));
+    queue.submit(Some(encoder.finish()));
+    atlas.acknowledge_pending_uploads();
+    assert_eq!(atlas.pending_upload_count(), 0);
+    assert_eq!(atlas.insert(&device, mask_key, &mask).unwrap(), mask_entry);
+    assert_eq!(atlas.pending_upload_count(), 0);
+    let mut clean_encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    assert!(!atlas.encode_pending_uploads(&mut clean_encoder));
 
     let stats = atlas.stats();
     assert_eq!(stats.entries, 2);
     assert_eq!(stats.mask_entries, 1);
     assert_eq!(stats.color_entries, 1);
     assert_eq!(stats.texture_allocations, 2);
-    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.hits, 2);
     assert_eq!(stats.misses, 2);
     assert_eq!(atlas.get(mask_key), Some(mask_entry));
     assert_eq!(atlas.get(color_key), Some(color_entry));
@@ -106,14 +121,13 @@ fn noop_device_validates_lazy_mask_and_color_uploads() {
 
 #[test]
 fn noop_device_allocates_live_pages_within_explicit_budget() {
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
 
     for glyph_id in 1..=2 {
         let GlyphAtlasEntry::Image(image) = atlas
             .insert(
                 &device,
-                &queue,
                 glyph_key(glyph_id),
                 &mask_raster(4, 2, 100 + glyph_id as u8),
             )
@@ -125,7 +139,7 @@ fn noop_device_allocates_live_pages_within_explicit_budget() {
     }
 
     let GlyphAtlasEntry::Image(page_one) = atlas
-        .insert(&device, &queue, glyph_key(3), &mask_raster(1, 1, 255))
+        .insert(&device, glyph_key(3), &mask_raster(1, 1, 255))
         .unwrap()
     else {
         panic!("visible mask glyph must occupy the atlas");
@@ -146,19 +160,17 @@ fn noop_device_allocates_live_pages_within_explicit_budget() {
 
 #[test]
 fn noop_device_keeps_current_generation_pages_pinned() {
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 1).unwrap();
     let raster = mask_raster(4, 2, 200);
 
     for glyph_id in 1..=2 {
-        atlas
-            .insert(&device, &queue, glyph_key(glyph_id), &raster)
-            .unwrap();
+        atlas.insert(&device, glyph_key(glyph_id), &raster).unwrap();
     }
     assert_eq!(atlas.stats().texture_allocations, 1);
 
     let error = atlas
-        .insert(&device, &queue, glyph_key(3), &mask_raster(1, 1, 255))
+        .insert(&device, glyph_key(3), &mask_raster(1, 1, 255))
         .unwrap_err();
     assert_eq!(
         error,
@@ -176,13 +188,13 @@ fn noop_device_keeps_current_generation_pages_pinned() {
 
 #[test]
 fn noop_device_reuses_oldest_unpinned_page_without_reallocating_texture() {
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
     let full_page_raster = mask_raster(4, 2, 180);
 
     for glyph_id in 1..=4 {
         let GlyphAtlasEntry::Image(image) = atlas
-            .insert(&device, &queue, glyph_key(glyph_id), &full_page_raster)
+            .insert(&device, glyph_key(glyph_id), &full_page_raster)
             .unwrap()
         else {
             panic!("visible mask glyph must occupy the atlas");
@@ -194,11 +206,11 @@ fn noop_device_reuses_oldest_unpinned_page_without_reallocating_texture() {
 
     assert_eq!(atlas.begin_generation(), 2);
     atlas
-        .insert(&device, &queue, glyph_key(4), &full_page_raster)
+        .insert(&device, glyph_key(4), &full_page_raster)
         .unwrap();
 
     let GlyphAtlasEntry::Image(reused) = atlas
-        .insert(&device, &queue, glyph_key(5), &mask_raster(1, 1, 255))
+        .insert(&device, glyph_key(5), &mask_raster(1, 1, 255))
         .unwrap()
     else {
         panic!("visible mask glyph must occupy the atlas");

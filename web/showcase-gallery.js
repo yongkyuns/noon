@@ -34,6 +34,8 @@ export function normalizeShowcaseManifest(manifest) {
     )) throw new Error(`${entry.id}: expected at least three review beats within the scene`);
     if (entry.interaction != null && entry.interaction.type !== "pointer-fill-selection") throw new Error(`${entry.id}: unsupported host interaction`);
     if (entry.interaction != null && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: interactive scenes must disclose their host setup`);
+    if (entry.inspection_zoom != null && typeof entry.inspection_zoom !== "boolean") throw new Error(`${entry.id}: inspection_zoom must be a boolean`);
+    if (entry.inspection_zoom === true && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: inspection zoom must disclose its host setup`);
     const playbackCapability = entry.playback_capability ?? REPLAYABLE_SHOWCASE;
     if (![REPLAYABLE_SHOWCASE, NONREPLAYABLE_HOST_CALLBACKS].includes(playbackCapability)) {
       throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
@@ -65,6 +67,7 @@ export function normalizeShowcaseManifest(manifest) {
       thumbnailTime: entry.thumbnail_time,
       order: ids.size,
       interaction: entry.interaction ? { type: entry.interaction.type, maxMovement: 4 } : null,
+      inspectionZoom: entry.inspection_zoom === true,
       performance: entry.performance === true,
       playbackCapability,
       playbackLimitation: entry.playback_limitation ?? null,

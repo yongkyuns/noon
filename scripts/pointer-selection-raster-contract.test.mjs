@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { VIEW, SHAPES, selectionFixtureSource, shapeSurfaceCenter, assertExactPixels,
   assertSelectionPixels } from "./pointer-selection-raster-contract.mjs";
 
-const image = () => ({ width: VIEW.width, height: VIEW.height,
-  data: Buffer.alloc(VIEW.width * VIEW.height * 4, 0xff) });
+const image = (view = VIEW) => ({ width: view.width, height: view.height,
+  data: Buffer.alloc(view.width * view.height * 4, 0xff) });
 // Synthetic mutations test the oracle only; they are not renderer evidence.
-function fill(shape) {
-  const result = image();
-  const center = shapeSurfaceCenter(shape), scale = VIEW.height / VIEW.cameraHeight;
+function fill(shape, view = VIEW) {
+  const result = image(view);
+  const center = shapeSurfaceCenter(shape, view), scale = view.height / view.cameraHeight;
   for (let y = 0; y < result.height; y++) for (let x = 0; x < result.width; x++) {
     const dx = (x + 0.5 - center.x) / scale, dy = -(y + 0.5 - center.y) / scale;
     const u = (dx * Math.cos(shape.rotation) + dy * Math.sin(shape.rotation)) / shape.scaleX;
@@ -50,4 +50,23 @@ test("invalid dimensions and incomplete decoded captures fail closed", () => {
   const before = image();
   assert.throws(() => assertSelectionPixels(before, { ...image(), width: 0 }, SHAPES[0]));
   assert.throws(() => assertExactPixels(before, { ...image(), data: Buffer.alloc(3) }, "capture"), /RGBA/);
+});
+
+test("inspection oracle follows zoomed camera geometry without demanding opaque yellow", () => {
+  const view = { width: 800, height: 400, cameraHeight: 4, centerX: 0.5, centerY: 0 };
+  const shape = { kind: "circle", radius: 0.4, x: 2, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+  const before = image(view), after = fill(shape, view);
+  // A translucent overlay changes channels, but need not exceed an opaque-color threshold.
+  for (let i = 0; i < after.data.length; i += 4) if (after.data[i] === 0) after.data[i] = 147;
+  assert.ok(assertSelectionPixels(before, after, shape, view).changed > 100);
+  assert.throws(() => assertSelectionPixels(before, after, shape, { ...view, cameraHeight: 8, centerX: 0 }), /unrelated|interior/);
+  assert.throws(() => assertSelectionPixels(before, before, shape, view), /interior/);
+  after.data[0] = 0;
+  assert.throws(() => assertSelectionPixels(before, after, shape, view), /unrelated/);
+});
+
+test("inspection oracle rejects an invalid expected camera before scanning pixels", () => {
+  for (const cameraHeight of [0, -1, NaN, Infinity]) {
+    assert.throws(() => assertSelectionPixels(image(), image(), SHAPES[0], { ...VIEW, cameraHeight }), /invalid expected/);
+  }
 });

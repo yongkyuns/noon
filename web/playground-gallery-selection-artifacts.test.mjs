@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { waitForBrowserObservation } from "../scripts/playground-browser-support.mjs";
 import test from "node:test";
 
 const sourceUrl = new URL("../scripts/playground-gallery-selection-smoke.mjs", import.meta.url).href;
@@ -12,15 +13,17 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, wheelReplies = [], env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
+    "zoomed", "zoomIndicated", "zoomRestored", "zoomReset",
   ];
   const captures = names.map((name) => Buffer.from(name));
   const decoded = new Map(captures.map((bytes, index) => {
     const data = new Uint8Array(32 * 32 * 4);
-    const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0][index];
+    const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0,
+      1000, 400, 1000, 0][index];
     for (let i = 0; i < changed; i += 1) data[i * 4] = 1;
     return [bytes, { width: 32, height: 32, data }];
   }));
@@ -36,8 +39,17 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
     executionMetrics: async () => ({ metrics: { presentedFrames: frame } }),
   };
+  const inspection = { pending: [], samples: [] };
+  const acceptWheel = () => {
+    const changed = wheelReplies.length ? wheelReplies.shift() : true;
+    if (changed) frame += 1;
+    inspection.pending.push(Promise.resolve({ inspectionScrollChanged: changed }));
+  };
   const canvas = {
-    evaluate: async (fn) => fn({ style: { setProperty() {} } }),
+    evaluate: async (fn, argument) => fn({ style: { setProperty() {} },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+      dispatchEvent: event => { event.defaultPrevented = true; acceptWheel(); events.push("DOM:wheel"); },
+    }, argument),
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
     screenshot: async () => {
       const name = names[capture];
@@ -52,7 +64,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       showcase = String(url).includes("catalog=showcase");
       gallery.selectedExampleId = showcase ? "showcase-pointer-selection" : "noon-pointer-selection";
     },
-    evaluate: async (fn) => fn(),
+    evaluate: async (fn, argument) => String(fn).includes("await import(") ? undefined : fn(argument),
     waitForFunction: async (fn, argument) => assert.ok(await fn(argument)),
     waitForTimeout: async () => {},
     locator: (selector) => {
@@ -65,7 +77,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return canvas;
     },
     getByRole: () => ({ count: async () => 1, click: async () => {} }),
-    mouse: { click: async (x, y) => {
+    mouse: { move: async () => {}, wheel: async () => { acceptWheel(); }, click: async (x, y) => {
       events.push(`mouse:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },
@@ -99,6 +111,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
           close: async () => events.push("browser:close"),
         };
       } }])),
+      waitForBrowserObservation,
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {} }),
       layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
@@ -106,7 +119,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
         bounds: { x: 0, y: 0, ...size }, deviceScaleFactor,
       }),
-      window: { __noonExampleGallery: gallery },
+      window: { __noonExampleGallery: gallery, __noonInspectionTest: inspection },
       document: { querySelector: (selector) => {
         if (selector === ".playback-controls") return {
           dataset: { busy: "false", elapsedSeconds: "2.6" },
@@ -117,15 +130,16 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         } };
       } },
       Event: class Event { constructor() {} },
+      WheelEvent: class WheelEvent { constructor() {} },
       console: { log: () => events.push("passed"), error: () => events.push("diagnostic:error") },
     });
   } catch (caught) { error = caught; }
-  return { error, writes, events, captures, contextOptions, launchOptions, layoutSizes };
+  return { error, writes, events, captures, captureNames: names, contextOptions, launchOptions, layoutSizes };
 }
 
 function assertRetained(result, names) {
   for (const name of names) {
-    const index = ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"].indexOf(name);
+    const index = result.captureNames.indexOf(name);
     assert.equal(result.writes.get(`${name}.png`), result.captures[index]);
   }
   assert.equal(result.events.filter((event) => event === "browser:close").length, 1);
@@ -139,11 +153,13 @@ function assertRetained(result, names) {
 test("successful legacy clear and source-declared indication retain their captures and measurements", async () => {
   const result = await runSmoke();
   assert.equal(result.error, undefined);
-  const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated"]);
+  const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated",
+    "zoomed", "zoomIndicated", "zoomRestored", "zoomReset"]);
   assert.equal(report.selectedChanged, 501);
   assert.equal(report.clearDifference, 0);
   assert.equal(report.indicatedChanged, 501);
   assert.equal(report.authoredInteraction, "click-indicate");
+  assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
 });
@@ -170,6 +186,8 @@ test("mobile profile uses DPR2 portrait geometry, touch input, and a viewport-fi
   assert.ok(result.events.some((event) => event.startsWith("touch:")));
   assert.ok(!result.events.some((event) => event.startsWith("mouse:")));
   const report = JSON.parse(result.writes.get("result.json"));
+  assert.equal(report.wheelInput, "DOM wheel (mobile WebKit automation limitation)");
+  assert.equal(result.events.filter(event => event === "DOM:wheel").length, 2);
   assert.deepEqual(report.captureViewport.bitmap, { width: 716, height: 402 });
   assert.equal(report.captureViewport.deviceScaleFactor, 2);
   assert.equal(result.layoutSizes.length, 2, "both interaction canvases must use the mobile capture layout");
@@ -231,4 +249,29 @@ test("one failed write cannot abandon other pending capture writes", async () =>
   assert.equal(result.writes.size, 3);
   assert.ok(result.events.findLastIndex((event) => event.startsWith("stored:")) <
     result.events.indexOf("browser:close"));
+});
+
+test("async browser observations poll resolved false values and propagate failures", async () => {
+  let reads = 0, waits = 0;
+  const page = { evaluate: async (fn, argument) => fn(argument), waitForTimeout: async () => { waits++; } };
+  await waitForBrowserObservation(page, async limit => ++reads >= limit, 3);
+  assert.equal(reads, 3);
+  assert.equal(waits, 2);
+  await assert.rejects(waitForBrowserObservation(page, async () => false, null, { timeout: 0 }), /Timed out/);
+  await assert.rejects(waitForBrowserObservation(page, async () => { throw new Error("worker failed"); }), /worker failed/);
+});
+
+test("gallery qualification observes rejection before offering a distinct fresh wheel", async () => {
+  const result = await runSmoke({ wheelReplies: [null, true, true] });
+  assert.equal(result.error, undefined);
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.wheelAcknowledgements, [null, true, true]);
+});
+
+test("gallery qualification bounds fresh wheel attempts and never claims rejected zoom", async () => {
+  const result = await runSmoke({ wheelReplies: Array(8).fill(null) });
+  assert.match(result.error?.message, /did not admit a fresh wheel/);
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.wheelAcknowledgements, Array(8).fill(null));
+  assert.equal(result.writes.has("zoomed.png"), false);
 });

@@ -17,6 +17,8 @@ pub(crate) struct DirectPointerPresentation {
     pub(crate) refresh_pending: bool,
 }
 
+mod inspection;
+
 impl DirectPointerPresentation {
     pub(crate) fn set_view(&mut self, revision: u64, viewport: Vec2) -> Result<bool, String> {
         if revision > (1_u64 << 53) - 1

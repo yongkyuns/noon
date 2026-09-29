@@ -31,6 +31,13 @@ pub(crate) trait BrowserPointerTarget {
         view: u64,
     ) -> Result<NativePointerInputToken, String>;
     fn pointer_token(&self) -> Result<NativePointerInputToken, String>;
+    fn scroll_inspection(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, String>;
     fn submit_pointer(
         &mut self,
         token: &NativePointerInputToken,
@@ -146,6 +153,16 @@ impl BrowserPointerTarget for ExecutionSession {
     fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
         self.native_pointer_input_token().map_err(|e| e.to_string())
     }
+    fn scroll_inspection(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, String> {
+        self.scroll_inspection_view(frame, view, surface, delta_pixels)
+            .map_err(|error| error.to_string())
+    }
     fn submit_pointer(
         &mut self,
         token: &NativePointerInputToken,
@@ -174,6 +191,16 @@ where
     fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
         self.native_pointer_input_token().map_err(|e| e.to_string())
     }
+    fn scroll_inspection(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, String> {
+        self.scroll_inspection_view(frame, view, surface, delta_pixels)
+            .map_err(|error| error.to_string())
+    }
     fn submit_pointer(
         &mut self,
         token: &NativePointerInputToken,
@@ -197,6 +224,22 @@ pub(crate) struct BrowserPointerBinding {
     view_revision: u64,
     viewport: Vec2,
     retired: bool,
+}
+
+impl BrowserPointerBinding {
+    /// Occurrence identity and logical view, for retiring an asynchronous packet
+    /// tail after the shared session has cancelled this contact during navigation.
+    pub(crate) fn identity_and_view(self) -> (NativePointerId, u64, Vec2) {
+        (self.pointer, self.view_revision, self.viewport)
+    }
+
+    /// Shared navigation has already cancelled the semantic gesture. Retain the
+    /// source tombstone so delayed records cannot rebind it after repaint.
+    pub(crate) fn retire_after_inspection(binding: &mut Option<Self>) {
+        if let Some(contact) = binding {
+            contact.retired = true;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -374,8 +417,8 @@ fn submit_pointer(
         // resetting held signals may itself change execution.
         let camera = target
             .session()
-            .camera()
-            .map_err(|error| error.to_string())?;
+            .inspection_camera()
+            .map_err(BrowserPointerAdmissionError::Frame)?;
         if let Some(frame) = presented {
             let view = PointerFrameView::new(wire.view_revision, viewport, camera)?;
             frame.validate_current(target.session(), view)?;
@@ -405,8 +448,8 @@ fn submit_pointer(
         let (surface, viewport) = coordinates.expect("validated positional record");
         let camera = target
             .session()
-            .camera()
-            .map_err(|error| error.to_string())?;
+            .inspection_camera()
+            .map_err(BrowserPointerAdmissionError::Frame)?;
         let position = if let Some(frame) = presented {
             // Revalidate after configuration. Never retag an occurrence to the
             // publication or camera produced by clearing an older source.

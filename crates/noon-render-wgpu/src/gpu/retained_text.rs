@@ -1183,7 +1183,6 @@ impl RetainedFramePreparer {
     pub fn prepare<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
@@ -1191,9 +1190,7 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         let changes = FrameChanges::all();
-        self.prepare_with_changes(
-            device, queue, frame, &changes, texts, fonts, geometries, metrics,
-        )
+        self.prepare_with_changes(device, frame, &changes, texts, fonts, geometries, metrics)
     }
 
     /// Prepare one coherent runtime publication and retain its applied revision
@@ -1201,7 +1198,6 @@ impl RetainedFramePreparer {
     pub fn prepare_publication<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         publication: &RendererPublication<'_>,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
@@ -1220,7 +1216,6 @@ impl RetainedFramePreparer {
         }
         let prepared = self.prepare_with_changes_inner(
             device,
-            queue,
             publication.frame(),
             publication.changes(),
             publication.text_resources(),
@@ -1241,7 +1236,6 @@ impl RetainedFramePreparer {
     pub fn prepare_publication_visible<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         publication: &RendererPublication<'_>,
         visible_object_indices: &[usize],
         metrics: TextDeviceMetrics,
@@ -1261,7 +1255,6 @@ impl RetainedFramePreparer {
 
         let prepared = self.prepare_with_changes_inner(
             device,
-            queue,
             publication.frame(),
             publication.changes(),
             publication.text_resources(),
@@ -1293,7 +1286,6 @@ impl RetainedFramePreparer {
     pub fn prepare_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1302,7 +1294,7 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepare_with_changes_inner(
-            device, queue, frame, changes, texts, fonts, geometries, metrics, None, None,
+            device, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
     }
 
@@ -1312,7 +1304,6 @@ impl RetainedFramePreparer {
     pub fn prepare_with_image_resources<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1323,7 +1314,6 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepare_with_changes_inner(
             device,
-            queue,
             frame,
             changes,
             texts,
@@ -1339,7 +1329,6 @@ impl RetainedFramePreparer {
     fn prepare_with_changes_inner<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1352,7 +1341,6 @@ impl RetainedFramePreparer {
         let staged = self.stage_image_publication(device, frame, changes, images)?;
         let mut prepared = self.prepare_geometry_text_inner(
             device,
-            queue,
             frame,
             changes,
             texts,
@@ -1572,7 +1560,6 @@ impl RetainedFramePreparer {
     fn prepare_geometry_text_inner<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1627,7 +1614,6 @@ impl RetainedFramePreparer {
         if self.can_update_mixed_properties_locally(frame, changes, texts, metrics)? {
             return self.prepare_mixed_properties_locally(
                 device,
-                queue,
                 frame,
                 changes,
                 texts,
@@ -1654,7 +1640,7 @@ impl RetainedFramePreparer {
             self.prepared_generation_ready = false;
             let prepared = self
                 .text
-                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+                .prepare_with_changes(device, frame, changes, texts, fonts, metrics)?;
             debug_assert_eq!(prepared.mask_quads.len(), self.snapshot_mask_quads.len());
             debug_assert_eq!(prepared.color_quads.len(), self.snapshot_color_quads.len());
             debug_assert_eq!(prepared.items.len(), self.snapshot_text_items.len());
@@ -1712,7 +1698,7 @@ impl RetainedFramePreparer {
         // leave an older successful generation eligible for empty-frame reuse.
         self.prepared_generation_ready = false;
 
-        self.prepare_text_snapshot(device, queue, frame, changes, texts, fonts, metrics)?;
+        self.prepare_text_snapshot(device, frame, changes, texts, fonts, metrics)?;
 
         let geometry = if scratch_reused {
             let no_changes = FrameChanges::default();
@@ -1817,7 +1803,6 @@ impl RetainedFramePreparer {
     pub(super) fn prepare_canonical_mixed_baseline(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1836,14 +1821,13 @@ impl RetainedFramePreparer {
         }
         self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
         self.geometry_only_classification = None;
-        self.prepare_text_snapshot(device, queue, frame, changes, texts, fonts, metrics)
+        self.prepare_text_snapshot(device, frame, changes, texts, fonts, metrics)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn prepare_text_snapshot(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -1856,7 +1840,7 @@ impl RetainedFramePreparer {
         {
             let prepared = self
                 .text
-                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+                .prepare_with_changes(device, frame, changes, texts, fonts, metrics)?;
             self.snapshot_mask_quads.clear();
             self.snapshot_mask_quads
                 .extend_from_slice(prepared.mask_quads);
@@ -2068,7 +2052,6 @@ impl RetainedFramePreparer {
     fn prepare_mixed_properties_locally<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -2084,7 +2067,7 @@ impl RetainedFramePreparer {
         if includes_text {
             let prepared_text = self
                 .text
-                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+                .prepare_with_changes(device, frame, changes, texts, fonts, metrics)?;
             text_layout_rebuilt = prepared_text.layout_rebuilt;
             if text_layout_rebuilt {
                 // Glyph count/page topology can change during subpixel motion.
@@ -3562,7 +3545,11 @@ impl GpuRenderer {
         if !prepared.geometry_only {
             return Err(RetainedDerivedDisplayError::MixedTextUnsupported);
         }
+        let atlas_uploads = prepared.text.atlas.encode_pending_uploads(encoder);
         let geometry = self.encode_inner(encoder, view, &prepared.geometry, Some(derived), options);
+        if atlas_uploads {
+            prepared.text.atlas.acknowledge_pending_uploads();
+        }
         Ok(RetainedDrawStats {
             images: 0,
             geometry,
@@ -3598,6 +3585,9 @@ impl GpuRenderer {
 
     /// Encode the normal retained painter-order pass, optionally recording its
     /// beginning/end into a host-owned two-entry timestamp query set.
+    ///
+    /// The host must submit a successfully encoded frame, including its staged glyph
+    /// transfers. On error, discard the encoder; pending atlas transfers remain retryable.
     pub fn encode_retained(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3624,12 +3614,17 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         options: super::FramePassOptions<'_>,
     ) -> Result<RetainedDrawStats, RetainedDrawError> {
+        let atlas_uploads = prepared.text.atlas.encode_pending_uploads(encoder);
         if prepared.geometry_only && self.inset_views.is_empty() {
-            return Ok(RetainedDrawStats {
+            let stats = RetainedDrawStats {
                 images: 0,
                 geometry: self.encode_inner(encoder, view, &prepared.geometry, None, options),
                 text: TextGpuDrawStats::default(),
-            });
+            };
+            if atlas_uploads {
+                prepared.text.atlas.acknowledge_pending_uploads();
+            }
+            return Ok(stats);
         }
         let super::FramePassOptions {
             clear_color,
@@ -3690,6 +3685,9 @@ impl GpuRenderer {
         stats += inset_stats;
         if finalize {
             stats.geometry += self.finalize_frame(encoder, view, overlay);
+        }
+        if atlas_uploads {
+            prepared.text.atlas.acknowledge_pending_uploads();
         }
         Ok(stats)
     }
@@ -4270,7 +4268,7 @@ mod tests {
             .unwrap()
             .with_world_origin_pixels(Vec2::new(480.0, 270.0))
             .unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut retained = RetainedFramePreparer::new();
         retained.set_painter_order(&[0, 1, 2]);
         let mut topology_changes = 0;
@@ -4290,7 +4288,6 @@ mod tests {
             let actual = retained
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &changes,
                     &texts,
@@ -4306,7 +4303,6 @@ mod tests {
             let expected = fresh
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -4535,7 +4531,7 @@ mod tests {
 
     #[test]
     fn prepare_publication_applies_current_runtime_and_rejects_stale_runtime_view() {
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let mut preparer = RetainedFramePreparer::new();
 
@@ -4550,14 +4546,14 @@ mod tests {
         assert!(current_context.frame_epoch().get() > stale_context.frame_epoch().get());
         {
             let prepared = preparer
-                .prepare_publication(&device, &queue, &current, metrics)
+                .prepare_publication(&device, &current, metrics)
                 .unwrap();
             assert_eq!(prepared.time(), 1.0);
         }
         assert_eq!(preparer.last_applied_publication(), Some(current_context));
 
         assert!(matches!(
-            preparer.prepare_publication(&device, &queue, &stale, metrics),
+            preparer.prepare_publication(&device, &stale, metrics),
             Err(RetainedPrepareError::StalePublication { received, applied })
                 if received == stale_context && applied == current_context
         ));
@@ -4566,7 +4562,7 @@ mod tests {
         preparer.reset_publication_context();
         {
             let prepared = preparer
-                .prepare_publication(&device, &queue, &stale, metrics)
+                .prepare_publication(&device, &stale, metrics)
                 .unwrap();
             assert_eq!(prepared.time(), 0.0);
             assert_eq!(prepared.geometry_stats().full_rebuilds, 1);
@@ -4576,7 +4572,7 @@ mod tests {
 
     #[test]
     fn visible_publication_keeps_resident_geometry_but_filters_submission() {
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let mut preparer = RetainedFramePreparer::new();
         let mut instance = runtime_publication_scene();
@@ -4585,7 +4581,7 @@ mod tests {
 
         {
             let prepared = preparer
-                .prepare_publication_visible(&device, &queue, &publication, &[], metrics)
+                .prepare_publication_visible(&device, &publication, &[], metrics)
                 .unwrap();
             assert_eq!(prepared.geometry.circles.len(), 1);
             assert!(prepared
@@ -4607,7 +4603,7 @@ mod tests {
     fn presentation_only_redraw_reuses_mixed_retained_preparation() {
         let (frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         let initial_text_generation;
 
@@ -4615,7 +4611,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -4633,7 +4628,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::presentation_redraw(),
                     &texts,
@@ -4670,12 +4664,11 @@ mod tests {
     fn observed_text_object_reuses_its_existing_glyph_instance_ranges() {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -4741,7 +4734,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -4768,7 +4760,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![0, 1]),
                     &texts,
@@ -4827,12 +4818,11 @@ mod tests {
     fn mixed_observation_rejects_a_mismatched_frame_index_and_object() {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -4861,7 +4851,6 @@ mod tests {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -4911,6 +4900,23 @@ mod tests {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let pending = prepared.text.atlas.pending_upload_count();
+        assert!(pending > 0);
+        let missing_text = renderer.create_retained_text_state(&device, &queue);
+        let mut failed_encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        assert!(renderer
+            .encode_retained(
+                &mut failed_encoder,
+                &view,
+                &prepared,
+                &missing_text,
+                wgpu::Color::TRANSPARENT,
+                None
+            )
+            .is_err());
+        drop(failed_encoder);
+        assert_eq!(prepared.text.atlas.pending_upload_count(), pending);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Noon mixed text observation encoder"),
         });
@@ -4925,6 +4931,7 @@ mod tests {
             )
             .unwrap();
         queue.submit(Some(encoder.finish()));
+        assert_eq!(prepared.text.atlas.pending_upload_count(), 0);
         assert!(draw.geometry.draw_calls > 0);
         assert!(draw.text.draw_calls > 0);
     }
@@ -4998,14 +5005,13 @@ mod tests {
         let fonts = FontResourceArena::new();
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         preparer.set_painter_order(&[0, 1]);
         {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -5024,7 +5030,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![1]),
                     &texts,
@@ -5047,7 +5052,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![1]),
                     &texts,
@@ -5073,7 +5077,7 @@ mod tests {
     fn unchanged_frame_reuses_semantic_scratch_generation() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         let first_text_generation;
 
@@ -5081,7 +5085,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -5114,7 +5117,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::default(),
                     &texts,
@@ -5149,14 +5151,13 @@ mod tests {
     fn mixed_visibility_projects_geometry_and_text_enter_exit_in_painter_order() {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
 
         {
             let prepared = preparer
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -5183,7 +5184,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::default(),
                     &texts,
@@ -5204,7 +5204,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::default(),
                     &texts,
@@ -5233,13 +5232,12 @@ mod tests {
     fn unchanged_text_candidate_reuses_projection_across_clean_and_offscreen_changes() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
 
         preparer
             .prepare_with_changes_inner(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -5255,7 +5253,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::default(),
                     &texts,
@@ -5279,7 +5276,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes_inner(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![0]),
                     &texts,
@@ -5308,13 +5304,12 @@ mod tests {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let first_metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let second_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
 
         let first_generation = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -5328,7 +5323,6 @@ mod tests {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::default(),
                 &texts,
@@ -5342,6 +5336,149 @@ mod tests {
         assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
         assert_ne!(prepared.text_generation, first_generation);
         assert_eq!(preparer.prepared_generation_reuses, 0);
+    }
+
+    #[test]
+    fn inverse_metrics_restore_glyph_geometry_after_shape_only_indicate_updates() {
+        let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+        let baseline_metrics = TextDeviceMetrics::uniform(50.25)
+            .unwrap()
+            .with_world_origin_pixels(Vec2::new(358.0, 201.0))
+            .unwrap();
+        let zoomed_metrics = TextDeviceMetrics::uniform(100.5)
+            .unwrap()
+            .with_world_origin_pixels(Vec2::new(358.0, 202.0))
+            .unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+
+        let glyph_geometry = |quads: &[GlyphQuadInstance]| {
+            quads
+                .iter()
+                .map(|quad| (quad.origin, quad.axis_x, quad.axis_y, quad.color))
+                .collect::<Vec<_>>()
+        };
+        let render_membership = |prepared: &PreparedRetainedGpuFrame<'_>| {
+            prepared
+                .render_items
+                .iter()
+                .map(|item| match item {
+                    RetainedRenderItem::Geometry { object_id, .. } => (*object_id, None),
+                    RetainedRenderItem::Glyph {
+                        object_id,
+                        text_item_index,
+                    } => {
+                        let PreparedTextItem::GlyphBatch { plane, .. } =
+                            &prepared.text.items[*text_item_index]
+                        else {
+                            unreachable!("retained glyph item must address a glyph batch")
+                        };
+                        (*object_id, Some(*plane))
+                    }
+                    RetainedRenderItem::Image { object_id, .. } => (*object_id, None),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let (baseline_mask, baseline_color, baseline_membership, baseline_generation) = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    baseline_metrics,
+                )
+                .unwrap();
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+            assert!(upload.text.bytes_uploaded > 0);
+            (
+                glyph_geometry(prepared.text.mask_quads),
+                glyph_geometry(prepared.text.color_quads),
+                render_membership(&prepared),
+                prepared.text_generation,
+            )
+        };
+
+        let zoomed_generation = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    zoomed_metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+            assert!(prepared.text_generation > baseline_generation);
+            assert!(
+                renderer
+                    .upload_retained(&device, &queue, &prepared, &mut text_state)
+                    .text
+                    .bytes_uploaded
+                    > 0
+            );
+            prepared.text_generation
+        };
+
+        // An Indicate changes only its circle's presentation properties. At a fixed
+        // inspection metric it must neither repack text nor re-upload glyph instances.
+        for (scale, opacity) in [(1.2, 0.8), (1.0, 1.0)] {
+            frame.objects[0].transform = Transform2D {
+                scale: Vec2::new(scale, scale),
+                ..Transform2D::IDENTITY
+            };
+            frame.objects[0].style.opacity = opacity;
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    zoomed_metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.text_generation, zoomed_generation);
+            assert_eq!(
+                renderer
+                    .upload_retained(&device, &queue, &prepared, &mut text_state)
+                    .text
+                    .bytes_uploaded,
+                0
+            );
+        }
+
+        let restored = preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &fonts,
+                &geometries,
+                baseline_metrics,
+            )
+            .unwrap();
+        assert!(restored.text_generation > zoomed_generation);
+        assert!(
+            renderer
+                .upload_retained(&device, &queue, &restored, &mut text_state)
+                .text
+                .bytes_uploaded
+                > 0
+        );
+        assert_eq!(glyph_geometry(restored.text.mask_quads), baseline_mask);
+        assert_eq!(glyph_geometry(restored.text.color_quads), baseline_color);
+        assert_eq!(render_membership(&restored), baseline_membership);
     }
 
     #[test]
