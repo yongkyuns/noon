@@ -1496,17 +1496,17 @@ impl ExecutionSession {
         );
         self.next_segment_sequence = next_segment_sequence;
         segment = segment.with_completion_token(token);
-        self.pending_segment_completion = Some(PendingSegmentCompletion {
+        self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
-            activation_scene_revision: store.scene_revision(),
-            kind: PendingSegmentCompletionKind {
+            store.scene_revision(),
+            PendingSegmentCompletionKind {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
                 object_entries: completions,
                 scalar_entries: Vec::new(),
             },
-        });
+        ));
         self.next_activation_track_id = next_track_id;
         Ok(segment)
     }
@@ -1800,10 +1800,10 @@ impl ExecutionSession {
             .expect("scalar authored plan publication was preflighted under exclusive ownership");
         self.next_segment_sequence = next_segment_sequence;
         segment = segment.with_completion_token(token);
-        self.pending_segment_completion = Some(PendingSegmentCompletion {
+        self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
-            activation_scene_revision: store.scene_revision(),
-            kind: PendingSegmentCompletionKind {
+            store.scene_revision(),
+            PendingSegmentCompletionKind {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
@@ -1815,7 +1815,7 @@ impl ExecutionSession {
                     end_time: segment.end_time(),
                 }],
             },
-        });
+        ));
         Ok(segment)
     }
 
@@ -4005,10 +4005,10 @@ impl ExecutionSession {
                 segment = segment.with_family_replacement(root, source, target);
             }
             self.next_segment_sequence = next_segment_sequence;
-            self.pending_segment_completion = Some(PendingSegmentCompletion {
+            self.pending_segment_completion = Some(PendingSegmentCompletion::new(
                 token,
                 activation_scene_revision,
-                kind: PendingSegmentCompletionKind {
+                PendingSegmentCompletionKind {
                     lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
                     lifecycle_removals: match lifecycle.as_ref() {
                         Some(PreparedAnimationLifecycle::Composition { removals, .. }) => removals
@@ -4025,7 +4025,7 @@ impl ExecutionSession {
                     object_entries: entries,
                     scalar_entries: scalar_completions.into_values().collect(),
                 },
-            });
+            ));
         }
         Ok(segment)
     }

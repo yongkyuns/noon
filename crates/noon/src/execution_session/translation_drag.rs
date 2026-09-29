@@ -48,6 +48,10 @@ impl TranslationDragState {
     pub(super) const fn is_active(&self) -> bool {
         self.active.is_some()
     }
+
+    pub(super) fn target(&self) -> Option<SemanticNodeId> {
+        self.active.map(|active| active.node)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,9 +258,9 @@ impl ExecutionSession {
             if self.runtime.replay_is_sealed() {
                 return Err(TranslationDragError::ReplaySealed);
             }
-            // A release must be able to publish its one authored reconciliation.
-            // Reject before capture if an unfinished segment owns that lane.
-            self.require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)
+            // Admit only when release can reconcile without changing the pending
+            // segment's target domains or structural completion assumptions.
+            self.require_publication_ready(SemanticPublicationPurpose::TranslationDrag(node))
                 .map_err(TranslationDragError::Publication)?;
             let object = self
                 .execution_object_id(node)
@@ -412,13 +416,18 @@ impl ExecutionSession {
             prepared_semantic,
             Vec::new(),
             PreparedRuntimePublication { effective, frame },
-            SemanticPublicationPurpose::AuthoredMutation,
+            SemanticPublicationPurpose::TranslationDrag(active.node),
             None,
             None,
         );
         if let Err(error) = publication {
             self.translation_drag.active = Some(active);
             return Err(TranslationDragError::Publication(error));
+        }
+        if let Some(pending) = self.pending_segment_completion.as_mut() {
+            // Admission proved the persistent edit disjoint from this segment.
+            // Advance its proof only after the coherent publication succeeds.
+            pending.activation_scene_revision = store.scene_revision();
         }
         let input = self
             .commit_prepared_native_pointer_metadata(timeline, metadata)

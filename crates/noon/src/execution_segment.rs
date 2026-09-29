@@ -84,6 +84,36 @@ pub(crate) struct PendingSegmentCompletion {
     pub token: ExecutionSegmentToken,
     pub activation_scene_revision: noon_core::SceneRevision,
     pub kind: PendingSegmentCompletionKind,
+    affected_objects: std::collections::HashSet<SemanticNodeId>,
+}
+
+impl PendingSegmentCompletion {
+    pub(crate) fn new(
+        token: ExecutionSegmentToken,
+        activation_scene_revision: noon_core::SceneRevision,
+        kind: PendingSegmentCompletionKind,
+    ) -> Self {
+        let affected_objects = kind
+            .object_entries
+            .iter()
+            .map(|entry| entry.semantic_object)
+            .collect();
+        Self {
+            token,
+            activation_scene_revision,
+            kind,
+            affected_objects,
+        }
+    }
+
+    /// Indexed admission for a local edit beneath an unrelated animation. Structural
+    /// completion requires a separate migration policy; it cannot retire a held target.
+    pub(crate) fn allows_translation_drag(&self, target: SemanticNodeId) -> bool {
+        self.kind.lifecycle_root.is_none()
+            && self.kind.lifecycle_removals.is_empty()
+            && self.kind.family_transform.is_none()
+            && !self.affected_objects.contains(&target)
+    }
 }
 
 /// One exact semantic family replacement to publish at segment completion.
