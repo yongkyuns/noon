@@ -2720,15 +2720,21 @@ class SelectedAlignment(Scene):
   // callback's one publication. Both async and synchronous source stacks catch
   // a rejected second operation, so their completed assertions prove the
   // earlier remove/add prefix was retained rather than replayed or discarded.
-  for (const [filename, canvasId] of [
-    ["ordinary_callback_membership_atomic.py", "scene-callback-membership-atomic"],
-    ["ordinary_callback_membership_atomic_sync.py", "scene-callback-membership-atomic-sync"],
-  ]) {
-    const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
-    const result = await runCallbackMembershipContinuation(page, source, canvasId);
-    assert.equal(result.duration, 0.25, `${filename} duration`);
-    assert.equal(result.metrics.objectCount, 3, `${filename} object count`);
-    assert.ok(result.metrics.drawCalls > 0, `${filename} rendered no geometry`);
+  const membershipSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_callback_membership_atomic.py"), "utf8",
+  );
+  assert.equal(membershipSource.split("async def construct(self):").length, 2);
+  assert.equal(membershipSource.split("await self.wait(0.25)").length, 2);
+  // Derive the synchronous JSPI case from the same controlled fixture so its
+  // membership/error assertions cannot drift from the portable async case.
+  const synchronousMembershipSource = membershipSource
+    .replace("async def construct(self):", "def construct(self):")
+    .replace("await self.wait(0.25)", "self.wait(0.25)");
+  for (const [mode, source] of [["async", membershipSource], ["sync", synchronousMembershipSource]]) {
+    const result = await runCallbackMembershipContinuation(page, source, `scene-callback-membership-${mode}`);
+    assert.equal(result.duration, 0.25, `${mode} callback membership duration`);
+    assert.equal(result.metrics.objectCount, 3, `${mode} callback membership object count`);
+    assert.ok(result.metrics.drawCalls > 0, `${mode} callback membership rendered no geometry`);
   }
 
   // A normal def construct uses the canonical JSPI continuation when its first
