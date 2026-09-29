@@ -81,6 +81,87 @@ fn translation(session: &ExecutionSession, node: noon_core::SemanticNodeId) -> V
 }
 
 #[test]
+fn inspection_cancellation_restores_a_moved_drag_in_one_frame_epoch() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(3.0)),
+    )
+    .unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+    let view = session
+        .inspection_pointer_view(1, Vec2::new(100.0, 100.0))
+        .unwrap();
+    let displayed = session.capture_pointer_frame(view).unwrap();
+    let before = session.publication_context();
+    let scene_revision = store.scene_revision();
+
+    assert_eq!(
+        session.zoom_inspection_view(&displayed, displayed.view(), Vec2::new(50.0, 50.0), 0.5,),
+        Ok(true)
+    );
+
+    assert!(!session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::ZERO);
+    assert_eq!(store.scene_revision(), scene_revision);
+    assert_eq!(
+        session.publication_context().frame_epoch(),
+        before.frame_epoch().checked_next().unwrap()
+    );
+}
+
+#[test]
+fn rejected_inspection_view_leaves_a_captured_drag_and_frame_unchanged() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(3.0)),
+    )
+    .unwrap();
+    let view = session
+        .inspection_pointer_view(1, Vec2::new(100.0, 100.0))
+        .unwrap();
+    let displayed = session.capture_pointer_frame(view).unwrap();
+    let before_frame = session.frame().clone();
+    let before_publication = session.publication_context();
+    let wrong_view = session
+        .inspection_pointer_view(2, Vec2::new(100.0, 100.0))
+        .unwrap();
+
+    assert!(session
+        .zoom_inspection_view(&displayed, wrong_view, Vec2::new(50.0, 50.0), 0.5)
+        .is_err());
+    assert!(session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+    assert_eq!(session.frame(), &before_frame);
+    assert_eq!(session.publication_context(), before_publication);
+}
+
+#[test]
 fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
     let (mut store, target, unrelated, mut session) = fixture();
     submit(
