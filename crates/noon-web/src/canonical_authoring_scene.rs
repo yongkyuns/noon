@@ -8293,7 +8293,7 @@ mod tests {
         let error = stale_batch
             .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
             .unwrap_err();
-        assert_eq!(error.category, "authoring.semantic");
+        assert_eq!(error.category, "stale_handle");
     }
 
     #[test]

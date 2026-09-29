@@ -1635,7 +1635,7 @@ impl SemanticExecutionPlayer {
             return Err("callback membership collector token is stale".into());
         }
         let stages = collector.as_ref().map_or(0, |existing| existing.stages);
-        let mut transaction = collector
+        let transaction = collector
             .take()
             .map(|existing| existing.transaction)
             .unwrap_or_else(SemanticMutationTransaction::new);
@@ -1648,23 +1648,27 @@ impl SemanticExecutionPlayer {
             return Err("callback membership staging exceeded its bounded operation limit".into());
         }
 
+        let mut transaction = Some(transaction);
         let outcome = batch.with_existing_callback_membership(&semantics, |request| {
+            let current_transaction = transaction
+                .take()
+                .expect("callback membership transaction is retained across one stage");
             let mut store = semantics.borrow_mut();
-            let prepared = match transaction.prepare_recoverable(&mut store) {
+            let prepared = match current_transaction.prepare_recoverable(&mut store) {
                 Ok(prepared) => prepared,
                 Err((recovered, error)) => {
-                    transaction = recovered;
+                    transaction = Some(recovered);
                     return Err(AuthoringFailure::from(error));
                 }
             };
             match stage_prepared_semantic_scene_membership(prepared, root, request) {
                 Ok(prepared) => {
-                    transaction = prepared.into_transaction();
+                    transaction = Some(prepared.into_transaction());
                     Ok(())
                 }
                 Err(error) => {
                     let (prepared, cause) = error.into_parts();
-                    transaction = prepared.into_transaction();
+                    transaction = Some(prepared.into_transaction());
                     Err(match cause {
                         noon_core::PreparedSemanticMembershipErrorKind::Operation(error) => {
                             AuthoringFailure::from(error)
@@ -1676,6 +1680,7 @@ impl SemanticExecutionPlayer {
                 }
             }
         });
+        let transaction = transaction.expect("callback membership stage restores its transaction");
         self.callback_membership_transaction = Some(CallbackMembershipCollector {
             token,
             transaction,
@@ -1736,7 +1741,7 @@ impl SemanticExecutionPlayer {
         };
         let members = prepared
             .family_members(root)
-            .map_err(AuthoringFailure::from);
+            .map_err(|error| AuthoringFailure::unclassified("callback.membership_read", &error));
         let transaction = prepared.into_transaction();
         self.callback_membership_transaction = Some(CallbackMembershipCollector {
             token,
@@ -3030,7 +3035,7 @@ impl SemanticExecutionPlayer {
             .filter(|(pending, _)| *pending == token)
             .ok_or("callback batch does not match the player pending phase")?;
         #[cfg(any(target_arch = "wasm32", test))]
-        let committed_membership =
+        {
             if let Some(collector) = self.callback_membership_transaction.take() {
                 if collector.token != token {
                     self.callback_membership_transaction = Some(collector);
@@ -3056,20 +3061,16 @@ impl SemanticExecutionPlayer {
                 self.session
                     .commit_prepared_required_callback_transaction(batch, prepared, order_root)
                     .map_err(AuthoringFailure::from)?;
-                true
             } else {
-                false
-            };
+                self.session
+                    .commit_required_callback_phase(batch)
+                    .map_err(AuthoringFailure::from)?;
+            }
+        }
         #[cfg(not(any(target_arch = "wasm32", test)))]
         self.session
             .commit_required_callback_phase(batch)
             .map_err(AuthoringFailure::from)?;
-        #[cfg(any(target_arch = "wasm32", test))]
-        if !committed_membership {
-            self.session
-                .commit_required_callback_phase(batch)
-                .map_err(AuthoringFailure::from)?;
-        }
         // The callback phase time is session-owned. Re-anchoring presentation
         // only after its commit avoids a host-side progression cursor.
         self.clock.seek(time).map_err(|error| error.to_string())?;
@@ -3083,7 +3084,9 @@ impl SemanticExecutionPlayer {
             .fail_required_callback_phase(token)
             .map_err(AuthoringFailure::from)?;
         #[cfg(any(target_arch = "wasm32", test))]
-        self.callback_membership_transaction = None;
+        {
+            self.callback_membership_transaction = None;
+        }
         self.pending_callback_phase = None;
         Ok(())
     }
@@ -3097,7 +3100,9 @@ impl SemanticExecutionPlayer {
             .interrupt_required_callback_phase(token)
             .map_err(AuthoringFailure::from)?;
         #[cfg(any(target_arch = "wasm32", test))]
-        self.callback_membership_transaction = None;
+        {
+            self.callback_membership_transaction = None;
+        }
         self.pending_callback_phase = None;
         Ok(())
     }

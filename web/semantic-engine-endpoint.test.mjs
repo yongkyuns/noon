@@ -25,6 +25,7 @@ function fixture(
   runRequiredCallbackPhase = null,
   continuation = null,
   requestOptions = {},
+  callbackHooks = {},
 ) {
   const control = new MessageChannel();
   const render = new MessageChannel();
@@ -114,7 +115,8 @@ function fixture(
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
-    }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation),
+    }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation,
+    callbackHooks.complete ?? null, callbackHooks.discard ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -1494,7 +1496,11 @@ test("shared setup cannot expose a snapshot before its resource bundle", async (
 test("required initial callback withholds the first delta until its exact batch commits", async () => {
   let resolvePhase;
   const phase = new Promise((resolve) => { resolvePhase = resolve; });
-  const f = fixture("transferable", () => phase, null, { initiallyPaused: true });
+  const lifecycle = [];
+  const f = fixture("transferable", () => phase, null, { initiallyPaused: true }, {
+    complete: async () => lifecycle.push("complete"),
+    discard: async () => lifecycle.push("discard"),
+  });
   let committed = 0;
   let callbackObservedPaused = false;
   try {
@@ -1505,6 +1511,7 @@ test("required initial callback withholds the first delta until its exact batch 
     f.player.commitCallbackPhaseJson = (batch) => {
       assert.equal(batch, "{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
       committed += 1;
+      lifecycle.push("commit");
     };
     const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
@@ -1523,6 +1530,7 @@ test("required initial callback withholds the first delta until its exact batch 
     resolvePhase("{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
     const endpoint = await attached;
     assert.equal(committed, 1);
+    assert.deepEqual(lifecycle, ["commit", "complete"]);
     const delta = await initial;
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).snapshot, true);
     assert.equal((await wake).cadence, "idle");
@@ -1535,10 +1543,11 @@ test("stopping an attachment discards a late callback result before returning it
   let phaseStarted;
   const phase = new Promise((resolve) => { resolvePhase = resolve; });
   const began = new Promise((resolve) => { phaseStarted = resolve; });
+  let discarded = 0;
   const f = fixture("transferable", () => {
     phaseStarted();
     return phase;
-  });
+  }, null, {}, { discard: async () => { discarded += 1; } });
   let committed = 0;
   let failed = 0;
   try {
@@ -1557,6 +1566,7 @@ test("stopping an attachment discards a late callback result before returning it
     await turn();
     assert.equal(committed, 0);
     assert.equal(failed, 1);
+    assert.equal(discarded, 1, "late stopped callback discards pending Python wrapper work");
     assert.equal(f.stats().returned, 1);
   } finally { f.close(); }
 });
@@ -1564,9 +1574,14 @@ test("stopping an attachment discards a late callback result before returning it
 test("a callback failure latches the endpoint and never invokes the opaque callback again", async () => {
   let invocations = 0;
   const failure = new Error("opaque callback failed");
+  let discarded = 0;
+  let completed = 0;
   const f = fixture("transferable", async () => {
     invocations += 1;
     throw failure;
+  }, null, {}, {
+    complete: async () => { completed += 1; },
+    discard: async () => { discarded += 1; },
   });
   let failed = 0;
   try {
@@ -1584,8 +1599,38 @@ test("a callback failure latches the endpoint and never invokes the opaque callb
     await turn();
     assert.equal(invocations, 1);
     assert.equal(failed, 1);
+    assert.equal(discarded, 1, "failed Rust callback commit discards pending Python wrapper work");
+    assert.equal(completed, 0, "failed Rust callback commit never finalizes wrapper work");
     endpoint.stop();
   } finally { f.close(); }
+});
+
+test("a rejected Rust callback commit discards wrapper work without finalizing it", async () => {
+  let discarded = 0;
+  let completed = 0;
+  const f = fixture("transferable", async (phase) =>
+    JSON.stringify({ token: phase.token, writes: [] }), null, {}, {
+      complete: async () => { completed += 1; },
+      discard: async () => { discarded += 1; },
+    });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const initial = await nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "execution_ack", session: initial.session, sequence: initial.sequence });
+    f.player.tickCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "3" } });
+    f.player.commitCallbackPhaseJson = () => { throw new Error("Rust callback commit rejected"); };
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await nextMatching(
+      f.control.port2,
+      (message) => message.type === "error" && /Rust callback commit rejected/.test(message.message),
+    );
+    assert.equal(discarded, 1);
+    assert.equal(completed, 0);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("a typed callback-advance failure is surfaced once and never retried", async () => {

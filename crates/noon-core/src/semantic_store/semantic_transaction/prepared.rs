@@ -162,7 +162,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             };
         Ok(Self {
             store,
-            transaction: candidate,
+            transaction,
             preflight: candidate_preflight,
             next_revision: candidate_next_revision,
             planned_nodes: candidate_planned_nodes,
