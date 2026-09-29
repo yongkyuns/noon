@@ -213,13 +213,6 @@ impl SemanticNodeCreation {
             Self::Signal { .. } => None,
         }
     }
-
-    pub(crate) fn pending_path(&self) -> Option<&SemanticPendingPathObject> {
-        match self {
-            Self::PendingPathObject { state, .. } => Some(state),
-            Self::Object { .. } | Self::Family { .. } | Self::Signal { .. } => None,
-        }
-    }
 }
 
 pub(super) fn preflight_add_node(

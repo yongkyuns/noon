@@ -1711,7 +1711,8 @@ impl SemanticMutationTransaction {
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
         let mut staged_objects = HashMap::new();
-        let mut staged_pending_paths = HashMap::new();
+        let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
+            HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut staged_updaters =
@@ -3508,6 +3509,10 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPendingGeometryPath => formatter.write_str("pending geometry path contains non-finite coordinates"),
+            Self::PendingGeometryLimitExceeded => formatter.write_str("pending geometry working set exceeds the transaction limit"),
+            Self::LocalResourceTokenExhausted => formatter.write_str("transaction-local resource tokens exhausted"),
+            Self::UnknownPendingGeometryResource { index, resource } => write!(formatter, "semantic transaction mutation {index} names unknown pending geometry resource {resource:?}"),
             Self::InvalidTableLayout { index, scope } => write!(formatter, "semantic transaction mutation {index} has invalid Table layout for {scope:?}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,

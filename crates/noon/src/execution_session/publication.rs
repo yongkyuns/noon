@@ -71,6 +71,7 @@ pub enum ExecutionSessionPublicationError {
     Lowering(SemanticPublicationLoweringError),
     Runtime(AuthoredPublicationError),
     NumericText(noon_core::NumericTextResourceError),
+    Geometry(noon_core::GeometryResourceError),
     ExecutionSlot(ExecutionSlotError),
 }
 
@@ -106,6 +107,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::Lowering(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
             Self::NumericText(error) => error.fmt(f),
+            Self::Geometry(error) => error.fmt(f),
             Self::ExecutionSlot(error) => error.fmt(f),
         }
     }
@@ -117,6 +119,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Lowering(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::NumericText(error) => Some(error),
+            Self::Geometry(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::RequiredCallbackPending
             | Self::ReplaySealed
@@ -403,6 +406,45 @@ impl ExecutionSession {
     }
 
     pub(super) fn apply_prepared_semantic_transaction_with_execution_contract(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        runtime: PreparedRuntimePublication,
+        purpose: SemanticPublicationPurpose,
+        scalar: Option<PreparedScalarPublicationContract>,
+        order_root: Option<SemanticNodeId>,
+    ) -> Result<
+        (
+            SemanticMutationTransactionResult,
+            Option<super::callback::CallbackCompletion>,
+        ),
+        ExecutionSessionPublicationError,
+    > {
+        prepared
+            .with_pending_geometry_paths(|prepared| {
+                self.publish_materialized_semantic_transaction(
+                    prepared,
+                    execution_prefix,
+                    runtime,
+                    purpose,
+                    scalar,
+                    order_root,
+                )
+            })
+            .map_err(|error| match error {
+                noon_core::PendingGeometryPublicationError::Resource(error) => {
+                    ExecutionSessionPublicationError::Geometry(error)
+                }
+                noon_core::PendingGeometryPublicationError::Transaction(error) => {
+                    ExecutionSessionPublicationError::Semantic(error)
+                }
+                noon_core::PendingGeometryPublicationError::Publication(error) => error,
+            })
+    }
+
+    // No provisional resource declaration reaches lowering. The outer existing
+    // resource scope owns rollback through this complete publication boundary.
+    fn publish_materialized_semantic_transaction(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
         execution_prefix: Vec<ExecutionPatch>,

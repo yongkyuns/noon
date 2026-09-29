@@ -458,7 +458,7 @@ fn failed_pending_path_publication_leaves_no_resource_or_semantic_state() {
     ));
     assert_eq!(store.geometry_resources().len(), 0);
     assert_eq!(store.scene_revision(), revision);
-    assert_eq!(store.live_node_count(), 0);
+    assert_eq!(store.len(), 0);
 }
 
 #[test]
@@ -563,7 +563,7 @@ fn canceled_pending_path_never_enters_the_resource_arena() {
     let result = transaction.prepare(&mut store).unwrap().commit();
     assert_eq!(result.resolve(local), None);
     assert_eq!(store.geometry_resources().len(), 0);
-    assert_eq!(store.live_node_count(), 0);
+    assert_eq!(store.len(), 0);
 }
 
 #[test]
@@ -689,11 +689,11 @@ fn rejected_pending_object_update_discards_its_fresh_path_payload_suffix() {
     }) else {
         panic!("non-finite extension must reject");
     };
-    assert_eq!(prepared.transaction.pending_geometry_paths.len(), 1);
     assert_eq!(
         prepared.pending_path_transform(local).unwrap().translation,
         SemanticVec3::new(1.0, 2.0, 0.0)
     );
+    assert_eq!(prepared.into_transaction().pending_geometry_paths.len(), 1);
 }
 
 #[test]
@@ -724,7 +724,6 @@ fn rejected_resource_extension_restores_a_coalesced_prior_property() {
     else {
         panic!("extension error must preserve the original proof");
     };
-    assert_eq!(prepared.transaction.pending_geometry_paths.len(), 0);
     assert_eq!(
         prepared
             .proposed_object_state(local)
@@ -733,4 +732,5 @@ fn rejected_resource_extension_restores_a_coalesced_prior_property() {
             .translation,
         SemanticVec3::new(1.0, 0.0, 0.0)
     );
+    assert_eq!(prepared.into_transaction().pending_geometry_paths.len(), 0);
 }

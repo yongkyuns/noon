@@ -289,13 +289,25 @@ fn prepared_read_error(error: crate::SemanticTransactionReadError) -> SemanticSc
         | crate::SemanticTransactionReadError::NotFamily(SemanticTransactionNodeRef::Pending(t)) => {
             SemanticSceneOperationError::InvalidPendingAdmission(t)
         }
-        crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Existing(
+        crate::SemanticTransactionReadError::NotPendingGeometry(
+            SemanticTransactionNodeRef::Existing(id),
+        )
+        | crate::SemanticTransactionReadError::UnknownPendingGeometry(
+            SemanticTransactionNodeRef::Existing(id),
+        )
+        | crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Existing(
             id,
         ))
         | crate::SemanticTransactionReadError::NotAnimation(
             SemanticTransactionNodeRef::Existing(id),
         ) => SemanticSceneOperationError::NotSemanticAuthoringNode(id),
-        crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Pending(t))
+        crate::SemanticTransactionReadError::NotPendingGeometry(
+            SemanticTransactionNodeRef::Pending(t),
+        )
+        | crate::SemanticTransactionReadError::UnknownPendingGeometry(
+            SemanticTransactionNodeRef::Pending(t),
+        )
+        | crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Pending(t))
         | crate::SemanticTransactionReadError::NotAnimation(SemanticTransactionNodeRef::Pending(
             t,
         )) => SemanticSceneOperationError::InvalidPendingAdmission(t),

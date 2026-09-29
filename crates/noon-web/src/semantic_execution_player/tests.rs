@@ -1158,12 +1158,10 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     player
         .stage_required_callback_provisional_shift(token, retained_path, 1.5, 0.5)
         .unwrap();
-    assert_eq!(
-        player
-            .callback_provisional_center(token, retained_path)
-            .unwrap(),
-        (1.5, 0.8)
-    );
+    let center = player
+        .callback_provisional_center(token, retained_path)
+        .unwrap();
+    assert!((center.0 - 1.5).abs() < 1e-6 && (center.1 - 0.8).abs() < 1e-6);
     player
         .stage_required_callback_mixed_addition(
             token,
@@ -1172,6 +1170,17 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
                 [],
                 token,
                 local,
+            ),
+        )
+        .unwrap();
+    player
+        .stage_required_callback_mixed_addition(
+            token,
+            &crate::canonical_authoring_scene::SceneMembershipBatch::callback_with_provisional(
+                crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                [],
+                token,
+                retained_path,
             ),
         )
         .unwrap();
@@ -1193,7 +1202,27 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
             &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
         )
         .unwrap();
-    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 1);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 2);
+    let resolved_path = player
+        .take_committed_callback_provisional(token, retained_path)
+        .unwrap();
+    {
+        let store = scene.integration_store().borrow();
+        assert_eq!(store.geometry_resources().len(), 1);
+        let noon_core::SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) =
+            store
+                .semantic_object_state_checked(resolved_path)
+                .unwrap()
+                .content
+        else {
+            panic!("retained path must publish its resource");
+        };
+        assert!(store.geometry_resources().get(handle).is_some());
+        assert!(player
+            .session
+            .effective_semantic_object(&store, resolved_path)
+            .is_ok());
+    }
     let resolved = player
         .take_committed_callback_provisional(token, local)
         .unwrap();
@@ -1208,7 +1237,7 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
             .borrow()
             .semantic_family_members_checked(scene.root())
             .unwrap(),
-        vec![callback_target.node_id(), resolved]
+        vec![callback_target.node_id(), resolved, resolved_path]
     );
     assert!(player
         .callback_provisional_object_state(token, local)

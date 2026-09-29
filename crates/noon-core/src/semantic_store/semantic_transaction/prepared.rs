@@ -20,7 +20,7 @@ pub enum SemanticTransactionReadError {
     /// The requested local object does not carry transaction-local path content.
     NotPendingGeometry(SemanticTransactionNodeRef),
     /// A pending path declaration lost its transaction-owned payload before read.
-    UnknownPendingGeometry(SemanticLocalResourceToken),
+    UnknownPendingGeometry(SemanticTransactionNodeRef),
     RemovedExistingNode(SemanticNodeId),
     UnknownExistingNode(SemanticNodeId),
     NotObject(SemanticTransactionNodeRef),
@@ -424,7 +424,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// their raw payloads are simply dropped.
     pub fn with_pending_geometry_paths<T, E>(
         self,
-        publish: impl FnOnce(Self) -> Result<T, E>,
+        publish: impl for<'scope> FnOnce(PreparedSemanticMutationTransaction<'scope>) -> Result<T, E>,
     ) -> Result<T, PendingGeometryPublicationError<E>> {
         let Self {
             store,
@@ -457,8 +457,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .zip(handles.iter().copied())
                     .collect::<HashMap<_, _>>();
                 transaction.materialize_pending_geometry_paths(&resources, &final_states);
-                let prepared = Self::new_recoverable(transaction, store)
-                    .map_err(|(_, error)| PendingGeometryPublicationError::Transaction(error))?;
+                let prepared =
+                    PreparedSemanticMutationTransaction::new_recoverable(transaction, store)
+                        .map_err(|(_, error)| {
+                            PendingGeometryPublicationError::Transaction(error)
+                        })?;
                 publish(prepared).map_err(PendingGeometryPublicationError::Publication)
             },
         )
@@ -680,12 +683,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         &self,
         object: impl Into<SemanticTransactionNodeRef>,
     ) -> Result<&crate::VectorPath, SemanticTransactionReadError> {
-        let state = self.pending_path_state(object.into())?;
+        let object = object.into();
+        let state = self.pending_path_state(object)?;
         self.transaction
             .pending_geometry_path(state.resource())
-            .ok_or(SemanticTransactionReadError::UnknownPendingGeometry(
-                state.resource(),
-            ))
+            .ok_or(SemanticTransactionReadError::UnknownPendingGeometry(object))
     }
 
     /// Return conservative local bounds from the real staged path payload.

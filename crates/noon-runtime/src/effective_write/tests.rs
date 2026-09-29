@@ -122,8 +122,16 @@ fn scale_and_fill_preserve_newly_evaluated_translation_rotation_and_opacity() {
     assert_eq!(instance.compiled.objects()[0].base_style, base_style());
 }
 
-fn assign_expected(transform: &mut Transform2D, style: &mut Style, write: EffectivePropertyWrite) {
+fn assign_expected(
+    transform: &mut Transform2D,
+    style: &mut Style,
+    presence: &mut bool,
+    write: EffectivePropertyWrite,
+) {
     match write {
+        EffectivePropertyWrite::Presence {
+            presence: value, ..
+        } => *presence = value,
         EffectivePropertyWrite::Transform {
             transform: value, ..
         } => *transform = value,
@@ -146,6 +154,14 @@ fn assign_expected(transform: &mut Transform2D, style: &mut Style, write: Effect
 fn mixed_whole_and_component_writes_preserve_supplied_order() {
     let object = object();
     let pool = [
+        EffectivePropertyWrite::Presence {
+            object,
+            presence: false,
+        },
+        EffectivePropertyWrite::Presence {
+            object,
+            presence: true,
+        },
         EffectivePropertyWrite::Transform {
             object,
             transform: Transform2D {
@@ -212,14 +228,21 @@ fn mixed_whole_and_component_writes_preserve_supplied_order() {
                 let writes = [a, b, c];
                 let mut expected_transform = Transform2D::IDENTITY;
                 let mut expected_style = base_style();
+                let mut expected_presence = true;
                 for write in writes {
-                    assign_expected(&mut expected_transform, &mut expected_style, write);
+                    assign_expected(
+                        &mut expected_transform,
+                        &mut expected_style,
+                        &mut expected_presence,
+                        write,
+                    );
                 }
                 let mut instance = SceneInstance::new(compiled.clone());
                 commit(&mut instance, 0.0, &writes);
                 let row = instance.effective_object(object).unwrap();
                 assert_eq!(row.transform, expected_transform, "{writes:?}");
                 assert_eq!(row.style, expected_style, "{writes:?}");
+                assert_eq!(instance.frame.presences[0], expected_presence, "{writes:?}");
             }
         }
     }
