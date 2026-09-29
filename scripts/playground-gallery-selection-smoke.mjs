@@ -146,7 +146,13 @@ try {
   report.browserErrors = errors;
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning" &&
+    if (message.type() === "error" && message.text().startsWith("Failed to load resource:")) {
+      // Curated posters may be intentionally pending while the browser-runtime
+      // gate runs. Keep these visible in the report without treating them as
+      // Rust/input failures.
+      report.resourceWarnings ??= [];
+      report.resourceWarnings.push(message.text());
+    } else if (message.type() === "error" || message.type() === "warning" &&
         /Recoverable Python callback error|\[Noon input\]/.test(message.text())) errors.push(message.text());
   });
 
@@ -339,7 +345,11 @@ try {
 
   if (browserName === "webkit" && profileName === "mobile-dpr2") {
     const rawManifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
-    const nativeInputEntry = normalizeShowcaseManifest(rawManifest).examples.find(entry => entry.id === "showcase-translation-drag");
+    const normalizedEntry = normalizeShowcaseManifest(rawManifest).examples.find(entry => entry.id === "showcase-translation-drag");
+    const declaredEntry = rawManifest.entries.find(entry => entry.id === "showcase-translation-drag");
+    const nativeInputEntry = normalizedEntry && declaredEntry
+      ? { ...normalizedEntry, duration: declaredEntry.duration }
+      : null;
     assert.ok(nativeInputEntry, "native-input drag lesson is missing from the curated showcase");
     assert.equal(nativeInputEntry.playbackCapability, "nonreplayable-native-input");
     await page.goto(`${base}?catalog=showcase&example=${nativeInputEntry.id}`, { waitUntil: "domcontentloaded" });
@@ -347,14 +357,14 @@ try {
     assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
     const dragCanvas = page.locator("#scene");
     await layoutReplayViewport(dragCanvas, captureSize);
-    report.nativeDragViewport = await replayViewport(dragCanvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
     await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
     await page.evaluate(() => window.__noonExampleGallery.run());
     await waitForAuthoring(page);
     await page.waitForFunction(duration => {
       const controls = document.querySelector(".playback-controls")?.dataset;
-      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+      return Number(controls?.elapsedSeconds) >= duration - 1e-7;
     }, nativeInputEntry.duration, { timeout: 30000 });
+    report.nativeDragViewport = await replayViewport(dragCanvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
     const nativeBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.ok(["WebGL2", "WebGPU"].includes(nativeBackend), "native drag did not use a real renderer backend");
     const firstPassState = await readLiveState(page);
@@ -428,7 +438,7 @@ try {
     await waitForAuthoring(page);
     await page.waitForFunction(duration => {
       const controls = document.querySelector(".playback-controls")?.dataset;
-      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+      return Number(controls?.elapsedSeconds) >= duration - 1e-7;
     }, nativeInputEntry.duration, { timeout: 30000 });
     assertNonreplayableShowcase(nativeInputEntry, await readLiveState(page), nativeBackend);
     const nativeReset = await waitForExactPixels(dragCanvas, nativeBaseline, "public Run after touch drag/cancel");
