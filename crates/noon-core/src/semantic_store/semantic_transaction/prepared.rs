@@ -458,7 +458,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// Query one staged direct family edge without materializing that family's
     /// complete order.  Local structural planners use these adjacency reads for
     /// large scene roots.
-    pub fn family_contains_existing(
+    pub(crate) fn family_contains_existing(
         &self,
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -473,7 +473,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     }
 
     /// First member in final staged order, without cloning an unrelated root.
-    pub fn family_first_member_existing(
+    pub(crate) fn family_first_member_existing(
         &self,
         family: SemanticNodeId,
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
@@ -487,7 +487,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     }
 
     /// Next member in final staged order, without cloning an unrelated root.
-    pub fn family_next_member_existing(
+    pub(crate) fn family_next_member_existing(
         &self,
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -503,7 +503,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     }
 
     /// Previous member in final staged order, without cloning an unrelated root.
-    pub fn family_previous_member_existing(
+    pub(crate) fn family_previous_member_existing(
         &self,
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -516,6 +516,19 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .previous_member(&catalog, family.into(), member.into())
             .map(existing_read_node)
             .transpose()
+    }
+
+    pub(crate) fn staged_parent_additions_existing(
+        &self,
+        member: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_authoring_node(member)?;
+        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
+        self.preflight
+            .family_edges
+            .added_parents(&catalog, member.into())
+            .map(existing_read_node)
+            .collect()
     }
 
     /// Read final foreground declarations without inspecting display membership.

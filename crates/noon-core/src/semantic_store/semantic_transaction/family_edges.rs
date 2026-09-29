@@ -237,6 +237,19 @@ impl FamilyEdgePreflight {
             .unwrap_or_else(|| catalog.contains(family, member))
     }
 
+    pub(super) fn added_parents(
+        &self,
+        catalog: &TransactionNodeCatalog<'_>,
+        member: SemanticTransactionNodeRef,
+    ) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
+        self.added_parents
+            .get(&member)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |family| self.contains(catalog, *family, member))
+    }
+
     pub(super) fn first_member(
         &self,
         catalog: &TransactionNodeCatalog<'_>,
@@ -365,12 +378,12 @@ impl FamilyOrderOverlay {
     ) {
         let previous = self.last(catalog, family);
         if let Some(previous) = previous {
-            self.link_mut(family, previous).next = Some(member);
+            self.link_mut(catalog, family, previous).next = Some(member);
         } else {
             self.first.insert(family, Some(member));
         }
-        self.link_mut(family, member).previous = previous;
-        self.link_mut(family, member).next = None;
+        self.link_mut(catalog, family, member).previous = previous;
+        self.link_mut(catalog, family, member).next = None;
         self.last.insert(family, Some(member));
     }
 
@@ -383,16 +396,16 @@ impl FamilyOrderOverlay {
         let previous = self.previous(catalog, family, member);
         let next = self.next(catalog, family, member);
         if let Some(previous) = previous {
-            self.link_mut(family, previous).next = next;
+            self.link_mut(catalog, family, previous).next = next;
         } else {
             self.first.insert(family, next);
         }
         if let Some(next) = next {
-            self.link_mut(family, next).previous = previous;
+            self.link_mut(catalog, family, next).previous = previous;
         } else {
             self.last.insert(family, previous);
         }
-        let link = self.link_mut(family, member);
+        let link = self.link_mut(catalog, family, member);
         link.previous = None;
         link.next = None;
     }
@@ -410,21 +423,27 @@ impl FamilyOrderOverlay {
         };
         let previous = self.previous(catalog, family, before);
         if let Some(previous) = previous {
-            self.link_mut(family, previous).next = Some(member);
+            self.link_mut(catalog, family, previous).next = Some(member);
         } else {
             self.first.insert(family, Some(member));
         }
-        self.link_mut(family, before).previous = Some(member);
-        let link = self.link_mut(family, member);
+        self.link_mut(catalog, family, before).previous = Some(member);
+        let link = self.link_mut(catalog, family, member);
         link.previous = previous;
         link.next = Some(before);
     }
 
     fn link_mut(
         &mut self,
+        catalog: &TransactionNodeCatalog<'_>,
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
     ) -> &mut FamilyOrderLink {
-        self.links.entry((family, member)).or_default()
+        self.links
+            .entry((family, member))
+            .or_insert_with(|| FamilyOrderLink {
+                previous: catalog.previous_member(family, member),
+                next: catalog.next_member(family, member),
+            })
     }
 }

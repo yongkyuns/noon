@@ -136,7 +136,6 @@ impl MembershipView for StoreMembershipView<'_> {
 
 struct PreparedMembershipView<'a, 'store> {
     prepared: &'a PreparedSemanticMutationTransaction<'store>,
-    root: SemanticNodeId,
 }
 impl MembershipView for PreparedMembershipView<'_, '_> {
     fn target(&self, id: SemanticNodeId) -> Result<MembershipTarget, SemanticSceneOperationError> {
@@ -185,13 +184,16 @@ impl MembershipView for PreparedMembershipView<'_, '_> {
         n: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
         let mut parents = StoreMembershipView(self.prepared.store()).parents(n)?;
-        let published = parents.contains(&self.root);
-        let staged = self.contains(self.root, n)?;
-        if staged && !published {
-            parents.push(self.root)
-        } else if published && !staged {
-            parents.retain(|p| *p != self.root)
-        };
+        parents.retain(|parent| self.contains(*parent, n).unwrap_or(false));
+        for parent in self
+            .prepared
+            .staged_parent_additions_existing(n)
+            .map_err(prepared_read_error)?
+        {
+            if !parents.contains(&parent) {
+                parents.push(parent);
+            }
+        }
         Ok(parents)
     }
     fn foreground(
@@ -295,14 +297,7 @@ pub fn plan_prepared_semantic_scene_membership(
     scene_root: SemanticNodeId,
     request: SemanticSceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
-    plan_membership_in_view(
-        &PreparedMembershipView {
-            prepared,
-            root: scene_root,
-        },
-        scene_root,
-        request,
-    )
+    plan_membership_in_view(&PreparedMembershipView { prepared }, scene_root, request)
 }
 
 /// Extend one prepared transaction with an ordered existing-handle membership
