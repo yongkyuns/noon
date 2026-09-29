@@ -6,6 +6,8 @@ const {
   createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
+  createDirectNativeDragSmokeRenderer,
+  createDirectRetainedLocalityRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
@@ -100,6 +102,139 @@ async function presentDirectFrame(renderer) {
     await sleep(10);
   }
   throw new Error("direct affine callback renderer could not acquire a frame");
+}
+
+async function directNativeDragProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectNativeDragSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.setPointerView(0, canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    const initialFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    const initialRevision = renderer.directSceneRevision();
+    const [cameraX, cameraY, cameraHeight] =
+      JSON.parse(renderer.debugPointerPresentationJson()).camera;
+    const cameraWidth = cameraHeight * canvas.width / canvas.height;
+    const point = (x, y) => ({
+      x: ((x - cameraX) / cameraWidth + 0.5) * canvas.width,
+      y: (0.5 - (y - cameraY) / cameraHeight) * canvas.height,
+    });
+    const dispatch = (kind, position, button) => {
+      const accepted = renderer.nativePointerInput(
+        kind, 41, 9, 0,
+        position?.x ?? null, position?.y ?? null,
+        position ? canvas.width : null, position ? canvas.height : null,
+        button, false, false, false, false,
+      );
+      if (accepted === undefined || accepted === null) {
+        throw new Error(`direct Rust/WASM rejected native ${kind}`);
+      }
+    };
+    const assertCenter = (object, expectedX, expectedY, label) => {
+      if (Math.abs(object.center[0] - expectedX) > 0.02 ||
+          Math.abs(object.center[1] - expectedY) > 0.02) {
+        throw new Error(`${label} center was ${JSON.stringify(object.center)}`);
+      }
+    };
+    if (renderer.rendererBackend() !== expectedBackend || initialFrame.objects.length !== 2) {
+      throw new Error(`direct drag fixture has wrong renderer/frame: ${JSON.stringify(initialFrame)}`);
+    }
+    const targetId = initialFrame.objects[0].id;
+    const unrelatedId = initialFrame.objects[1].id;
+    assertCenter(initialFrame.objects[0], 0, 0, "initial drag target");
+    assertCenter(initialFrame.objects[1], 2.5, 1, "unrelated object");
+
+    dispatch("press", point(0, 0), 0);
+    await settleDirectPublication(renderer, 0);
+    dispatch("move", point(1, 0), null);
+    await presentDirectFrame(renderer);
+    const movedFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    const movedTarget = movedFrame.objects.find(object => object.id === targetId);
+    const movedUnrelated = movedFrame.objects.find(object => object.id === unrelatedId);
+    assertCenter(movedTarget, 1, 0, "effective target during drag");
+    assertCenter(movedUnrelated, 2.5, 1, "unrelated object during drag");
+    if (renderer.directSceneRevision() !== initialRevision) {
+      throw new Error("direct drag authored scene before release");
+    }
+
+    dispatch("release", point(1, 0), 0);
+    await presentDirectFrame(renderer);
+    const releasedRevision = renderer.directSceneRevision();
+    if (releasedRevision !== initialRevision + 1n) {
+      throw new Error(`release advanced authored revision by ${releasedRevision - initialRevision}, expected one`);
+    }
+    const releasedFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    assertCenter(releasedFrame.objects.find(object => object.id === targetId), 1, 0, "released target");
+
+    dispatch("press", point(1, 0), 0);
+    await settleDirectPublication(renderer, 0);
+    dispatch("move", point(2, 0), null);
+    await presentDirectFrame(renderer);
+    assertCenter(
+      JSON.parse(renderer.debugSelectionFrameJson()).objects.find(object => object.id === targetId),
+      2, 0, "second effective drag",
+    );
+    dispatch("cancel", null, null);
+    await presentDirectFrame(renderer);
+    const cancelledFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    assertCenter(cancelledFrame.objects.find(object => object.id === targetId), 1, 0, "cancelled target");
+    assertCenter(cancelledFrame.objects.find(object => object.id === unrelatedId), 2.5, 1, "unrelated object after cancel");
+    if (renderer.directSceneRevision() !== releasedRevision) {
+      throw new Error("direct drag cancellation authored a scene revision");
+    }
+    return {
+      backend: renderer.rendererBackend(),
+      objectCount: renderer.objectCount(),
+      revisionBefore: initialRevision.toString(),
+      revisionAfterRelease: releasedRevision.toString(),
+      targetId,
+      movedCenter: movedTarget.center,
+      cancelledCenter: cancelledFrame.objects.find(object => object.id === targetId).center,
+    };
+  } finally {
+    renderer.free();
+  }
+}
+
+async function directRetainedLocalityProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectRetainedLocalityRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    const initialBytesUploaded = renderer.lastBytesUploaded();
+    const objectCount = renderer.objectCount();
+    // Advance normal playback; inspection seek intentionally rebuilds its frame.
+    renderer.directWakeDirectiveJson(0);
+    renderer.advanceDirectRealtime(500);
+    await presentDirectFrame(renderer);
+    const updateBytesUploaded = renderer.lastBytesUploaded();
+    const metrics = {
+      backend: renderer.rendererBackend(),
+      objectCount,
+      initialBytesUploaded,
+      updateBytesUploaded,
+      drawCalls: renderer.lastDrawCalls(),
+    };
+    if (metrics.backend !== expectedBackend) {
+      throw new Error(`100k locality renderer selected ${metrics.backend}; expected ${expectedBackend}`);
+    }
+    if (metrics.objectCount !== 100000) {
+      throw new Error(`100k locality renderer exposed ${metrics.objectCount} objects`);
+    }
+    if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
+      throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
+    }
+    // Bound a local upload independently of how much of the initial scene the
+    // renderer elects to install. Native coverage pins the exact instance size.
+    if (metrics.updateBytesUploaded <= 0 || metrics.updateBytesUploaded > 256) {
+      throw new Error(`single-target update uploaded non-local bytes: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+  }
 }
 
 async function settleDirectPublication(renderer, wallTimeMs) {
@@ -2613,6 +2748,8 @@ async function start() {
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
+  metrics.nativeDrag = await directNativeDragProof(expectedBackend);
+  metrics.retainedLocality = await directRetainedLocalityProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

@@ -191,14 +191,11 @@ impl ExecutionSession {
                     .render_geometry(index)
                     .ok_or(InspectionNavigationError::CameraChangedDuringCancellation)?;
                 let mut transform = properties.transform;
-                if prepared
+                if let Some(cancellation) = prepared
                     .drag_cancellation
-                    .is_some_and(|cancellation| cancellation.object == object)
+                    .filter(|cancellation| cancellation.object == object)
                 {
-                    transform.translation = prepared
-                        .drag_cancellation
-                        .expect("cancellation checked above")
-                        .base;
+                    transform.translation = cancellation.base;
                 }
                 if Camera2DState::from_frame_object(geometry, transform) != Some(camera) {
                     return Err(InspectionNavigationError::CameraChangedDuringCancellation);

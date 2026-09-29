@@ -224,7 +224,7 @@ impl Default for PointerInputState {
 /// effects of cancelling held buttons before either operation commits.
 pub(super) struct PreparedInputPublication {
     pub(super) frame: noon_runtime::PreparedFrameEvaluation,
-    pub(super) effective: noon_runtime::PreparedEffectivePropertyBatch,
+    effective: noon_runtime::PreparedEffectivePropertyBatch,
     timeline: Option<noon_runtime::SignalTimelinePreview>,
     pub(super) drag_cancellation:
         Option<super::translation_drag::PreparedTranslationDragCancellation>,
@@ -681,31 +681,15 @@ impl ExecutionSession {
             timeline,
             drag_cancellation,
         } = prepared;
-        let suspended = if let Some(cancellation) = drag_cancellation {
-            Some(
-                self.runtime
-                    .suspend_translation_drag(cancellation.object)
-                    .ok_or_else(|| {
-                        ExecutionSessionInputError::Interaction(
-                            "captured translation drag target is no longer live".into(),
-                        )
-                    })?,
-            )
+        if let Some(cancellation) = drag_cancellation {
+            self.commit_translation_drag_cancellation(cancellation, frame, effective)?;
         } else {
-            None
-        };
-        if let Err(error) = self.runtime.commit_prepared_frame(frame, effective) {
-            if let (Some(cancellation), Some(held)) = (drag_cancellation, suspended) {
-                self.runtime
-                    .restore_translation_drag(cancellation.object, held);
-            }
-            return Err(ExecutionSessionInputError::PreparedCommit(error));
+            self.runtime
+                .commit_prepared_frame(frame, effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
         }
         if let Some(preview) = timeline {
             self.signal_timeline.commit(preview);
-        }
-        if let Some(cancellation) = drag_cancellation {
-            self.finish_translation_drag_cancellation(cancellation);
         }
         Ok(self.runtime.frame())
     }
@@ -722,21 +706,7 @@ impl ExecutionSession {
         if inputs.is_empty() && drag_cancellation.is_none() {
             Ok(None)
         } else {
-            let mut prepared = if inputs.is_empty() {
-                let frame = self.runtime.prepare_advance_to(self.runtime.frame().time)?;
-                let effective = self
-                    .runtime
-                    .prepare_effective_property_batch(&[])
-                    .expect("an empty effective-property batch is always valid");
-                PreparedInputPublication {
-                    frame,
-                    effective,
-                    timeline: None,
-                    drag_cancellation: None,
-                }
-            } else {
-                self.prepare_reactive_input_batch(inputs)?
-            };
+            let mut prepared = self.prepare_reactive_input_batch(inputs)?;
             if let Some(cancellation) = drag_cancellation {
                 prepared.effective = self
                     .runtime

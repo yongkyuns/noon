@@ -401,9 +401,10 @@ mod admission {
             }
             let captured_continuation = !needs_binding
                 && target.session().translation_drag_active()
-                && (matches!(input.kind, BrowserPointerKind::Move)
-                    || (matches!(input.kind, BrowserPointerKind::Release)
-                        && input.button == Some(0)));
+                && matches!(
+                    input.kind,
+                    BrowserPointerKind::Move | BrowserPointerKind::Release
+                );
             if captured_continuation {
                 let captured_frame = receipt.and_then(|receipt| {
                     self.presented_frame.as_ref().and_then(|presented| {

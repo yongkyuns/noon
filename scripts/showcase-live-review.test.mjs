@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFirstPass, assertReplayAvailable, assertNonreplayableHostCallbacks, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -116,7 +116,7 @@ test("successful first execution cannot substitute for unavailable replay", () =
   assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
 });
 
-test("only the declared callback lesson accepts the exact idle UnsupportedDomain denial", () => {
+test("declared nonreplayable lessons accept the exact idle UnsupportedDomain denial", () => {
   const entry = {
     id: "showcase-reactive-relationships", duration: 9.2,
     playbackCapability: "nonreplayable-host-callbacks",
@@ -130,17 +130,22 @@ test("only the declared callback lesson accepts the exact idle UnsupportedDomain
     controls: { controllable: "false", busy: "false", elapsedSeconds: "9.199999999999999" },
     disabledReplayControls: { play: true, restart: true, scrubber: true },
   };
-  assertNonreplayableHostCallbacks(entry, state, "WebGPU");
+  assertNonreplayableShowcase(entry, state, "WebGPU");
   for (const change of [
     { replayReason: "Replay unavailable: UnsupportedFeature" },
     { controls: { ...state.controls, controllable: "true" } },
     { controls: { ...state.controls, busy: "true" } },
     { disabledReplayControls: { play: true, restart: false, scrubber: true } },
-  ]) assert.throws(() => assertNonreplayableHostCallbacks(entry, { ...state, ...change }, "WebGPU"));
+  ]) assert.throws(() => assertNonreplayableShowcase(entry, { ...state, ...change }, "WebGPU"));
   const anotherLesson = { ...entry, id: "showcase-other-callback-lesson" };
-  assert.doesNotThrow(() => assertNonreplayableHostCallbacks(anotherLesson, {
+  assert.doesNotThrow(() => assertNonreplayableShowcase(anotherLesson, {
     ...state, selectedExampleId: anotherLesson.id,
   }, "WebGPU"));
+  const nativeInput = { ...entry, id: "showcase-translation-drag", playbackCapability: "nonreplayable-native-input" };
+  assert.doesNotThrow(() => assertNonreplayableShowcase(nativeInput, {
+    ...state, selectedExampleId: nativeInput.id,
+  }, "WebGPU"));
+  assert.throws(() => assertNonreplayableShowcase({ ...nativeInput, playbackCapability: "deterministic-retained-replay" }, state, "WebGPU"));
 });
 
 test("unexpected denial stays fatal and expected nonreplayable reruns have separate counters", () => {

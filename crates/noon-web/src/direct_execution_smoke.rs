@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use noon::{ExecutionSession, Mobject, Text};
+use noon::{ExecutionSession, Mobject, Scene, Text};
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventSource, NativeInputValue, NativeStateSource,
     RateFunction, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticStore,
@@ -10,6 +10,19 @@ use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
+
+struct FinishedNativeDragSmoke;
+
+impl noon::LiveContinuation for FinishedNativeDragSmoke {
+    type Error = std::convert::Infallible;
+
+    fn resume(
+        &mut self,
+        _live: &mut noon::LiveSession<'_>,
+    ) -> Result<noon::ContinuationStep, Self::Error> {
+        Ok(noon::ContinuationStep::Finished)
+    }
+}
 
 /// Direct analytic profiling uses the same typed workload as the native Rust example.
 #[wasm_bindgen(js_name = createDirectAnalyticProfileRenderer)]
@@ -25,6 +38,49 @@ pub async fn create_direct_analytic_profile_renderer(
         noon::example_scenes::analytic_profile::session(count as usize, layout, aspect, duration)
             .map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct-WASM real-GPU qualification for a local change in a sparse 100k scene.
+#[wasm_bindgen(js_name = createDirectRetainedLocalityRenderer)]
+pub async fn create_direct_retained_locality_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
+    let animation = noon::example_scenes::retained_locality::target_animation(
+        &scene,
+        &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
+    )
+    .map_err(js_error)?;
+    let session = scene
+        .execution_session_with_animation_root(&animation)
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct typed Rust/WASM target for native pointer-driven translation qualification.
+#[wasm_bindgen(js_name = createDirectNativeDragSmokeRenderer)]
+pub async fn create_direct_native_drag_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let mut scene = Scene::new();
+    let mut target = scene.circle(0.9).map_err(js_error)?;
+    target.set_fill(0.0, 0.0, 1.0, 1.0).map_err(js_error)?;
+    target.set_stroke_width(0.0).map_err(js_error)?;
+    scene.add(&target).map_err(js_error)?;
+
+    let mut unrelated = scene.square(1.0).map_err(js_error)?;
+    unrelated.set_fill(0.0, 0.75, 0.0, 1.0).map_err(js_error)?;
+    unrelated.set_stroke_width(0.0).map_err(js_error)?;
+    unrelated.set_translation(2.5, 1.0).map_err(js_error)?;
+    scene.add(&unrelated).map_err(js_error)?;
+
+    let mut program = scene
+        .into_live_program(FinishedNativeDragSmoke)
+        .map_err(js_error)?;
+    program
+        .set_translation_drag_targets([&target])
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Filled path interpolation uses the shared native renderer qualification scene.

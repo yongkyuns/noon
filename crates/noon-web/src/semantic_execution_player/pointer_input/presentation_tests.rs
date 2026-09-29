@@ -535,7 +535,7 @@ fn captured_drag_continues_with_its_presented_receipt_until_release() {
     assert!(!p.session.translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation.x,
-        0.75,
+        3.0,
         "release uses its own final collection-time coordinates"
     );
     assert_eq!(
@@ -573,7 +573,9 @@ fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
     let (mut p, circle, presented) = drag_player();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
 
-    let mut unrelated = wire("release", 1, 1, 400.0);
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
+    let _unpresented_motion = delta(&mut p);
+    let mut unrelated = wire("release", 1, 1, 450.0);
     unrelated["button"] = 1.into();
     assert!(p
         .submit_browser_pointer_input_json(
@@ -613,5 +615,6 @@ fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(p.session.publication_context().scene_revision(), before);
-    assert!(!input(&mut p, "release", 1, Some(old), 1, 500.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(old), 1, 500.0).is_err());
+    assert_eq!(p.session.publication_context().scene_revision(), before);
 }
