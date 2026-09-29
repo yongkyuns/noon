@@ -918,5 +918,21 @@ mod tests {
             lowered.compiled().objects()[0].text_bounds,
             Some(Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)))
         );
+
+        let mut replacement = SemanticMutationTransaction::new();
+        replacement.replace_content(object, StoredGeometry::Circle { radius: 2.0 });
+        replacement.apply(&mut store).unwrap();
+
+        assert!(store.text_resources().get(handle).is_none());
+        assert!(store
+            .font_resources()
+            .handle_for_face(&selected_face)
+            .is_none());
+        assert!(store.geometry_resources().get(retained_vector).is_none());
+        // The old execution revision owns an Arc dependency closure, so semantic
+        // reclamation cannot invalidate an execution/replay snapshot in flight.
+        assert!(TextResourceLookup::get(resources, handle).is_some());
+        assert!(GeometryResourceLookup::get(resources, retained_vector).is_some());
+        assert!(FontResourceLookup::get(resources, retained_font).is_some());
     }
 }

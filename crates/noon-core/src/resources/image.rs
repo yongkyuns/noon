@@ -259,6 +259,29 @@ impl RasterImageResourceArena {
         self.pixel_bytes -= entry.value.rgba8.len();
     }
 
+    /// Retire a semantic-store resource after its last durable semantic owner
+    /// has gone away. Resource IDs are intentionally not reused, so stale image
+    /// handles cannot alias a later payload.
+    pub(crate) fn remove(
+        &mut self,
+        handle: RasterImageResourceHandle,
+    ) -> Option<Arc<RasterImageResource>> {
+        if handle.arena != self.namespace {
+            return None;
+        }
+        let entry = self.entries.get(&handle.id)?;
+        if entry.version != handle.version {
+            return None;
+        }
+        let entry = self.entries.remove(&handle.id)?;
+        self.handles_by_content.remove(&entry.value.key());
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_sub(entry.value.retained_bytes());
+        self.pixel_bytes = self.pixel_bytes.saturating_sub(entry.value.rgba8.len());
+        Some(entry.value)
+    }
+
     pub fn get(&self, handle: RasterImageResourceHandle) -> Option<&RasterImageResource> {
         if handle.arena != self.namespace {
             return None;

@@ -57,6 +57,16 @@ impl SemanticStore {
             }
         }
     }
+    pub(crate) fn forget_compiled_text_resources_for(&mut self, handle: TextResourceHandle) {
+        let identities = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(identity, candidate)| (*candidate == handle).then_some(identity.clone()))
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.forget_compiled_text_resource(&identity);
+        }
+    }
     pub(super) fn remember_compiled_text_resource(
         &mut self,
         identity: crate::TextCompilationIdentity,
@@ -142,10 +152,12 @@ impl SemanticStore {
                 self.geometry_resources.insert_path(path.as_ref().clone())
             });
         }
-        Ok(self
+        let handle = self
             .text_resources
             .insert(resource)
-            .expect("text resource preflighted"))
+            .expect("text resource preflighted");
+        self.register_semantic_text_resource_dependencies(handle);
+        Ok(handle)
     }
 
     /// Import a normalized compiled resource, or reuse its existing immutable

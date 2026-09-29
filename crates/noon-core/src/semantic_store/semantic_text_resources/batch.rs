@@ -354,6 +354,7 @@ impl SemanticStore {
             }
         } else {
             for (_, handle) in installed {
+                self.unregister_semantic_text_resource_dependencies(handle);
                 let resource = self
                     .text_resources
                     .remove(handle.id)
@@ -416,6 +417,9 @@ impl SemanticStore {
                 self.font_resources
                     .intern_face(&face, data)
                     .expect("font batch preflighted");
+            }
+            for handle in handles {
+                self.register_semantic_text_resource_dependencies(handle);
             }
         }
         result
@@ -707,6 +711,66 @@ mod tests {
         parts[0].vector_count = 1;
         resource.parts = Arc::from(parts);
         (resource, fonts, geometry)
+    }
+
+    #[test]
+    fn inert_text_resource_keeps_shared_font_and_vector_dependencies_live() {
+        let mut store = SemanticStore::new();
+        let geometry = store
+            .insert_geometry_path(
+                crate::VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(2.0, 1.0)),
+            )
+            .unwrap();
+        let (mut first, fonts) = glyph_resource();
+        first.vector_items = Arc::from([crate::TextVectorItem {
+            geometry,
+            transform: TextAffineTransform::IDENTITY,
+            style: crate::TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: None,
+        }]);
+        first.render_items = Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+        let mut parts = first.parts.to_vec();
+        parts[0].vector_count = 1;
+        first.parts = Arc::from(parts);
+        let owner = Cell::new(None);
+
+        store
+            .with_derived_text_resources(vec![first.clone()], &fonts, |store, handles| {
+                let mut transaction = SemanticMutationTransaction::new();
+                let token = transaction.create_node(SemanticNodeCreation::object(
+                    SemanticObjectState::new(handles[0]),
+                ));
+                let result = transaction.apply(store).map_err(Error::from)?;
+                owner.set(result.resolve(token));
+                Ok::<_, Error>(result)
+            })
+            .unwrap();
+        let inert = Cell::new(None);
+        store
+            .with_derived_text_resources(vec![first], &fonts, |_, handles| {
+                inert.set(Some(handles[0]));
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        let second = inert.get().unwrap();
+
+        let owner = owner.get().unwrap();
+        let mut replace = SemanticMutationTransaction::new();
+        replace.replace_content(owner, crate::StoredGeometry::Circle { radius: 1.0 });
+        replace.apply(&mut store).unwrap();
+
+        assert!(store.text_resources().get(second).is_some());
+        assert!(store.geometry_resources().get(geometry).is_some());
+        assert_eq!(store.font_resources().len(), 1);
+
+        let mut attach_inert = SemanticMutationTransaction::new();
+        attach_inert.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+            second,
+        )));
+        assert!(attach_inert.apply(&mut store).is_ok());
     }
 
     fn identity(label: &str) -> crate::TextCompilationIdentity {

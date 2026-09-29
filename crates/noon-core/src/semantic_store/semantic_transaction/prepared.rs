@@ -787,6 +787,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
         let mut pending_source_assignments = Vec::new();
         let mut committed_nodes = HashMap::new();
+        store.begin_semantic_resource_reclamation_defer();
         for mutation in &transaction.mutations {
             match mutation {
                 SemanticMutation::AddNode { token, creation } => {
@@ -886,7 +887,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
                     let object = resolve_node_ref(object, &committed_nodes);
-                    set_object_content(store, object, content);
+                    store.replace_semantic_object_content(object, content);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
@@ -921,12 +922,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
                 SemanticMutation::ReplaceDecimalNumber { object, number } => {
                     let object = resolve_node_ref(object, &committed_nodes);
-                    store
-                        .node_mut(object)
-                        .expect("preflighted semantic object")
-                        .semantic_object_state_mut()
-                        .expect("preflighted semantic object state")
-                        .set_decimal_number(Some(number));
+                    store.replace_semantic_decimal_number(object, number);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::DecimalNumber { object });
                 }
@@ -1192,6 +1188,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         if !written_slots.is_empty() {
             store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
         }
+        store.end_semantic_resource_reclamation_defer();
 
         (
             SemanticMutationTransactionResult {

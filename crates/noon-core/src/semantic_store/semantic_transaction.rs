@@ -2887,18 +2887,6 @@ fn apply_object_property(
     }
 }
 
-fn set_object_content(
-    store: &mut SemanticStore,
-    object: SemanticNodeId,
-    content: SemanticObjectContent,
-) {
-    store
-        .node_mut(object)
-        .and_then(|node| node.semantic_object_state_mut())
-        .expect("preflighted semantic object must remain valid while transaction owns the store")
-        .content = content;
-}
-
 pub(super) fn validate_object_content_resource(
     store: &SemanticStore,
     content: SemanticObjectContent,

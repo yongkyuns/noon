@@ -33,8 +33,8 @@ impl FontResourceId {
 
 /// Versioned reference to one immutable font buffer.
 ///
-/// Font resources are append-only for the lifetime of an arena, so version zero
-/// remains stable for every live handle. The owning arena still participates in the
+/// A released slot may be reused only with a later version, so old handles cannot
+/// resolve to a different font payload. The owning arena still participates in the
 /// handle because same-slot values from another store must never alias this buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FontResourceHandle {
@@ -82,7 +82,7 @@ impl FontResource {
 #[derive(Clone, Debug)]
 struct FontResourceEntry {
     version: u64,
-    value: Arc<FontResource>,
+    value: Option<Arc<FontResource>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,15 +99,17 @@ pub struct FontResourceStats {
 /// to carry only text handles; font buffers are resolved separately and retained
 /// once per face.
 ///
-/// Unlike mutable geometry/text arenas, font resources are deliberately append-only
-/// for the arena lifetime. A shaped glyph ID is meaningful only relative to the
-/// exact font bytes that produced it, so a face key is never rebound to new bytes.
-/// Dropping the whole arena is the font-resource invalidation barrier.
+/// A shaped glyph ID is meaningful only relative to the exact font bytes that
+/// produced it. A released face key may therefore only be reintroduced through a
+/// new versioned handle; existing shaped text retains its exact dependency until
+/// its semantic owner and any compiled snapshot release it.
 #[derive(Clone, Debug)]
 pub struct FontResourceArena {
     namespace: u64,
     entries: Vec<FontResourceEntry>,
+    free_slots: Vec<u64>,
     handles_by_key: BTreeMap<FontResourceKey, FontResourceHandle>,
+    live_resources: usize,
     retained_bytes: usize,
     font_bytes: usize,
 }
@@ -117,7 +119,9 @@ impl Default for FontResourceArena {
         Self {
             namespace: next_font_resource_arena(),
             entries: Vec::new(),
+            free_slots: Vec::new(),
             handles_by_key: BTreeMap::new(),
+            live_resources: 0,
             retained_bytes: 0,
             font_bytes: 0,
         }
@@ -161,13 +165,16 @@ impl FontResourceArena {
             return Err(FontResourceError::ConflictingResource(key));
         }
 
-        let id = FontResourceId::new(
-            u64::try_from(self.entries.len()).expect("Noon font resource ID space exhausted"),
-        );
+        let id = FontResourceId::new(self.free_slots.pop().unwrap_or_else(|| {
+            u64::try_from(self.entries.len()).expect("Noon font resource ID space exhausted")
+        }));
         let handle = FontResourceHandle {
             arena: self.namespace,
             id,
-            version: 0,
+            version: self
+                .entries
+                .get(id.get() as usize)
+                .map_or(0, |entry| entry.version),
         };
         let resource = Arc::new(FontResource {
             key: key.clone(),
@@ -177,10 +184,16 @@ impl FontResourceArena {
             .retained_bytes
             .saturating_add(resource.retained_bytes());
         self.font_bytes = self.font_bytes.saturating_add(resource.data.len());
-        self.entries.push(FontResourceEntry {
-            version: 0,
-            value: resource,
-        });
+        if let Some(entry) = self.entries.get_mut(id.get() as usize) {
+            debug_assert!(entry.value.is_none());
+            entry.value = Some(resource);
+        } else {
+            self.entries.push(FontResourceEntry {
+                version: 0,
+                value: Some(resource),
+            });
+        }
+        self.live_resources += 1;
         self.handles_by_key.insert(key, handle);
         Ok(handle)
     }
@@ -193,7 +206,7 @@ impl FontResourceArena {
         if entry.version != handle.version {
             return None;
         }
-        Some(entry.value.as_ref())
+        entry.value.as_deref()
     }
 
     /// Share one immutable font payload with a derived compiled resource snapshot.
@@ -202,7 +215,9 @@ impl FontResourceArena {
             return None;
         }
         let entry = self.entries.get(handle.id.get() as usize)?;
-        (entry.version == handle.version).then(|| entry.value.clone())
+        (entry.version == handle.version)
+            .then(|| entry.value.clone())
+            .flatten()
     }
 
     pub fn handle_for_face(&self, face: &FontFaceIdentity) -> Option<FontResourceHandle> {
@@ -215,20 +230,49 @@ impl FontResourceArena {
         self.get(self.handle_for_face(face)?)
     }
 
+    /// Release one font buffer after the final text dependency disappears.
+    /// Reused slots receive a new resource version, so old handles stay stale.
+    pub(crate) fn remove(&mut self, handle: FontResourceHandle) {
+        if handle.arena != self.namespace {
+            return;
+        }
+        let Some(entry) = self.entries.get_mut(handle.id.get() as usize) else {
+            return;
+        };
+        if entry.version != handle.version {
+            return;
+        }
+        let Some(resource) = entry.value.take() else {
+            return;
+        };
+        let Some(next_version) = entry.version.checked_add(1) else {
+            entry.value = Some(resource);
+            return;
+        };
+        entry.version = next_version;
+        self.handles_by_key.remove(&resource.key);
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_sub(resource.retained_bytes());
+        self.font_bytes = self.font_bytes.saturating_sub(resource.data.len());
+        self.live_resources -= 1;
+        self.free_slots.push(handle.id.get());
+    }
+
     pub const fn stats(&self) -> FontResourceStats {
         FontResourceStats {
-            live_resources: self.entries.len(),
+            live_resources: self.live_resources,
             retained_bytes: self.retained_bytes,
             font_bytes: self.font_bytes,
         }
     }
 
     pub const fn len(&self) -> usize {
-        self.entries.len()
+        self.live_resources
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.live_resources == 0
     }
 }
 
