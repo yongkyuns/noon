@@ -2720,17 +2720,17 @@ class SelectedAlignment(Scene):
   // callback's one publication. Both async and synchronous source stacks catch
   // a rejected second operation, so their completed assertions prove the
   // earlier remove/add prefix was retained rather than replayed or discarded.
-  const membershipSource = await readFile(
+  const callbackMembershipSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_callback_membership_atomic.py"), "utf8",
   );
-  assert.equal(membershipSource.split("async def construct(self):").length, 2);
-  assert.equal(membershipSource.split("await self.wait(0.25)").length, 2);
+  assert.equal(callbackMembershipSource.split("async def construct(self):").length, 2);
+  assert.equal(callbackMembershipSource.split("await self.wait(0.25)").length, 2);
   // Derive the synchronous JSPI case from the same controlled fixture so its
   // membership/error assertions cannot drift from the portable async case.
-  const synchronousMembershipSource = membershipSource
+  const synchronousCallbackMembershipSource = callbackMembershipSource
     .replace("async def construct(self):", "def construct(self):")
     .replace("await self.wait(0.25)", "self.wait(0.25)");
-  for (const [mode, source] of [["async", membershipSource], ["sync", synchronousMembershipSource]]) {
+  for (const [mode, source] of [["async", callbackMembershipSource], ["sync", synchronousCallbackMembershipSource]]) {
     const result = await runCallbackMembershipContinuation(page, source, `scene-callback-membership-${mode}`);
     assert.equal(result.duration, 0.25, `${mode} callback membership duration`);
     assert.equal(result.metrics.objectCount, 3, `${mode} callback membership object count`);
