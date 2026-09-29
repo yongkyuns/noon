@@ -13,8 +13,13 @@ use noon_runtime::{
 use super::{ExecutionEvaluationMode, ExecutionSession};
 use noon_runtime::SignalTimelinePreview;
 
-pub(super) const CALLBACK_TRANSFORM_DOMAIN: u8 = 1;
-pub(super) const CALLBACK_STYLE_DOMAIN: u8 = 2;
+pub(super) const CALLBACK_TRANSLATION: u8 = 1;
+pub(super) const CALLBACK_ROTATION: u8 = 2;
+pub(super) const CALLBACK_SCALE: u8 = 4;
+pub(super) const CALLBACK_FILL: u8 = 8;
+pub(super) const CALLBACK_STROKE: u8 = 16;
+pub(super) const CALLBACK_STROKE_WIDTH: u8 = 32;
+pub(super) const CALLBACK_OPACITY: u8 = 64;
 
 #[derive(Clone, Debug)]
 pub(super) struct CallbackPublicationReceipt {
@@ -472,24 +477,25 @@ impl CallbackPhaseToken {
     }
 }
 
-/// Effective-only semantic write returned by an ordered host callback phase.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EffectiveSemanticPropertyWrite {
-    Transform {
-        object: SemanticNodeId,
-        transform: Transform2D,
-    },
-    Style {
-        object: SemanticNodeId,
-        style: Style,
-    },
-}
+/// The runtime effective-write vocabulary addressed by semantic identity.
+/// Identity resolves only when the pinned callback result is prepared.
+pub type EffectiveSemanticPropertyWrite = RuntimeEffectivePropertyWrite<SemanticNodeId>;
 
-impl EffectiveSemanticPropertyWrite {
-    const fn object(self) -> SemanticNodeId {
-        match self {
-            Self::Transform { object, .. } | Self::Style { object, .. } => object,
+fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
+    match write {
+        EffectiveSemanticPropertyWrite::Transform { .. } => {
+            CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
         }
+        EffectiveSemanticPropertyWrite::Style { .. } => {
+            CALLBACK_FILL | CALLBACK_STROKE | CALLBACK_STROKE_WIDTH | CALLBACK_OPACITY
+        }
+        EffectiveSemanticPropertyWrite::Translation { .. } => CALLBACK_TRANSLATION,
+        EffectiveSemanticPropertyWrite::Rotation { .. } => CALLBACK_ROTATION,
+        EffectiveSemanticPropertyWrite::Scale { .. } => CALLBACK_SCALE,
+        EffectiveSemanticPropertyWrite::Fill { .. } => CALLBACK_FILL,
+        EffectiveSemanticPropertyWrite::Stroke { .. } => CALLBACK_STROKE,
+        EffectiveSemanticPropertyWrite::StrokeWidth { .. } => CALLBACK_STROKE_WIDTH,
+        EffectiveSemanticPropertyWrite::Opacity { .. } => CALLBACK_OPACITY,
     }
 }
 
@@ -579,14 +585,7 @@ impl CallbackPhaseOverlay {
         object: SemanticNodeId,
         transform: Transform2D,
     ) -> Result<(), ExecutionSessionCallbackError> {
-        let current = self
-            .objects
-            .get_mut(&object)
-            .ok_or(ExecutionSessionCallbackError::UnknownObject(object))?;
-        current.set_transform(transform);
-        self.writes
-            .push(EffectiveSemanticPropertyWrite::Transform { object, transform });
-        Ok(())
+        self.write(EffectiveSemanticPropertyWrite::Transform { object, transform })
     }
 
     pub fn set_style(
@@ -594,13 +593,44 @@ impl CallbackPhaseOverlay {
         object: SemanticNodeId,
         style: Style,
     ) -> Result<(), ExecutionSessionCallbackError> {
+        self.write(EffectiveSemanticPropertyWrite::Style { object, style })
+    }
+
+    /// Stage one scoped effective write. Later reads in this invocation observe
+    /// its value, while commit validates the complete ordered batch atomically.
+    pub fn write(
+        &mut self,
+        write: EffectiveSemanticPropertyWrite,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        let object = write.object();
         let current = self
             .objects
             .get_mut(&object)
             .ok_or(ExecutionSessionCallbackError::UnknownObject(object))?;
+        let mut transform = current.transform;
+        let mut style = current.style;
+        match write {
+            EffectiveSemanticPropertyWrite::Transform {
+                transform: value, ..
+            } => transform = value,
+            EffectiveSemanticPropertyWrite::Style { style: value, .. } => style = value,
+            EffectiveSemanticPropertyWrite::Translation { translation, .. } => {
+                transform.translation = translation
+            }
+            EffectiveSemanticPropertyWrite::Rotation { rotation, .. } => {
+                transform.rotation = rotation
+            }
+            EffectiveSemanticPropertyWrite::Scale { scale, .. } => transform.scale = scale,
+            EffectiveSemanticPropertyWrite::Fill { fill, .. } => style.fill = fill,
+            EffectiveSemanticPropertyWrite::Stroke { stroke, .. } => style.stroke = stroke,
+            EffectiveSemanticPropertyWrite::StrokeWidth { stroke_width, .. } => {
+                style.stroke_width = stroke_width
+            }
+            EffectiveSemanticPropertyWrite::Opacity { opacity, .. } => style.opacity = opacity,
+        }
+        current.set_transform(transform);
         current.set_style(style);
-        self.writes
-            .push(EffectiveSemanticPropertyWrite::Style { object, style });
+        self.writes.push(write);
         Ok(())
     }
 
@@ -1170,16 +1200,8 @@ impl ExecutionSession {
                 .execution_index
                 .execution_object_id(semantic)
                 .ok_or(ExecutionSessionCallbackError::UnknownObject(semantic))?;
-            let runtime_write = match write {
-                EffectiveSemanticPropertyWrite::Transform { transform, .. } => {
-                    *receipt_domains.entry(semantic).or_insert(0) |= CALLBACK_TRANSFORM_DOMAIN;
-                    RuntimeEffectivePropertyWrite::Transform { object, transform }
-                }
-                EffectiveSemanticPropertyWrite::Style { style, .. } => {
-                    *receipt_domains.entry(semantic).or_insert(0) |= CALLBACK_STYLE_DOMAIN;
-                    RuntimeEffectivePropertyWrite::Style { object, style }
-                }
-            };
+            *receipt_domains.entry(semantic).or_insert(0) |= callback_write_domains(write);
+            let runtime_write = write.map_object(|_| object);
             writes.push(runtime_write);
         }
         let effective = self.runtime.prepare_effective_property_batch(&writes)?;
@@ -1808,6 +1830,80 @@ mod tests {
             session.committed_callback_renderer_observation(token, object),
             CallbackRendererObservationOutcome::StaleCallback { .. }
         ));
+    }
+
+    #[test]
+    fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let publication = session.publication_context();
+        let mut overlay = session
+            .begin_required_callback_phase(0.5, [object])
+            .unwrap();
+        let transform = Transform2D {
+            translation: Vec2::new(1.0, 2.0),
+            rotation: 0.75,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        overlay.set_transform(object, transform).unwrap();
+        overlay
+            .write(EffectiveSemanticPropertyWrite::Translation {
+                object,
+                translation: Vec2::new(4.0, 5.0),
+            })
+            .unwrap();
+        overlay
+            .write(EffectiveSemanticPropertyWrite::Opacity {
+                object,
+                opacity: 0.25,
+            })
+            .unwrap();
+        let read = overlay.object(object).unwrap();
+        assert_eq!(read.transform.rotation, transform.rotation);
+        assert_eq!(read.transform.scale, transform.scale);
+        assert_eq!(read.transform.translation, Vec2::new(4.0, 5.0));
+        assert_eq!(read.style.opacity, 0.25);
+        let expected = *read;
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform, expected.transform);
+        assert_eq!(session.frame().objects[0].style, expected.style);
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            publication.scene_revision()
+        );
+        assert_eq!(
+            session.publication_context().execution_revision(),
+            publication.execution_revision()
+        );
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            publication.frame_epoch().checked_next().unwrap()
+        );
+        let receipt = session.last_callback_receipt.as_ref().unwrap();
+        assert_eq!(
+            receipt.domains[&object],
+            CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE | CALLBACK_OPACITY
+        );
+        let mut next = session
+            .begin_required_callback_phase(1.0, [object])
+            .unwrap();
+        next.write(EffectiveSemanticPropertyWrite::Translation {
+            object,
+            translation: Vec2::new(9.0, 9.0),
+        })
+        .unwrap();
+        next.set_transform(object, transform).unwrap();
+        session
+            .commit_required_callback_phase(next.finish())
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform, transform);
     }
 
     #[test]

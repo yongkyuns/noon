@@ -2590,6 +2590,34 @@ enum CallbackWriteWire {
         object: CallbackNodeWire,
         style: Style,
     },
+    Translation {
+        object: CallbackNodeWire,
+        translation: noon_core::Vec2,
+    },
+    Rotation {
+        object: CallbackNodeWire,
+        rotation: f32,
+    },
+    Scale {
+        object: CallbackNodeWire,
+        scale: noon_core::Vec2,
+    },
+    Fill {
+        object: CallbackNodeWire,
+        fill: Option<noon_core::Color>,
+    },
+    Stroke {
+        object: CallbackNodeWire,
+        stroke: Option<noon_core::Color>,
+    },
+    StrokeWidth {
+        object: CallbackNodeWire,
+        stroke_width: f32,
+    },
+    Opacity {
+        object: CallbackNodeWire,
+        opacity: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -2684,6 +2712,48 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
                 Ok(EffectiveSemanticPropertyWrite::Style {
                     object: object.into(),
                     style,
+                })
+            }
+            CallbackWriteWire::Translation {
+                object,
+                translation,
+            } => Ok(EffectiveSemanticPropertyWrite::Translation {
+                object: object.into(),
+                translation,
+            }),
+            CallbackWriteWire::Rotation { object, rotation } => {
+                Ok(EffectiveSemanticPropertyWrite::Rotation {
+                    object: object.into(),
+                    rotation,
+                })
+            }
+            CallbackWriteWire::Scale { object, scale } => {
+                Ok(EffectiveSemanticPropertyWrite::Scale {
+                    object: object.into(),
+                    scale,
+                })
+            }
+            CallbackWriteWire::Fill { object, fill } => Ok(EffectiveSemanticPropertyWrite::Fill {
+                object: object.into(),
+                fill,
+            }),
+            CallbackWriteWire::Stroke { object, stroke } => {
+                Ok(EffectiveSemanticPropertyWrite::Stroke {
+                    object: object.into(),
+                    stroke,
+                })
+            }
+            CallbackWriteWire::StrokeWidth {
+                object,
+                stroke_width,
+            } => Ok(EffectiveSemanticPropertyWrite::StrokeWidth {
+                object: object.into(),
+                stroke_width,
+            }),
+            CallbackWriteWire::Opacity { object, opacity } => {
+                Ok(EffectiveSemanticPropertyWrite::Opacity {
+                    object: object.into(),
+                    opacity,
                 })
             }
         })

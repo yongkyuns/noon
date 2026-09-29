@@ -14,7 +14,10 @@ use crate::execution_segment::ExecutionSegmentToken;
 use crate::execution_session::CallbackTermination;
 use crate::{ExecutionSegment, ExecutionSession, ExecutionSessionPublicationError};
 
-use super::callback::{CALLBACK_STYLE_DOMAIN, CALLBACK_TRANSFORM_DOMAIN};
+use super::callback::{
+    CALLBACK_FILL, CALLBACK_OPACITY, CALLBACK_ROTATION, CALLBACK_SCALE, CALLBACK_STROKE,
+    CALLBACK_STROKE_WIDTH, CALLBACK_TRANSLATION,
+};
 
 /// Failure to atomically release one completed animation segment into authored state.
 #[derive(Clone, Debug, PartialEq)]
@@ -495,16 +498,48 @@ impl ExecutionSession {
             let object = self
                 .effective_semantic_object(store, entry.semantic_object)?
                 .object;
-            if domains & CALLBACK_TRANSFORM_DOMAIN != 0 {
-                effective.push(EffectivePropertyWrite::Transform {
+            // Preserve only channels actually owned by continuing callbacks;
+            // unrelated completed timeline values reconcile independently.
+            if domains & CALLBACK_TRANSLATION != 0 {
+                effective.push(EffectivePropertyWrite::Translation {
                     object: entry.execution_object,
-                    transform: object.transform,
+                    translation: object.transform.translation,
                 });
             }
-            if domains & CALLBACK_STYLE_DOMAIN != 0 {
-                effective.push(EffectivePropertyWrite::Style {
+            if domains & CALLBACK_ROTATION != 0 {
+                effective.push(EffectivePropertyWrite::Rotation {
                     object: entry.execution_object,
-                    style: object.style,
+                    rotation: object.transform.rotation,
+                });
+            }
+            if domains & CALLBACK_SCALE != 0 {
+                effective.push(EffectivePropertyWrite::Scale {
+                    object: entry.execution_object,
+                    scale: object.transform.scale,
+                });
+            }
+            if domains & CALLBACK_FILL != 0 {
+                effective.push(EffectivePropertyWrite::Fill {
+                    object: entry.execution_object,
+                    fill: object.style.fill,
+                });
+            }
+            if domains & CALLBACK_STROKE != 0 {
+                effective.push(EffectivePropertyWrite::Stroke {
+                    object: entry.execution_object,
+                    stroke: object.style.stroke,
+                });
+            }
+            if domains & CALLBACK_STROKE_WIDTH != 0 {
+                effective.push(EffectivePropertyWrite::StrokeWidth {
+                    object: entry.execution_object,
+                    stroke_width: object.style.stroke_width,
+                });
+            }
+            if domains & CALLBACK_OPACITY != 0 {
+                effective.push(EffectivePropertyWrite::Opacity {
+                    object: entry.execution_object,
+                    opacity: object.style.opacity,
                 });
             }
         }
@@ -1515,6 +1550,7 @@ mod tests {
         updater.apply(&mut store).unwrap();
         let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
         target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        target_state.transform.rotation_z = 0.75;
         let target = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(object, target, AnimationOptions::new())
@@ -1546,11 +1582,10 @@ mod tests {
             }
         };
         endpoint
-            .set_transform(
-                object,
-                Transform2D {
+            .write(
+                crate::integration::EffectiveSemanticPropertyWrite::Translation {
+                    object,
                     translation: Vec2::new(5.0, 1.0),
-                    ..Transform2D::IDENTITY
                 },
             )
             .unwrap();
@@ -1571,6 +1606,7 @@ mod tests {
             session.frame().objects[0].transform.translation,
             Vec2::new(5.0, 1.0)
         );
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.75);
         assert!(session.segment_state(segment).is_complete());
         assert!(matches!(
             session.advance_to_callback_barrier(1.0).unwrap(),

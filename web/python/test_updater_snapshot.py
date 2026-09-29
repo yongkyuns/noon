@@ -341,10 +341,10 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertEqual(compat.VMobject.set_opacity.__module__, "_manim_compat")
         self.assertEqual(
             [write["kind"] for write in writes],
-            ["transform", "style", "style", "transform"],
+            ["translation", "opacity", "stroke", "translation"],
         )
         self.assertEqual(
-            writes[-1]["transform"]["translation"], {"x": 5.0, "y": 3.0}
+            writes[-1]["translation"], {"x": 5.0, "y": 3.0}
         )
         row = next(iter(context._rows.values()))
         self.assertIsInstance(row, updaters._PhasePropertyRow)
@@ -490,9 +490,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             context._operations.rotations[0],
             (2.0, -1.0, 0.0, 1.0, 1.0, math.pi / 2.0, 0.0, 0.0),
         )
-        self.assertEqual([write["kind"] for write in writes], ["transform"])
-        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
-        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertEqual([write["kind"] for write in writes], ["translation", "rotation"])
+        self.assertEqual(writes[0]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[1]["rotation"], math.pi / 2.0)
         self.assertFalse(next(iter(context._rows.values())).bounds_translation_only)
 
     def test_shared_line_rotate_about_origin_uses_the_callback_property_row(self) -> None:
@@ -517,9 +517,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
         self.assertEqual(len(context._operations.rotations), 1)
-        self.assertEqual([write["kind"] for write in writes], ["transform"])
-        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
-        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertEqual([write["kind"] for write in writes], ["translation", "rotation"])
+        self.assertEqual(writes[0]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[1]["rotation"], math.pi / 2.0)
 
     def test_native_text_uses_the_same_effective_overlay_without_authored_writes(self) -> None:
         scene, _, context = self._mobject_and_context()
@@ -568,11 +568,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
-        self.assertEqual([write["kind"] for write in writes], ["transform", "style"])
+        self.assertEqual([write["kind"] for write in writes], ["translation", "opacity"])
         self.assertEqual(
-            writes[0]["transform"]["translation"], {"x": 2.25, "y": -0.5}
+            writes[0]["translation"], {"x": 2.25, "y": -0.5}
         )
-        self.assertEqual(writes[1]["style"]["opacity"], 0.4)
+        self.assertEqual(writes[1]["opacity"], 0.4)
         self.assertEqual(handle.authored_translation, (2.0, -1.0))
         self.assertEqual(handle.authored_opacity, 1.0)
         self.assertEqual(handle.authored_revision, 17)

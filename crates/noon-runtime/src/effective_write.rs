@@ -15,47 +15,20 @@ use crate::{apply_evaluated_value, release_render_transform, EvaluatedValue, Fra
 /// ownership. Acquisition, conflict handling and release remain the caller's
 /// responsibility; preparing a batch does not bypass publication/replay guards.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EffectivePropertyWrite {
-    Transform {
-        object: ObjectId,
-        transform: Transform2D,
-    },
-    Style {
-        object: ObjectId,
-        style: Style,
-    },
-    Translation {
-        object: ObjectId,
-        translation: Vec2,
-    },
-    Rotation {
-        object: ObjectId,
-        rotation: f32,
-    },
-    Scale {
-        object: ObjectId,
-        scale: Vec2,
-    },
-    Fill {
-        object: ObjectId,
-        fill: Option<Color>,
-    },
-    Stroke {
-        object: ObjectId,
-        stroke: Option<Color>,
-    },
-    StrokeWidth {
-        object: ObjectId,
-        stroke_width: f32,
-    },
-    Opacity {
-        object: ObjectId,
-        opacity: f32,
-    },
+pub enum EffectivePropertyWrite<I = ObjectId> {
+    Transform { object: I, transform: Transform2D },
+    Style { object: I, style: Style },
+    Translation { object: I, translation: Vec2 },
+    Rotation { object: I, rotation: f32 },
+    Scale { object: I, scale: Vec2 },
+    Fill { object: I, fill: Option<Color> },
+    Stroke { object: I, stroke: Option<Color> },
+    StrokeWidth { object: I, stroke_width: f32 },
+    Opacity { object: I, opacity: f32 },
 }
 
-impl EffectivePropertyWrite {
-    pub(crate) const fn object(self) -> ObjectId {
+impl<I: Copy> EffectivePropertyWrite<I> {
+    pub const fn object(self) -> I {
         match self {
             Self::Transform { object, .. }
             | Self::Style { object, .. }
@@ -69,6 +42,35 @@ impl EffectivePropertyWrite {
         }
     }
 
+    /// Resolve identity at the semantic-to-execution boundary without translating
+    /// or duplicating the effective write vocabulary.
+    pub fn map_object<J>(self, map: impl FnOnce(I) -> J) -> EffectivePropertyWrite<J> {
+        let object = map(self.object());
+        match self {
+            Self::Transform { transform, .. } => {
+                EffectivePropertyWrite::Transform { object, transform }
+            }
+            Self::Style { style, .. } => EffectivePropertyWrite::Style { object, style },
+            Self::Translation { translation, .. } => EffectivePropertyWrite::Translation {
+                object,
+                translation,
+            },
+            Self::Rotation { rotation, .. } => {
+                EffectivePropertyWrite::Rotation { object, rotation }
+            }
+            Self::Scale { scale, .. } => EffectivePropertyWrite::Scale { object, scale },
+            Self::Fill { fill, .. } => EffectivePropertyWrite::Fill { object, fill },
+            Self::Stroke { stroke, .. } => EffectivePropertyWrite::Stroke { object, stroke },
+            Self::StrokeWidth { stroke_width, .. } => EffectivePropertyWrite::StrokeWidth {
+                object,
+                stroke_width,
+            },
+            Self::Opacity { opacity, .. } => EffectivePropertyWrite::Opacity { object, opacity },
+        }
+    }
+}
+
+impl EffectivePropertyWrite {
     /// Reuse the compiler's existing identity/numeric validators. Defaults fill
     /// only the irrelevant validation fields; these patches are never committed
     /// to the execution plan or used to assign a whole effective row.
