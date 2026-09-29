@@ -1,4 +1,4 @@
-import { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
+import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
 import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
@@ -399,10 +399,6 @@ export class AuthoringExecutionClient {
     if (this.#transition !== null) {
       await this.#transition;
     }
-    // Input belongs to the outgoing endpoint. Retire its collector before
-    // replacing the endpoint so cancellation of pending input is not reported
-    // as a Python/runtime failure. The successor registers a fresh view below.
-    this.#retirePointerInput();
     const transition = rebuild();
     this.#transition = transition;
     try {
@@ -523,6 +519,10 @@ export class AuthoringExecutionClient {
     const fault = async (error, preceding = previousDelivery) => {
       if (signal.aborted) return;
       controller.abort();
+      // A successful owner replacement intentionally rejects pending input.
+      // Keep genuine failures visible, including a failed candidate attachment
+      // that leaves the previous owner and its collector usable.
+      if (error instanceof ExecutionTransitionCancelled) return;
       report(error);
       await preceding.catch(() => {});
       if (lastInput === null || this.#pointerAbortController !== controller || this.#player !== player ||
