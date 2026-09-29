@@ -108,15 +108,11 @@ async function directRetainedLocalityProof(expectedBackend) {
   const renderer = await createDirectRetainedLocalityRenderer(canvas);
   try {
     renderer.resize(canvas.width, canvas.height);
-    if (!renderer.render()) {
-      throw new Error("100k direct locality scene did not present its initial frame");
-    }
+    await presentDirectFrame(renderer);
     const initialBytesUploaded = renderer.lastBytesUploaded();
     const objectCount = renderer.objectCount();
     renderer.seekDirect(0.5);
-    if (!renderer.render()) {
-      throw new Error("100k direct locality edit did not present its published frame");
-    }
+    await presentDirectFrame(renderer);
     const updateBytesUploaded = renderer.lastBytesUploaded();
     const metrics = {
       backend: renderer.rendererBackend(),
@@ -134,7 +130,9 @@ async function directRetainedLocalityProof(expectedBackend) {
     if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
       throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
     }
-    if (metrics.updateBytesUploaded <= 0 || metrics.updateBytesUploaded * 1000 >= metrics.initialBytesUploaded) {
+    // Bound a local upload independently of how much of the initial scene the
+    // renderer elects to install. Native coverage pins the exact instance size.
+    if (metrics.updateBytesUploaded <= 0 || metrics.updateBytesUploaded > 256) {
       throw new Error(`single-target update uploaded non-local bytes: ${JSON.stringify(metrics)}`);
     }
     return metrics;
