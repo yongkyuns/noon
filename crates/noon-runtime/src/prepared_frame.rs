@@ -34,6 +34,7 @@ pub struct PreparedFrameEvaluation {
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
+    deferred_reactive_bindings: Vec<(noon_core::ObjectId, noon_core::Property)>,
     numeric_text: Vec<PreparedNumericTextUpdate>,
     pub(crate) authored_scalar_inputs: bool,
 }
@@ -68,6 +69,10 @@ impl PreparedFrameEvaluation {
 
     pub const fn prior_driver_rows(&self) -> usize {
         self.prior_driver_rows
+    }
+
+    pub fn deferred_reactive_bindings(&self) -> &[(noon_core::ObjectId, noon_core::Property)] {
+        &self.deferred_reactive_bindings
     }
 }
 
@@ -272,6 +277,17 @@ impl SceneInstance {
         time: f64,
         reactive_inputs: &[(SignalId, ReactiveValue)],
     ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        self.prepare_advance_to_with_reactive_inputs_deferred(time, reactive_inputs, false)
+    }
+
+    /// Prepare reactive signal values while leaving selected binding writes for
+    /// an ordered callback region to apply after its preceding host updaters.
+    pub fn prepare_advance_to_with_reactive_inputs_deferred(
+        &mut self,
+        time: f64,
+        reactive_inputs: &[(SignalId, ReactiveValue)],
+        defer_reactive_bindings: bool,
+    ) -> Result<PreparedFrameEvaluation, EvaluationError> {
         if self.replay_is_sealed() {
             return Err(EvaluationError::ReplaySealed);
         }
@@ -367,11 +383,18 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
 
+        let mut deferred = HashSet::new();
         for (&object_index, row) in &mut rows {
-            self.reapply_reactive_to_row(
-                object_index,
-                row.as_mut(&self.frame.objects[object_index].content),
-            );
+            if defer_reactive_bindings {
+                for property in self.reactive_properties_for_object(object_index) {
+                    deferred.insert((object_index, property));
+                }
+            } else {
+                self.reapply_reactive_to_row(
+                    object_index,
+                    row.as_mut(&self.frame.objects[object_index].content),
+                );
+            }
         }
 
         let reactive = if reactive_inputs.is_empty() {
@@ -392,6 +415,10 @@ impl SceneInstance {
         if let Some(reactive) = reactive.as_ref() {
             for (object_index, property, value) in reactive.property_changes() {
                 if !self.object_slot_is_live(*object_index) {
+                    continue;
+                }
+                if defer_reactive_bindings {
+                    deferred.insert((*object_index, *property));
                     continue;
                 }
                 let row = rows
@@ -446,6 +473,10 @@ impl SceneInstance {
             scheduler_stats: preview.stats(),
             prior_driver_rows,
             reactive,
+            deferred_reactive_bindings: deferred
+                .into_iter()
+                .map(|(index, property)| (self.compiled.objects()[index].id, property))
+                .collect(),
             numeric_text,
             authored_scalar_inputs: false,
         })

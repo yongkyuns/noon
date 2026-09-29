@@ -3002,6 +3002,7 @@ fn set_object_subscription(
     property: SemanticObjectProperty,
     signal: Option<SemanticNodeId>,
 ) {
+    let authored_order = store.next_authored_updater_order(object);
     store.unregister_semantic_references_for_owner(object);
     let bindings = store
         .node_mut(object)
@@ -3014,9 +3015,16 @@ fn set_object_subscription(
 
     match (position, signal) {
         (Some(position), Some(signal)) => {
-            bindings[position] = SemanticSignalBinding::new(signal, property);
+            let order = bindings[position].authored_order();
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings[position] = binding;
         }
-        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (None, Some(signal)) => {
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(authored_order);
+            bindings.push(binding);
+        }
         (Some(position), None) => {
             bindings.remove(position);
         }

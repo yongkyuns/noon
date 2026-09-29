@@ -622,6 +622,14 @@ impl ExecutionSession {
                 })?;
         }
 
+        let changed_native_bindings = prepared
+            .mutations()
+            .iter()
+            .filter_map(|mutation| match mutation {
+                noon_core::SemanticMutation::ChangeSubscription { object, .. } => object.existing(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let (result, store) = prepared.commit_with_store();
         let membership = self
             .reachability
@@ -687,8 +695,12 @@ impl ExecutionSession {
         }
         if let Some(revision) = revised_callbacks {
             self.callback_schedule
-                .apply_revision(revision, self.frame().time);
+                .apply_revision(revision, store, self.frame().time);
             self.last_callback_receipt = None;
+        }
+        if !changed_native_bindings.is_empty() {
+            self.callback_schedule
+                .refresh_native_bindings(store, changed_native_bindings);
         }
         self.publish_replay_membership(&exited, &entered);
         self.reconcile_callback_membership(&exited, false);

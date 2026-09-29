@@ -26,11 +26,66 @@ impl SemanticStore {
         registration: SemanticUpdaterRegistration,
         position: Option<usize>,
     ) -> Result<(), UpdaterRegistrationEditError> {
+        let existing = self
+            .node(target)
+            .expect("semantic updater target validated above")
+            .host_updaters();
+        let insertion_order = position
+            .and_then(|position| {
+                existing
+                    .iter()
+                    .filter(|entry| entry.is_active_at(registration.active_from()))
+                    .nth(position)
+                    .map(|entry| entry.authored_order())
+            })
+            .unwrap_or_else(|| self.next_authored_updater_order(target));
         let registrations = self
             .node_mut(target)
             .expect("semantic updater target validated above")
             .host_updaters_mut();
-        insert_updater_registration(registrations, registration, position)
+        let inserted = insert_updater_registration(registrations, registration, position)?;
+        let node = self.node_mut(target).expect("validated updater target");
+        for (index, entry) in node.host_updaters_mut().iter_mut().enumerate() {
+            if index != inserted && entry.authored_order() >= insertion_order {
+                entry.set_authored_order(
+                    entry
+                        .authored_order()
+                        .checked_add(1)
+                        .expect("updater order space exhausted"),
+                );
+            }
+        }
+        if let Some(state) = node.semantic_object_state_mut() {
+            for binding in state.signal_bindings_mut() {
+                if binding.authored_order() >= insertion_order {
+                    binding.set_authored_order(
+                        binding
+                            .authored_order()
+                            .checked_add(1)
+                            .expect("updater order space exhausted"),
+                    );
+                }
+            }
+        }
+        node.host_updaters_mut()[inserted].set_authored_order(insertion_order);
+        Ok(())
+    }
+
+    pub(crate) fn next_authored_updater_order(&self, target: SemanticNodeId) -> u64 {
+        let node = self.node(target).expect("validated updater target");
+        node.host_updaters()
+            .iter()
+            .map(|entry| entry.authored_order())
+            .chain(node.semantic_object_state().into_iter().flat_map(|state| {
+                state
+                    .signal_bindings()
+                    .iter()
+                    .map(|entry| entry.authored_order())
+            }))
+            .max()
+            .map_or(0, |order| {
+                order.checked_add(1).expect("updater order space exhausted")
+            })
     }
 
     pub(crate) fn close_first_semantic_updater_registration(
@@ -69,7 +124,7 @@ pub(crate) fn insert_updater_registration(
     registrations: &mut Vec<SemanticUpdaterRegistration>,
     registration: SemanticUpdaterRegistration,
     position: Option<usize>,
-) -> Result<(), UpdaterRegistrationEditError> {
+) -> Result<usize, UpdaterRegistrationEditError> {
     let active_positions = registrations
         .iter()
         .enumerate()
@@ -97,7 +152,7 @@ pub(crate) fn insert_updater_registration(
                 .unwrap_or(registrations.len())
         });
     registrations.insert(insertion, registration);
-    Ok(())
+    Ok(insertion)
 }
 
 pub(crate) fn close_first_updater_registration(
@@ -163,7 +218,7 @@ mod tests {
     use crate::{
         SemanticMutationImpact, SemanticMutationStats, SemanticMutationTransaction,
         SemanticMutationTransactionError, SemanticNodeCreation, SemanticObjectProperty,
-        SemanticObjectState, StoredGeometry,
+        SemanticObjectState, SemanticVec3, StoredGeometry,
     };
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -180,6 +235,52 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(target, callback, active_from, position);
         transaction.apply(store).unwrap();
+    }
+
+    #[test]
+    fn native_and_host_declarations_keep_one_authored_order() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let first = store
+            .insert_semantic_input_signal(SemanticVec3::new(2.0, 3.0, 0.0))
+            .unwrap();
+        let second = store.insert_semantic_input_signal(2.0_f64).unwrap();
+        store
+            .bind_semantic_signal(first, target, SemanticObjectProperty::Translation)
+            .unwrap();
+        add(&mut store, target, HostCallbackId::new(1), 0.0, None);
+        store
+            .bind_semantic_signal(second, target, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        assert_eq!(
+            store.semantic_object_signal_bindings(target).unwrap()[0].authored_order(),
+            0
+        );
+        assert_eq!(
+            store.semantic_updater_registrations(target).unwrap()[0].authored_order(),
+            1
+        );
+        assert_eq!(
+            store.semantic_object_signal_bindings(target).unwrap()[1].authored_order(),
+            2
+        );
+        add(&mut store, target, HostCallbackId::new(2), 0.0, Some(0));
+        assert_eq!(
+            store.semantic_object_signal_bindings(target).unwrap()[0].authored_order(),
+            0
+        );
+        assert_eq!(
+            store.semantic_updater_registrations(target).unwrap()[0].authored_order(),
+            1
+        );
+        assert_eq!(
+            store.semantic_updater_registrations(target).unwrap()[1].authored_order(),
+            2
+        );
+        assert_eq!(
+            store.semantic_object_signal_bindings(target).unwrap()[1].authored_order(),
+            3
+        );
     }
 
     #[test]

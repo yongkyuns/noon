@@ -34,10 +34,11 @@ mod publication;
 mod replay;
 pub use callback::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
-    CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
-    CallbackSequence, CallbackTermination, CallbackTerminationKind,
-    CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
-    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
+    CallbackReadValue, CallbackRegionAdvance, CallbackRendererDirtyClassification,
+    CallbackRendererObservationOutcome, CallbackSequence, CallbackTermination,
+    CallbackTerminationKind, CommittedCallbackRendererObservation, EffectivePropertyBatch,
+    EffectiveSemanticPropertyWrite, ExecutionSessionCallbackError,
+    ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
 };
 pub use completion::ExecutionSegmentCompletionError;
 pub use noon_runtime::SignalTimelineAppendError;

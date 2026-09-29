@@ -3291,6 +3291,7 @@ struct CallbackInvocationWire {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackPhaseWire {
     token: CallbackTokenWire,
+    region: u32,
     time: f64,
     delta_time: f64,
     objects: Vec<CallbackPhaseObjectWire>,
@@ -3382,6 +3383,8 @@ enum CallbackWriteWire {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 struct CallbackBatchWire {
     token: CallbackTokenWire,
+    #[serde(default)]
+    region: u32,
     writes: Vec<CallbackWriteWire>,
 }
 
@@ -3517,7 +3520,7 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(EffectivePropertyBatch::new(token, writes))
+    Ok(EffectivePropertyBatch::new(token, writes).with_region(wire.region))
 }
 
 // Keep the shared callback failures typed until the actual JS boundary. The
@@ -3593,13 +3596,32 @@ impl SemanticExecutionPlayer {
         serde_json::to_string(&wire).map_err(|error| AuthoringFailure::from(error.to_string()))
     }
 
-    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), AuthoringFailure> {
+    pub fn commit_callback_phase_json(
+        &mut self,
+        batch_json: &str,
+    ) -> Result<Option<String>, AuthoringFailure> {
         let batch = decode_callback_batch(batch_json)?;
         let token = batch.token();
         let (_, time) = self
             .pending_callback_phase
             .filter(|(pending, _)| *pending == token)
             .ok_or("callback batch does not match the player pending phase")?;
+        let batch = match self
+            .session
+            .submit_required_callback_region(batch)
+            .map_err(AuthoringFailure::from)?
+        {
+            noon::integration::CallbackRegionAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => {
+                return self
+                    .retain_callback_phase(invocations, overlay)
+                    .map(Some)
+                    .map_err(AuthoringFailure::from);
+            }
+            noon::integration::CallbackRegionAdvance::Complete(batch) => batch,
+        };
         #[cfg(any(target_arch = "wasm32", test))]
         {
             if let Some(collector) = self.callback_membership_transaction.take() {
@@ -3700,7 +3722,7 @@ impl SemanticExecutionPlayer {
         // only after its commit avoids a host-side progression cursor.
         self.clock.seek(time).map_err(|error| error.to_string())?;
         self.pending_callback_phase = None;
-        Ok(())
+        Ok(None)
     }
 
     pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), AuthoringFailure> {
@@ -3741,6 +3763,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<String, String> {
         let phase = CallbackPhaseWire {
             token: overlay.token().into(),
+            region: overlay.region(),
             time: overlay.time(),
             delta_time: overlay.delta_time(),
             objects: overlay
@@ -4123,7 +4146,7 @@ impl SemanticExecutionPlayer {
     pub fn commit_callback_phase_json_wasm(
         &mut self,
         batch_json: &str,
-    ) -> Result<(), wasm_bindgen::JsValue> {
+    ) -> Result<Option<String>, wasm_bindgen::JsValue> {
         self.commit_callback_phase_json(batch_json)
             .map_err(crate::authoring_error::js_error)
     }

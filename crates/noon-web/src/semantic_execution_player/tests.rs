@@ -3,8 +3,98 @@ use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
     AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-    StoredGeometry,
+    SemanticVec3, StoredGeometry, TrackTiming,
 };
+
+#[test]
+fn callback_json_regions_preserve_native_host_order_and_publish_once() {
+    let mut scene = noon::Scene::new();
+    let object = scene.circle(1.0).unwrap();
+    scene.add(&object).unwrap();
+    {
+        let mut store = scene.integration_store().borrow_mut();
+        let translation = store
+            .insert_semantic_input_signal(SemanticVec3::new(4.0, 1.0, 0.0))
+            .unwrap();
+        let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let mut track = SemanticMutationTransaction::new();
+        track.add_scalar_signal_track(
+            width,
+            1.0,
+            2.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        track.apply(&mut store).unwrap();
+        store
+            .bind_semantic_signal(
+                translation,
+                object.node_id(),
+                SemanticObjectProperty::Translation,
+            )
+            .unwrap();
+        let mut first = SemanticMutationTransaction::new();
+        first.add_updater(object.node_id(), HostCallbackId::new(7), 1.0, None);
+        first.apply(&mut store).unwrap();
+        store
+            .bind_semantic_signal(width, object.node_id(), SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        let mut second = SemanticMutationTransaction::new();
+        second.add_updater(object.node_id(), HostCallbackId::new(8), 1.0, None);
+        second.apply(&mut store).unwrap();
+    }
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        64,
+    )
+    .unwrap();
+    let publication = player.session.publication_context();
+    let first_json = player.advance_to_callback_phase(1.0).unwrap().unwrap();
+    let first: serde_json::Value = serde_json::from_str(&first_json).unwrap();
+    assert_eq!(first["region"], 0);
+    assert_eq!(first["invocations"][0]["callback_id"], "7");
+    assert_eq!(first["objects"][0]["transform"]["translation"]["x"], 4.0);
+    assert_eq!(first["objects"][0]["style"]["stroke_width"], 1.0);
+    let first_batch = serde_json::json!({
+        "token": first["token"], "region": first["region"],
+        "writes": [
+            {"kind":"translation", "object":first["objects"][0]["node"], "translation":{"x":4.0,"y":9.0}},
+            {"kind":"stroke_width", "object":first["objects"][0]["node"], "stroke_width":3.0}
+        ]
+    }).to_string();
+    let second_json = player
+        .commit_callback_phase_json(&first_batch)
+        .unwrap()
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second_json).unwrap();
+    assert_eq!(second["region"], 1);
+    assert_eq!(second["invocations"][0]["callback_id"], "8");
+    assert_eq!(second["objects"][0]["transform"]["translation"]["y"], 9.0);
+    assert_eq!(second["objects"][0]["style"]["stroke_width"], 2.0);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.commit_callback_phase_json(&first_batch).is_err());
+    let second_batch = serde_json::json!({
+        "token": second["token"], "region": second["region"],
+        "writes": [{"kind":"opacity", "object":second["objects"][0]["node"], "opacity":0.7}]
+    })
+    .to_string();
+    assert!(player
+        .commit_callback_phase_json(&second_batch)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.frame().objects[0].transform.translation,
+        noon_core::Vec2::new(4.0, 9.0)
+    );
+    assert_eq!(player.session.frame().objects[0].style.stroke_width, 2.0);
+    assert_eq!(player.session.frame().objects[0].style.opacity, 0.7);
+    assert_eq!(
+        player.session.publication_context().frame_epoch(),
+        publication.frame_epoch().checked_next().unwrap()
+    );
+}
 
 struct NumericRuleBackend;
 

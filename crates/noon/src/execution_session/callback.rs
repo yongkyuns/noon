@@ -1,8 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use noon_compile::{CompilePatchError, SemanticHostCallbackEventKind, SemanticHostCallbackPlan};
+use noon_compile::{
+    CompilePatchError, SemanticHostCallbackEventKind, SemanticHostCallbackPlan,
+    SemanticOrderedUpdater,
+};
 use noon_core::{
-    HostCallbackId, PublicationContext, ReactiveValue, SemanticNodeId, Style, Transform2D,
+    HostCallbackId, Property, PublicationContext, ReactiveValue, SemanticNodeId,
+    SemanticObjectProperty, Style, Transform2D,
 };
 use noon_runtime::{
     EffectiveObjectProperties, EffectivePropertyWrite as RuntimeEffectivePropertyWrite,
@@ -20,6 +24,7 @@ pub(super) const CALLBACK_FILL: u8 = 8;
 pub(super) const CALLBACK_STROKE: u8 = 16;
 pub(super) const CALLBACK_STROKE_WIDTH: u8 = 32;
 pub(super) const CALLBACK_OPACITY: u8 = 64;
+pub(super) const CALLBACK_PRESENCE: u8 = 128;
 
 #[derive(Clone, Debug)]
 pub(super) struct CallbackPublicationReceipt {
@@ -174,6 +179,7 @@ impl CallbackSchedule {
     pub(super) fn apply_revision(
         &mut self,
         revision: noon_compile::SemanticHostCallbackRevision,
+        store: &noon_core::SemanticStore,
         time: f64,
     ) {
         let targets = revision.targets().collect::<Vec<_>>();
@@ -183,7 +189,9 @@ impl CallbackSchedule {
                     .remove(&(self.plan.occurrence(index).order(), index));
             }
         }
-        self.plan.apply_revision(revision);
+        self.plan.apply_revision(revision, store);
+        self.plan
+            .refresh_native_bindings(store, targets.iter().copied());
         for target in targets {
             for index in self.plan.target_occurrences(target) {
                 let occurrence = self.plan.occurrence(index);
@@ -196,6 +204,16 @@ impl CallbackSchedule {
                 }
             }
         }
+        self.completed_time = None;
+        self.completed_publication = None;
+    }
+
+    pub(super) fn refresh_native_bindings(
+        &mut self,
+        store: &noon_core::SemanticStore,
+        targets: impl IntoIterator<Item = SemanticNodeId>,
+    ) {
+        self.plan.refresh_native_bindings(store, targets);
         self.completed_time = None;
         self.completed_publication = None;
     }
@@ -292,6 +310,23 @@ impl CallbackSchedule {
             .iter()
             .any(|&(_, index)| self.plan.occurrence(index).target() == target)
     }
+
+    fn ordered_updates(
+        &self,
+        active: &BTreeSet<(usize, usize)>,
+        relevant_native: &HashSet<(SemanticNodeId, SemanticObjectProperty)>,
+    ) -> Vec<SemanticOrderedUpdater> {
+        self.plan
+            .ordered_relevant_updates(active, relevant_native)
+            .into_iter()
+            .filter(|update| match update {
+                SemanticOrderedUpdater::Native(native) => {
+                    !self.detached_targets.contains(&native.target())
+                }
+                SemanticOrderedUpdater::Host(_) => true,
+            })
+            .collect()
+    }
     pub(super) fn carry_completed_publication(
         &mut self,
         time: f64,
@@ -333,6 +368,62 @@ pub enum CallbackAdvance<'a> {
         invocations: Vec<RequiredCallbackInvocation>,
         overlay: CallbackPhaseOverlay,
     },
+}
+
+/// Progress after admitting one exact host region within an unpublished frame.
+#[derive(Debug)]
+pub enum CallbackRegionAdvance {
+    HostRequired {
+        invocations: Vec<RequiredCallbackInvocation>,
+        overlay: CallbackPhaseOverlay,
+    },
+    Complete(EffectivePropertyBatch),
+}
+
+fn semantic_native_property(property: Property) -> Option<SemanticObjectProperty> {
+    match property {
+        Property::Presence => Some(SemanticObjectProperty::Presence),
+        Property::Position => Some(SemanticObjectProperty::Translation),
+        Property::Scale => Some(SemanticObjectProperty::Scale),
+        Property::Rotation => Some(SemanticObjectProperty::RotationZ),
+        Property::Opacity => Some(SemanticObjectProperty::ObjectOpacity),
+        Property::StrokeWidth => Some(SemanticObjectProperty::StrokeWidth),
+        _ => None,
+    }
+}
+
+fn native_effective_write(
+    object: SemanticNodeId,
+    property: SemanticObjectProperty,
+    value: ReactiveValue,
+) -> EffectiveSemanticPropertyWrite {
+    match (property, value) {
+        (SemanticObjectProperty::Presence, ReactiveValue::Bool(presence)) => {
+            EffectiveSemanticPropertyWrite::Presence { object, presence }
+        }
+        (SemanticObjectProperty::Translation, ReactiveValue::Vec2(translation)) => {
+            EffectiveSemanticPropertyWrite::Translation {
+                object,
+                translation,
+            }
+        }
+        (SemanticObjectProperty::Scale, ReactiveValue::Vec2(scale)) => {
+            EffectiveSemanticPropertyWrite::Scale { object, scale }
+        }
+        (SemanticObjectProperty::RotationZ, ReactiveValue::Scalar(rotation)) => {
+            EffectiveSemanticPropertyWrite::Rotation { object, rotation }
+        }
+        (SemanticObjectProperty::ObjectOpacity, ReactiveValue::Scalar(opacity)) => {
+            EffectiveSemanticPropertyWrite::Opacity { object, opacity }
+        }
+        (SemanticObjectProperty::StrokeWidth, ReactiveValue::Scalar(stroke_width)) => {
+            EffectiveSemanticPropertyWrite::StrokeWidth {
+                object,
+                stroke_width,
+            }
+        }
+        _ => unreachable!("lowered native binding retains its validated value kind"),
+    }
 }
 
 /// One arbitrary semantic read requested by a callback already pinned to a phase.
@@ -483,6 +574,7 @@ pub type EffectiveSemanticPropertyWrite = RuntimeEffectivePropertyWrite<Semantic
 
 fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
     match write {
+        EffectiveSemanticPropertyWrite::Presence { .. } => CALLBACK_PRESENCE,
         EffectiveSemanticPropertyWrite::Transform { .. } => {
             CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
         }
@@ -499,10 +591,23 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
     }
 }
 
+fn native_write_domain(property: SemanticObjectProperty) -> u8 {
+    match property {
+        SemanticObjectProperty::Presence => CALLBACK_PRESENCE,
+        SemanticObjectProperty::Translation => CALLBACK_TRANSLATION,
+        SemanticObjectProperty::RotationZ => CALLBACK_ROTATION,
+        SemanticObjectProperty::Scale => CALLBACK_SCALE,
+        SemanticObjectProperty::StrokeWidth => CALLBACK_STROKE_WIDTH,
+        SemanticObjectProperty::ObjectOpacity => CALLBACK_OPACITY,
+        SemanticObjectProperty::FillOpacity | SemanticObjectProperty::StrokeOpacity => 0,
+    }
+}
+
 /// Final ordered effective writes for one exact required callback phase.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectivePropertyBatch {
     token: CallbackPhaseToken,
+    region: u32,
     writes: Vec<EffectiveSemanticPropertyWrite>,
 }
 
@@ -513,8 +618,18 @@ impl EffectivePropertyBatch {
     ) -> Self {
         Self {
             token,
+            region: 0,
             writes: writes.into_iter().collect(),
         }
+    }
+
+    pub fn with_region(mut self, region: u32) -> Self {
+        self.region = region;
+        self
+    }
+
+    pub const fn region(&self) -> u32 {
+        self.region
     }
 
     pub const fn token(&self) -> CallbackPhaseToken {
@@ -533,6 +648,8 @@ impl EffectivePropertyBatch {
 #[derive(Clone, Debug)]
 pub struct CallbackPhaseOverlay {
     token: CallbackPhaseToken,
+    region: u32,
+    region_start: usize,
     time: f64,
     delta_time: f64,
     objects: BTreeMap<SemanticNodeId, EffectiveObjectProperties>,
@@ -544,6 +661,10 @@ pub struct CallbackPhaseOverlay {
 impl CallbackPhaseOverlay {
     pub const fn token(&self) -> CallbackPhaseToken {
         self.token
+    }
+
+    pub const fn region(&self) -> u32 {
+        self.region
     }
 
     pub const fn time(&self) -> f64 {
@@ -610,6 +731,9 @@ impl CallbackPhaseOverlay {
         let mut transform = current.transform;
         let mut style = current.style;
         match write {
+            EffectiveSemanticPropertyWrite::Presence { presence, .. } => {
+                current.presence = presence
+            }
             EffectiveSemanticPropertyWrite::Transform {
                 transform: value, ..
             } => transform = value,
@@ -635,7 +759,8 @@ impl CallbackPhaseOverlay {
     }
 
     pub fn finish(self) -> EffectivePropertyBatch {
-        EffectivePropertyBatch::new(self.token, self.writes)
+        EffectivePropertyBatch::new(self.token, self.writes[self.region_start..].iter().copied())
+            .with_region(self.region)
     }
 }
 
@@ -648,6 +773,11 @@ pub enum ExecutionSessionCallbackError {
         expected: CallbackPhaseToken,
         actual: CallbackPhaseToken,
     },
+    StaleRegion {
+        expected: u32,
+        actual: u32,
+    },
+    IncompleteRegion,
     SequenceExhausted,
     NonMonotonicAdvance {
         current: f64,
@@ -683,6 +813,13 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
                 actual.sequence().get(),
                 expected.sequence().get()
             ),
+            Self::StaleRegion { expected, actual } => write!(
+                formatter,
+                "callback region {actual} does not match pending region {expected}"
+            ),
+            Self::IncompleteRegion => {
+                formatter.write_str("ordered callback regions must finish before publication")
+            }
             Self::SequenceExhausted => formatter.write_str("callback sequence space exhausted"),
             Self::NonMonotonicAdvance { current, requested } => write!(
                 formatter,
@@ -741,6 +878,13 @@ pub(super) struct PendingCallbackPhase {
     pub(super) prepared: PreparedFrameEvaluation,
     schedule: Option<CallbackSchedulePreview>,
     signal_timeline: Option<SignalTimelinePreview>,
+    ordered_updates: Vec<SemanticOrderedUpdater>,
+    next_update: usize,
+    region: u32,
+    region_last_host_key: (usize, u64),
+    overlay: CallbackPhaseOverlay,
+    completed: bool,
+    last_region_batch: Option<EffectivePropertyBatch>,
 }
 
 pub(super) struct CallbackCompletion {
@@ -846,6 +990,9 @@ impl ExecutionSession {
                 }
             }
             CallbackReadRequest::Object(semantic) => {
+                if let Some(object) = pending.overlay.object(semantic) {
+                    return Ok(CallbackReadValue::Object(object.clone()));
+                }
                 let execution = self
                     .execution_index
                     .execution_object_id(semantic)
@@ -1033,26 +1180,260 @@ impl ExecutionSession {
         for invocation in &invocations {
             if self
                 .execution_index
-                .execution_object_id(invocation.target)
+                .execution_object_id(invocation.target())
                 .is_none()
             {
                 return Err(ExecutionSessionCallbackError::UnsupportedCallbackTarget(
-                    invocation.target,
+                    invocation.target(),
                 ));
             }
-            if seen_read_objects.insert(invocation.target) {
-                read_objects.push(invocation.target);
+            if seen_read_objects.insert(invocation.target()) {
+                read_objects.push(invocation.target());
             }
         }
-        let overlay = self.begin_required_callback_phase_with_schedule(
+        self.begin_required_callback_phase_with_schedule(
             preview.time,
             read_objects,
             Some(preview),
+            true,
         )?;
-        Ok(CallbackAdvance::HostRequired {
-            invocations,
-            overlay,
-        })
+        let pending = self.pending_callback.as_ref().expect("new callback phase");
+        let relevant_native = pending
+            .prepared
+            .deferred_reactive_bindings()
+            .iter()
+            .filter_map(|&(object, property)| {
+                Some((
+                    self.execution_index.semantic_object_id(object)?,
+                    semantic_native_property(property)?,
+                ))
+            })
+            .collect::<HashSet<_>>();
+        let ordered_updates = self.callback_schedule.ordered_updates(
+            &pending
+                .schedule
+                .as_ref()
+                .expect("scheduled callback phase")
+                .active_occurrences,
+            &relevant_native,
+        );
+        self.pending_callback
+            .as_mut()
+            .expect("new callback phase")
+            .ordered_updates = ordered_updates;
+        match self.advance_ordered_callback_region()? {
+            CallbackRegionAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => Ok(CallbackAdvance::HostRequired {
+                invocations,
+                overlay,
+            }),
+            CallbackRegionAdvance::Complete(_) => {
+                unreachable!("an active host occurrence requires a host region")
+            }
+        }
+    }
+
+    fn advance_ordered_callback_region(
+        &mut self,
+    ) -> Result<CallbackRegionAdvance, ExecutionSessionCallbackError> {
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .expect("ordered phase pending");
+        let (cursor, last_host_key, overlay, advance) = self.stage_next_callback_region(
+            pending,
+            &pending.ordered_updates,
+            pending.next_update,
+            pending.overlay.clone(),
+        )?;
+        let pending = self
+            .pending_callback
+            .as_mut()
+            .expect("ordered phase pending");
+        pending.next_update = cursor;
+        pending.region_last_host_key = last_host_key;
+        pending.overlay = overlay;
+        Ok(advance)
+    }
+
+    fn ordered_update_key(&self, update: SemanticOrderedUpdater) -> (usize, u64) {
+        match update {
+            SemanticOrderedUpdater::Native(native) => native.sort_key(),
+            SemanticOrderedUpdater::Host(index) => {
+                let host = self.callback_schedule.plan.occurrence(index);
+                (host.order(), host.activation().authored_order())
+            }
+        }
+    }
+
+    fn stage_next_callback_region(
+        &self,
+        pending: &PendingCallbackPhase,
+        updates: &[SemanticOrderedUpdater],
+        mut cursor: usize,
+        mut overlay: CallbackPhaseOverlay,
+    ) -> Result<
+        (
+            usize,
+            (usize, u64),
+            CallbackPhaseOverlay,
+            CallbackRegionAdvance,
+        ),
+        ExecutionSessionCallbackError,
+    > {
+        let mut invocations = Vec::new();
+        let mut last_host_key = pending.region_last_host_key;
+        loop {
+            let next = updates.get(cursor).copied();
+            match next {
+                Some(SemanticOrderedUpdater::Native(native)) if invocations.is_empty() => {
+                    let signal = self
+                        .reactive_projection
+                        .execution_signal_id(native.signal())
+                        .expect("lowered native updater references a projected signal");
+                    let value = self
+                        .runtime
+                        .prepared_reactive_value(&pending.prepared, signal)
+                        .expect("lowered native updater has a prepared signal value");
+                    let write = native_effective_write(native.target(), native.property(), value);
+                    if overlay.object(native.target()).is_none() {
+                        let CallbackReadValue::Object(object) = self.required_callback_read(
+                            pending.token,
+                            CallbackReadRequest::Object(native.target()),
+                        )?
+                        else {
+                            unreachable!("object request returns object properties")
+                        };
+                        overlay.cache_read_object(native.target(), object);
+                    }
+                    overlay.write(write)?;
+                    cursor += 1;
+                }
+                Some(SemanticOrderedUpdater::Native(_)) => break,
+                Some(SemanticOrderedUpdater::Host(index)) => {
+                    let occurrence = self.callback_schedule.plan.occurrence(index);
+                    invocations.push(RequiredCallbackInvocation {
+                        occurrence_index: index,
+                        callback_id: occurrence.callback_id(),
+                        target: occurrence.target(),
+                    });
+                    last_host_key = self.ordered_update_key(SemanticOrderedUpdater::Host(index));
+                    cursor += 1;
+                }
+                None => break,
+            }
+        }
+        // Validate the complete ordered prefix while it is still local. A bad
+        // native value or stale row cannot advance the pending cursor.
+        self.prepare_callback_writes(
+            EffectivePropertyBatch::new(pending.token, overlay.writes.iter().copied())
+                .with_region(pending.region),
+        )?;
+        let advance = if invocations.is_empty() {
+            CallbackRegionAdvance::Complete(
+                EffectivePropertyBatch::new(pending.token, overlay.writes.iter().copied())
+                    .with_region(overlay.region),
+            )
+        } else {
+            overlay.region_start = overlay.writes.len();
+            CallbackRegionAdvance::HostRequired {
+                invocations,
+                overlay: overlay.clone(),
+            }
+        };
+        Ok((cursor, last_host_key, overlay, advance))
+    }
+
+    /// Admit one host region without publishing. The response contains only
+    /// writes made in that region and carries its exact region index.
+    pub fn submit_required_callback_region(
+        &mut self,
+        batch: EffectivePropertyBatch,
+    ) -> Result<CallbackRegionAdvance, ExecutionSessionCallbackError> {
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .ok_or(ExecutionSessionCallbackError::NoPendingPhase)?;
+        if batch.token != pending.token {
+            return Err(ExecutionSessionCallbackError::StaleToken {
+                expected: pending.token,
+                actual: batch.token,
+            });
+        }
+        if pending.completed && pending.last_region_batch.as_ref() == Some(&batch) {
+            return Ok(CallbackRegionAdvance::Complete(
+                EffectivePropertyBatch::new(pending.token, pending.overlay.writes.iter().copied())
+                    .with_region(pending.region),
+            ));
+        }
+        if batch.region != pending.region {
+            return Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: pending.region,
+                actual: batch.region,
+            });
+        }
+        let mut overlay = pending.overlay.clone();
+        for &write in &batch.writes {
+            if overlay.object(write.object()).is_none() {
+                let CallbackReadValue::Object(object) = self.required_callback_read(
+                    pending.token,
+                    CallbackReadRequest::Object(write.object()),
+                )?
+                else {
+                    unreachable!("object request returns object properties")
+                };
+                overlay.cache_read_object(write.object(), object);
+            }
+            overlay.write(write)?;
+        }
+        let next_region = pending
+            .region
+            .checked_add(1)
+            .ok_or(ExecutionSessionCallbackError::SequenceExhausted)?;
+        overlay.region = next_region;
+        let mut updates = pending.ordered_updates.clone();
+        let mut added = BTreeMap::new();
+        for &write in &batch.writes {
+            for native in self
+                .callback_schedule
+                .plan
+                .native_updaters_for_target(write.object())
+            {
+                if native.sort_key() > pending.region_last_host_key
+                    && callback_write_domains(write) & native_write_domain(native.property()) != 0
+                {
+                    added.insert(native.sort_key(), native);
+                }
+            }
+        }
+        for (key, native) in added {
+            let suffix = &updates[pending.next_update..];
+            match suffix.binary_search_by_key(&key, |&update| self.ordered_update_key(update)) {
+                Ok(_) => {}
+                Err(position) => updates.insert(
+                    pending.next_update + position,
+                    SemanticOrderedUpdater::Native(native),
+                ),
+            }
+        }
+        let (cursor, last_host_key, overlay, advance) =
+            self.stage_next_callback_region(pending, &updates, pending.next_update, overlay)?;
+        let pending = self
+            .pending_callback
+            .as_mut()
+            .expect("validated region retains pending phase");
+        pending.region = next_region;
+        pending.ordered_updates = updates;
+        pending.next_update = cursor;
+        pending.region_last_host_key = last_host_key;
+        pending.overlay = overlay;
+        if matches!(advance, CallbackRegionAdvance::Complete(_)) {
+            pending.completed = true;
+            pending.last_region_batch = Some(batch);
+        }
+        Ok(advance)
     }
 
     /// Stage one forward timeline/native phase and return an owned sparse callback
@@ -1063,7 +1444,7 @@ impl ExecutionSession {
         time: f64,
         read_objects: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<CallbackPhaseOverlay, ExecutionSessionCallbackError> {
-        self.begin_required_callback_phase_with_schedule(time, read_objects, None)
+        self.begin_required_callback_phase_with_schedule(time, read_objects, None, false)
     }
 
     fn begin_required_callback_phase_with_schedule(
@@ -1071,6 +1452,7 @@ impl ExecutionSession {
         time: f64,
         read_objects: impl IntoIterator<Item = SemanticNodeId>,
         schedule: Option<CallbackSchedulePreview>,
+        defer_reactive_bindings: bool,
     ) -> Result<CallbackPhaseOverlay, ExecutionSessionCallbackError> {
         if self.runtime.replay_is_sealed() {
             return Err(CompilePatchError::ReplaySealed.into());
@@ -1093,12 +1475,15 @@ impl ExecutionSession {
             self.signal_timeline
                 .preview(self.runtime.frame().time, time)
         });
-        let prepared = self.runtime.prepare_advance_to_with_reactive_inputs(
-            time,
-            signal_timeline
-                .as_ref()
-                .map_or(&[], SignalTimelinePreview::inputs),
-        )?;
+        let prepared = self
+            .runtime
+            .prepare_advance_to_with_reactive_inputs_deferred(
+                time,
+                signal_timeline
+                    .as_ref()
+                    .map_or(&[], SignalTimelinePreview::inputs),
+                defer_reactive_bindings,
+            )?;
         let mut objects = BTreeMap::new();
         for semantic in read_objects {
             let execution = self
@@ -1132,21 +1517,31 @@ impl ExecutionSession {
         let delta_time = time - self.frame().time;
         self.next_callback_sequence = sequence.checked_add(1);
         self.runtime.invalidate_replay_domain();
-        self.pending_callback = Some(PendingCallbackPhase {
+        let overlay = CallbackPhaseOverlay {
             token,
-            prepared,
-            schedule,
-            signal_timeline,
-        });
-        Ok(CallbackPhaseOverlay {
-            token,
+            region: 0,
+            region_start: 0,
             time,
             delta_time,
             objects,
             writes: Vec::new(),
             staged_rows,
             prior_driver_rows,
-        })
+        };
+        self.pending_callback = Some(PendingCallbackPhase {
+            token,
+            prepared,
+            schedule,
+            signal_timeline,
+            ordered_updates: Vec::new(),
+            next_update: 0,
+            region: 0,
+            region_last_host_key: (0, 0),
+            overlay: overlay.clone(),
+            completed: false,
+            last_region_batch: None,
+        });
+        Ok(overlay)
     }
 
     pub fn pending_callback_token(&self) -> Option<CallbackPhaseToken> {
@@ -1159,6 +1554,7 @@ impl ExecutionSession {
         &mut self,
         batch: EffectivePropertyBatch,
     ) -> Result<&FrameState, ExecutionSessionCallbackError> {
+        self.require_completed_callback_regions()?;
         let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
         let pending = self
             .pending_callback
@@ -1192,6 +1588,12 @@ impl ExecutionSession {
                 actual: batch.token,
             });
         }
+        if batch.region != pending.region {
+            return Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: pending.region,
+                actual: batch.region,
+            });
+        }
         let mut receipt_domains = BTreeMap::new();
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
@@ -1209,6 +1611,17 @@ impl ExecutionSession {
             .preflight_prepared_frame_commit(&pending.prepared, &effective)?;
 
         Ok((effective, receipt_domains))
+    }
+
+    fn require_completed_callback_regions(&self) -> Result<(), ExecutionSessionCallbackError> {
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .ok_or(ExecutionSessionCallbackError::NoPendingPhase)?;
+        if !pending.ordered_updates.is_empty() && !pending.completed {
+            return Err(ExecutionSessionCallbackError::IncompleteRegion);
+        }
+        Ok(())
     }
 
     pub(super) fn reconcile_callback_membership(
@@ -1291,6 +1704,7 @@ impl ExecutionSession {
         prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
         order_root: Option<SemanticNodeId>,
     ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionCallbackError> {
+        self.require_completed_callback_regions()?;
         let token = batch.token;
         let (effective, domains) = self.prepare_callback_writes(batch)?;
         let (result, completion) = self
@@ -1355,12 +1769,187 @@ mod tests {
     use crate::{ExecutionSessionInputError, Scene};
     use noon_core::{
         HostCallbackId, NativeEventOccurrence, NativeEventSource, NativeInputValue,
-        NativeStateSource, SemanticMutationTransaction, SemanticObjectProperty,
-        SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
+        NativeStateSource, RateFunction, SemanticMutationTransaction, SemanticObjectProperty,
+        SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, TrackTiming, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
     use super::*;
+
+    #[test]
+    fn native_host_native_host_regions_share_one_unpublished_overlay_and_reject_stale_replies() {
+        let mut store = SemanticStore::new();
+        let translation = store
+            .insert_semantic_input_signal(SemanticVec3::new(4.0, 1.0, 0.0))
+            .unwrap();
+        let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let mut track = SemanticMutationTransaction::new();
+        track.add_scalar_signal_track(
+            width,
+            1.0,
+            2.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        track.apply(&mut store).unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(translation, object, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut first = SemanticMutationTransaction::new();
+        first.add_updater(object, HostCallbackId::new(1), 1.0, None);
+        first.apply(&mut store).unwrap();
+        store
+            .bind_semantic_signal(width, object, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        let mut second = SemanticMutationTransaction::new();
+        second.add_updater(object, HostCallbackId::new(2), 1.0, None);
+        second.apply(&mut store).unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let publication = session.publication_context();
+        let (first_invocations, mut overlay) =
+            match session.advance_to_callback_barrier(1.0).unwrap() {
+                CallbackAdvance::HostRequired {
+                    invocations,
+                    overlay,
+                } => (invocations, overlay),
+                CallbackAdvance::Ready(_) => panic!("first host region required"),
+            };
+        assert_eq!(
+            first_invocations
+                .iter()
+                .map(|entry| entry.callback_id())
+                .collect::<Vec<_>>(),
+            vec![HostCallbackId::new(1)]
+        );
+        assert_eq!(
+            overlay.object(object).unwrap().transform.translation,
+            Vec2::new(4.0, 1.0)
+        );
+        assert_eq!(overlay.object(object).unwrap().style.stroke_width, 1.0);
+        let token = overlay.token();
+        assert!(matches!(
+            session.submit_required_callback_region(
+                EffectivePropertyBatch::new(token, []).with_region(1)
+            ),
+            Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: 0,
+                actual: 1
+            })
+        ));
+        overlay
+            .write(EffectiveSemanticPropertyWrite::Translation {
+                object,
+                translation: Vec2::new(4.0, 9.0),
+            })
+            .unwrap();
+        overlay
+            .write(EffectiveSemanticPropertyWrite::StrokeWidth {
+                object,
+                stroke_width: 3.0,
+            })
+            .unwrap();
+        let stale_reply = overlay.clone().finish();
+        let (second_invocations, mut overlay) = match session
+            .submit_required_callback_region(overlay.finish())
+            .unwrap()
+        {
+            CallbackRegionAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => (invocations, overlay),
+            CallbackRegionAdvance::Complete(_) => panic!("second host region required"),
+        };
+        assert_eq!(
+            second_invocations
+                .iter()
+                .map(|entry| entry.callback_id())
+                .collect::<Vec<_>>(),
+            vec![HostCallbackId::new(2)]
+        );
+        assert_eq!(overlay.region(), 1);
+        assert_eq!(
+            overlay.object(object).unwrap().transform.translation,
+            Vec2::new(4.0, 9.0)
+        );
+        assert_eq!(overlay.object(object).unwrap().style.stroke_width, 2.0);
+        assert_eq!(session.publication_context(), publication);
+        assert!(matches!(
+            session.submit_required_callback_region(stale_reply),
+            Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: 1,
+                actual: 0
+            })
+        ));
+        assert!(matches!(
+            session.submit_required_callback_region(
+                EffectivePropertyBatch::new(
+                    token,
+                    [EffectiveSemanticPropertyWrite::Opacity {
+                        object,
+                        opacity: f32::NAN
+                    }]
+                )
+                .with_region(1)
+            ),
+            Err(ExecutionSessionCallbackError::InvalidEffectiveWrite(_))
+        ));
+        assert_eq!(session.publication_context(), publication);
+        overlay
+            .write(EffectiveSemanticPropertyWrite::Opacity {
+                object,
+                opacity: 0.7,
+            })
+            .unwrap();
+        let final_reply = overlay.finish();
+        let final_batch = match session
+            .submit_required_callback_region(final_reply.clone())
+            .unwrap()
+        {
+            CallbackRegionAdvance::Complete(batch) => batch,
+            CallbackRegionAdvance::HostRequired { .. } => panic!("final region must complete"),
+        };
+        assert!(matches!(
+            session
+                .submit_required_callback_region(final_reply)
+                .unwrap(),
+            CallbackRegionAdvance::Complete(_)
+        ));
+        session.commit_required_callback_phase(final_batch).unwrap();
+        let row = &session.frame().objects[0];
+        assert_eq!(row.transform.translation, Vec2::new(4.0, 9.0));
+        assert_eq!(row.style.stroke_width, 2.0);
+        assert_eq!(row.style.opacity, 0.7);
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            publication.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn native_only_binding_keeps_the_ready_fast_path() {
+        let mut store = SemanticStore::new();
+        let width = store.insert_semantic_input_signal(2.0_f64).unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(width, object, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        assert!(matches!(
+            session.advance_to_callback_barrier(1.0).unwrap(),
+            CallbackAdvance::Ready(_)
+        ));
+        assert_eq!(session.frame().objects[0].style.stroke_width, 2.0);
+        assert!(session.pending_callback_token().is_none());
+    }
 
     #[test]
     fn token_pinned_callback_reads_prepared_scalar_and_arbitrary_object_without_commit() {

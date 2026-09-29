@@ -564,9 +564,21 @@ pub(super) fn replace_object_binding(
         .position(|binding| binding.property() == property);
     match (position, signal) {
         (Some(position), Some(signal)) => {
-            bindings[position] = SemanticSignalBinding::new(signal, property)
+            let order = bindings[position].authored_order();
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings[position] = binding;
         }
-        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (None, Some(signal)) => {
+            let order = bindings
+                .iter()
+                .map(|entry| entry.authored_order())
+                .max()
+                .map_or(0, |order| order + 1);
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings.push(binding);
+        }
         (Some(position), None) => {
             bindings.remove(position);
         }

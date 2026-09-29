@@ -3,8 +3,43 @@ use std::ops::Bound::{Excluded, Unbounded};
 
 use noon_core::{
     HostCallbackId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId,
-    SemanticNodeKind, SemanticStore, SemanticUpdaterRegistration,
+    SemanticNodeKind, SemanticObjectProperty, SemanticStore, SemanticUpdaterRegistration,
 };
+
+/// One authored native binding evaluated at its position among host updaters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticNativeUpdater {
+    target: SemanticNodeId,
+    signal: SemanticNodeId,
+    property: SemanticObjectProperty,
+    target_order: usize,
+    authored_order: u64,
+}
+
+impl SemanticNativeUpdater {
+    pub const fn target(self) -> SemanticNodeId {
+        self.target
+    }
+    pub const fn signal(self) -> SemanticNodeId {
+        self.signal
+    }
+    pub const fn property(self) -> SemanticObjectProperty {
+        self.property
+    }
+    pub const fn authored_order(self) -> u64 {
+        self.authored_order
+    }
+
+    pub const fn sort_key(self) -> (usize, u64) {
+        (self.target_order, self.authored_order)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticOrderedUpdater {
+    Native(SemanticNativeUpdater),
+    Host(usize),
+}
 
 /// One semantic registration occurrence in deterministic authoring order.
 ///
@@ -89,6 +124,7 @@ pub struct SemanticHostCallbackPlan {
     events: BTreeSet<SemanticHostCallbackEvent>,
     activations: BTreeSet<SemanticHostCallbackEvent>,
     targets: HashMap<SemanticNodeId, (usize, Vec<usize>)>,
+    native_updaters: BTreeMap<usize, Vec<SemanticNativeUpdater>>,
     next_index: usize,
 }
 
@@ -123,6 +159,80 @@ impl SemanticHostCallbackPlan {
     }
     pub fn is_empty(&self) -> bool {
         self.occurrences.is_empty()
+    }
+
+    pub fn native_updaters_for_target(
+        &self,
+        target: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNativeUpdater> + '_ {
+        self.targets
+            .get(&target)
+            .into_iter()
+            .flat_map(|(order, _)| self.native_updaters.get(order))
+            .flat_map(|updaters| updaters.iter().copied())
+    }
+
+    pub fn ordered_relevant_updates(
+        &self,
+        active_hosts: &BTreeSet<(usize, usize)>,
+        relevant_native: &HashSet<(SemanticNodeId, SemanticObjectProperty)>,
+    ) -> Vec<SemanticOrderedUpdater> {
+        let mut updates = BTreeMap::new();
+        for &(_, index) in active_hosts {
+            let host = self.occurrence(index);
+            updates.insert(
+                (host.order(), host.activation().authored_order()),
+                SemanticOrderedUpdater::Host(index),
+            );
+            for native in self.native_updaters_for_target(host.target()) {
+                updates.insert(native.sort_key(), SemanticOrderedUpdater::Native(native));
+            }
+        }
+        for &(target, property) in relevant_native {
+            if let Some(native) = self
+                .native_updaters_for_target(target)
+                .find(|native| native.property() == property)
+            {
+                updates.insert(native.sort_key(), SemanticOrderedUpdater::Native(native));
+            }
+        }
+        updates.into_values().collect()
+    }
+
+    /// Refresh only committed binding declarations for changed semantic targets.
+    pub fn refresh_native_bindings(
+        &mut self,
+        store: &SemanticStore,
+        targets: impl IntoIterator<Item = SemanticNodeId>,
+    ) {
+        for target in targets {
+            let Some(&(order, _)) = self.targets.get(&target) else {
+                continue;
+            };
+            let Some(state) = store
+                .node(target)
+                .and_then(|node| node.semantic_object_state())
+            else {
+                self.native_updaters.remove(&order);
+                continue;
+            };
+            let updaters = state
+                .signal_bindings()
+                .iter()
+                .map(|binding| SemanticNativeUpdater {
+                    target,
+                    signal: binding.signal(),
+                    property: binding.property(),
+                    target_order: order,
+                    authored_order: binding.authored_order(),
+                })
+                .collect::<Vec<_>>();
+            if updaters.is_empty() {
+                self.native_updaters.remove(&order);
+            } else {
+                self.native_updaters.insert(order, updaters);
+            }
+        }
     }
 
     fn after(time: Option<f64>) -> std::ops::Bound<SemanticHostCallbackEvent> {
@@ -193,8 +303,12 @@ impl SemanticHostCallbackPlan {
     }
 
     /// Apply a previously prepared delta without scanning dormant history.
-    pub fn apply_revision(&mut self, revision: SemanticHostCallbackRevision) {
-        for (target, registrations) in revision.targets {
+    pub fn apply_revision(
+        &mut self,
+        revision: SemanticHostCallbackRevision,
+        store: &SemanticStore,
+    ) {
+        for (target, _) in revision.targets {
             let indices =
                 std::mem::take(&mut self.targets.get_mut(&target).expect("preflighted target").1);
             for index in indices {
@@ -204,7 +318,11 @@ impl SemanticHostCallbackPlan {
                     self.activations.remove(&event);
                 }
             }
-            for registration in registrations {
+            for &registration in store
+                .node(target)
+                .expect("committed updater target remains live")
+                .host_updaters()
+            {
                 self.insert(target, registration);
             }
         }
@@ -288,6 +406,7 @@ pub(super) fn lower_semantic_host_callbacks(
     let mut plan = SemanticHostCallbackPlan::default();
     let mut seen = HashSet::new();
     let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
+    let mut preorder = 0;
     while let Some(target) = pending.pop() {
         if !seen.insert(target) {
             continue;
@@ -295,11 +414,30 @@ pub(super) fn lower_semantic_host_callbacks(
         let node = store
             .node(target)
             .expect("semantic lowering roots and members must remain live");
-        if !node.host_updaters().is_empty() {
-            let order = plan.targets.len();
-            plan.targets.insert(target, (order, Vec::new()));
+        let order = preorder;
+        preorder += 1;
+        plan.targets.insert(target, (order, Vec::new()));
+        if !node.host_updaters().is_empty()
+            || node
+                .semantic_object_state()
+                .is_some_and(|state| !state.signal_bindings().is_empty())
+        {
             for &activation in node.host_updaters() {
                 plan.insert(target, activation);
+            }
+            if let Some(state) = node.semantic_object_state() {
+                for &binding in state.signal_bindings() {
+                    plan.native_updaters
+                        .entry(order)
+                        .or_default()
+                        .push(SemanticNativeUpdater {
+                            target,
+                            signal: binding.signal(),
+                            property: binding.property(),
+                            target_order: order,
+                            authored_order: binding.authored_order(),
+                        });
+                }
             }
         }
         if matches!(node.kind(), SemanticNodeKind::Family(_)) {
@@ -459,6 +597,47 @@ mod tests {
             crate::lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
         assert!(lowered.host_callbacks().is_empty());
     }
+
+    #[test]
+    fn one_host_tick_selects_only_local_bindings_among_many_unrelated_native_targets() {
+        let mut store = SemanticStore::new();
+        let local = object(&mut store, 1.0);
+        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        store
+            .bind_semantic_signal(signal, local, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        add_updater(&mut store, local, 1, 0.0);
+        let mut plan = lower_semantic_host_callbacks(&store, &[local]);
+        let local_occurrence = plan.target_occurrences(local).next().unwrap();
+        let local_order = plan.occurrence(local_occurrence).order();
+
+        // The plan can retain a large native-only scene without making one
+        // local host tick traverse its unrelated binding index.
+        for order in 1..=100_000 {
+            let target = SemanticNodeId::new(order as u32, 7);
+            plan.targets.insert(target, (order, Vec::new()));
+            plan.native_updaters.insert(
+                order,
+                vec![SemanticNativeUpdater {
+                    target,
+                    signal,
+                    property: SemanticObjectProperty::StrokeWidth,
+                    target_order: order,
+                    authored_order: 0,
+                }],
+            );
+        }
+        assert_eq!(local_order, 0);
+        let active = BTreeSet::from([(local_order, local_occurrence)]);
+        let updates = plan.ordered_relevant_updates(&active, &HashSet::new());
+        assert_eq!(updates.len(), 2);
+        assert!(
+            matches!(updates[0], SemanticOrderedUpdater::Native(native) if native.target() == local)
+        );
+        assert!(
+            matches!(updates[1], SemanticOrderedUpdater::Host(index) if index == local_occurrence)
+        );
+    }
     #[test]
     fn staged_updater_revision_uses_semantic_order_and_does_not_publish_early() {
         let mut store = SemanticStore::new();
@@ -535,7 +714,7 @@ mod tests {
             2,
             "preflight owns only the changed target's history"
         );
-        plan.apply_revision(revision);
+        plan.apply_revision(revision, &store);
         assert_eq!(plan.occurrence(unrelated_index), unrelated);
         assert_eq!(plan.next_activation_after(Some(2.0)), Some(100.0));
         assert_eq!(plan.occurrences().len(), 1025);
