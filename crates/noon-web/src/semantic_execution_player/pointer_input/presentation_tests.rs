@@ -456,3 +456,90 @@ fn disabling_last_pointer_subscriber_clears_once_then_settles() {
 }
 
 mod inspection;
+
+fn drag_player() -> (SemanticExecutionPlayer, noon::Mobject, WorkerPointerReceipt) {
+    let mut scene = noon::Scene::new();
+    let mut circle = scene.circle(1.0).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut p = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        2.0,
+        7,
+    )
+    .unwrap();
+    p.set_translation_drag_targets(std::slice::from_ref(&circle))
+        .unwrap();
+    p.pause();
+    register(&mut p, 1);
+    let r = receipt(&delta(&mut p), 1);
+    assert!(acknowledge(&mut p, r));
+    (p, circle, r)
+}
+
+#[test]
+fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_release() {
+    let (mut p, circle, r) = drag_player();
+    let before = p.session.publication_context();
+    let resources = p.resource_bundle_bytes();
+    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+    assert!(
+        p.drain_delta_json().unwrap().is_none(),
+        "stationary capture does not repaint"
+    );
+    assert!(input(&mut p, "move", 1, Some(r), 1, 450.0).unwrap());
+    let moved = delta(&mut p);
+    assert_eq!(moved.retained.objects.len(), 1);
+    assert!(moved.resource_additions.is_none());
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision()
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    let r = receipt(&moved, 3);
+    assert!(acknowledge(&mut p, r));
+    assert!(input(&mut p, "release", 1, Some(r), 1, 500.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert!(circle.state().unwrap().transform.translation.x > 0.0);
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap()
+    );
+    assert_eq!(p.resource_bundle_bytes(), resources);
+    let r = receipt(&delta(&mut p), 4);
+    assert!(acknowledge(&mut p, r));
+    assert!(p.drain_delta_json().unwrap().is_none());
+    assert_eq!(p.execution_wake(50_000.0).unwrap().cadence(), "idle");
+}
+
+#[test]
+fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
+    let (mut p, circle, r) = drag_player();
+    let before = p.session.publication_context().scene_revision();
+    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+    assert!(
+        p.drain_delta_json().unwrap().is_none(),
+        "stationary capture does not repaint"
+    );
+    assert!(input(&mut p, "move", 1, Some(r), 1, 450.0).unwrap());
+    let old = receipt(&delta(&mut p), 3);
+    assert!(acknowledge(&mut p, old));
+    register(&mut p, 2);
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    assert_eq!(p.session.publication_context().scene_revision(), before);
+    assert!(!input(&mut p, "release", 1, Some(old), 1, 500.0).unwrap());
+}

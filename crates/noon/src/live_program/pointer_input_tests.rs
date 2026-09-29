@@ -66,7 +66,8 @@ fn finished_program_accepts_native_pointer_input_without_resuming_or_advancing_t
 #[test]
 fn finished_program_routes_typed_drag_input_without_frontend_target_selection() {
     let mut scene = Scene::new();
-    let circle = scene.circle(0.5).unwrap();
+    let mut circle = scene.circle(0.5).unwrap();
+    circle.set_fill(0.2, 0.6, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut program = scene.into_live_program(Finish).unwrap();
     program.set_translation_drag_targets([&circle]).unwrap();
@@ -84,6 +85,7 @@ fn finished_program_routes_typed_drag_input_without_frontend_target_selection() 
         },
     );
     program.submit_native_pointer_input(&token, press).unwrap();
+    assert!(program.session().translation_drag_active());
 
     let token = program.native_pointer_input_token().unwrap();
     let release = NativePointerInput::new(

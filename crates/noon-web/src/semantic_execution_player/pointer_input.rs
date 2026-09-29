@@ -20,8 +20,7 @@ pub(super) struct WorkerPointerInput {
 /// ordinary native pointer behavior.
 pub(super) struct PlayerPointerTarget<'a> {
     pub(super) session: &'a mut ExecutionSession,
-    pub(super) semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
-    pub(super) root: Option<noon_core::SemanticNodeId>,
+    pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
@@ -68,11 +67,8 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
                 .submit_native_pointer_input(token, input)
                 .map_err(|error| error.to_string());
         };
-        let root = self
-            .root
-            .ok_or("live semantic pointer input is missing its scene root")?;
-        noon::LiveSession::new(semantics, root, self.session)
-            .submit_translation_drag_input(token, input)
+        self.session
+            .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
             .map(|receipt| receipt.input)
             .map_err(|error| error.to_string())
     }
@@ -80,8 +76,6 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
 
 #[cfg(test)]
 use super::SemanticExecutionPlayer;
-#[cfg(test)]
-use noon_core::Vec2;
 #[cfg(test)]
 mod presentation_tests;
 #[cfg(test)]

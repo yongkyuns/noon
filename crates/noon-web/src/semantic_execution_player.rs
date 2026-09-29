@@ -3206,7 +3206,6 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
-            semantic_root,
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
@@ -3214,8 +3213,7 @@ impl SemanticExecutionPlayer {
         } = self;
         let mut target = pointer_input::PlayerPointerTarget {
             session,
-            semantics: semantics.clone(),
-            root: *semantic_root,
+            semantics: semantics.as_ref(),
         };
         worker_pointer_presentation.submit(
             &mut target,
@@ -3236,15 +3234,13 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
-            semantic_root,
             worker_pointer_presentation,
             browser_pointer_binding,
             ..
         } = self;
         let mut target = pointer_input::PlayerPointerTarget {
             session,
-            semantics: semantics.clone(),
-            root: *semantic_root,
+            semantics: semantics.as_ref(),
         };
         worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
     }
@@ -3257,7 +3253,6 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
-            semantic_root,
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
@@ -3265,8 +3260,7 @@ impl SemanticExecutionPlayer {
         } = self;
         let mut target = pointer_input::PlayerPointerTarget {
             session,
-            semantics: semantics.clone(),
-            root: *semantic_root,
+            semantics: semantics.as_ref(),
         };
         worker_pointer_presentation.set_view(
             &mut target,
@@ -3292,7 +3286,6 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
-            semantic_root,
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
@@ -3300,8 +3293,7 @@ impl SemanticExecutionPlayer {
         } = self;
         let mut target = pointer_input::PlayerPointerTarget {
             session,
-            semantics: semantics.clone(),
-            root: *semantic_root,
+            semantics: semantics.as_ref(),
         };
         worker_pointer_presentation.invalidate(
             &mut target,
