@@ -158,7 +158,7 @@ impl SceneInstance {
         {
             return Err("interaction clock moved backwards".into());
         }
-        let mut writes = Vec::with_capacity(self.transient_animations.active.len() * 2);
+        let mut writes = Vec::with_capacity(self.transient_animations.active.len() * 4);
         let mut completed = Vec::new();
         let mut stale = Vec::new();
         for (&object, driver) in &self.transient_animations.active {
@@ -197,14 +197,30 @@ impl SceneInstance {
             } else {
                 completed.push(object);
             }
-            writes.push(EffectivePropertyWrite::Transform {
-                object,
-                transform: row.transform,
-            });
-            writes.push(EffectivePropertyWrite::Style {
-                object,
-                style: row.style,
-            });
+            // The lowering omits unchanged channels (including own-center
+            // translation). Restore only the channels this effect animates;
+            // unrelated input/host writes made since preparation stay intact.
+            for channel in &driver.channels {
+                writes.push(match channel.property {
+                    noon_core::Property::Position => EffectivePropertyWrite::Translation {
+                        object,
+                        translation: row.transform.translation,
+                    },
+                    noon_core::Property::Scale => EffectivePropertyWrite::Scale {
+                        object,
+                        scale: row.transform.scale,
+                    },
+                    noon_core::Property::Fill => EffectivePropertyWrite::Fill {
+                        object,
+                        fill: row.style.fill,
+                    },
+                    noon_core::Property::Stroke => EffectivePropertyWrite::Stroke {
+                        object,
+                        stroke: row.style.stroke,
+                    },
+                    _ => unreachable!("prepared supported interaction channel"),
+                });
+            }
         }
         let next_epoch = if stale.is_empty() {
             None
@@ -252,3 +268,6 @@ impl SceneInstance {
         self.transient_animations = TransientAnimations::default();
     }
 }
+
+#[cfg(test)]
+mod tests;
