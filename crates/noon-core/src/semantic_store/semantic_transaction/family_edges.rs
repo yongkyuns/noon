@@ -286,20 +286,12 @@ impl FamilyEdgePreflight {
             .flatten()
             .filter_map(move |family| {
                 let family = family.existing()?;
-                self.contains_existing_placeholder(family, member)
-                    .then_some(family)
+                self.overrides
+                    .get(&(family.into(), member.into()))
+                    .copied()
+                    .filter(|present| *present)
+                    .map(|_| family)
             })
-    }
-
-    fn contains_existing_placeholder(
-        &self,
-        family: crate::SemanticNodeId,
-        member: crate::SemanticNodeId,
-    ) -> bool {
-        self.overrides
-            .get(&(family.into(), member.into()))
-            .copied()
-            .unwrap_or(false)
     }
 
     fn reaches(

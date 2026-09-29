@@ -1271,6 +1271,254 @@ mod tests {
         assert_eq!(view.parents(nested).unwrap(), vec![outer, root]);
     }
 
+    fn ordered_root_store() -> (
+        SemanticStore,
+        SemanticNodeId,
+        SemanticNodeId,
+        SemanticNodeId,
+        SemanticNodeId,
+        SemanticNodeId,
+    ) {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let a = object(&mut store, 1.0);
+        let b = object(&mut store, 2.0);
+        let c = object(&mut store, 3.0);
+        let d = object(&mut store, 4.0);
+        plan_semantic_scene_membership(
+            &store,
+            root,
+            SemanticSceneMembershipRequest::Add(&[a, b, c]),
+        )
+        .unwrap()
+        .apply(&mut store)
+        .unwrap();
+        (store, root, a, b, c, d)
+    }
+
+    fn apply_membership_request(
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        request: SemanticSceneMembershipRequest<'_>,
+    ) {
+        plan_semantic_scene_membership(store, root, request)
+            .unwrap()
+            .apply(store)
+            .unwrap();
+    }
+
+    #[test]
+    fn prepared_remove_then_add_matches_sequential_tail_move() {
+        let (mut staged_store, root, a, b, c, _) = ordered_root_store();
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut staged_store)
+            .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Remove(&[a]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[a]),
+        )
+        .unwrap();
+        prepared.commit();
+
+        let (mut sequential_store, sequential_root, sequential_a, sequential_b, sequential_c, _) =
+            ordered_root_store();
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Remove(&[sequential_a]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Add(&[sequential_a]),
+        );
+
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            vec![b, c, a]
+        );
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap()
+        );
+        assert_eq!(
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap(),
+            vec![sequential_b, sequential_c, sequential_a]
+        );
+    }
+
+    #[test]
+    fn prepared_add_remove_add_matches_sequential_reentry() {
+        let (mut staged_store, root, a, b, c, d) = ordered_root_store();
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut staged_store)
+            .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[d]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Remove(&[d]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[d]),
+        )
+        .unwrap();
+        prepared.commit();
+
+        let (
+            mut sequential_store,
+            sequential_root,
+            sequential_a,
+            sequential_b,
+            sequential_c,
+            sequential_d,
+        ) = ordered_root_store();
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Add(&[sequential_d]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Remove(&[sequential_d]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Add(&[sequential_d]),
+        );
+
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            vec![a, b, c, d]
+        );
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap()
+        );
+        assert_eq!(
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap(),
+            vec![sequential_a, sequential_b, sequential_c, sequential_d]
+        );
+    }
+
+    #[test]
+    fn prepared_alternating_root_reorders_match_sequential_plans() {
+        let (mut staged_store, root, a, b, c, _) = ordered_root_store();
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut staged_store)
+            .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::BringToBack(&[c]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::BringToBack(&[b]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::BringToBack(&[a]),
+        )
+        .unwrap();
+        prepared.commit();
+
+        let (mut sequential_store, sequential_root, sequential_a, sequential_b, sequential_c, _) =
+            ordered_root_store();
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::BringToBack(&[sequential_c]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::BringToBack(&[sequential_b]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::BringToBack(&[sequential_a]),
+        );
+
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn prepared_removal_after_reorder_anchor_matches_sequential_plan() {
+        let (mut staged_store, root, _, b, c, _) = ordered_root_store();
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut staged_store)
+            .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::BringToBack(&[c]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Remove(&[b]),
+        )
+        .unwrap();
+        prepared.commit();
+
+        let (mut sequential_store, sequential_root, _, sequential_a, sequential_c, _) =
+            ordered_root_store();
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::BringToBack(&[sequential_c]),
+        );
+        apply_membership_request(
+            &mut sequential_store,
+            sequential_root,
+            SemanticSceneMembershipRequest::Remove(&[sequential_a]),
+        );
+
+        assert_eq!(
+            staged_store.semantic_family_members_checked(root).unwrap(),
+            sequential_store
+                .semantic_family_members_checked(sequential_root)
+                .unwrap()
+        );
+    }
+
     #[test]
     fn adding_family_collapses_existing_descendant_roots_and_appends_family() {
         let mut store = SemanticStore::new();

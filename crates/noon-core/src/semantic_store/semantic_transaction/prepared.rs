@@ -109,45 +109,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             id: transaction.id,
             next_token: transaction.next_token,
             mutations: transaction.mutations.clone(),
+            allow_repeated_membership_mutations: true,
         };
-        for mutation in plan.mutations {
-            let replacement = match &mutation {
-                SemanticMutation::AddMember { family, member }
-                | SemanticMutation::RemoveMember { family, member } => {
-                    candidate.mutations.iter().position(|existing| {
-                        matches!(
-                            existing,
-                            SemanticMutation::AddMember {
-                                family: existing_family,
-                                member: existing_member,
-                            }
-                                | SemanticMutation::RemoveMember {
-                                    family: existing_family,
-                                    member: existing_member,
-                                } if existing_family == family && existing_member == member
-                        )
-                    })
-                }
-                SemanticMutation::ReorderMember { family, member, .. } => {
-                    candidate.mutations.iter().position(|existing| {
-                        matches!(
-                            existing,
-                            SemanticMutation::ReorderMember {
-                                family: existing_family,
-                                member: existing_member,
-                                ..
-                            } if existing_family == family && existing_member == member
-                        )
-                    })
-                }
-                _ => None,
-            };
-            if let Some(index) = replacement {
-                candidate.mutations[index] = mutation;
-            } else {
-                candidate.mutations.push(mutation);
-            }
-        }
+        candidate.mutations.extend(plan.mutations);
         let (candidate_preflight, candidate_next_revision, candidate_planned_nodes) =
             match Self::preflight_parts(&candidate, store) {
                 Ok(parts) => parts,
