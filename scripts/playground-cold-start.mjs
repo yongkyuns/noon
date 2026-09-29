@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 
 import {
   classifyWorkerUrl,
@@ -21,6 +22,10 @@ const repoRoot = path.resolve(scriptDir, "..");
 const port = positiveInteger(process.env.NOON_COLD_START_PORT ?? "4182", "port");
 const baseUrl = `http://127.0.0.1:${port}`;
 const backend = process.env.NOON_COLD_START_BACKEND ?? "webgpu";
+const runtimePackageSourceRevision = process.env.NOON_COLD_START_PACKAGE_SOURCE_REVISION ?? null;
+if (runtimePackageSourceRevision !== null) {
+  assert.match(runtimePackageSourceRevision, /^[0-9a-f]{40}$/, "package source revision must be a full Git SHA");
+}
 const profile = process.env.NOON_COLD_START_PROFILE ?? "desktop";
 assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
@@ -51,12 +56,22 @@ try {
   await waitForServer();
   const cases = [];
   for (const example of examples) {
-    const browser = await chromium.launch({
+    const browserServer = await chromium.launchServer({
       channel: "chromium",
       headless: true,
       args: browserArgs(backend),
     });
+    let rssSampler = null;
+    let browser = null;
+    let caseReport = null;
+    let browserVersion = null;
     try {
+      const browserProcess = browserServer.process();
+      assert.ok(browserProcess?.pid, "Chromium launch server must expose its process for RSS sampling");
+      rssSampler = createProcessTreeRssSampler(browserProcess.pid);
+      rssSampler.start();
+      browser = await chromium.connect(browserServer.wsEndpoint());
+      browserVersion = browser.version();
       const page = await browser.newPage(profile === "mobile-class"
         ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
         : { viewport: { width: 1200, height: 900 } });
@@ -103,6 +118,10 @@ try {
         example.id,
         { timeout: 60_000 },
       );
+      const firstPresentedPromise = waitForFirstPresentedFrame(page).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
 
       await page.waitForFunction(
         () => document.querySelector("#status")?.dataset.runtimeStartup === "started-on-demand",
@@ -119,6 +138,9 @@ try {
         { timeout: 60_000 },
       );
       const firstMetrics = monotonicNow();
+      const firstPresentedResult = await firstPresentedPromise;
+      if (firstPresentedResult.error) throw firstPresentedResult.error;
+      const firstPresented = firstPresentedResult.value;
       if (failures.length > 0) throw new Error(failures.join("\n"));
 
       assert.ok(authoringWorker !== null, "automatic preload must create the Python authoring worker");
@@ -210,8 +232,10 @@ try {
         warmRerun,
         status,
         metrics,
+        firstPresented,
+        browserEnvironment: { name: "Chromium", version: browserVersion },
       };
-      cases.push(report);
+      caseReport = report;
       console.log(
         `${example.label}: preload→metrics ${format(report.milestones.preloadToFirstMetricsMs)} ms, ` +
           `Python worker ${format(authoringStartup.totalMs)} ms ` +
@@ -222,15 +246,34 @@ try {
           `${resourceFootprint.noonWasm.observedOwnerCount} observed owners = ` +
           `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint, ` +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)}), ` +
+          `first worker-present ${format(firstPresented.navigationToFirstPresentedMs)} ms from navigation, ` +
           `warm edit→completed run ${format(warmRerun.editToCompletedRunMs)} ms`,
       );
     } finally {
-      await browser.close();
+      try {
+          if (rssSampler !== null) {
+            const memory = await rssSampler.stop();
+            assert.ok(
+              memory.sampleCount > 0 && memory.peakSampledRssBytes !== null,
+              `Chromium RSS measurement unavailable: ${memory.samplingError ?? "no process samples"}`,
+            );
+            if (caseReport !== null) {
+            caseReport.memory = memory;
+            cases.push(caseReport);
+          }
+        }
+      } finally {
+        try {
+          await browser?.close();
+        } finally {
+          await browserServer.close();
+        }
+      }
     }
   }
 
   const artifact = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     benchmark: "Noon public playground preloaded cold-start topology",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
@@ -242,10 +285,13 @@ try {
       logicalCpuCount: os.cpus().length,
       totalMemoryBytes: os.totalmem(),
       node: process.version,
+      browser: cases[0]?.browserEnvironment ?? null,
     },
     package: {
       noonWasmPath: path.relative(repoRoot, noonWasmPath),
       noonWasmPackageBytes,
+      sourceRevision: runtimePackageSourceRevision,
+      frontendCommit: commitSha,
     },
     configuration: {
       backend,
@@ -255,8 +301,9 @@ try {
       freshBrowserProcessPerCase: true,
       automaticPreload: true,
     },
+    memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable; it is not a first-present timestamp. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. Its hostObservedAtPageMs and observationLagMs retain the page's later metrics observation separately. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -264,6 +311,37 @@ try {
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
 } finally {
   server.kill("SIGTERM");
+}
+
+async function waitForFirstPresentedFrame(page) {
+  return page.evaluate(async () => {
+    const deadline = performance.now() + 240_000;
+    while (performance.now() < deadline) {
+      const response = await window.__noonExampleGallery?.executionMetrics?.();
+      const metrics = response?.metrics;
+      if (metrics?.presentedFrames > 0 && Number.isFinite(metrics.firstPresentedAtMs) &&
+          Number.isFinite(metrics.performanceTimeOriginMs)) {
+        const observedAtPageMs = performance.now();
+        const firstPresentedAtEpochMs = metrics.performanceTimeOriginMs + metrics.firstPresentedAtMs;
+        const navigationStartEpochMs = performance.timeOrigin +
+          (performance.getEntriesByType("navigation")[0]?.startTime ?? 0);
+        return {
+          firstPresentedAtWorkerMs: metrics.firstPresentedAtMs,
+          workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
+          firstPresentedAtEpochMs,
+          navigationStartEpochMs,
+          navigationToFirstPresentedMs: firstPresentedAtEpochMs - navigationStartEpochMs,
+          hostObservedAtPageMs: observedAtPageMs,
+          pageTimeOriginEpochMs: performance.timeOrigin,
+          observationLagMs: performance.timeOrigin + observedAtPageMs - firstPresentedAtEpochMs,
+          presentedFramesAtObservation: metrics.presentedFrames,
+          rendererSampledAtWorkerMs: metrics.sampledAtMs,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("timed out waiting for renderer first-present telemetry");
+  });
 }
 
 async function waitForCompletedRun(page, previousGeneration = -1) {

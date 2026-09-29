@@ -78,6 +78,7 @@ export function createAuthoringRenderController(host) {
   let scheduledFrame = null;
   let scheduleTicket = 0;
   let presentedFrames = 0;
+  let firstPresentedAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
   let webglRecoveryPromise = null;
@@ -683,6 +684,7 @@ export function createAuthoringRenderController(host) {
     }
     needsPresent = false;
     presentedFrames += 1;
+    firstPresentedAtMs ??= performance.now();
     const publication = pendingPresentationPublication;
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
@@ -942,6 +944,8 @@ export function createAuthoringRenderController(host) {
       modeSwitches,
       rendererRebuilds,
       sampledAtMs: performance.now(),
+      performanceTimeOriginMs: performance.timeOrigin,
+      firstPresentedAtMs,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
