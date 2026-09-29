@@ -645,7 +645,7 @@ function pointerCanvas(t) {
   } };
 }
 
-test("DOM pointer rejection retires its collector and never replays an occurrence on a replacement", async t => {
+test("scene replacement retires pending DOM input without reporting cancellation as a callback failure", async t => {
   const dom = pointerCanvas(t);
   const errors = [];
   const { client, engine, render } = await startInputClient(t, dom.canvas, {
@@ -666,7 +666,11 @@ test("DOM pointer rejection retires its collector and never replays an occurrenc
   await inputTurn();
   const next = replacement.attachments.at(-1).controlPort.peer;
   assert.equal(next.messages.some(message => message.type === "browser_pointer_input"), false);
-  assert.equal(errors.length, 1, "retired input rejection must be surfaced once");
+  assert.equal(errors.length, 0, "intentional endpoint retirement is not a callback failure");
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(next.messages.filter(message => message.type === "browser_pointer_input").length, 1,
+    "the successor has a fresh working input collector");
 });
 
 test("DOM pointer overflow is bounded, surfaced, and cancelled in order without replay", async t => {

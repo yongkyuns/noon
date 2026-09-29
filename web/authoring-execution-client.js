@@ -360,9 +360,7 @@ export class AuthoringExecutionClient {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
-    this.#pointerAbortController?.abort();
-    this.#pointerAbortController = null;
-    this.#pointerCollector = null;
+    this.#retirePointerInput();
     this.#pointerViewport = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
@@ -401,6 +399,10 @@ export class AuthoringExecutionClient {
     if (this.#transition !== null) {
       await this.#transition;
     }
+    // Input belongs to the outgoing endpoint. Retire its collector before
+    // replacing the endpoint so cancellation of pending input is not reported
+    // as a Python/runtime failure. The successor registers a fresh view below.
+    this.#retirePointerInput();
     const transition = rebuild();
     this.#transition = transition;
     try {
@@ -489,10 +491,14 @@ export class AuthoringExecutionClient {
     this.#pointerViewRevision += 1;
   }
 
-  #attachPointerInput() {
+  #retirePointerInput() {
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
     this.#pointerCollector = null;
+  }
+
+  #attachPointerInput() {
+    this.#retirePointerInput();
     // Headless contract tests intentionally use a minimal canvas double. Pointer
     // collection is a DOM capability, not a startup requirement.
     if (typeof this.#canvas.addEventListener !== "function" ||
