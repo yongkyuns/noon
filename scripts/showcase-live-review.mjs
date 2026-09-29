@@ -193,11 +193,14 @@ async function main() {
     }
     for (const rawEntry of manifest.entries) {
       const entry = { ...rawEntry, ...normalizedById.get(rawEntry.id) };
-      const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", intermediateReplayOutcome: "not-run", stage: "open", pageErrors: [] };
+      const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", intermediateReplayOutcome: "not-run", stage: "open", pageErrors: [], consoleErrors: [] };
       report.results.push(result);
       const page = await context.newPage();
       page.setDefaultTimeout(120000);
-      page.on("pageerror", (error) => result.pageErrors.push(String(error)));
+      page.on("pageerror", (error) => result.pageErrors.push(String(error.stack ?? error)));
+      page.on("console", (message) => {
+        if (message.type() === "error") result.consoleErrors.push(message.text());
+      });
       const video = page.video();
       try {
         await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
@@ -215,15 +218,17 @@ async function main() {
         result.firstPassOutcome = "fail";
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
         result.firstPassWallMsIncludingAuthoring = await runOrdinaryGallery(page);
+        // Check execution before viewport convergence so a runtime panic is not
+        // obscured by the renderer's consequently unchanged backing dimensions.
+        result.firstPass = await readLiveState(page);
+        assertFirstPass(entry, result.firstPass, expectedBackend);
+        assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
         await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
         // Preserve first-pass evidence; the manifest below distinguishes expected denial from replay failure.
-        result.firstPass = await readLiveState(page);
         const firstPass = PNG.sync.read(await canvas.screenshot({
           path: path.join(output, `${entry.id}-first-pass.png`),
         }));
         result.firstPassPixelSha256 = hash(firstPass.data);
-        assertFirstPass(entry, result.firstPass, expectedBackend);
-        assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
         result.firstPassOutcome = "pass";
         if (entry.playbackCapability === "nonreplayable-host-callbacks") {
           result.stage = "expected nonreplayable capability";
