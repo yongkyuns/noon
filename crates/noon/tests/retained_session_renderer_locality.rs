@@ -4,7 +4,7 @@ use noon_render_wgpu::{text::TextDeviceMetrics, GpuRenderer, RetainedFramePrepar
 
 #[test]
 fn one_typed_session_edit_stays_local_through_retained_upload() {
-    let (mut scene, objects) = retained_locality::scene().expect("large sparse scene must build");
+    let (scene, objects) = retained_locality::scene().expect("large sparse scene must build");
     let object_count = retained_locality::OBJECT_COUNT;
     let changed_index = retained_locality::TARGET_INDEX;
 
