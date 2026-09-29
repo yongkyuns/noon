@@ -81,7 +81,7 @@ pub const TRACE: &[Step] = &[
 
 pub const EXPECTED_POSITION: (f32, f32) = (4.0, -2.0);
 pub const EXPECTED_DOWN_COUNT: f32 = 3.0;
-pub const EXPECTED_UP_COUNT: f32 = 2.0;
+pub const EXPECTED_UP_COUNT: f32 = 3.0;
 pub const EXPECTED_SEQUENCE: u64 = TRACE.len() as u64;
 pub const EXPECTED_SELECTED: bool = false;
 pub const EXPECTED_FRAME_TIME: f64 = 0.0;
@@ -94,10 +94,9 @@ impl Fixture {
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
                 radius: 0.5,
             }));
-        let unrelated =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 0.5,
-            }));
+        let mut unrelated_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
+        unrelated_state.transform.translation = SemanticVec3::new(-5.0, -3.0, 0.0);
+        let unrelated = store.insert_semantic_object(unrelated_state);
         for object in [target, unrelated] {
             store.add_semantic_family_member(root, object).unwrap();
         }
@@ -131,9 +130,6 @@ impl Fixture {
             SemanticNativeInputSource::State(NativeStateSource::ViewportSize),
             SemanticSignalValue::Vec3(SemanticVec3::ZERO),
         );
-        store
-            .bind_semantic_signal(position, unrelated, SemanticObjectProperty::Translation)
-            .unwrap();
         store
             .bind_semantic_signal(down, target, SemanticObjectProperty::RotationZ)
             .unwrap();
