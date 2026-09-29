@@ -250,7 +250,7 @@ test("initially paused semantic execution presents time zero without automatic a
     await turn();
     await turn();
     assert.equal(f.player.time(), 0, "renderer wakes must not advance an initially paused player");
-    assert.equal(tickCalls, 1, "only the deliberately injected tick reaches the paused player");
+    assert.equal(tickCalls, 0, "an idle runtime ignores a stale renderer tick");
 
     const advanced = await request(f.control.port2, "advance_to", 79, { time: 0.25 });
     assert.equal(advanced.time, 0.25);
@@ -2442,5 +2442,38 @@ test("worker inspection errors retain their cause without admitting or resuming 
     const result = await request(f.control.port2, "inspection_scroll", 992, { input: {}, presentation: null });
     assert.equal(result.type, "error"); assert.match(result.message, /required callback pending/);
     assert.equal(f.player.time(), 0); assert.equal(f.stats().completedSegments, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("non-replayable paused scenes drive native interaction wakes and settle", { timeout: 3000 }, async () => {
+  const f = fixture();
+  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  let active = false, ticks = 0;
+  f.player.executionWake = () => ({ presentNow: false, cadence: active ? "animation_frame" : "idle" });
+  f.player.submitBrowserPointerInputJson = () => { active = true; return true; };
+  f.player.tickCallbackPhaseJson = () => { ticks++; active = false; return null; };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const inputWake = nextMatching(f.render.port2, message => message.type === "execution_wake" && message.cadence === "animation_frame");
+    const response = await request(f.control.port2, "browser_pointer_input", 991, { input: {} });
+    assert.equal(response.pointerInputAccepted, true);
+    assert.equal(response.replaySupported, false);
+    assert.equal(response.playing, false);
+    await inputWake;
+    const idle = nextMatching(f.render.port2, message => message.type === "execution_wake" && message.cadence === "idle");
+    f.render.port2.postMessage({ type: "tick", timestamp: 1000 });
+    await idle;
+    assert.equal(ticks, 1);
+    assert.equal(f.player.time(), 0, "interaction must not advance authored time");
+    assert.equal(f.player.isPlaying(), false);
+    f.render.port2.postMessage({ type: "tick", timestamp: 1016 });
+    await turn(); await turn();
+    assert.equal(ticks, 1, "settled runtime ignores a stale platform wake");
+    const rejected = await request(f.control.port2, "seek", 992, { time: 0 });
+    assert.equal(rejected.type, "error");
+    assert.match(rejected.message, /Replay unavailable/);
   } finally { endpoint?.stop(); f.close(); }
 });

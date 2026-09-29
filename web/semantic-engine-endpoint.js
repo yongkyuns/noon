@@ -1006,7 +1006,9 @@ export async function attachSemanticEngine(
       if (stopped) return;
       if (message?.type === "tick") {
         if (!Number.isFinite(message.timestamp)) { fail(new Error("invalid render timestamp")); return; }
-        if (pacing === SEMANTIC_PACING_REALTIME && replayUnavailable === null) {
+        // Replay admission cannot suppress an input effect's Rust-owned wake.
+        // A paused authored clock still permits transient interaction animation.
+        if (pacing === SEMANTIC_PACING_REALTIME && executionWakeCadence !== "idle") {
           latestTick = message.timestamp;
           void drain();
         }
