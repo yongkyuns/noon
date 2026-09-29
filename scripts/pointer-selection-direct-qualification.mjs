@@ -98,17 +98,12 @@ try {
         assert.equal(await page.evaluate(() => direct.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
         // This public fixture is authored in Python in the worker qualification
         // and through the shared Rust builder here. Compare the whole image.
-        const baselinePath = path.join(root,
-          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-baseline.png`);
-        const workerBaseline = await readFile(baselinePath).catch(error => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
-        if (deviceScaleFactor === 1 && workerBaseline) {
-          assertExactPixels(baseline, PNG.sync.read(workerBaseline), "Rust/Python fixture baseline");
+        let workerBaseline = null, workerCircle = null;
+        if (deviceScaleFactor === 1) {
+          workerBaseline = PNG.sync.read(await readFile(path.join(root,
+            `browser-smoke-artifacts/pointer-selection/${backend}-transferable-baseline.png`)));
+          assertExactPixels(baseline, workerBaseline, "Rust/Python fixture baseline");
           result.steps.push({ name: "python-baseline-pixels", status: "passed" });
-        } else if (deviceScaleFactor === 1) {
-          result.steps.push({ name: "python-baseline-pixels", status: "unavailable" });
         }
         await page.evaluate(() => { direct.renderer.setPointerFillSelection(4); direct.driver.wake(); });
         await settled();
@@ -116,17 +111,11 @@ try {
         const selected = await image("circle");
         result.steps.push({ name: "circle", ...assertSelectionPixels(baseline, selected, SHAPES[0]) });
         assert.deepEqual((await state()).frame, before.frame);
-        const circlePath = path.join(root,
-          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-circle.png`);
-        const workerCircle = await readFile(circlePath).catch(error => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
-        if (deviceScaleFactor === 1 && workerCircle) {
-          assertExactPixels(selected, PNG.sync.read(workerCircle), "Rust/Python selected image");
+        if (deviceScaleFactor === 1) {
+          workerCircle = PNG.sync.read(await readFile(path.join(root,
+            `browser-smoke-artifacts/pointer-selection/${backend}-transferable-circle.png`)));
+          assertExactPixels(selected, workerCircle, "Rust/Python selected image");
           result.steps.push({ name: "python-selection-pixels", status: "passed" });
-        } else if (deviceScaleFactor === 1) {
-          result.steps.push({ name: "python-selection-pixels", status: "unavailable" });
         }
         // Replay the same normalized trace at each DPR and inspect the actual
         // successful Rust ABI admissions, including occurrence-local CSS view.
