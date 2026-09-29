@@ -178,6 +178,22 @@ impl TimelineEventScheduler {
         self.last_stats
     }
 
+    /// Indexed ownership/event query for one property. An interval crossed in
+    /// one large advance still supersedes a transient driver even after it ends.
+    pub(crate) fn channel_changed_since(&self, channel: CompiledChannelKey, since: f64) -> bool {
+        let Some(&group) = self.group_indices.get(&channel) else {
+            return false;
+        };
+        if self.active_counts[group] != 0 {
+            return true;
+        }
+        let events = &self.group_events[group];
+        let next = events.partition_point(|event| event.time.0 <= since);
+        events
+            .get(next)
+            .is_some_and(|event| event.time.0 <= self.time)
+    }
+
     pub fn active_groups(&self) -> &[usize] {
         &self.active_groups
     }
@@ -261,6 +277,7 @@ impl TimelineEventScheduler {
                 );
             }
         }
+        self.group_events[group].sort_unstable();
         self.recompute_group_activity(group, tracks);
         TimelineRelowerStats {
             groups_relowered: 1,

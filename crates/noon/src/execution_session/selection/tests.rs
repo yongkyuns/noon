@@ -450,7 +450,7 @@ fn callback_barrier_rejects_selection_configuration_and_input_without_partial_ch
 }
 
 #[test]
-fn removal_replacement_and_even_unrelated_revision_changes_invalidate_selection() {
+fn selection_survives_unrelated_edits_but_never_revives_a_retired_identity() {
     let (mut store, root, old, mut session) = fixture();
     click(&mut session, 0, 0.0);
     submit(&mut session, 2, press(0.0, 100.0));
@@ -487,9 +487,39 @@ fn removal_replacement_and_even_unrelated_revision_changes_invalidate_selection(
     session.apply_semantic_transaction(&mut store, add).unwrap();
     assert_eq!(
         session.selected_pointer_target(),
-        None,
-        "initial policy conservatively invalidates across any authored revision"
+        Some(replacement),
+        "unrelated authored publication preserves the selected semantic identity"
     );
+    let mut move_selected = SemanticMutationTransaction::new();
+    move_selected.set_property(
+        replacement,
+        noon_core::SemanticObjectProperty::Translation,
+        noon_core::SemanticSignalValue::Vec3(noon_core::SemanticVec3::new(4.0, 0.0, 0.0)),
+    );
+    session
+        .apply_semantic_transaction(&mut store, move_selected)
+        .unwrap();
+    assert_eq!(session.selected_pointer_target(), Some(replacement));
+    assert_eq!(
+        session
+            .pointer_selection_highlight()
+            .unwrap()
+            .transform
+            .translation,
+        noon_core::Vec2::new(4.0, 0.0)
+    );
+    let mut detach = SemanticMutationTransaction::new();
+    detach.remove_member(root, replacement);
+    session
+        .apply_semantic_transaction(&mut store, detach)
+        .unwrap();
+    assert_eq!(session.selected_pointer_target(), None);
+    let mut reattach = SemanticMutationTransaction::new();
+    reattach.add_member(root, replacement);
+    session
+        .apply_semantic_transaction(&mut store, reattach)
+        .unwrap();
+    assert_eq!(session.selected_pointer_target(), None);
 }
 
 #[test]

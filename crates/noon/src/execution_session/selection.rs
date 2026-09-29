@@ -72,17 +72,11 @@ struct PendingClick {
     eligible: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SelectedTarget {
-    node: SemanticNodeId,
-    publication: PublicationContext,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PointerSelectionState {
     max_movement: Option<f32>,
     pending: Option<PendingClick>,
-    selected: Option<SelectedTarget>,
+    selected: Option<SemanticNodeId>,
     buttons: [u64; 4],
 }
 
@@ -157,18 +151,27 @@ impl ExecutionSession {
         Ok(())
     }
 
-    /// Current generation-safe selection. Any semantic/execution revision change
-    /// invalidates selection conservatively, even when unrelated to the target.
-    /// A later reattachment cannot revive it. Ordinary effective frame advance
-    /// is compatible; successful seek/backward evaluation clears session state.
+    /// Current generation-safe selection. Unrelated edits, compatible property
+    /// changes and reordering preserve the selected semantic identity. Detachment
+    /// or deletion clears it at publication, so reattachment cannot revive it.
+    /// Successful seek/backward evaluation clears transient session state.
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
         if !self.pointer_selection.enabled() {
             return None;
         }
         let selected = self.pointer_selection.selected?;
-        (compatible_revisions(selected.publication, self.publication_context())
-            && self.semantic_object_is_reachable(selected.node))
-        .then_some(selected.node)
+        self.semantic_object_is_reachable(selected)
+            .then_some(selected)
+    }
+
+    pub(super) fn reconcile_pointer_selection(&mut self) {
+        if self
+            .pointer_selection
+            .selected
+            .is_some_and(|node| !self.semantic_object_is_reachable(node))
+        {
+            self.pointer_selection.selected = None;
+        }
     }
 
     /// Project only the selected row, without querying the spatial index,
@@ -299,10 +302,7 @@ impl ExecutionSession {
                             PointerFillOutcome::Miss => None,
                             _ => unreachable!("eligible press is a decided hit or miss"),
                         };
-                        prepared.state.selected = target.map(|node| SelectedTarget {
-                            node,
-                            publication: query.publication(),
-                        });
+                        prepared.state.selected = target;
                         prepared.click = Some(PointerSelectionClick {
                             target,
                             press: pending.press,

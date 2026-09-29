@@ -97,15 +97,9 @@ impl ExecutionSession {
         let Some(binding) = self.interaction_bindings.0.get(&node) else {
             return Ok(None);
         };
-        // Authored segment/host drivers keep their ownership. A click never
-        // interrupts a source continuation or captures its unfinished endpoint.
-        if self.pending_segment_completion.is_some()
-            || self.pending_callback.is_some()
-            || matches!(
-                self.wake_state().timeline(),
-                noon_runtime::TimelineWakeState::Continuous
-            )
-        {
+        // Runtime-owned channel arbitration admits disjoint playback and defers
+        // an effect when an authored/native driver owns one of its channels.
+        if self.pending_callback.is_some() {
             return Ok(None);
         }
         let Some(object) = self.execution_object_id(node) else {
