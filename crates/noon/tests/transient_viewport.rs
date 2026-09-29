@@ -48,7 +48,7 @@ fn renderer_viewport_keeps_offscreen_anchor_for_onscreen_transient() {
 
     let viewport = Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0));
     let spatial = session.query_viewport(viewport);
-    let renderer = session.renderer_viewport_query(spatial.clone());
+    let renderer = session.renderer_viewport_query(spatial.clone()).unwrap();
     let publication = session.take_renderer_publication();
     let transient = publication.transient_presentations();
     assert_eq!(transient.len(), 1);

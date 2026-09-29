@@ -456,3 +456,101 @@ fn nominal_contour_is_inclusive_and_zero_scale_is_not_inverted() {
         Err(PointerFillUnsupported::DegenerateGeometry)
     );
 }
+
+#[test]
+fn hundred_thousand_objects_share_local_viewport_and_pointer_updates_through_churn() {
+    let mut store = SemanticStore::new();
+    let mut target = None;
+    for index in 0..100_000 {
+        let mut state = circle();
+        state.transform.translation = SemanticVec3::new(
+            f64::from(index % 400) * 4.0,
+            f64::from(index / 400) * 4.0,
+            0.0,
+        );
+        let node = attach(&mut store, state);
+        if index == 123 {
+            target = Some(node);
+        }
+    }
+    let target = target.unwrap();
+    let mut session = session(&store);
+    let mut previous = Vec2::new(492.0, 0.0);
+    assert_eq!(
+        query(&mut session, previous).outcome(),
+        PointerFillOutcome::Hit(target)
+    );
+    for turn in 0..64 {
+        let next = if turn % 2 == 0 {
+            Vec2::new(2000.0, 1500.0)
+        } else {
+            Vec2::new(492.0, 0.0)
+        };
+        let (stale_token, stale_input) = record(&session, previous);
+        let stale_viewport = session.query_viewport(noon_core::Rect::new(
+            previous - Vec2::new(1.1, 1.1),
+            previous + Vec2::new(1.1, 1.1),
+        ));
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(
+            target,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(f64::from(next.x), f64::from(next.y), 0.0),
+        );
+        session
+            .apply_semantic_transaction(&mut store, transaction)
+            .unwrap();
+        assert!(session
+            .pick_native_pointer_fill(&stale_token, stale_input, |_| true)
+            .is_err());
+        assert!(!stale_viewport.is_current_for(&session));
+        assert!(session
+            .renderer_viewport_query(stale_viewport.clone())
+            .is_err());
+        assert!(session
+            .renderer_viewport_query_union([stale_viewport])
+            .is_err());
+        let viewport = session.query_viewport(noon_core::Rect::new(
+            next - Vec2::new(1.1, 1.1),
+            next + Vec2::new(1.1, 1.1),
+        ));
+        assert!(viewport.is_current_for(&session));
+        assert_eq!(viewport.object_indices(), &[123]);
+        assert_eq!(viewport.spatial_stats().full_scan_fallbacks, 0);
+        assert!(viewport.spatial_stats().candidates_tested <= 16);
+        assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 1);
+        let picked = query(&mut session, next);
+        assert_eq!(picked.publication(), viewport.publication());
+        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target));
+        assert_eq!(picked.precise_tests(), 1);
+        assert_eq!(picked.spatial_stats().full_scan_fallbacks, 0);
+        assert!(picked.spatial_stats().candidates_tested <= 16);
+        assert_eq!(
+            query(&mut session, previous).outcome(),
+            PointerFillOutcome::Miss
+        );
+        assert_eq!(session.take_frame_changes().object_indices(), &[123]);
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+        assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+        previous = next;
+    }
+}
+
+#[test]
+fn viewport_candidates_reject_another_runtime_with_equal_revision_numbers() {
+    let mut store = SemanticStore::new();
+    attach(&mut store, circle());
+    let mut first = session(&store);
+    let second = session(&store);
+    assert_eq!(first.publication_context(), second.publication_context());
+    let query = first.query_viewport(noon_core::Rect::new(
+        Vec2::new(-2.0, -2.0),
+        Vec2::new(2.0, 2.0),
+    ));
+    assert!(query.is_current_for(&first));
+    assert!(!query.is_current_for(&second));
+    assert!(second.renderer_viewport_query(query.clone()).is_err());
+    assert!(second.renderer_viewport_query_union([query]).is_err());
+}

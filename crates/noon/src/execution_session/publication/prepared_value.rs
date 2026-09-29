@@ -142,9 +142,15 @@ impl ExecutionSession {
     pub fn renderer_viewport_query(
         &self,
         mut query: crate::execution_session::ExecutionViewportQuery,
-    ) -> crate::execution_session::ExecutionViewportQuery {
+    ) -> Result<
+        crate::execution_session::ExecutionViewportQuery,
+        crate::execution_session::StaleViewportQuery,
+    > {
+        if !query.is_current_for(self) {
+            return Err(crate::execution_session::StaleViewportQuery);
+        }
         let Some(plan) = self.derived_display_plan.as_ref() else {
-            return query;
+            return Ok(query);
         };
         let time = self.runtime.frame().time;
         // Match DerivedDisplayAnimationPlan::evaluate's first-channel lifetime
@@ -158,7 +164,7 @@ impl ExecutionSession {
             })
             .peekable();
         if transient.peek().is_none() {
-            return query;
+            return Ok(query);
         }
 
         let mut seen = query
@@ -190,7 +196,7 @@ impl ExecutionSession {
             anchors.push((rank, anchor));
         }
         if anchors.is_empty() {
-            return query;
+            return Ok(query);
         }
         anchors.sort_unstable_by_key(|&(rank, _)| rank);
 
@@ -206,7 +212,7 @@ impl ExecutionSession {
         debug_assert!(visible.windows(2).all(|pair| pair[0].0 < pair[1].0));
 
         query.object_indices = merge_ranked_viewport_rows(&visible, &anchors);
-        query
+        Ok(query)
     }
 
     /// Merge independently indexed camera queries into one painter-ordered
@@ -215,10 +221,21 @@ impl ExecutionSession {
     pub fn renderer_viewport_query_union(
         &self,
         queries: impl IntoIterator<Item = crate::execution_session::ExecutionViewportQuery>,
-    ) -> crate::execution_session::ExecutionViewportQuery {
-        let mut merged = crate::execution_session::ExecutionViewportQuery::default();
+    ) -> Result<
+        crate::execution_session::ExecutionViewportQuery,
+        crate::execution_session::StaleViewportQuery,
+    > {
+        let mut merged = crate::execution_session::ExecutionViewportQuery {
+            runtime: self.runtime.runtime_identity(),
+            publication: self.publication_context(),
+            object_indices: Vec::new(),
+            spatial_stats: Default::default(),
+        };
         let mut seen = std::collections::HashSet::new();
         for query in queries {
+            if !query.is_current_for(self) {
+                return Err(crate::execution_session::StaleViewportQuery);
+            }
             merged.spatial_stats.cells_visited = merged
                 .spatial_stats
                 .cells_visited
@@ -350,7 +367,7 @@ mod viewport_tests {
             let spatial = session.query_viewport(bounds);
             assert!(spatial.object_indices().is_empty());
             let context = session.publication_context();
-            let query = session.renderer_viewport_query(spatial.clone());
+            let query = session.renderer_viewport_query(spatial.clone()).unwrap();
             if active {
                 assert_eq!(query.object_indices(), &[anchor as usize]);
             } else {
@@ -364,7 +381,10 @@ mod viewport_tests {
             let visible =
                 session.query_viewport(Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0)));
             assert_eq!(visible.object_indices(), &[anchor as usize]);
-            assert_eq!(session.renderer_viewport_query(visible.clone()), visible);
+            assert_eq!(
+                session.renderer_viewport_query(visible.clone()).unwrap(),
+                visible
+            );
         }
     }
 }

@@ -368,13 +368,37 @@ impl ExecutionEvaluationMode {
 ///
 /// Execution slots remain the index identity; frame indices are a transient
 /// projection for the renderer's currently published dense compatibility view.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionViewportQuery {
+    runtime: noon_runtime::RuntimeIdentity,
+    publication: noon_core::PublicationContext,
     object_indices: Vec<usize>,
     spatial_stats: SpatialQueryStats,
 }
 
+/// A viewport result belongs to another runtime incarnation or publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StaleViewportQuery;
+
+impl std::fmt::Display for StaleViewportQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("viewport query does not match the current runtime publication")
+    }
+}
+impl std::error::Error for StaleViewportQuery {}
+
 impl ExecutionViewportQuery {
+    /// Exact publication whose retained rows these candidate indices address.
+    pub const fn publication(&self) -> noon_core::PublicationContext {
+        self.publication
+    }
+
+    /// Reject cached candidates after a publication or runtime incarnation changes.
+    pub fn is_current_for(&self, session: &ExecutionSession) -> bool {
+        self.runtime == session.runtime.runtime_identity()
+            && self.publication == session.publication_context()
+    }
+
     pub fn object_indices(&self) -> &[usize] {
         &self.object_indices
     }
@@ -1097,6 +1121,8 @@ impl ExecutionSession {
         });
         spatial_stats.results = object_indices.len();
         ExecutionViewportQuery {
+            runtime: self.runtime.runtime_identity(),
+            publication: self.publication_context(),
             object_indices,
             spatial_stats,
         }
