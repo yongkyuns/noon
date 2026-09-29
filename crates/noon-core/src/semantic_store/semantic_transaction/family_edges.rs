@@ -250,6 +250,71 @@ impl FamilyEdgePreflight {
             .filter(move |family| self.contains(catalog, *family, member))
     }
 
+    pub(super) fn contains_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> bool {
+        self.overrides
+            .get(&(family.into(), member.into()))
+            .copied()
+            .unwrap_or_else(|| {
+                store
+                    .node(family)
+                    .is_some_and(|node| node.contains_member(member))
+            })
+    }
+
+    pub(super) fn first_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        self.order.first_existing(store, family)
+    }
+    pub(super) fn next_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        self.order.next_existing(store, family, member)
+    }
+    pub(super) fn previous_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        self.order.previous_existing(store, family, member)
+    }
+    pub(super) fn added_parents_existing(
+        &self,
+        member: crate::SemanticNodeId,
+    ) -> impl Iterator<Item = crate::SemanticNodeId> + '_ {
+        self.added_parents
+            .get(&member.into())
+            .into_iter()
+            .flatten()
+            .filter_map(|family| {
+                let family = family.existing()?;
+                self.contains_existing_placeholder(family, member)
+                    .then_some(family)
+            })
+    }
+
+    fn contains_existing_placeholder(
+        &self,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> bool {
+        self.overrides
+            .get(&(family.into(), member.into()))
+            .copied()
+            .unwrap_or(false)
+    }
+
     pub(super) fn first_member(
         &self,
         catalog: &TransactionNodeCatalog<'_>,
@@ -324,6 +389,40 @@ impl FamilyEdgePreflight {
 }
 
 impl FamilyOrderOverlay {
+    fn first_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        match self.first.get(&family.into()) {
+            Some(member) => member.and_then(|member| member.existing()),
+            None => store.node(family).and_then(|node| node.first_member()),
+        }
+    }
+    fn next_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        match self.links.get(&(family.into(), member.into())) {
+            Some(link) => link.next.and_then(|node| node.existing()),
+            None => store.node(family).and_then(|node| node.next_member(member)),
+        }
+    }
+    fn previous_existing(
+        &self,
+        store: &crate::SemanticStore,
+        family: crate::SemanticNodeId,
+        member: crate::SemanticNodeId,
+    ) -> Option<crate::SemanticNodeId> {
+        match self.links.get(&(family.into(), member.into())) {
+            Some(link) => link.previous.and_then(|node| node.existing()),
+            None => store
+                .node(family)
+                .and_then(|node| node.previous_member(member)),
+        }
+    }
     fn first(
         &self,
         catalog: &TransactionNodeCatalog<'_>,

@@ -465,11 +465,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<bool, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
         self.validate_existing_authoring_node(member)?;
-        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
         Ok(self
             .preflight
             .family_edges
-            .contains(&catalog, family.into(), member.into()))
+            .contains_existing(self.store, family, member))
     }
 
     /// First member in final staged order, without cloning an unrelated root.
@@ -478,12 +477,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         family: SemanticNodeId,
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
-        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
-        self.preflight
+        Ok(self
+            .preflight
             .family_edges
-            .first_member(&catalog, family.into())
-            .map(existing_read_node)
-            .transpose()
+            .first_existing(self.store, family))
     }
 
     /// Next member in final staged order, without cloning an unrelated root.
@@ -494,12 +491,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
         self.validate_existing_authoring_node(member)?;
-        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
-        self.preflight
+        Ok(self
+            .preflight
             .family_edges
-            .next_member(&catalog, family.into(), member.into())
-            .map(existing_read_node)
-            .transpose()
+            .next_existing(self.store, family, member))
     }
 
     /// Previous member in final staged order, without cloning an unrelated root.
@@ -510,12 +505,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
         self.validate_existing_authoring_node(member)?;
-        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
-        self.preflight
+        Ok(self
+            .preflight
             .family_edges
-            .previous_member(&catalog, family.into(), member.into())
-            .map(existing_read_node)
-            .transpose()
+            .previous_existing(self.store, family, member))
     }
 
     pub(crate) fn staged_parent_additions_existing(
@@ -523,11 +516,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         member: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_authoring_node(member)?;
-        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
         self.preflight
             .family_edges
-            .added_parents(&catalog, member.into())
-            .map(existing_read_node)
+            .added_parents_existing(member)
+            .map(Ok)
             .collect()
     }
 
