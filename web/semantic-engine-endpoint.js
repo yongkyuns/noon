@@ -358,7 +358,8 @@ export async function attachSemanticEngine(
         }
         const completedRegionJson = phaseJson;
         phaseJson = nextRegionJson;
-        if (phaseJson === null && observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
+        if ((phaseJson === null || phaseJson === undefined)
+          && observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
           const target = callbackObservationTarget(phase);
           rendererObservation = sendRendererObservationPublication(
             player.drainRendererObservationPublicationJson(

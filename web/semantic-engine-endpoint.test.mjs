@@ -1054,7 +1054,7 @@ test("forward authored-time control commits its callback phase before its matchi
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("callback renderer observation waits for the exact presented publication and matching result", async () => {
+test("callback renderer observation waits for the exact presented publication and matching result", { timeout: 5000 }, async () => {
   const f = fixture("transferable", async (phase) =>
     JSON.stringify({ token: phase.token, writes: [] }));
   let endpoint;
@@ -1536,6 +1536,31 @@ test("required initial callback withholds the first delta until its exact batch 
     assert.equal((await wake).cadence, "idle");
     endpoint.stop();
   } finally { f.close(); }
+});
+
+test("initial mixed callback regions complete once before the first publication", { timeout: 5000 }, async () => {
+  const lifecycle = [];
+  const f = fixture("transferable", async (phase) => {
+    lifecycle.push(`run:${phase.region}`);
+    return JSON.stringify({ token: phase.token, region: phase.region, writes: [] });
+  }, null, { initiallyPaused: true }, {
+    complete: async () => lifecycle.push("complete"),
+  });
+  let endpoint;
+  try {
+    f.player.initialCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "0" }, region: 0 });
+    f.player.commitCallbackPhaseJson = (batch) => {
+      const { region } = JSON.parse(batch);
+      lifecycle.push(`commit:${region}`);
+      return region === 0
+        ? JSON.stringify({ token: { sequence: "0" }, region: 1 })
+        : null;
+    };
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    assert.deepEqual(lifecycle, ["run:0", "commit:0", "run:1", "commit:1", "complete"]);
+    assert.equal(JSON.parse(decodeTransferableExecutionDelta(await initial).json).snapshot, true);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("stopping an attachment discards a late callback result before returning its player", async () => {
