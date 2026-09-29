@@ -859,6 +859,7 @@ function stopForSourceEdit() {
     // Active/stuck source continuations still use bounded cancellation below.
     const retainedPlayer = player;
     canvas.style.visibility = "hidden";
+    playbackControls?.setBusy(true);
     stopMetricsPolling();
     cancellation = retainedPlayer.pause().catch(() => {
       discardEarlyContinuationRuntime(retainedPlayer);

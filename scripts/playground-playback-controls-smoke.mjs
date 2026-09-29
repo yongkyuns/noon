@@ -113,6 +113,7 @@ async function playbackSnapshot(page) {
     const status = document.querySelector("#status");
     return {
       hasControls: controls !== null,
+      canvasHidden: canvas ? getComputedStyle(canvas).visibility === "hidden" : true,
       playing: controls?.dataset.playing ?? null,
       busy: controls?.dataset.busy ?? null,
       playText: play?.textContent ?? "",
@@ -310,7 +311,10 @@ try {
   diagnostics.edited = edited;
   assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
   assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
-  assert.equal(edited.hasControls, false, "editing must retire the old replay lease");
+  assert.equal(edited.canvasHidden, true, "editing must hide the old source preview");
+  assert.equal(edited.playing, "false", "editing must pause the retained execution");
+  assert.ok(edited.playDisabled && edited.restartDisabled && edited.scrubberDisabled,
+    "editing must disable every control for the old replay lease");
   await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
   await page.waitForFunction(
     () =>
