@@ -1,4 +1,5 @@
 mod images;
+pub(crate) mod residency;
 use crate::TransportImageResourceHandle;
 use images::{install_images, ImageHandles, TransportImageEntry};
 use std::{
@@ -28,7 +29,34 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 7;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 8;
+
+/// Exact source resources whose final published row reference was released by
+/// this delta. Dependency resources are retired by the installed owner after it
+/// accounts for the text closure, never by a transport-wide scan.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetainedResourceRetirements {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<TransportImageResourceHandle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<TransportTextResourceHandle>,
+}
+
+impl RetainedResourceRetirements {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.images.is_empty() && self.texts.is_empty()
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), RetainedResourceTransportError> {
+        if self.images.iter().collect::<HashSet<_>>().len() != self.images.len() {
+            return Err(RetainedResourceTransportError::DuplicateRetiredImage);
+        }
+        if self.texts.iter().collect::<HashSet<_>>().len() != self.texts.len() {
+            return Err(RetainedResourceTransportError::DuplicateRetiredText);
+        }
+        Ok(())
+    }
+}
 
 /// Immutable compiled render geometry at the genuine cross-worker boundary.
 /// Indices are scoped to the player session and this installed resource bundle.
@@ -190,6 +218,41 @@ impl RetainedResourceInventory {
             .get(&(handle.arena, handle.id))
             .is_some_and(|installed| *installed == handle)
     }
+    pub(crate) fn forget_root_retirements(&mut self, retirements: &RetainedResourceRetirements) {
+        for image in &retirements.images {
+            self.images.remove(image);
+        }
+        for text in &retirements.texts {
+            let key = (text.arena, text.id);
+            if self.texts.get(&key) == Some(text) {
+                self.texts.remove(&key);
+            }
+        }
+    }
+
+    pub(crate) fn forget_geometry(&mut self, handle: TransportGeometryResourceHandle) {
+        self.geometries.remove(&handle);
+    }
+
+    pub(crate) fn forget_font(&mut self, face: &(String, u32)) {
+        self.fonts.remove(face);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn counts(&self) -> [usize; 4] {
+        [
+            self.images.len(),
+            self.texts.len(),
+            self.geometries.len(),
+            self.fonts.len(),
+        ]
+    }
+}
+
+pub(crate) struct TransportTextDependencyClosure {
+    pub text: TransportTextResourceHandle,
+    pub geometries: Vec<TransportGeometryResourceHandle>,
+    pub fonts: Vec<(String, u32)>,
 }
 
 impl RetainedResourceBundle {
@@ -208,6 +271,28 @@ impl RetainedResourceBundle {
                 .map(|entry| (entry.face_key.clone(), entry.face_index))
                 .collect(),
         }
+    }
+
+    pub(crate) fn text_closures(
+        &self,
+    ) -> impl Iterator<Item = TransportTextDependencyClosure> + '_ {
+        self.texts
+            .iter()
+            .map(|entry| TransportTextDependencyClosure {
+                text: entry.handle,
+                geometries: entry
+                    .resource
+                    .vector_items
+                    .iter()
+                    .map(|item| item.geometry)
+                    .collect(),
+                fonts: entry
+                    .resource
+                    .runs
+                    .iter()
+                    .map(|run| (run.font.face_key.to_string(), run.font.face_index))
+                    .collect(),
+            })
     }
 
     pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
@@ -466,7 +551,7 @@ impl RetainedResourceBundle {
             geometries: geometry_handles.keys().copied().collect(),
             fonts: font_bytes.keys().cloned().collect(),
         };
-        Ok(InstalledRetainedResources {
+        let mut installed = InstalledRetainedResources {
             images,
             image_handles,
             image_layers: HashMap::new(),
@@ -474,6 +559,10 @@ impl RetainedResourceBundle {
             geometries,
             fonts,
             text_handles,
+            geometry_transports: geometry_handles
+                .iter()
+                .map(|(&transport, &local)| (local, transport))
+                .collect(),
             geometry_handles,
             render_geometry_session: self
                 .render_geometry_resources
@@ -496,13 +585,20 @@ impl RetainedResourceBundle {
                 })
                 .unwrap_or_default(),
             additions: Vec::new(),
+            free_addition_layers: Vec::new(),
+            free_addition_layer_set: HashSet::new(),
             text_layers: HashMap::new(),
             geometry_layers: HashMap::new(),
             font_layers: HashMap::new(),
             font_layers_by_face: HashMap::new(),
             font_arenas: HashSet::new(),
             inventory,
-        })
+            text_dependencies: HashMap::new(),
+            geometry_references: HashMap::new(),
+            font_references: HashMap::new(),
+        };
+        installed.initialize_text_dependencies();
+        Ok(installed)
     }
 
     fn validate_protocol(&self) -> Result<(), RetainedResourceTransportError> {
@@ -521,8 +617,14 @@ impl RetainedResourceBundle {
 }
 
 #[derive(Clone, Debug)]
+struct TextResourceDependencies {
+    geometries: Vec<GeometryResourceHandle>,
+    fonts: Vec<noon_core::FontResourceHandle>,
+}
+
+#[derive(Clone, Debug)]
 pub struct InstalledRetainedResources {
-    images: Arc<noon_core::RasterImageResourceArena>,
+    images: noon_core::RasterImageResourceArena,
     image_handles: ImageHandles,
     image_layers: HashMap<u64, usize>,
     texts: TextResourceArena,
@@ -530,16 +632,22 @@ pub struct InstalledRetainedResources {
     fonts: FontResourceArena,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     geometry_handles: HashMap<TransportGeometryResourceHandle, GeometryResourceHandle>,
+    geometry_transports: HashMap<GeometryResourceHandle, TransportGeometryResourceHandle>,
     render_geometry_session: Option<u32>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
     render_geometry_preparations: Vec<RenderGeometryPreparation>,
     additions: Vec<InstalledRetainedResources>,
+    free_addition_layers: Vec<usize>,
+    free_addition_layer_set: HashSet<usize>,
     text_layers: HashMap<u64, usize>,
     geometry_layers: HashMap<u64, usize>,
     font_layers: HashMap<u64, usize>,
     font_layers_by_face: HashMap<(String, u32), usize>,
     font_arenas: HashSet<u64>,
     inventory: RetainedResourceInventory,
+    text_dependencies: HashMap<TransportTextResourceHandle, TextResourceDependencies>,
+    geometry_references: HashMap<GeometryResourceHandle, usize>,
+    font_references: HashMap<noon_core::FontResourceHandle, usize>,
 }
 
 impl InstalledRetainedResources {
@@ -591,6 +699,11 @@ impl InstalledRetainedResources {
         &self,
     ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
         self.text_handles.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inventory(&self) -> RetainedResourceInventory {
+        self.inventory.clone()
     }
 
     pub(crate) fn prepare_additions(
@@ -671,6 +784,7 @@ impl InstalledRetainedResources {
         let mut staged_text_arenas = HashSet::new();
         let mut text_handle_remap = HashMap::with_capacity(bundle.texts.len());
         let mut superseded_text_handles = Vec::new();
+        let mut text_dependencies = HashMap::with_capacity(bundle.texts.len());
         for entry in bundle.texts {
             if text_handle_remap.contains_key(&entry.handle) {
                 return Err(RetainedResourceTransportError::DuplicateText(entry.handle));
@@ -692,6 +806,23 @@ impl InstalledRetainedResources {
                     });
                 }
             }
+            let dependencies = TextResourceDependencies {
+                geometries: resource
+                    .vector_items
+                    .iter()
+                    .map(|item| item.geometry)
+                    .collect(),
+                fonts: resource
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        fonts
+                            .handle_for_face(&run.font)
+                            .or_else(|| self.handle_for_face(&run.font))
+                            .expect("validated text font remains installed")
+                    })
+                    .collect(),
+            };
             let key = (entry.handle.arena, entry.handle.id);
             if let Some(previous) = self.inventory.texts.get(&key) {
                 superseded_text_handles.push(*previous);
@@ -720,8 +851,9 @@ impl InstalledRetainedResources {
                 staged_text_arenas.insert(local.arena);
             }
             text_handle_remap.insert(entry.handle, local);
+            text_dependencies.insert(entry.handle, dependencies);
         }
-        let installed = InstalledRetainedResources {
+        let mut installed = InstalledRetainedResources {
             images,
             image_handles,
             image_layers: HashMap::new(),
@@ -733,17 +865,28 @@ impl InstalledRetainedResources {
                 .into_iter()
                 .filter(|(transport, _)| inventory.geometries.contains(transport))
                 .collect(),
+            geometry_transports: HashMap::new(),
             render_geometry_session: None,
             render_geometries: Arc::from([]),
             render_geometry_preparations: Vec::new(),
             additions: Vec::new(),
+            free_addition_layers: Vec::new(),
+            free_addition_layer_set: HashSet::new(),
             text_layers: HashMap::new(),
             geometry_layers: HashMap::new(),
             font_layers: HashMap::new(),
             font_layers_by_face: HashMap::new(),
             font_arenas,
             inventory,
+            text_dependencies,
+            geometry_references: HashMap::new(),
+            font_references: HashMap::new(),
         };
+        installed.geometry_transports = installed
+            .geometry_handles
+            .iter()
+            .map(|(&transport, &local)| (local, transport))
+            .collect();
         Ok(PreparedRetainedResourceAdditions {
             installed,
             staged_texts,
@@ -759,11 +902,26 @@ impl InstalledRetainedResources {
             staged_texts,
             staged_text_arenas,
             text_handle_remap,
-            superseded_text_handles: _,
+            superseded_text_handles,
         } = additions;
         self.commit_staged_text_replacements(staged_texts)
             .expect("prepared retained text replacements must remain current until commit");
-        let layer = self.additions.len();
+        let owns_payload = !installed.images.is_empty()
+            || !installed.texts.is_empty()
+            || !installed.geometries.is_empty()
+            || !installed.fonts.is_empty();
+        // A version replacement may reuse an existing text arena and add no
+        // payload layer. It must not consume a free layer reservation.
+        let layer = if owns_payload {
+            let layer = self
+                .free_addition_layers
+                .pop()
+                .unwrap_or(self.additions.len());
+            self.free_addition_layer_set.remove(&layer);
+            layer
+        } else {
+            self.additions.len()
+        };
         for content in installed.image_handles.values() {
             self.image_layers.insert(content.resource().arena, layer);
         }
@@ -806,13 +964,206 @@ impl InstalledRetainedResources {
                 .iter()
                 .map(|(&key, &value)| (key, value)),
         );
-        if !installed.images.is_empty()
-            || !installed.texts.is_empty()
-            || !installed.geometries.is_empty()
-            || !installed.font_arenas.is_empty()
-        {
-            self.additions.push(installed);
+        self.geometry_transports.extend(
+            installed
+                .geometry_transports
+                .iter()
+                .map(|(&local, &transport)| (local, transport)),
+        );
+        for (&transport, dependencies) in &installed.text_dependencies {
+            self.register_text_dependencies(transport, dependencies.clone());
         }
+        for superseded in superseded_text_handles {
+            self.release_text_dependencies(superseded);
+        }
+        if owns_payload {
+            if layer == self.additions.len() {
+                self.additions.push(installed);
+            } else {
+                self.additions[layer] = installed;
+            }
+        }
+    }
+
+    pub(crate) fn retire(&mut self, retirements: &RetainedResourceRetirements) {
+        for image in &retirements.images {
+            self.retire_image(*image);
+        }
+        for text in &retirements.texts {
+            self.retire_text(*text);
+        }
+    }
+
+    fn initialize_text_dependencies(&mut self) {
+        let entries = self
+            .text_handles
+            .iter()
+            .filter_map(|(&transport, &local)| {
+                let resource = self.texts.get(local)?;
+                let dependencies = TextResourceDependencies {
+                    geometries: resource
+                        .vector_items
+                        .iter()
+                        .map(|item| item.geometry)
+                        .collect(),
+                    fonts: resource
+                        .runs
+                        .iter()
+                        .filter_map(|run| self.fonts.handle_for_face(&run.font))
+                        .collect(),
+                };
+                Some((transport, dependencies))
+            })
+            .collect::<Vec<_>>();
+        for (transport, dependencies) in entries {
+            self.register_text_dependencies(transport, dependencies);
+        }
+    }
+
+    fn register_text_dependencies(
+        &mut self,
+        transport: TransportTextResourceHandle,
+        dependencies: TextResourceDependencies,
+    ) {
+        for geometry in &dependencies.geometries {
+            *self.geometry_references.entry(*geometry).or_default() += 1;
+        }
+        for font in &dependencies.fonts {
+            *self.font_references.entry(*font).or_default() += 1;
+        }
+        self.text_dependencies.insert(transport, dependencies);
+    }
+
+    fn release_text_dependencies(&mut self, transport: TransportTextResourceHandle) {
+        let Some(dependencies) = self.text_dependencies.remove(&transport) else {
+            return;
+        };
+        for geometry in dependencies.geometries {
+            let Some(count) = self.geometry_references.get_mut(&geometry) else {
+                continue;
+            };
+            *count -= 1;
+            if *count == 0 {
+                self.geometry_references.remove(&geometry);
+                self.retire_geometry(geometry);
+            }
+        }
+        for font in dependencies.fonts {
+            let Some(count) = self.font_references.get_mut(&font) else {
+                continue;
+            };
+            *count -= 1;
+            if *count == 0 {
+                self.font_references.remove(&font);
+                self.retire_font(font);
+            }
+        }
+    }
+
+    fn retire_text(&mut self, transport: TransportTextResourceHandle) {
+        let Some(local) = self.text_handles.remove(&transport) else {
+            return;
+        };
+        if self.inventory.texts.get(&(transport.arena, transport.id)) == Some(&transport) {
+            self.inventory
+                .texts
+                .remove(&(transport.arena, transport.id));
+        }
+        let owner = self.text_arena_for_handle(local).map(|(owner, _)| owner);
+        if let Some(owner) = owner {
+            let _ = self.text_arena_mut(owner).remove(local.id);
+            if matches!(owner, InstalledTextArena::Addition(_)) && self.text_arena(owner).is_empty()
+            {
+                self.text_layers.remove(&local.arena);
+            }
+            self.recycle_layer_if_empty(owner);
+        }
+        self.release_text_dependencies(transport);
+    }
+
+    fn retire_image(&mut self, transport: TransportImageResourceHandle) {
+        let Some(content) = self.image_handles.remove(&transport) else {
+            return;
+        };
+        self.inventory.images.remove(&transport);
+        let handle = content.resource();
+        if self.images.get(handle).is_some() {
+            self.images.remove(handle);
+        } else if let Some(&layer) = self.image_layers.get(&handle.arena) {
+            self.additions[layer].images.remove(handle);
+            if self.additions[layer].images.is_empty() {
+                self.image_layers.remove(&handle.arena);
+            }
+            self.recycle_layer_if_empty(InstalledTextArena::Addition(layer));
+        }
+    }
+
+    fn retire_geometry(&mut self, handle: GeometryResourceHandle) {
+        let removed = if self.geometries.get(handle).is_some() {
+            self.geometries.remove(handle.id).is_ok()
+        } else if let Some(&layer) = self.geometry_layers.get(&handle.arena) {
+            self.additions[layer].geometries.remove(handle.id).is_ok()
+        } else {
+            false
+        };
+        if removed {
+            if let Some(transport) = self.geometry_transports.remove(&handle) {
+                self.geometry_handles.remove(&transport);
+                self.inventory.geometries.remove(&transport);
+            }
+            if let Some(layer) = self.geometry_layers.get(&handle.arena).copied() {
+                if self.additions[layer].geometries.is_empty() {
+                    self.geometry_layers.remove(&handle.arena);
+                }
+                self.recycle_layer_if_empty(InstalledTextArena::Addition(layer));
+            }
+        }
+    }
+
+    fn retire_font(&mut self, handle: noon_core::FontResourceHandle) {
+        let face = if self.fonts.get(handle).is_some() {
+            self.fonts
+                .get(handle)
+                .map(|font| (font.key.face_key.to_string(), font.key.face_index))
+        } else if let Some(&layer) = self.font_layers.get(&handle.arena) {
+            self.additions[layer]
+                .fonts
+                .get(handle)
+                .map(|font| (font.key.face_key.to_string(), font.key.face_index))
+        } else {
+            None
+        };
+        if self.fonts.get(handle).is_some() {
+            self.fonts.remove(handle);
+        } else if let Some(&layer) = self.font_layers.get(&handle.arena) {
+            self.additions[layer].fonts.remove(handle);
+        }
+        if let Some(face) = face {
+            self.inventory.fonts.remove(&face);
+            self.font_layers_by_face.remove(&face);
+            if let Some(layer) = self.font_layers.get(&handle.arena).copied() {
+                if self.additions[layer].fonts.is_empty() {
+                    self.font_layers.remove(&handle.arena);
+                }
+                self.recycle_layer_if_empty(InstalledTextArena::Addition(layer));
+            }
+        }
+    }
+
+    fn recycle_layer_if_empty(&mut self, owner: InstalledTextArena) {
+        let InstalledTextArena::Addition(layer) = owner else {
+            return;
+        };
+        let resources = &self.additions[layer];
+        if !resources.images.is_empty()
+            || !resources.texts.is_empty()
+            || !resources.geometries.is_empty()
+            || !resources.fonts.is_empty()
+            || !self.free_addition_layer_set.insert(layer)
+        {
+            return;
+        }
+        self.free_addition_layers.push(layer);
     }
 }
 
@@ -1028,6 +1379,10 @@ impl FontResourceLookup for InstalledRetainedResources {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedResourceTransportError {
+    DuplicateRetiredImage,
+    DuplicateRetiredText,
+    RetiredLiveImage(TransportImageResourceHandle),
+    RetiredLiveText(TransportTextResourceHandle),
     UnknownImage(TransportImageResourceHandle),
     DuplicateImage(TransportImageResourceHandle),
     InvalidImage(String),
@@ -1052,6 +1407,14 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateRetiredImage => formatter.write_str("duplicate retired raster image"),
+            Self::DuplicateRetiredText => formatter.write_str("duplicate retired text resource"),
+            Self::RetiredLiveImage(handle) => {
+                write!(formatter, "retired live raster image {handle:?}")
+            }
+            Self::RetiredLiveText(handle) => {
+                write!(formatter, "retired live text resource {handle:?}")
+            }
             Self::UnknownImage(handle) => {
                 write!(formatter, "unknown raster image resource {handle:?}")
             }

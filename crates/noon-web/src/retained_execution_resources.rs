@@ -1,3 +1,4 @@
+use crate::retained_resource_transport::residency::{ResourceResidency, ResourceRoot};
 use std::collections::HashMap;
 
 use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
@@ -18,6 +19,7 @@ pub struct InstalledRetainedExecutionMirror {
     resolved: Option<FrameState>,
     family: InstalledRetainedFamilyExecutionState,
     transient_presentations: Vec<noon_runtime::TransientPresentationOccurrence>,
+    resource_roots: ResourceResidency,
 }
 
 impl InstalledRetainedExecutionMirror {
@@ -35,6 +37,7 @@ impl InstalledRetainedExecutionMirror {
             resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
             transient_presentations: Vec::new(),
+            resource_roots: ResourceResidency::default(),
         })
     }
 
@@ -126,6 +129,7 @@ impl InstalledRetainedExecutionMirror {
         validate_snapshot_resources: bool,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let snapshot = delta.snapshot;
+        let staged_roots = self.resource_roots.stage(&delta);
         if snapshot && validate_snapshot_resources {
             self.validate_snapshot_resources(&delta)?;
         }
@@ -140,6 +144,7 @@ impl InstalledRetainedExecutionMirror {
         } else {
             self.apply_resolved_incremental(&changes)?;
         }
+        self.resource_roots.commit(staged_roots);
         if snapshot {
             self.family = InstalledRetainedFamilyExecutionState::default();
             self.transient_presentations.clear();
@@ -160,6 +165,7 @@ impl InstalledRetainedExecutionMirror {
             return Ok(self.wire.apply(delta.retained)?);
         }
         delta.validate()?;
+        self.validate_resource_retirements(&delta)?;
         if let Some(bundle) = delta.resource_additions.take() {
             return self.apply_family_with_resource_additions(delta, bundle);
         }
@@ -169,10 +175,16 @@ impl InstalledRetainedExecutionMirror {
         let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
         let prepared_transient = self.prepare_transient_presentations(&delta)?;
 
+        let retirements = delta.resource_retirements.clone();
         let (outcome, changes) = self.apply(delta.retained)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
+        self.resources.retire(&retirements);
+        self.wire
+            .remove_installed_image_handles(retirements.images.iter());
+        self.wire
+            .remove_installed_text_handles(retirements.texts.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -237,6 +249,7 @@ impl InstalledRetainedExecutionMirror {
                 return Err(error);
             }
         };
+        let retirements = delta.resource_retirements.clone();
         let applied = self.apply_retained(delta.retained, false);
         let (outcome, changes) = match applied {
             Ok(applied) => applied,
@@ -261,11 +274,42 @@ impl InstalledRetainedExecutionMirror {
         }
 
         self.resources.commit_additions_with_render(additions);
+        self.resources.retire(&retirements);
+        self.wire
+            .remove_installed_image_handles(retirements.images.iter());
+        self.wire
+            .remove_installed_text_handles(retirements.texts.iter());
         self.wire
             .remove_installed_text_handles(superseded_text_handles.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
+    }
+
+    fn validate_resource_retirements(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+    ) -> Result<(), InstalledExecutionError> {
+        let staged = self.resource_roots.stage(&delta.retained);
+        for image in &delta.resource_retirements.images {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Image(*image))
+                > 0
+            {
+                return Err(RetainedResourceTransportError::RetiredLiveImage(*image).into());
+            }
+        }
+        for text in &delta.resource_retirements.texts {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Text(*text))
+                > 0
+            {
+                return Err(RetainedResourceTransportError::RetiredLiveText(*text).into());
+            }
+        }
+        Ok(())
     }
 
     fn prepare_transient_presentations(
@@ -607,6 +651,7 @@ mod tests {
             )
             .unwrap()],
             resource_additions: None,
+            resource_retirements: crate::RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -770,6 +815,7 @@ mod tests {
             )
             .unwrap()],
             resource_additions: None,
+            resource_retirements: crate::RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -813,6 +859,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: crate::RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,

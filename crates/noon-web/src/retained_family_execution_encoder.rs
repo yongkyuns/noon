@@ -1,3 +1,4 @@
+use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
     Camera2DState, FontResourceLookup, GeometryRef, GeometryResourceLookup,
     RetainedFamilyAnimationPlan, TextResourceHandle, TextResourceLookup,
@@ -9,7 +10,8 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     RenderGeometryPreparation, RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
-    RetainedResourceBundle, RetainedResourceInventory, RetainedResourceTransportError,
+    RetainedResourceBundle, RetainedResourceInventory, RetainedResourceRetirements,
+    RetainedResourceTransportError, TransportTextResourceHandle,
 };
 
 /// Sequence-owning producer for the additive retained family execution envelope.
@@ -25,8 +27,18 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     published_plan_count: usize,
     observed_plan_count: usize,
     resources: RetainedResourceInventory,
+    resource_roots: ResourceResidency,
+    text_closures: HashMap<TransportTextResourceHandle, TextClosure>,
+    geometry_references: HashMap<crate::TransportGeometryResourceHandle, usize>,
+    font_references: HashMap<(String, u32), usize>,
     render_geometry_resources: HashMap<crate::TransportSlotId, u32>,
     next_render_geometry_resource: u32,
+}
+
+#[derive(Clone, Debug)]
+struct TextClosure {
+    geometries: Vec<crate::TransportGeometryResourceHandle>,
+    fonts: Vec<(String, u32)>,
 }
 
 #[derive(Debug)]
@@ -48,23 +60,24 @@ impl RetainedFamilyExecutionDeltaEncoder {
             published_plan_count: 0,
             observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
+            resource_roots: ResourceResidency::default(),
+            text_closures: HashMap::new(),
+            geometry_references: HashMap::new(),
+            font_references: HashMap::new(),
             render_geometry_resources: HashMap::new(),
             next_render_geometry_resource: 0,
         }
     }
 
     pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
-        let next_render_geometry_resource = u32::try_from(resources.render_geometry_count())
+        let mut encoder = Self::new(session);
+        encoder.next_render_geometry_resource = u32::try_from(resources.render_geometry_count())
             .expect("retained render geometry resources exceed u32 transport index space");
-        Self {
-            retained: RetainedExecutionDeltaEncoder::new(session),
-            plan_index_remap: HashMap::new(),
-            published_plan_count: 0,
-            observed_plan_count: 0,
-            resources: resources.inventory(),
-            render_geometry_resources: HashMap::new(),
-            next_render_geometry_resource,
+        encoder.resources = resources.inventory();
+        for closure in resources.text_closures() {
+            encoder.register_text_closure(closure.text, closure.geometries, closure.fonts);
         }
+        encoder
     }
 
     pub(crate) fn attach_resource_additions(
@@ -76,6 +89,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
         fonts: &(impl FontResourceLookup + ?Sized),
         images: &(impl noon_core::RasterImageResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
+        let staged_roots = self.resource_roots.stage(&envelope.retained);
+        let retirements = self.resource_roots.retirements(&staged_roots);
         let new_images = envelope
             .retained
             .objects
@@ -148,6 +163,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
         }
 
         if new_texts.is_empty() && new_images.is_empty() && new_render_geometries.is_empty() {
+            envelope.resource_retirements = retirements;
+            self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
             self.render_geometry_resources = staged_slot_resources;
             self.next_render_geometry_resource = next_render_geometry_resource;
             return Ok(());
@@ -161,7 +178,11 @@ impl RetainedFamilyExecutionDeltaEncoder {
             &self.resources,
         )?;
         additions.capture_images(new_images, images)?;
+        let closures = additions.text_closures().collect::<Vec<_>>();
         additions.retain_additions(&mut self.resources);
+        for closure in closures {
+            self.register_text_closure(closure.text, closure.geometries, closure.fonts);
+        }
         if !new_render_geometries.is_empty() {
             additions.set_render_geometries(
                 self.session(),
@@ -171,9 +192,58 @@ impl RetainedFamilyExecutionDeltaEncoder {
         }
         debug_assert!(!additions.is_empty());
         envelope.resource_additions = Some(additions);
+        envelope.resource_retirements = retirements;
+        self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
         self.render_geometry_resources = staged_slot_resources;
         self.next_render_geometry_resource = next_render_geometry_resource;
         Ok(())
+    }
+
+    fn register_text_closure(
+        &mut self,
+        text: TransportTextResourceHandle,
+        geometries: Vec<crate::TransportGeometryResourceHandle>,
+        fonts: Vec<(String, u32)>,
+    ) {
+        for geometry in &geometries {
+            *self.geometry_references.entry(*geometry).or_default() += 1;
+        }
+        for font in &fonts {
+            *self.font_references.entry(font.clone()).or_default() += 1;
+        }
+        self.text_closures
+            .insert(text, TextClosure { geometries, fonts });
+    }
+
+    fn commit_resource_roots(
+        &mut self,
+        staged: StagedResourceResidency,
+        retirements: &RetainedResourceRetirements,
+    ) {
+        self.resources.forget_root_retirements(retirements);
+        for text in &retirements.texts {
+            if let Some(TextClosure { geometries, fonts }) = self.text_closures.remove(text) {
+                for geometry in geometries {
+                    if let Some(count) = self.geometry_references.get_mut(&geometry) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.geometry_references.remove(&geometry);
+                            self.resources.forget_geometry(geometry);
+                        }
+                    }
+                }
+                for font in fonts {
+                    if let Some(count) = self.font_references.get_mut(&font) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.font_references.remove(&font);
+                            self.resources.forget_font(&font);
+                        }
+                    }
+                }
+            }
+        }
+        self.resource_roots.commit(staged);
     }
 
     pub fn encode_snapshot(
@@ -599,6 +669,175 @@ mod tests {
             render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
+    }
+
+    #[test]
+    fn retired_text_closures_reintroduce_complete_payloads_without_inventory_growth() {
+        let mut scene = noon::Scene::new();
+        let first = scene
+            .typst(noon::Typst::new("#line(length: 10pt) A"))
+            .unwrap();
+        let second = scene
+            .typst(noon::Typst::new("#line(length: 10pt) B"))
+            .unwrap();
+        let first = first.state().unwrap().content.text().unwrap();
+        let second = second.state().unwrap().content.text().unwrap();
+        let owner = scene.integration_store();
+        let store = owner.borrow();
+        let images = noon_core::RasterImageResourceArena::new();
+        let resources = RetainedResourceBundle::capture(
+            [first, second],
+            store.text_resources(),
+            store.geometry_resources(),
+            store.font_resources(),
+        )
+        .unwrap();
+        assert!(resources.font_bytes() > 0);
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(47, &resources);
+        assert_eq!(encoder.text_closures.len(), 2);
+        assert!(!encoder.geometry_references.is_empty());
+        assert!(!encoder.font_references.is_empty());
+        let (_, mut frame, _) = fixture();
+        frame.objects[0].content = ObjectContentRef::Text(first);
+        frame.objects[1].content = ObjectContentRef::Text(second);
+        let states = [None, None];
+        let mut initial = encoder
+            .encode_snapshot(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(
+                &mut initial,
+                [first, second],
+                store.text_resources(),
+                store.geometry_resources(),
+                store.font_resources(),
+                &images,
+            )
+            .unwrap();
+        assert!(initial.resource_additions.is_none());
+
+        for index in 0..2 {
+            frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
+            let mut delta = encoder
+                .encode_incremental(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![index]),
+                    Camera2DState::default(),
+                )
+                .unwrap()
+                .unwrap();
+            encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            assert_eq!(delta.resource_retirements.texts.len(), 1);
+            if index == 0 {
+                assert_eq!(encoder.text_closures.len(), 1);
+                assert!(
+                    !encoder.font_references.is_empty(),
+                    "second text owns shared fonts"
+                );
+            }
+        }
+        assert_eq!(encoder.resources.counts(), [0; 4]);
+        assert!(encoder.text_closures.is_empty());
+        assert!(encoder.geometry_references.is_empty());
+        assert!(encoder.font_references.is_empty());
+
+        for cycle in 0..32 {
+            frame.objects[0].content = ObjectContentRef::Text(first);
+            let mut delta = encoder
+                .encode_incremental(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![0]),
+                    Camera2DState::default(),
+                )
+                .unwrap()
+                .unwrap();
+            // Failed capture leaves producer residency unchanged and permits exact retry.
+            assert!(encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [first],
+                    &TextResourceArena::new(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .is_err());
+            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert!(encoder.resource_roots.is_empty());
+            encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [first],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            let additions = delta.resource_additions.as_ref().unwrap();
+            assert!(
+                additions.font_bytes() > 0,
+                "cycle {cycle} must resend retired fonts"
+            );
+            let installed = additions.clone().install().unwrap();
+            assert!(installed
+                .resolve_text_handle(TransportTextResourceHandle::from_source_handle(first))
+                .is_some());
+            assert_eq!(encoder.text_closures.len(), 1);
+
+            frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
+            let mut removal = encoder
+                .encode_incremental(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![0]),
+                    Camera2DState::default(),
+                )
+                .unwrap()
+                .unwrap();
+            encoder
+                .attach_resource_additions(
+                    &mut removal,
+                    [],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert!(encoder.text_closures.is_empty());
+            assert!(encoder.geometry_references.is_empty());
+            assert!(encoder.font_references.is_empty());
+            assert!(encoder.resource_roots.is_empty());
+        }
     }
 
     #[test]

@@ -2062,9 +2062,10 @@ impl RetainedFramePreparer {
                 return false;
             };
             if object.content.image().is_some() {
-                // Sparse image residency handles materialize/retire/reentry; its
-                // painter entry remains stable and needs no scratch rebuild.
-                return true;
+                // Image-only updates have no geometry/text scratch rows. A
+                // cross-kind replacement must rebuild those rows before reuse.
+                return self.scratch_slots.get(index).is_some_and(Option::is_none)
+                    && !self.fast_text_only.get(index).copied().unwrap_or(false);
             }
             if object.text().is_some() {
                 return frame.is_present(index)

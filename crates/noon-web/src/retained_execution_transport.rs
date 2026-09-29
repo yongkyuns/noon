@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 8;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -146,7 +146,6 @@ pub enum RetainedExecutionTransportError {
     DuplicateObject(ObjectId),
     UnknownSlot(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
-    ContentIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
     InvalidRenderGeometryResource(u32),
     AmbiguousRenderGeometry(TransportSlotId),
@@ -218,11 +217,6 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::SlotIdentityChanged(slot) => write!(
                 formatter,
                 "retained execution slot {}:{} changed object identity without a snapshot",
-                slot.slot, slot.generation
-            ),
-            Self::ContentIdentityChanged(slot) => write!(
-                formatter,
-                "retained execution slot {}:{} changed content identity without a snapshot",
                 slot.slot, slot.generation
             ),
             Self::TextRenderGeometry(slot) => write!(
@@ -990,11 +984,8 @@ impl RetainedExecutionFrameMirror {
                         object.slot,
                     ));
                 }
-                if !incremental_content_identity_matches(&current.content, &content) {
-                    return Err(RetainedExecutionTransportError::ContentIdentityChanged(
-                        object.slot,
-                    ));
-                }
+                // Typed resource resolution above already validates new content.
+                // Content replacement does not change this retained object's identity.
                 (index, false)
             } else {
                 if self.object_indices.contains_key(&object.object)
@@ -1195,25 +1186,6 @@ impl RetainedExecutionFrameMirror {
             old_end,
             segment,
         }))
-    }
-}
-
-fn incremental_content_identity_matches(
-    current: &ObjectContentRef,
-    next: &ObjectContentRef,
-) -> bool {
-    match (current, next) {
-        (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
-        (ObjectContentRef::Image(current), ObjectContentRef::Image(next)) => {
-            current.resource() == next.resource()
-        }
-        // Text resources are immutable, but a live numeric binding can replace the
-        // version behind one retained object. The enclosing family envelope stages
-        // that resource addition before this mirror resolves the row, so preserving
-        // the text content kind preserves the retained slot without requiring a
-        // complete-scene snapshot.
-        (ObjectContentRef::Text(_), ObjectContentRef::Text(_)) => true,
-        _ => false,
     }
 }
 
@@ -1832,7 +1804,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_content_swap_requires_snapshot() {
+    fn incremental_content_swap_preserves_slot_and_unrelated_rows() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(3);
         let initial = encoder
@@ -1851,10 +1823,12 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            mirror.apply(delta),
-            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
-        ));
+        let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert_eq!(changes.object_indices(), &[1]);
+        assert!(changes.added_indices().is_empty());
+        assert!(changes.removed_indices().is_empty());
+        assert_eq!(mirror.frame().unwrap(), &changed);
     }
 
     #[test]

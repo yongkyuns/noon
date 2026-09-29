@@ -123,7 +123,7 @@ impl RetainedResourceBundle {
 pub(super) type ImageHandles = HashMap<TransportImageResourceHandle, RasterImageContentRef>;
 pub(super) fn install_images(
     entries: Vec<TransportImageEntry>,
-) -> Result<(Arc<RasterImageResourceArena>, ImageHandles), RetainedResourceTransportError> {
+) -> Result<(RasterImageResourceArena, ImageHandles), RetainedResourceTransportError> {
     let mut arena = RasterImageResourceArena::new();
     let mut handles = HashMap::new();
     for entry in entries {
@@ -147,7 +147,7 @@ pub(super) fn install_images(
         );
         handles.insert(entry.handle, content);
     }
-    Ok((Arc::new(arena), handles))
+    Ok((arena, handles))
 }
 impl InstalledRetainedResources {
     pub fn images(&self) -> &dyn RasterImageResourceLookup {
