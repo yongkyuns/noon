@@ -10,7 +10,7 @@ use noon_core::{
     NativeStateSource, NativeStateUpdate, PublicationContext, ReactiveError, ReactiveValue,
     SemanticNodeId, SignalId,
 };
-use noon_runtime::{EvaluationError, FrameState, RuntimeIdentity};
+use noon_runtime::{EffectivePropertyWrite, EvaluationError, FrameState, RuntimeIdentity};
 
 use super::ExecutionSession;
 
@@ -224,8 +224,10 @@ impl Default for PointerInputState {
 /// effects of cancelling held buttons before either operation commits.
 pub(super) struct PreparedInputPublication {
     pub(super) frame: noon_runtime::PreparedFrameEvaluation,
-    effective: noon_runtime::PreparedEffectivePropertyBatch,
+    pub(super) effective: noon_runtime::PreparedEffectivePropertyBatch,
     timeline: Option<noon_runtime::SignalTimelinePreview>,
+    pub(super) drag_cancellation:
+        Option<super::translation_drag::PreparedTranslationDragCancellation>,
 }
 
 /// One fully validated native occurrence split at the existing runtime
@@ -665,6 +667,7 @@ impl ExecutionSession {
             frame,
             effective,
             timeline: signal_timeline,
+            drag_cancellation: None,
         })
     }
 
@@ -672,11 +675,37 @@ impl ExecutionSession {
         &mut self,
         prepared: PreparedInputPublication,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        self.runtime
-            .commit_prepared_frame(prepared.frame, prepared.effective)
-            .map_err(ExecutionSessionInputError::PreparedCommit)?;
-        if let Some(preview) = prepared.timeline {
+        let PreparedInputPublication {
+            frame,
+            effective,
+            timeline,
+            drag_cancellation,
+        } = prepared;
+        let suspended = if let Some(cancellation) = drag_cancellation {
+            Some(
+                self.runtime
+                    .suspend_translation_drag(cancellation.object)
+                    .ok_or_else(|| {
+                        ExecutionSessionInputError::Interaction(
+                            "captured translation drag target is no longer live".into(),
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        if let Err(error) = self.runtime.commit_prepared_frame(frame, effective) {
+            if let (Some(cancellation), Some(held)) = (drag_cancellation, suspended) {
+                self.runtime
+                    .restore_translation_drag(cancellation.object, held);
+            }
+            return Err(ExecutionSessionInputError::PreparedCommit(error));
+        }
+        if let Some(preview) = timeline {
             self.signal_timeline.commit(preview);
+        }
+        if let Some(cancellation) = drag_cancellation {
+            self.finish_translation_drag_cancellation(cancellation);
         }
         Ok(self.runtime.frame())
     }
@@ -689,10 +718,40 @@ impl ExecutionSession {
         // No input publication is needed for already released buttons. In
         // particular inspection alone must not invalidate finite replay history.
         inputs.retain(|(signal, value)| self.runtime.reactive_value(*signal) != Some(value));
-        if inputs.is_empty() {
+        let drag_cancellation = self.prepare_translation_drag_cancellation()?;
+        if inputs.is_empty() && drag_cancellation.is_none() {
             Ok(None)
         } else {
-            self.prepare_reactive_input_batch(inputs).map(Some)
+            let mut prepared = if inputs.is_empty() {
+                let frame = self.runtime.prepare_advance_to(self.runtime.frame().time)?;
+                let effective = self
+                    .runtime
+                    .prepare_effective_property_batch(&[])
+                    .expect("an empty effective-property batch is always valid");
+                PreparedInputPublication {
+                    frame,
+                    effective,
+                    timeline: None,
+                    drag_cancellation: None,
+                }
+            } else {
+                self.prepare_reactive_input_batch(inputs)?
+            };
+            if let Some(cancellation) = drag_cancellation {
+                prepared.effective = self
+                    .runtime
+                    .prepare_effective_property_batch(&[EffectivePropertyWrite::Translation {
+                        object: cancellation.object,
+                        translation: cancellation.base,
+                    }])
+                    .map_err(|_| {
+                        ExecutionSessionInputError::Interaction(
+                            "captured translation drag conflicts with cancellation".into(),
+                        )
+                    })?;
+                prepared.drag_cancellation = Some(cancellation);
+            }
+            Ok(Some(prepared))
         }
     }
 

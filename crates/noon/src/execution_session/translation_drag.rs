@@ -25,6 +25,15 @@ struct ActiveDrag {
     translation: Vec2,
 }
 
+/// Unpublished restoration of one captured effective translation.  Input and
+/// inspection share this metadata so the runtime lease remains live until their
+/// one prepared publication has passed every fallible check.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PreparedTranslationDragCancellation {
+    pub(super) object: noon_core::ObjectId,
+    pub(super) base: Vec2,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct TranslationDragState {
     targets: Arc<BTreeSet<SemanticNodeId>>,
@@ -141,6 +150,39 @@ impl ExecutionSession {
 
     pub fn translation_drag_active(&self) -> bool {
         self.translation_drag.active.is_some()
+    }
+
+    pub(super) fn prepare_translation_drag_cancellation(
+        &self,
+    ) -> Result<Option<PreparedTranslationDragCancellation>, ExecutionSessionInputError> {
+        let Some(active) = self.translation_drag.active else {
+            return Ok(None);
+        };
+        let base = self
+            .runtime
+            .translation_drag_base(active.object)
+            .ok_or_else(|| {
+                ExecutionSessionInputError::Interaction(
+                    "captured translation drag target is no longer live".into(),
+                )
+            })?;
+        Ok(Some(PreparedTranslationDragCancellation {
+            object: active.object,
+            base,
+        }))
+    }
+
+    pub(super) fn finish_translation_drag_cancellation(
+        &mut self,
+        cancellation: PreparedTranslationDragCancellation,
+    ) {
+        debug_assert!(self
+            .translation_drag
+            .active
+            .is_some_and(|active| active.object == cancellation.object));
+        self.translation_drag.active = None;
+        self.runtime
+            .clear_translation_drag_effective_driver(cancellation.object);
     }
 
     pub fn cancel_translation_drag(&mut self) -> Result<(), TranslationDragError> {
