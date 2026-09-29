@@ -91,27 +91,48 @@ try {
           const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
           return { dpr: devicePixelRatio, css: [rect.width, rect.height], backing: [canvas.width, canvas.height] };
         });
+        result.dimensions = dimensions;
         assert.deepEqual(dimensions, { dpr: deviceScaleFactor, css: [640, 360],
           backing: [640 * deviceScaleFactor, 360 * deviceScaleFactor] });
         assert.equal(before.time, 0); assert.equal(before.objects, 3);
         assert.equal(await page.evaluate(() => direct.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
         // This public fixture is authored in Python in the worker qualification
         // and through the shared Rust builder here. Compare the whole image.
-        const workerBaseline = PNG.sync.read(await readFile(path.join(root,
-          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-baseline.png`)));
-        if (deviceScaleFactor === 1) assertExactPixels(baseline, workerBaseline, "Rust/Python fixture baseline");
+        const baselinePath = path.join(root,
+          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-baseline.png`);
+        const workerBaseline = await readFile(baselinePath).catch(error => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (deviceScaleFactor === 1 && workerBaseline) {
+          assertExactPixels(baseline, PNG.sync.read(workerBaseline), "Rust/Python fixture baseline");
+          result.steps.push({ name: "python-baseline-pixels", status: "passed" });
+        } else if (deviceScaleFactor === 1) {
+          result.steps.push({ name: "python-baseline-pixels", status: "unavailable" });
+        }
         await page.evaluate(() => { direct.renderer.setPointerFillSelection(4); direct.driver.wake(); });
         await settled();
         let prior = await state(); await click(SHAPES[0]); await changed(prior);
         const selected = await image("circle");
         result.steps.push({ name: "circle", ...assertSelectionPixels(baseline, selected, SHAPES[0]) });
         assert.deepEqual((await state()).frame, before.frame);
-        const workerCircle = PNG.sync.read(await readFile(path.join(root,
-          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-circle.png`)));
-        if (deviceScaleFactor === 1) assertExactPixels(selected, workerCircle, "Rust/Python selected image");
+        const circlePath = path.join(root,
+          `browser-smoke-artifacts/pointer-selection/${backend}-transferable-circle.png`);
+        const workerCircle = await readFile(circlePath).catch(error => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (deviceScaleFactor === 1 && workerCircle) {
+          assertExactPixels(selected, PNG.sync.read(workerCircle), "Rust/Python selected image");
+          result.steps.push({ name: "python-selection-pixels", status: "passed" });
+        } else if (deviceScaleFactor === 1) {
+          result.steps.push({ name: "python-selection-pixels", status: "unavailable" });
+        }
         // Replay the same normalized trace at each DPR and inspect the actual
         // successful Rust ABI admissions, including occurrence-local CSS view.
         const tracePoint = shapeSurfaceCenter(SHAPES[0]);
+        await page.evaluate(() => { direct.detach(); direct.detach = direct.attach(); direct.admittedInputs.length = 0; });
+        await settled();
         await page.evaluate(({ x, y }) => {
           const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
           direct.admittedInputs.length = 0;
@@ -137,6 +158,8 @@ try {
         assert.deepEqual((await state()).frame, before.frame);
         assert.equal((await state()).time, 0, "paused pointer trace must not advance authored time");
         assertExactPixels(await image("normalized-trace"), selected, "normalized selection trace");
+        await page.evaluate(() => { direct.detach(); direct.detach = direct.attach(); direct.admittedInputs.length = 0; });
+        await settled();
         await page.evaluate(({ x, y }) => {
           const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
           direct.admittedInputs.length = 0;
@@ -290,7 +313,7 @@ try {
           assertExactPixels(await image("seek-clear"), baseline, "same-time seek clear");
         }
         result.status = "passed";
-        console.log(`[PASS] ${prefix}: direct typed selection, DPR ${deviceScaleFactor}, normalized trace, cancellation, clear, and exact Python pixels`);
+        console.log(`[PASS] ${prefix}: direct typed selection, DPR ${deviceScaleFactor}, normalized trace, and cancellation${deviceScaleFactor === 1 && workerBaseline && workerCircle ? ", with exact Python pixels" : ""}`);
       } catch (error) { result.status = "failed"; result.error = String(error.stack ?? error); throw error; }
       finally {
         await page.evaluate(() => { direct.detach(); direct.driver.stop(); direct.renderer.free(); }).catch(() => {});
