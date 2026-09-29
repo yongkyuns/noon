@@ -2716,25 +2716,27 @@ class SelectedAlignment(Scene):
     window.sharedAuthoringSmoke.callbackSparseReadsAuthoredPromise = null;
   });
 
-  // Existing-handle structural operations and effective writes share the
-  // callback's one publication. Both async and synchronous source stacks catch
-  // a rejected second operation, so their completed assertions prove the
-  // earlier remove/add prefix was retained rather than replayed or discarded.
-  const callbackMembershipSource = await readFile(
-    path.join(repoRoot, "web/python/examples/ordinary_callback_membership_atomic.py"), "utf8",
-  );
-  assert.equal(callbackMembershipSource.split("async def construct(self):").length, 2);
-  assert.equal(callbackMembershipSource.split("await self.wait(0.25)").length, 2);
-  // Derive the synchronous JSPI case from the same controlled fixture so its
-  // membership/error assertions cannot drift from the portable async case.
-  const synchronousCallbackMembershipSource = callbackMembershipSource
-    .replace("async def construct(self):", "def construct(self):")
-    .replace("await self.wait(0.25)", "self.wait(0.25)");
-  for (const [mode, source] of [["async", callbackMembershipSource], ["sync", synchronousCallbackMembershipSource]]) {
-    const result = await runCallbackMembershipContinuation(page, source, `scene-callback-membership-${mode}`);
-    assert.equal(result.duration, 0.25, `${mode} callback membership duration`);
-    assert.equal(result.metrics.objectCount, 3, `${mode} callback membership object count`);
-    assert.ok(result.metrics.drawCalls > 0, `${mode} callback membership rendered no geometry`);
+  // Existing and provisional structural edits publish with effective writes.
+  // Derive synchronous JSPI cases from each controlled async fixture so their
+  // rollback, local identity, and wrapper binding assertions cannot drift.
+  for (const [fixture, objectCount] of [
+    ["ordinary_callback_membership_atomic", 3],
+    ["ordinary_callback_provisional_geometry", 3],
+  ]) {
+    const callbackSource = await readFile(
+      path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",
+    );
+    assert.equal(callbackSource.split("async def construct(self):").length, 2);
+    assert.equal(callbackSource.split("await self.wait(0.25)").length, 2);
+    const synchronousSource = callbackSource
+      .replace("async def construct(self):", "def construct(self):")
+      .replace("await self.wait(0.25)", "self.wait(0.25)");
+    for (const [mode, source] of [["async", callbackSource], ["sync", synchronousSource]]) {
+      const result = await runCallbackMembershipContinuation(page, source, `scene-${fixture}-${mode}`);
+      assert.equal(result.duration, 0.25, `${fixture} ${mode} duration`);
+      assert.equal(result.metrics.objectCount, objectCount, `${fixture} ${mode} object count`);
+      assert.ok(result.metrics.drawCalls > 0, `${fixture} ${mode} rendered no geometry`);
+    }
   }
 
   // A normal def construct uses the canonical JSPI continuation when its first
