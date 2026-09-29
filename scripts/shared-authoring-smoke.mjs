@@ -431,6 +431,49 @@ async function stopSampledSource(page) {
   });
 }
 
+async function runCallbackMembershipContinuation(page, source, canvasId) {
+  return page.evaluate(async ({ source, canvasId }) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = canvasId;
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    try {
+      const authored = await harness.authoring.run(source, {}, {
+        async onSemanticContinuation(next) {
+          if (registration !== null) {
+            throw new Error(`${canvasId} registered more than one semantic context`);
+          }
+          registration = next;
+          execution = new harness.AuthoringExecutionClient(canvas);
+          await execution.startSemanticExecution(next.semanticExecution, {
+            authoringClient: harness.authoring,
+            loopDurationSeconds: Math.max(1, next.duration),
+            transportMode: "transferable",
+          });
+        },
+      });
+      if (execution === null || registration === null) {
+        throw new Error(`${canvasId} did not register its semantic continuation`);
+      }
+      if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
+          authored.semanticExecution.continuationGeneration !== registration.generation) {
+        throw new Error(`${canvasId} did not retain its canonical continuation`);
+      }
+      return {
+        duration: authored.duration,
+        metrics: (await execution.metrics()).metrics,
+      };
+    } finally {
+      execution?.terminate();
+      canvas.remove();
+    }
+  }, { source, canvasId });
+}
+
 await new Promise((resolve, reject) => {
   server.once("error", reject);
   server.listen(port, "127.0.0.1", resolve);
@@ -2672,6 +2715,21 @@ class SelectedAlignment(Scene):
     window.sharedAuthoringSmoke.callbackSparseReadsExecution = null;
     window.sharedAuthoringSmoke.callbackSparseReadsAuthoredPromise = null;
   });
+
+  // Existing-handle structural operations and effective writes share the
+  // callback's one publication. Both async and synchronous source stacks catch
+  // a rejected second operation, so their completed assertions prove the
+  // earlier remove/add prefix was retained rather than replayed or discarded.
+  for (const [filename, canvasId] of [
+    ["ordinary_callback_membership_atomic.py", "scene-callback-membership-atomic"],
+    ["ordinary_callback_membership_atomic_sync.py", "scene-callback-membership-atomic-sync"],
+  ]) {
+    const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
+    const result = await runCallbackMembershipContinuation(page, source, canvasId);
+    assert.equal(result.duration, 0.25, `${filename} duration`);
+    assert.equal(result.metrics.objectCount, 3, `${filename} object count`);
+    assert.ok(result.metrics.drawCalls > 0, `${filename} rendered no geometry`);
+  }
 
   // A normal def construct uses the canonical JSPI continuation when its first
   // supported play reaches the shared Rust segment barrier. Its source promise
