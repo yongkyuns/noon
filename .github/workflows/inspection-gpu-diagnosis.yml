@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [busy]
+        probe: [copy]
     runs-on: macos-latest
     timeout-minutes: 10
     steps:

@@ -193,20 +193,22 @@ try {
       }
       return texture;
     };
-    const busyBuffers = new WeakMap();
     const writeTexture = queue.writeTexture;
     queue.writeTexture = function(destination, data, layout, size) {
       if (/glyph mask atlas/.test(destination.texture.label)) {
-        if (probe === "busy") {
+        if (probe === "copy") {
           const owner = state.textures.find(item => item.texture === destination.texture).device;
-          let scratch = busyBuffers.get(owner);
-          if (!scratch) {
-            scratch = owner.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST });
-            busyBuffers.set(owner, scratch);
-          }
+          const row = Math.ceil(layout.bytesPerRow / 256) * 256;
+          const source = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength);
+          const staging = owner.createBuffer({ size: row * size.height, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true });
+          const padded = new Uint8Array(staging.getMappedRange());
+          for (let y = 0; y < size.height; y++) padded.set(source.subarray((layout.offset ?? 0) + y * layout.bytesPerRow,
+            (layout.offset ?? 0) + y * layout.bytesPerRow + size.width), y * row);
+          staging.unmap();
           const encoder = owner.createCommandEncoder();
-          encoder.clearBuffer(scratch);
+          encoder.copyBufferToTexture({ buffer: staging, bytesPerRow: row, rowsPerImage: size.height }, destination, size);
           this.submit([encoder.finish()]);
+          return;
         }
         if (probe === "pad256") {
           const height = size.height;
