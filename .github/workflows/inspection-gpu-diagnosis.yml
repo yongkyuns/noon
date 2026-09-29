@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [pad256, submit]
+        probe: [initialize]
     runs-on: macos-latest
     timeout-minutes: 10
     steps:

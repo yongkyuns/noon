@@ -74,7 +74,7 @@ async function readTextGpu() {
     for (const byte of bytes) value = Math.imul(value ^ byte, 16777619) >>> 0;
     return value;
   };
-  const result = { buffers: [] };
+  const result = { buffers: [], textureLabel: texture.label, textureCount: state.textures.filter(item => item.device === device).length };
   for (const { device: owner, buffer } of state.buffers) {
     if (owner !== device) continue;
     const output = device.createBuffer({ size: buffer.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -185,7 +185,12 @@ try {
     device.createTexture = function(desc) {
       const traced = /glyph mask atlas/.test(desc.label ?? "");
       const texture = createTexture.call(this, traced ? { ...desc, usage: desc.usage | GPUTextureUsage.COPY_SRC } : desc);
-      if (traced) state.textures.push({ device: this, texture });
+      if (traced) {
+        state.textures.push({ device: this, texture });
+        if (probe === "initialize") this.queue.writeTexture({ texture }, new Uint8Array(texture.width * texture.height),
+          { bytesPerRow: texture.width, rowsPerImage: texture.height },
+          { width: texture.width, height: texture.height, depthOrArrayLayers: 1 });
+      }
       return texture;
     };
     const writeTexture = queue.writeTexture;
@@ -430,6 +435,7 @@ try {
   const zoomed = await authoredCanvas.screenshot();
   captures.zoomed = zoomed;
   report.zoomChanged = changedPixels(authoredBaseline, zoomed);
+  if (process.env.NOON_INSPECTION_GPU_READBACK) report.gpuZoomed = await captureTextGpu(page);
   assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
   await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
   captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
