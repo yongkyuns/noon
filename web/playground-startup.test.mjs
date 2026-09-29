@@ -131,6 +131,11 @@ assert.notEqual(bootStart, -1, "playground boot boundary must exist");
 const bootCatch = main.indexOf("} catch (error) {\n  showError(error);\n}", bootStart);
 assert.ok(bootCatch > bootStart, "playground boot boundary must terminate cleanly");
 const bootBody = main.slice(bootStart, bootCatch);
+assert.match(
+  bootBody,
+  /window\.__noonExampleGallery\s*=\s*\{[\s\S]*?performance\.mark\("noon-playground-source-ready"\);/,
+  "initial source and public gallery API readiness must be timestamped before preload starts",
+);
 assert.doesNotMatch(
   bootBody,
   /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,

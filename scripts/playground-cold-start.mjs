@@ -28,6 +28,9 @@ if (runtimePackageSourceRevision !== null) {
 }
 const profile = process.env.NOON_COLD_START_PROFILE ?? "desktop";
 assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
+const preloadMode = process.env.NOON_COLD_START_PRELOAD ?? "on";
+assert.ok(["on", "off"].includes(preloadMode), `unknown preload mode: ${preloadMode}`);
+const preloadEnabled = preloadMode === "on";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const examples = parseExamples(
   process.env.NOON_COLD_START_EXAMPLES ??
@@ -75,6 +78,11 @@ try {
       const page = await browser.newPage(profile === "mobile-class"
         ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
         : { viewport: { width: 1200, height: 900 } });
+      if (!preloadEnabled) {
+        await page.route("**/live-authoring-bootstrap.js", (route) =>
+          route.fulfill({ status: 200, contentType: "text/javascript", body: "" }),
+        );
+      }
       if (profile === "mobile-class") {
         const cdp = await page.context().newCDPSession(page);
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
@@ -120,32 +128,81 @@ try {
         example.id,
         { timeout: 60_000 },
       );
-      const firstPresentedPromise = waitForFirstPresentedFrame(page, navigationStartEpochMs).then(
-        (value) => ({ value }),
-        (error) => ({ error }),
-      );
-
-      await page.waitForFunction(
-        () => document.querySelector("#status")?.dataset.runtimeStartup === "started-on-demand",
-        null,
-        { timeout: 240_000 },
-      );
-      await page.waitForFunction(
-        () => {
-          const draws = Number(document.querySelector("#metric-draws")?.value);
-          const objects = Number(document.querySelector("#metric-objects")?.value);
-          return Number.isFinite(draws) && draws > 0 && Number.isFinite(objects) && objects > 0;
-        },
-        null,
-        { timeout: 60_000 },
-      );
-      const firstMetrics = monotonicNow();
-      const firstPresentedResult = await firstPresentedPromise;
-      if (firstPresentedResult.error) throw firstPresentedResult.error;
-      const firstPresented = firstPresentedResult.value;
+      const sourceReady = await readPerformanceMark(page, "noon-playground-source-ready");
+      let firstPresented = null;
+      let firstMetrics = null;
+      let preloadStartedAtEpochMs = null;
+      let paintGateAtEpochMs = null;
+      let coldFirstEdit = null;
+      if (!preloadEnabled) {
+        paintGateAtEpochMs = await waitForInitialPaintGate(page);
+        const deferredState = await page.evaluate(() => ({
+          startup: document.querySelector("#status")?.dataset.runtimeStartup,
+          runInFlight: window.__noonExampleGallery?.runInFlight,
+        }));
+        assert.equal(deferredState.startup, "deferred", "off arm must leave runtime deferred until the first edit");
+        assert.equal(deferredState.runInFlight, false, "off arm must not submit an automatic source run");
+        assert.equal(workerHandles.length, 0, "off arm must not create workers before the first edit");
+        const previousGeneration = await page.evaluate(() =>
+          window.__noonExampleGallery.generationDiagnostics.runGeneration);
+        const editStarted = monotonicNow();
+        const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
+        await submitMeasuredSourceEdit(page, "# C6 first edit without preload");
+        await waitForCompletedRun(page, previousGeneration);
+        const editCompleted = monotonicNow();
+        const firstSession = await waitForSessionFirstPresented(page, null);
+        firstMetrics = editCompleted;
+        firstPresented = summarizeSessionPresentation(
+          firstSession.metrics,
+          navigationStartEpochMs,
+          firstSession.observedAfterEditMs,
+        );
+        coldFirstEdit = {
+          phase: "cold-first-edit-without-preload",
+          editToCompletedRunMs: editCompleted - editStarted,
+          editToFirstPresentedMs: firstSession.metrics.performanceTimeOriginMs +
+            firstSession.metrics.firstPresentedSessionAtMs - editStartedEpochMs,
+          hostObservedAfterEditMs: firstSession.observedAfterEditMs - editStartedEpochMs,
+          hostObservationLagMs: firstSession.observedAfterEditMs -
+            (firstSession.metrics.performanceTimeOriginMs + firstSession.metrics.firstPresentedSessionAtMs),
+          session: firstSession.metrics.presentedSession,
+          milestone: "first successful renderer.render() for the first authored session; not physical scanout",
+        };
+      }
+      if (preloadEnabled) {
+        await page.waitForFunction(
+          () => document.querySelector("#status")?.dataset.liveAuthoring === "ready",
+          null,
+          { timeout: 240_000 },
+        );
+        await page.waitForFunction(
+          () => {
+            const draws = Number(document.querySelector("#metric-draws")?.value);
+            const objects = Number(document.querySelector("#metric-objects")?.value);
+            return Number.isFinite(draws) && draws > 0 && Number.isFinite(objects) && objects > 0;
+          },
+          null,
+          { timeout: 60_000 },
+        );
+        firstMetrics = monotonicNow();
+        const firstSession = await waitForSessionFirstPresented(page, null);
+        firstPresented = summarizeSessionPresentation(
+          firstSession.metrics,
+          navigationStartEpochMs,
+          firstSession.observedAfterEditMs,
+        );
+        preloadStartedAtEpochMs = await readPerformanceMark(page, "noon-live-authoring-preload-start");
+        paintGateAtEpochMs = preloadStartedAtEpochMs;
+      }
       if (failures.length > 0) throw new Error(failures.join("\n"));
+      assert.ok(paintGateAtEpochMs >= sourceReady,
+        "initial source readiness must precede the two-frame preload/first-edit gate");
+      if (preloadEnabled) {
+        assert.ok(preloadStartedAtEpochMs >= paintGateAtEpochMs,
+          "automatic preload must start only after the initial paint gate");
+      }
 
-      assert.ok(authoringWorker !== null, "automatic preload must create the Python authoring worker");
+      assert.ok(authoringWorker !== null, "the first scene run must create one Python authoring worker");
       const authoringStartup = summarizeAuthoringStartup(
         await authoringWorker.evaluate(
           () => globalThis.__noonAuthoringStartupMetrics ?? null,
@@ -159,8 +216,10 @@ try {
         "cold preload must retain exactly one Python authoring worker",
       );
       const authoringWorkerEvent = workerSummary.workers.find(({ role }) => role === "authoring");
-      assert.ok(authoringWorkerEvent, "cold preload must record Python worker creation");
-      const preloadStarted = origin + authoringWorkerEvent.atMs;
+      assert.ok(authoringWorkerEvent, "first scene run must record Python worker creation");
+      const preloadStarted = preloadStartedAtEpochMs === null
+        ? null
+        : navigationStart + preloadStartedAtEpochMs - navigationStartEpochMs;
 
       const resourceContexts = [
         {
@@ -201,11 +260,7 @@ try {
       const workersBeforeEdit = workerHandles.length;
       const editStarted = monotonicNow();
       const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
-      await page.evaluate(() => {
-        const source = document.querySelector("#python-scene-source");
-        source.value = `${source.value.trimEnd()}\n# C6 warm source rerun\n`;
-        source.dispatchEvent(new Event("input", { bubbles: true }));
-      });
+      await submitMeasuredSourceEdit(page, "# C6 warm source rerun");
       await waitForCompletedRun(page, beforeGeneration);
       const editCompleted = monotonicNow();
       const warmPresentation = await waitForSessionFirstPresented(page, previousPresentationSession);
@@ -245,16 +300,34 @@ try {
       const report = {
         label: example.label,
         exampleId: example.id,
-        milestones: preloadedColdStartMilestones({
+        preloadExperiment: {
+          enabled: preloadEnabled,
+          sourceReadyAtEpochMs: sourceReady,
+          preloadStartedAtEpochMs,
+          postSourcePaintGateAtEpochMs: paintGateAtEpochMs,
+          sourceReadyToPaintGateMs: paintGateAtEpochMs - sourceReady,
+          sourceReadyToPreloadStartMs: preloadStartedAtEpochMs === null
+            ? null
+            : preloadStartedAtEpochMs - sourceReady,
+          sourceReadyMeaning: "selected authored source and public gallery API are ready; automatic preload waits through two animation frames before starting",
+        },
+        milestones: preloadEnabled ? preloadedColdStartMilestones({
           navigationStart,
           pageReady,
           preloadStarted,
           firstMetrics,
-        }),
+        }) : null,
         authoringStartup,
         resourceFootprint,
         workers: workerSummary,
         warmRerun,
+        firstEditComparison: preloadEnabled ? {
+          phase: "first edit after automatic preload completed",
+          editToCompletedRunMs: warmRerun.editToCompletedRunMs,
+          editToFirstPresentedMs: warmRerun.firstPresentedAfterEdit.editToFirstPresentedMs,
+          fromSession: warmRerun.firstPresentedAfterEdit.previousSession,
+          toSession: warmRerun.firstPresentedAfterEdit.presentedSession,
+        } : coldFirstEdit,
         status,
         metrics,
         firstPresented,
@@ -263,7 +336,7 @@ try {
       };
       caseReport = report;
       console.log(
-        `${example.label}: preload→metrics ${format(report.milestones.preloadToFirstMetricsMs)} ms, ` +
+        `${example.label} (${preloadMode}): source-ready→preload ${formatOptional(report.preloadExperiment.sourceReadyToPreloadStartMs)} ms, ` +
           `Python worker ${format(authoringStartup.totalMs)} ms ` +
           `(module graph ${format(authoringStartup.moduleGraphLoadMs)} ms, ` +
           `critical ${authoringStartup.criticalResource} ${format(authoringStartup.criticalResourceMs)} ms, ` +
@@ -274,7 +347,8 @@ try {
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)}), ` +
           `first worker-present ${format(firstPresented.navigationToFirstPresentedMs)} ms from navigation, ` +
           `renderer ready ${format(firstPresented.rendererReady.navigationToRendererReadyMs)} ms from navigation, ` +
-          `warm edit→completed run ${format(warmRerun.editToCompletedRunMs)} ms`,
+          `first edit→completed run ${format(report.firstEditComparison.editToCompletedRunMs)} ms, ` +
+          `first edit→present ${format(report.firstEditComparison.editToFirstPresentedMs)} ms`,
       );
     } finally {
       try {
@@ -326,11 +400,11 @@ try {
       cpuThrottlingRate: profile === "mobile-class" ? 4 : 1,
       examples,
       freshBrowserProcessPerCase: true,
-      automaticPreload: true,
+      automaticPreload: preloadEnabled,
     },
     memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. rendererReady records successful retained renderer creation after GPU setup, separately from presentation. Their host observation and poll lag remain separate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. preloadStarted is the Python authoring worker creation event. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
+    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared renderer frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -340,44 +414,33 @@ try {
   server.kill("SIGTERM");
 }
 
-async function waitForFirstPresentedFrame(page, navigationStartEpochMs) {
-  return page.evaluate(async (navigationStartEpochMs) => {
-    const deadline = performance.now() + 240_000;
-    while (performance.now() < deadline) {
-      const response = await window.__noonExampleGallery?.executionMetrics?.();
-      const metrics = response?.metrics;
-      if (metrics?.presentedFrames > 0 && Number.isFinite(metrics.rendererReadyAtMs) &&
-          Number.isFinite(metrics.firstPresentedAtMs) &&
-          Number.isFinite(metrics.performanceTimeOriginMs)) {
-        const observedAtPageMs = performance.now();
-        const rendererReadyAtEpochMs = metrics.performanceTimeOriginMs + metrics.rendererReadyAtMs;
-        const firstPresentedAtEpochMs = metrics.performanceTimeOriginMs + metrics.firstPresentedAtMs;
-        if (rendererReadyAtEpochMs > firstPresentedAtEpochMs) {
-          throw new Error("renderer-ready timestamp follows first-present timestamp");
-        }
-        return {
-          rendererReady: {
-            readyAtWorkerMs: metrics.rendererReadyAtMs,
-            workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
-            readyAtEpochMs: rendererReadyAtEpochMs,
-            navigationToRendererReadyMs: rendererReadyAtEpochMs - navigationStartEpochMs,
-          },
-          firstPresentedAtWorkerMs: metrics.firstPresentedAtMs,
-          workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
-          firstPresentedAtEpochMs,
-          navigationStartEpochMs,
-          navigationToFirstPresentedMs: firstPresentedAtEpochMs - navigationStartEpochMs,
-          hostObservedAtPageMs: observedAtPageMs,
-          pageTimeOriginEpochMs: performance.timeOrigin,
-          observationLagMs: performance.timeOrigin + observedAtPageMs - firstPresentedAtEpochMs,
-          presentedFramesAtObservation: metrics.presentedFrames,
-          rendererSampledAtWorkerMs: metrics.sampledAtMs,
-        };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error("timed out waiting for renderer first-present telemetry");
-  }, navigationStartEpochMs);
+function summarizeSessionPresentation(metrics, navigationStartEpochMs, observedAtEpochMs) {
+  assert.ok(Number.isSafeInteger(metrics.presentedSession), "scene presentation must include its retained session identity");
+  assert.ok(Number.isFinite(metrics.firstPresentedSessionAtMs), "scene session must have a first-present timestamp");
+  assert.ok(Number.isFinite(metrics.rendererReadyAtMs), "scene session must include renderer-ready telemetry");
+  const firstPresentedAtEpochMs = metrics.performanceTimeOriginMs + metrics.firstPresentedSessionAtMs;
+  const rendererReadyAtEpochMs = metrics.performanceTimeOriginMs + metrics.rendererReadyAtMs;
+  assert.ok(rendererReadyAtEpochMs <= firstPresentedAtEpochMs,
+    "renderer-ready timestamp must precede the first scene-session presentation");
+  return {
+    presentedSession: metrics.presentedSession,
+    rendererReady: {
+      readyAtWorkerMs: metrics.rendererReadyAtMs,
+      workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
+      readyAtEpochMs: rendererReadyAtEpochMs,
+      navigationToRendererReadyMs: rendererReadyAtEpochMs - navigationStartEpochMs,
+    },
+    firstPresentedAtWorkerMs: metrics.firstPresentedSessionAtMs,
+    workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
+    firstPresentedAtEpochMs,
+    navigationStartEpochMs,
+    navigationToFirstPresentedMs: firstPresentedAtEpochMs - navigationStartEpochMs,
+    hostObservedAtEpochMs: observedAtEpochMs,
+    observationLagMs: observedAtEpochMs - firstPresentedAtEpochMs,
+    presentedFramesAtObservation: metrics.presentedFrames,
+    rendererSampledAtWorkerMs: metrics.sampledAtMs,
+    milestone: "first successful renderer.render() for the authored semantic session; not physical scanout",
+  };
 }
 
 async function waitForSessionFirstPresented(page, previousSession) {
@@ -398,6 +461,32 @@ async function waitForSessionFirstPresented(page, previousSession) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`timed out waiting for a presented retained session newer than ${previousSession}`);
+}
+
+async function readPerformanceMark(page, name) {
+  const timestamp = await page.evaluate((markName) => {
+    const mark = performance.getEntriesByName(markName, "mark").at(-1);
+    return mark ? performance.timeOrigin + mark.startTime : null;
+  }, name);
+  assert.ok(Number.isFinite(timestamp), `missing page performance mark '${name}'`);
+  return timestamp;
+}
+
+async function waitForInitialPaintGate(page) {
+  return page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      performance.mark("noon-c6-initial-paint-gate");
+      resolve(performance.timeOrigin + performance.now());
+    }));
+  }));
+}
+
+async function submitMeasuredSourceEdit(page, note) {
+  await page.evaluate((comment) => {
+    const source = document.querySelector("#python-scene-source");
+    source.value = `${source.value.trimEnd()}\n${comment}\n`;
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  }, note);
 }
 
 async function waitForCompletedRun(page, previousGeneration = -1) {
@@ -485,6 +574,10 @@ function positiveInteger(value, name) {
 
 function format(value) {
   return Number(value).toFixed(2);
+}
+
+function formatOptional(value) {
+  return value == null ? "n/a" : format(value);
 }
 
 function formatBytes(value) {

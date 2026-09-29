@@ -16,7 +16,7 @@ assert.match(
 );
 assert.match(
   bootstrap,
-  /await afterInitialPaint\(\);[\s\S]*await gallery\.run\(\);/,
+  /await afterInitialPaint\(\);[\s\S]*performance\.mark\("noon-live-authoring-preload-start"\);[\s\S]*await gallery\.run\(\);/,
   "initial preload must use the initialized playground Run path after paint",
 );
 assert.doesNotMatch(
