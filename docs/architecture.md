@@ -951,6 +951,8 @@ Renderer/GPU lifetime is decoupled from semantic publication: an old resource ve
 
 For managed wgpu handles, renderer/cache eviction drops Noon references while wgpu and its backend track submitted use and ordered queue writes; this is logical eviction, not proof of immediate physical GPU destruction. Additional Noon fencing is needed only when Noon reuses or externally owns resources beyond those guarantees.
 
+Semantic resource retention follows durable object references, including detached objects and numeric-text tokens. Each admitted text resource retains its font and vector dependencies even before attachment. Replacing content or removing the final semantic owner queues only the affected resources for reclamation after the complete transaction and any enclosing resource-admission scope succeed. Resource handles are versioned lookup capabilities; retaining a copied handle alone does not retain retired content. Compiled execution snapshots retain their own immutable dependency closure so reclaiming store entries cannot invalidate an older execution revision.
+
 Long-running interactive/hot-reload churn must have a bounded reclamation/compaction strategy. Stable/tombstoned execution identities and retained caches are allowed, but memory usage must not grow indefinitely with historical mutations when the corresponding semantic/execution/resource state is no longer live or deliberately cached. Explicit maintenance compaction may use the deliberate maintenance-barrier exception defined above.
 
 Text, Graph, 3D and interaction are features of the same scene/runtime architecture, not separate scene engines.

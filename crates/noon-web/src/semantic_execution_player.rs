@@ -4939,7 +4939,8 @@ mod tests {
                 .to_string(),
             )
             .unwrap_err();
-        assert_eq!(error.category, "unclassified");
+        assert_eq!(error.category, "stale_handle");
+        assert_eq!(error.code, "callback.unknown_object");
         assert!(player.pending_callback_phase.is_none());
         assert!(player.callback_membership_transaction.is_none());
         assert_eq!(player.session.publication_context(), before_context);
