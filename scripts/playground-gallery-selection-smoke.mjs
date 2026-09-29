@@ -65,46 +65,6 @@ function changedPixels(leftBytes, rightBytes) {
   return changed;
 }
 
-async function readTextGpu() {
-  const state = globalThis.__noonTextGpu;
-  if (!state?.textures.length) return null;
-  const { device, texture } = state.textures.at(-1);
-  const hash = bytes => {
-    let value = 2166136261;
-    for (const byte of bytes) value = Math.imul(value ^ byte, 16777619) >>> 0;
-    return value;
-  };
-  const result = { buffers: [], textureLabel: texture.label, textureCount: state.textures.filter(item => item.device === device).length };
-  for (const { device: owner, buffer } of state.buffers) {
-    if (owner !== device) continue;
-    const output = device.createBuffer({ size: buffer.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-    const encoder = device.createCommandEncoder();
-    encoder.copyBufferToBuffer(buffer, 0, output, 0, buffer.size);
-    device.queue.submit([encoder.finish()]);
-    await output.mapAsync(GPUMapMode.READ);
-    const bytes = new Uint8Array(output.getMappedRange());
-    result.buffers.push({ label: buffer.label, hash: hash(bytes), size: bytes.length,
-      values: Array.from(new Float32Array(bytes.slice(0, Math.min(bytes.length, 64)).buffer)) });
-    output.unmap(); output.destroy();
-  }
-  const output = device.createBuffer({ size: 256 * 64, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const encoder = device.createCommandEncoder();
-  encoder.copyTextureToBuffer({ texture }, { buffer: output, bytesPerRow: 256 }, { width: 64, height: 64, depthOrArrayLayers: 1 });
-  device.queue.submit([encoder.finish()]);
-  await output.mapAsync(GPUMapMode.READ);
-  const data = new Uint8Array(output.getMappedRange());
-  const region = new Uint8Array(64 * 64);
-  for (let y = 0; y < 64; y++) region.set(data.subarray(y * 256, y * 256 + 64), y * 64);
-  result.atlas = { hash: hash(region), nonzero: region.filter(value => value !== 0).length };
-  output.unmap(); output.destroy();
-  return result;
-}
-
-async function captureTextGpu(page) {
-  return Promise.all([page, ...page.workers()].map(surface =>
-    surface.evaluate(readTextGpu).catch(error => ({ error: String(error) }))));
-}
-
 async function waitForPresentation(page, previous) {
   await page.waitForFunction(
     () =>
@@ -168,97 +128,11 @@ try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext(profile);
   await runtimeCache.install(context);
-  // Temporary CI-only GPU diagnosis for the WebKit inverse-zoom failure.
-  function traceTextWrites(probe) {
-    const queue = globalThis.GPUQueue?.prototype;
-    if (!queue) return;
-    const state = globalThis.__noonTextGpu = { buffers: [], textures: [] };
-    const device = globalThis.GPUDevice.prototype;
-    const createBuffer = device.createBuffer;
-    device.createBuffer = function(desc) {
-      const traced = /text|camera/i.test(desc.label ?? "");
-      const buffer = createBuffer.call(this, traced ? { ...desc, usage: desc.usage | GPUBufferUsage.COPY_SRC } : desc);
-      if (traced) state.buffers.push({ device: this, buffer });
-      return buffer;
-    };
-    const createTexture = device.createTexture;
-    device.createTexture = function(desc) {
-      const traced = /glyph mask atlas/.test(desc.label ?? "");
-      const texture = createTexture.call(this, traced ? { ...desc, usage: desc.usage | GPUTextureUsage.COPY_SRC } : desc);
-      if (traced) {
-        state.textures.push({ device: this, texture });
-        if (probe === "initialize") this.queue.writeTexture({ texture }, new Uint8Array(texture.width * texture.height),
-          { bytesPerRow: texture.width, rowsPerImage: texture.height },
-          { width: texture.width, height: texture.height, depthOrArrayLayers: 1 });
-      }
-      return texture;
-    };
-    const writeTexture = queue.writeTexture;
-    queue.writeTexture = function(destination, data, layout, size) {
-      if (/glyph mask atlas/.test(destination.texture.label)) {
-        if (probe === "copy") {
-          const owner = state.textures.find(item => item.texture === destination.texture).device;
-          const row = Math.ceil(layout.bytesPerRow / 256) * 256;
-          const source = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength);
-          const staging = owner.createBuffer({ size: row * size.height, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true });
-          const padded = new Uint8Array(staging.getMappedRange());
-          for (let y = 0; y < size.height; y++) padded.set(source.subarray((layout.offset ?? 0) + y * layout.bytesPerRow,
-            (layout.offset ?? 0) + y * layout.bytesPerRow + size.width), y * row);
-          staging.unmap();
-          const encoder = owner.createCommandEncoder();
-          encoder.copyBufferToTexture({ buffer: staging, bytesPerRow: row, rowsPerImage: size.height }, destination, size);
-          this.submit([encoder.finish()]);
-          return;
-        }
-        if (probe === "pad256") {
-          const height = size.height;
-          const row = Math.ceil(layout.bytesPerRow / 256) * 256;
-          const source = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength);
-          const padded = new Uint8Array(row * height);
-          for (let y = 0; y < height; y++) padded.set(source.subarray((layout.offset ?? 0) + y * layout.bytesPerRow,
-            (layout.offset ?? 0) + y * layout.bytesPerRow + size.width), y * row);
-          return writeTexture.call(this, destination, padded, { ...layout, offset: 0, bytesPerRow: row }, size);
-        }
-        const result = writeTexture.apply(this, arguments);
-        if (probe === "submit") this.submit([]);
-        return result;
-      }
-      return writeTexture.apply(this, arguments);
-    };
-    const original = queue.writeBuffer;
-    const last = new WeakMap();
-    queue.writeBuffer = function(buffer, offset, data, dataOffset, size) {
-      const result = original.apply(this, arguments);
-      if (!buffer.label?.includes("text") && !buffer.label?.toLowerCase().includes("camera")) return result;
-      const element = data.BYTES_PER_ELEMENT ?? 1;
-      const start = (data.byteOffset ?? 0) + (dataOffset ?? 0) * element;
-      const count = size === undefined ? data.byteLength - (dataOffset ?? 0) * element : size * element;
-      const bytes = new Uint8Array(data.buffer ?? data, start, count);
-      let hash = 2166136261;
-      for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619) >>> 0;
-      if (last.get(buffer) !== hash) {
-        last.set(buffer, hash);
-        const values = Array.from(new Float32Array(bytes.slice(0, Math.min(count, 64)).buffer));
-        console.log("NOON_TEXT_WRITE " + JSON.stringify({ label: buffer.label, offset, count, hash, values }));
-      }
-      return result;
-    };
-  }
-  const uploadProbe = process.env.NOON_GPU_UPLOAD_PROBE;
-  report.uploadProbe = uploadProbe;
-  await context.addInitScript(traceTextWrites, uploadProbe);
-  await context.route("**/authoring-render-worker.js*", async route => {
-    const response = await route.fetch();
-    await route.fulfill({ response, body: `(${traceTextWrites.toString()})(${JSON.stringify(uploadProbe) ?? "undefined"});\n${await response.text()}` });
-  });
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
   const errors = [];
-  report.browserErrors = errors;
   page.on("pageerror", (error) => errors.push(String(error)));
-  report.textWrites = [];
   page.on("console", (message) => {
-    if (message.text().startsWith("NOON_TEXT_WRITE ")) report.textWrites.push(JSON.parse(message.text().slice(16)));
     if (message.type() === "error") errors.push(message.text());
   });
 
@@ -375,7 +249,6 @@ try {
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
   const authoredBaseline = await authoredCanvas.screenshot();
   captures.authoredBaseline = authoredBaseline;
-  if (process.env.NOON_INSPECTION_GPU_READBACK) report.gpuBaseline = await captureTextGpu(page);
   const clickCircle = () => tap(page,
     authoredBox.x + authoredBox.width * 0.36,
     authoredBox.y + authoredBox.height * 0.5,
@@ -449,7 +322,6 @@ try {
   const zoomed = await authoredCanvas.screenshot();
   captures.zoomed = zoomed;
   report.zoomChanged = changedPixels(authoredBaseline, zoomed);
-  if (process.env.NOON_INSPECTION_GPU_READBACK) report.gpuZoomed = await captureTextGpu(page);
   assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
   await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
   captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
@@ -458,7 +330,6 @@ try {
   const beforeZoomOut = await presentedFrames(page);
   await wheel(500 * Math.log(2));
   await waitForPresentation(page, beforeZoomOut);
-  if (process.env.NOON_INSPECTION_GPU_READBACK) report.gpuRestored = await captureTextGpu(page);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
