@@ -1110,7 +1110,7 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
     options.set_translation(3.0, -2.0).unwrap();
     options.set_z_index(4.0).unwrap();
     let local = player
-        .stage_required_callback_analytic_geometry(token, options)
+        .stage_required_callback_provisional_geometry(token, options)
         .unwrap();
 
     assert_eq!(scene.integration_store().borrow().len(), before_nodes);
@@ -1144,7 +1144,7 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
     ));
     assert_eq!(styled.style.fill_opacity, 0.6);
     let retained_path = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::path(
                 noon_core::VectorPath::new()
@@ -1244,13 +1244,13 @@ fn callback_provisional_add_preserves_interleaved_source_order() {
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
     let token = player.pending_callback_phase.unwrap().0;
     let first = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.5).unwrap(),
         )
         .unwrap();
     let last = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.75).unwrap(),
         )
@@ -1339,7 +1339,7 @@ fn unadmitted_callback_provisional_is_canceled_before_the_final_publication() {
     let token = player.pending_callback_phase.unwrap().0;
     let before_nodes = scene.integration_store().borrow().len();
     let local = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.5).unwrap(),
         )
@@ -1624,7 +1624,7 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
         )
         .unwrap();
     let retained_path = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::path(
                 noon_core::VectorPath::new()
@@ -2217,7 +2217,7 @@ mod callback_provisional_stage_limit_regression {
             serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
         let token = player.pending_callback_phase.unwrap().0;
         let local = player
-            .stage_required_callback_analytic_geometry(
+            .stage_required_callback_provisional_geometry(
                 token,
                 noon::ManimGeometryOptions::circle(0.5).unwrap(),
             )
@@ -2300,7 +2300,7 @@ mod callback_mixed_provisional_membership_regression {
             )
             .unwrap();
         let local = player
-            .stage_required_callback_analytic_geometry(
+            .stage_required_callback_provisional_geometry(
                 token,
                 noon::ManimGeometryOptions::circle(0.5).unwrap(),
             )

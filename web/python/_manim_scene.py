@@ -1116,7 +1116,7 @@ class _ContinuationCallbackPlayer:
             operation="callback.membership_read",
         )
 
-    def stageCallbackAnalyticGeometry(self, token_json: str, options: object) -> object:
+    def stageCallbackProvisionalGeometry(self, token_json: str, options: object) -> object:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
         from js import noonStageSemanticContinuationAnalyticGeometry

@@ -571,14 +571,14 @@ class _CanonicalCallbackContext:
         )
         self._membership_finalizers.append(finalize)
 
-    def stage_analytic_geometry(self, options: object) -> object:
-        """Create one phase-local analytic object through the pinned player."""
+    def stage_provisional_geometry(self, options: object) -> object:
+        """Create one phase-local geometry object through the pinned player."""
         if self._callback_player is None:
             raise NotImplementedError(
                 "callback provisional construction requires the pinned semantic execution player"
             )
         return engine_call(
-            self._callback_player.stageCallbackAnalyticGeometry,
+            self._callback_player.stageCallbackProvisionalGeometry,
             json.dumps(self.token, separators=(",", ":")),
             options,
             operation="callback.provisional_geometry",

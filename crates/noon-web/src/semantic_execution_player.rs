@@ -3697,12 +3697,12 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
-    /// Stage a Circle, Rectangle, or Line declaration in the exact pending
-    /// callback transaction. Paths and other resource-backed constructors stay
-    /// rejected until their scoped payload admission joins this same commit.
+    /// Stage one provisional geometry declaration in the exact pending callback
+    /// transaction. Inline and retained-path constructors remain phase-local until
+    /// the callback's final shared publication.
     #[cfg(target_arch = "wasm32")]
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackAnalyticGeometry)]
-    pub fn stage_callback_analytic_geometry_wasm(
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackProvisionalGeometry)]
+    pub fn stage_callback_provisional_geometry_wasm(
         &mut self,
         token_json: &str,
         options: crate::WasmManimGeometryOptions,
@@ -3710,7 +3710,7 @@ impl SemanticExecutionPlayer {
         let token =
             Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
         let local = self
-            .stage_required_callback_analytic_geometry(token, options.options)
+            .stage_required_callback_provisional_geometry(token, options.options)
             .map_err(crate::authoring_error::js_error)?;
         Ok(WasmCallbackProvisionalMobject {
             callback_token: token,

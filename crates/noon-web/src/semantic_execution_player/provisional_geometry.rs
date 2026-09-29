@@ -7,7 +7,7 @@
 use super::*;
 
 impl SemanticExecutionPlayer {
-    /// Create one analytic or retained-path object in the exact pending callback
+    /// Create one provisional inline or retained-path object in the exact pending callback
     /// transaction.
     ///
     /// The returned local token has no store identity and is valid only while
@@ -16,7 +16,7 @@ impl SemanticExecutionPlayer {
     /// semantic/effective publication. Retained paths keep their raw payload in
     /// this collector until that publication's scoped resource-admission suffix.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn stage_required_callback_analytic_geometry(
+    pub(crate) fn stage_required_callback_provisional_geometry(
         &mut self,
         expected_token: CallbackPhaseToken,
         options: noon::ManimGeometryOptions,

@@ -174,7 +174,7 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         options = wasm.WasmManimGeometryOptions.rectangle(1.5, 0.5)
         options.setTranslation(2.0, -1.0)
         provisional = engine_call(
-            fixture.player.stageCallbackAnalyticGeometry,
+            fixture.player.stageCallbackProvisionalGeometry,
             token,
             options,
             operation="callback.provisional_geometry",

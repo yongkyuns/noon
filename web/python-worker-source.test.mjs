@@ -188,7 +188,7 @@ test("semantic continuation delivers required callback work to its suspended sou
 test("continuation provisional geometry keeps the pinned player through Rust commit", () => {
   assert.match(source, /noonStageSemanticContinuationAnalyticGeometry/);
   assert.match(source, /noonResolveSemanticContinuationProvisionalMobject/);
-  assert.match(source, /callback\.player\.stageCallbackAnalyticGeometry\(tokenJson, options\)/);
+  assert.match(source, /callback\.player\.stageCallbackProvisionalGeometry\(tokenJson, options\)/);
   assert.match(source, /callback\.player\.stageCallbackProvisionalShift\(tokenJson, object, x, y\)/);
   assert.match(source, /callback\.player\.stageCallbackProvisionalFill\(/);
   assert.match(source, /callback\.player\.callbackProvisionalCenter\(tokenJson, object\)/);
@@ -403,20 +403,20 @@ test("continuation membership helpers retain the endpoint player pinned to the p
 });
 
 test("continuation provisional helpers use the exact phase player", () => {
-  const start = source.indexOf("function stageContinuationCallbackAnalyticGeometry");
+  const start = source.indexOf("function stageContinuationCallbackProvisionalGeometry");
   const end = source.indexOf("function readContinuationCallback", start);
   assert.ok(start >= 0 && end > start, "provisional helper boundaries must exist");
   const context = {};
   const calls = [];
   const player = {
-    stageCallbackAnalyticGeometry(token, options) { calls.push(["create", token, options]); return { localKey: "local:1" }; },
+    stageCallbackProvisionalGeometry(token, options) { calls.push(["create", token, options]); return { localKey: "local:1" }; },
     stageCallbackProvisionalShift(token, object, x, y) { calls.push(["shift", token, object, x, y]); },
     stageCallbackProvisionalFill(token, object, ...rgba) { calls.push(["fill", token, object, ...rgba]); },
     callbackProvisionalCenter(token, object) { calls.push(["center", token, object]); return { x: 2, y: -1 }; },
   };
   const helpers = new Function("activeAuthoringRun", `${source.slice(start, end)}
     return {
-      stageContinuationCallbackAnalyticGeometry,
+      stageContinuationCallbackProvisionalGeometry,
       stageContinuationCallbackProvisionalShift,
       stageContinuationCallbackProvisionalFill,
       continuationCallbackProvisionalCenter,
@@ -425,7 +425,7 @@ test("continuation provisional helpers use the exact phase player", () => {
     phaseTokenJson: '{"sequence":2}', player,
   } } });
   const object = { localKey: "local:1" };
-  assert.deepEqual(helpers.stageContinuationCallbackAnalyticGeometry(context, '{"sequence":2}', { circle: 1 }), object);
+  assert.deepEqual(helpers.stageContinuationCallbackProvisionalGeometry(context, '{"sequence":2}', { circle: 1 }), object);
   helpers.stageContinuationCallbackProvisionalShift(context, '{"sequence":2}', object, 3, -4);
   helpers.stageContinuationCallbackProvisionalFill(context, '{"sequence":2}', object, .1, .2, .3, .4, .5);
   assert.deepEqual(helpers.continuationCallbackProvisionalCenter(context, '{"sequence":2}', object), { x: 2, y: -1 });

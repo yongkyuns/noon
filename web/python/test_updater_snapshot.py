@@ -680,7 +680,7 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             self.token = token
             return ["1:2", "3:4"]
 
-        def stageCallbackAnalyticGeometry(self, token, options):
+        def stageCallbackProvisionalGeometry(self, token, options):
             self.staged.append((token, "analytic", options))
             return "provisional"
 
@@ -731,7 +731,7 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
 
     def test_provisional_property_operations_stay_separate_from_effective_rows(self) -> None:
         context = self.context()
-        provisional = context.stage_analytic_geometry("circle-options")
+        provisional = context.stage_provisional_geometry("circle-options")
         context.provisional_shift(provisional, updaters._base.Vec2(0.5, -1.0))
         context.provisional_set_fill(
             provisional, updaters._base.Color(0.2, 0.4, 0.8, 0.75), 0.6
