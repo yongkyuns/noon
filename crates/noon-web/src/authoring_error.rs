@@ -699,6 +699,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
             E::SegmentCompletionPending => {
                 Self::new("pending_work", "publication.segment_pending", message)
             }
+            E::TranslationDragActive => Self::new(
+                "pending_work",
+                "publication.translation_drag_active",
+                message,
+            ),
             E::ForeignSemanticStore => {
                 Self::new("foreign_handle", "publication.foreign_store", message)
             }

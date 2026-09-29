@@ -502,3 +502,47 @@ fn active_drag_blocks_undo_mapping_changes_compaction_and_callback_cancellation(
     assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
     assert!(!session.translation_drag_active());
 }
+
+#[test]
+fn uncaptured_drag_input_preserves_ordinary_click_actions() {
+    let (mut store, _, unrelated, mut session) = fixture();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_click_indicate(
+        unrelated,
+        Some(noon_core::SemanticClickIndicate::new(
+            1.2,
+            noon_core::Color::YELLOW,
+            0.5,
+        )),
+    );
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(10.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert!(!session.translation_drag_active());
+    let receipt = submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Release {
+            position: position(10.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        receipt.input.selection_click().unwrap().target(),
+        Some(unrelated)
+    );
+    assert!(session.runtime.interactions_active());
+    assert!(receipt.undo.is_none());
+}

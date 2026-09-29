@@ -269,17 +269,20 @@ impl ExecutionSession {
                 .suspend_translation_drag(active.object)
                 .map(|translation| (active, translation))
         });
-        let publication =
-            match self.submit_native_pointer_input_with_effective(token, input, effective, true) {
-                Ok(publication) => publication,
-                Err(error) => {
-                    if let Some((active, translation)) = suspended {
-                        self.runtime
-                            .restore_translation_drag(active.object, translation);
-                    }
-                    return Err(error.into());
+        let captured =
+            start.is_some() || active.is_some_and(|active| active.pointer == input.pointer());
+        let publication = match self
+            .submit_native_pointer_input_with_effective(token, input, effective, captured)
+        {
+            Ok(publication) => publication,
+            Err(error) => {
+                if let Some((active, translation)) = suspended {
+                    self.runtime
+                        .restore_translation_drag(active.object, translation);
                 }
-            };
+                return Err(error.into());
+            }
+        };
         if let Some(start) = start {
             self.runtime.invalidate_replay_domain();
             self.runtime
@@ -294,10 +297,10 @@ impl ExecutionSession {
                 ..active
             });
         }
-        if cancellation.is_some() {
+        if let Some(cancelled) = cancellation {
             self.translation_drag.active = None;
             self.runtime
-                .clear_translation_drag_effective_driver(cancellation.expect("checked").object);
+                .clear_translation_drag_effective_driver(cancelled.object);
         }
         Ok(TranslationDragReceipt {
             input: publication,
