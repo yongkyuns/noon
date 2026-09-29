@@ -5,8 +5,7 @@ use noon_core::{NativePointerCancellation, NativePointerId};
 
 const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
 
-#[path = "../../../../noon/tests/support/pointer_input_trace.rs"]
-mod shared_trace;
+use noon::example_scenes::pointer_input_trace as shared_trace;
 
 pub(super) struct PointerFixture {
     pub(super) player: SemanticExecutionPlayer,

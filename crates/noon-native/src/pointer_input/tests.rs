@@ -9,8 +9,7 @@ use noon_core::{
 
 const SIZE: PhysicalSize<u32> = PhysicalSize::new(800, 400);
 
-#[path = "../../../noon/tests/support/pointer_input_trace.rs"]
-mod shared_trace;
+use noon::example_scenes::pointer_input_trace as shared_trace;
 
 struct Fixture {
     app: NativeApp,

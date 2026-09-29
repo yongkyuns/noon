@@ -86,6 +86,12 @@ pub const EXPECTED_SEQUENCE: u64 = TRACE.len() as u64;
 pub const EXPECTED_SELECTED: bool = false;
 pub const EXPECTED_FRAME_TIME: f64 = 0.0;
 
+impl Default for Fixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Fixture {
     pub fn new() -> Self {
         let mut store = SemanticStore::new();
