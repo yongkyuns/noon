@@ -18,6 +18,10 @@ class OrdinaryCallbackProvisionalGeometry(Scene):
 
         def construct_once(mobject, _dt):
             if created:
+                if len(created) == 2 and _manim_updaters._canonical_callback_time(mobject) == 0.25:
+                    terminal = Circle(radius=0.1).shift((4.0, -1.0, 0.0))
+                    self.add(terminal)
+                    created.append(terminal)
                 return
             assert _manim_updaters._canonical_callback_time(mobject) == 0.0
             candidate = (
@@ -37,9 +41,12 @@ class OrdinaryCallbackProvisionalGeometry(Scene):
 
         anchor.add_updater(construct_once)
         await self.wait(0.25)
-        assert len(created) == 2
+        # The final phase also creates an object: its wrapper must finalize
+        # before the endpoint returns the player lease at segment completion.
+        assert len(created) == 3
         assert all(candidate._scene is self for candidate in created)
         assert created[0].get_center() == (2.0, -1.0)
         assert created[1].get_center() == (3.0, -1.0)
+        assert created[2].get_center() == (4.0, -1.0)
         assert anchor.get_center() == (0.5, 0.0)
         assert self.mobjects == [anchor, *created]

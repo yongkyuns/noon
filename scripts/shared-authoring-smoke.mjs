@@ -2721,7 +2721,7 @@ class SelectedAlignment(Scene):
   // rollback, local identity, and wrapper binding assertions cannot drift.
   for (const [fixture, objectCount] of [
     ["ordinary_callback_membership_atomic", 3],
-    ["ordinary_callback_provisional_geometry", 3],
+    ["ordinary_callback_provisional_geometry", 4],
   ]) {
     const callbackSource = await readFile(
       path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",

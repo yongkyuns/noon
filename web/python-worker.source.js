@@ -128,6 +128,8 @@ async function initializePyodide() {
   };
   self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
     completeContinuationCallback(context, tokenJson, patchBatchJson);
+  self.noonAcknowledgeSemanticContinuationCallback = (context, tokenJson, failure) =>
+    acknowledgeContinuationCallback(context, tokenJson, failure);
   self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
     failContinuationCallback(context, tokenJson, message);
   self.noonReadSemanticContinuationCallback = (context, tokenJson, requestJson) =>
@@ -485,6 +487,7 @@ function registerContinuationContext(context) {
     callbackRead: null,
     pending: null,
     callbackRequest: null,
+    callbackCommit: null,
     committedCallbackPlayer: null,
     terminal: false,
   };
@@ -539,6 +542,9 @@ function requestContinuationCallback(continuation, phase, player) {
   }
   if (continuation.callbackRequest !== null) {
     return Promise.reject(new Error("semantic continuation already has a required callback request"));
+  }
+  if (continuation.callbackCommit !== null) {
+    return Promise.reject(new Error("semantic continuation callback commit is not acknowledged"));
   }
   let phaseTokenJson;
   try {
@@ -727,6 +733,38 @@ function completeContinuationCallback(context, tokenJson, patchBatchJson) {
   return next;
 }
 
+// Rust has published, but the suspended source must attach its Python wrappers
+// before the endpoint starts another phase or returns/consumes the player lease.
+function requestContinuationCallbackCommit(continuation, phase) {
+  const tokenJson = JSON.stringify(phase.token);
+  if (continuation.terminal || continuation.pending === null ||
+      continuation.callbackRequest !== null || continuation.callbackCommit !== null ||
+      continuation.committedCallbackPlayer?.tokenJson !== tokenJson) {
+    return Promise.reject(new Error("stale semantic continuation callback commit"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.callbackCommit = { tokenJson, resolve, reject };
+    const pending = continuation.pending;
+    continuation.pending = null;
+    pending.resolve(continuationEvent("callback_committed", { phase }));
+  });
+}
+
+function acknowledgeContinuationCallback(context, tokenJson, failure = null) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
+    throw new Error("stale semantic continuation callback acknowledgement");
+  }
+  const commit = continuation.callbackCommit;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackCommit = null;
+  continuation.committedCallbackPlayer = null;
+  if (failure === null || failure === undefined) commit.resolve();
+  else commit.reject(new Error(String(failure)));
+  return next;
+}
+
 function failContinuationCallback(context, tokenJson, message) {
   if (typeof message !== "string" || message.trim() === "") {
     throw new TypeError("semantic continuation callback failure requires a message");
@@ -745,7 +783,8 @@ function failContinuationCallback(context, tokenJson, message) {
 
 function completeContinuation(continuation, generation) {
   if (continuation.terminal || generation !== continuation.generation ||
-      continuation.pending === null || continuation.callbackRequest !== null) {
+      continuation.pending === null || continuation.callbackRequest !== null ||
+      continuation.callbackCommit !== null) {
     throw new Error("stale semantic continuation completion");
   }
   const { resolve } = continuation.pending;
@@ -756,6 +795,11 @@ function completeContinuation(continuation, generation) {
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  continuation.committedCallbackPlayer = null;
+  if (continuation.callbackCommit !== null) {
+    continuation.callbackCommit.reject(error instanceof Error ? error : new Error(String(error)));
+    continuation.callbackCommit = null;
+  }
   if (continuation.callbackRequest !== null) {
     const callback = continuation.callbackRequest;
     continuation.callbackRequest = null;
@@ -901,8 +945,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     : continuationOnly
     ? (frame, player) => requestContinuationCallback(continuation, frame, player)
     : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
-  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
+  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined
     ? null
+    : continuationOnly
+    ? (frame) => requestContinuationCallbackCommit(continuation, frame)
     : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
   const discardRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
     ? null

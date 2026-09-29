@@ -1196,6 +1196,21 @@ def _service_semantic_continuation_event(
     kind = event["kind"]
     if kind == "complete":
         return None
+    if kind == "callback_committed":
+        import _manim_updaters
+        from js import noonAcknowledgeSemanticContinuationCallback
+
+        phase = event["phase"]
+        failure = None
+        try:
+            _manim_updaters.complete_canonical_callback_phase(
+                _manim_updaters.canonical_callback_session_id(scene), phase
+            )
+        except Exception as error:
+            failure = str(error)
+        return noonAcknowledgeSemanticContinuationCallback(
+            _context(scene), _json(phase["token"]), failure
+        )
     if kind != "callback":
         raise RuntimeError(f"unsupported semantic continuation event: {kind}")
     phase = event.get("phase")
@@ -1262,10 +1277,6 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
                     _manim_updaters.canonical_callback_session_id(scene), completed_phase
                 )
             raise
-        if completed_phase is not None:
-            _manim_updaters.complete_canonical_callback_phase(
-                _manim_updaters.canonical_callback_session_id(scene), completed_phase
-            )
 
 
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
@@ -1290,11 +1301,6 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
                     _manim_updaters.canonical_callback_session_id(scene), event["phase"]
                 )
             raise
-        if event["kind"] == "callback":
-            import _manim_updaters
-            _manim_updaters.complete_canonical_callback_phase(
-                _manim_updaters.canonical_callback_session_id(scene), event["phase"]
-            )
     return scene
 
 

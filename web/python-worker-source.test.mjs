@@ -196,6 +196,61 @@ test("continuation provisional geometry keeps the pinned player through Rust com
   assert.match(source, /player\.resolveCallbackProvisionalMobject\(tokenJson, object\)/);
 });
 
+test("source wrapper acknowledgement holds the committed player before next phase or return", async () => {
+  const continuation = {
+    context: {}, generation: 1, terminal: false, pending: null,
+    callbackRequest: null, callbackCommit: null, committedCallbackPlayer: null,
+  };
+  const api = new Function("activeAuthoringRun", `
+    ${source.slice(source.indexOf("function continuationEvent("), source.indexOf("function isContinuationControl("))}
+    return { awaitContinuationEvent, requestContinuationCallback,
+      completeContinuationCallback, requestContinuationCallbackCommit,
+      acknowledgeContinuationCallback, resolveContinuationCallbackProvisionalMobject,
+      completeContinuation, failContinuation };
+  `)({ continuation });
+  const phase = { token: { sequence: 1 } };
+  const token = JSON.stringify(phase.token);
+  const player = { resolveCallbackProvisionalMobject: () => "published handle" };
+  const firstEvent = api.awaitContinuationEvent(continuation);
+  const result = api.requestContinuationCallback(continuation, phase, player);
+  assert.equal(JSON.parse(await firstEvent).kind, "callback");
+  const publicationEvent = api.completeContinuationCallback(continuation.context, token, "batch");
+  assert.equal(await result, "batch");
+  let acknowledged = false;
+  const commit = api.requestContinuationCallbackCommit(continuation, phase);
+  commit.then(() => { acknowledged = true; });
+  assert.equal(JSON.parse(await publicationEvent).kind, "callback_committed");
+  assert.equal(acknowledged, false);
+  await assert.rejects(api.requestContinuationCallback(continuation, phase, player), /suspended source|not acknowledged/);
+  assert.throws(() => api.completeContinuation(continuation, 1), /stale/);
+  assert.throws(() => api.acknowledgeContinuationCallback(continuation.context, "stale"), /stale/);
+  assert.equal(api.resolveContinuationCallbackProvisionalMobject(continuation.context, token, {}), "published handle");
+  const nextEvent = api.acknowledgeContinuationCallback(continuation.context, token);
+  await commit;
+  assert.equal(acknowledged, true);
+  assert.equal(continuation.committedCallbackPlayer, null);
+  api.completeContinuation(continuation, 1);
+  assert.equal(JSON.parse(await nextEvent).kind, "complete");
+});
+
+test("canceling while Python attaches wrappers rejects the commit acknowledgement", async () => {
+  const continuation = {
+    context: {}, terminal: false, pending: { resolve() {}, reject() {} },
+    callbackRequest: null, callbackCommit: null,
+    committedCallbackPlayer: { tokenJson: '{"sequence":1}', player: {} },
+  };
+  const api = new Function("activeAuthoringRun", `
+    ${source.slice(source.indexOf("function continuationEvent("), source.indexOf("function isContinuationControl("))}
+    return { requestContinuationCallbackCommit, failContinuation };
+  `)({ continuation });
+  const commit = api.requestContinuationCallbackCommit(continuation, { token: { sequence: 1 } });
+  const rejected = assert.rejects(commit, /canceled/);
+  api.failContinuation(continuation, new Error("canceled"));
+  await rejected;
+  assert.equal(continuation.callbackCommit, null);
+  assert.equal(continuation.committedCallbackPlayer, null);
+});
+
 test("suspended callback reads stay token-pinned and cannot settle after cancellation", () => {
   assert.match(source, /noonReadSemanticContinuationCallback/);
   assert.match(source, /function\s+readContinuationCallback\s*\(/);
