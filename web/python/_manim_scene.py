@@ -517,7 +517,15 @@ def _stage_callback_membership(
             raise NotImplementedError(
                 "canonical callback provisional Mobjects currently support Scene.add only"
             )
+
+        # Validate the complete mixed argument list before a Rust admission is
+        # staged. The one batch below then gives Rust every original and local
+        # target at once, so a caught bad argument cannot retain an earlier
+        # member from this source-level Scene.add call.
         seen: set[str] = set()
+        entries: list[tuple[_base.Mobject, object | None, object | None]] = []
+        provisional_bindings: list[tuple[_base.Mobject, object, object, str]] = []
+        next_object_id = scene._next_object_id
         for member, provisional_handle, owner in provisional:
             if not isinstance(member, _base.Mobject):
                 raise NotImplementedError(
@@ -527,63 +535,69 @@ def _stage_callback_membership(
                 if owner is not callback:
                     raise RuntimeError("callback provisional Mobject belongs to another callback phase")
                 identity = callback.provisional_membership_key(provisional_handle)
+                reservation = _reserve_typed_binding(
+                    member, scene, provisional_handle, None, object_id=next_object_id
+                )
+                next_object_id += 1
+                provisional_bindings.append((member, provisional_handle, reservation, identity))
+                entries.append((member, None, provisional_handle))
             else:
+                if member._object is None or member._object.id not in scene._binding_handles:
+                    raise NotImplementedError(
+                        "callback membership Mobject requires a bound typed semantic handle"
+                    )
+                if member._scene is not None and member._scene is not scene:
+                    raise ValueError("callback membership Mobject belongs to another Scene")
+                handle = getattr(member, "_semantic_handle", None)
+                if handle is None:
+                    raise RuntimeError("callback membership Mobject requires a typed semantic handle")
                 identity = _semantic_wrapper_key(member)
+                entries.append((member, handle, None))
             if identity in seen:
                 raise ValueError("membership request contains a duplicate Mobject")
             seen.add(identity)
 
-        # Stage each argument in source order against the one collector-owned
-        # transaction. That keeps `Scene.add(existing, new)` ordered by the
-        # shared prepared planner, rather than making a Python membership list.
-        for member, provisional_handle, _ in provisional:
-            if provisional_handle is not None:
-                reservation = _reserve_typed_binding(member, scene, provisional_handle, None)
-                local_key = callback.provisional_membership_key(provisional_handle)
+        batch = engine_call(
+            _context(scene).beginMembershipBatch,
+            "add",
+            operation="callback.membership",
+        )
+        try:
+            for _, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+                else:
+                    engine_call(
+                        batch.appendCallbackProvisional,
+                        provisional_handle,
+                        operation="callback.provisional_membership",
+                    )
+        except Exception:
+            batch.free()
+            raise
 
-                def finalize(
-                    member=member,
-                    provisional_handle=provisional_handle,
-                    reservation=reservation,
-                ) -> None:
-                    handle = callback.resolve_provisional(provisional_handle)
-                    _semantic_handles._attach_shared_handle(member, handle)
-                    _commit_typed_binding(member, scene, reservation, handle)
-                    member._canonical_live_target_context = _context(scene)
-                    _membership_registry(scene)[_semantic_wrapper_key(member)] = member
-                    del member._callback_provisional_handle
-                    del member._callback_provisional_context
+        def finalize() -> None:
+            registry = _membership_registry(scene)
+            for member, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    member._bind(scene, member._object)
+                    registry[_semantic_wrapper_key(member)] = member
+            for member, provisional_handle, reservation, local_key in provisional_bindings:
+                handle = callback.resolve_provisional(provisional_handle)
+                _semantic_handles._attach_shared_handle(member, handle)
+                _commit_typed_binding(member, scene, reservation, handle)
+                member._canonical_live_target_context = _context(scene)
+                registry[_semantic_wrapper_key(member)] = member
+                del member._callback_provisional_handle
+                del member._callback_provisional_context
+                callback._membership_wrappers.pop(local_key, None)
 
-                callback.stage_provisional_add(provisional_handle, finalize)
-                callback._membership_wrappers[local_key] = member
-                continue
-
-            if member._object is None or member._object.id not in scene._binding_handles:
-                raise NotImplementedError(
-                    "callback membership Mobject requires a bound typed semantic handle"
-                )
-            if member._scene is not None and member._scene is not scene:
-                raise ValueError("callback membership Mobject belongs to another Scene")
-            handle = getattr(member, "_semantic_handle", None)
-            if handle is None:
-                raise RuntimeError("callback membership Mobject requires a typed semantic handle")
-            batch = engine_call(
-                _context(scene).beginMembershipBatch,
-                "add",
-                operation="callback.membership",
-            )
-            try:
-                engine_call(batch.appendMobject, "", handle, operation="callback.membership")
-            except Exception:
-                batch.free()
-                raise
-
-            def finalize_existing(member=member) -> None:
-                member._bind(scene, member._object)
-                _membership_registry(scene)[_semantic_wrapper_key(member)] = member
-
-            callback.stage_membership(batch, finalize_existing)
-            callback._membership_wrappers[_semantic_wrapper_key(member)] = member
+        callback.stage_membership(batch, finalize)
+        for member, _, _, local_key in provisional_bindings:
+            callback._membership_wrappers[local_key] = member
+        for member, handle, _ in entries:
+            if handle is not None:
+                callback._membership_wrappers[_semantic_wrapper_key(member)] = member
         return
     members: list[tuple[_base.Mobject, object]] = []
     for value in values:

@@ -295,3 +295,38 @@ fn canceled_pending_object_consumes_no_insertion_order_capacity() {
     assert_eq!(result.resolve(canceled), None);
     assert_eq!(store.next_insertion_order(), u64::MAX);
 }
+
+#[test]
+fn rejected_pending_extension_never_reuses_an_escaped_local_token() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let mut rejected = None;
+    let (prepared, error) = prepared
+        .with_pending_object_update(|transaction| {
+            let local = transaction.create_node(SemanticNodeCreation::object(
+                SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 }),
+            ));
+            rejected = Some(local);
+            transaction.set_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SemanticMutationTransactionError::InvalidNodeObjectState { .. }
+    ));
+
+    let escaped = rejected.expect("the rejected extension exposed one local token");
+    let mut recovered = prepared.into_transaction();
+    let retry = recovered.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 3.0 },
+    )));
+    assert_ne!(retry, escaped);
+
+    let result = recovered.prepare(&mut store).unwrap().commit();
+    assert!(result.resolve(escaped).is_none());
+    assert!(result.resolve(retry).is_some());
+}

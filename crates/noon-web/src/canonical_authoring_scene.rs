@@ -3193,11 +3193,18 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmSceneMembershipBatch {
         inner: SceneMembershipBatch,
+        callback_provisionals: Vec<noon_core::SemanticLocalNodeToken>,
     }
 
     impl WasmSceneMembershipBatch {
         pub(crate) fn into_inner(self) -> SceneMembershipBatch {
             self.inner
+        }
+
+        pub(crate) fn into_callback_parts(
+            self,
+        ) -> (SceneMembershipBatch, Vec<noon_core::SemanticLocalNodeToken>) {
+            (self.inner, self.callback_provisionals)
         }
 
         pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
@@ -3247,7 +3254,19 @@ mod wasm {
                     members: Vec::new(),
                     bindings: Vec::new(),
                 },
+                callback_provisionals: Vec::new(),
             })
+        }
+
+        /// Append one phase-local callback object to this existing typed batch.
+        /// The batch remains inert until the exact callback token consumes all
+        /// original and local references in one shared planner operation.
+        #[wasm_bindgen(js_name = appendCallbackProvisional)]
+        pub fn append_callback_provisional(
+            &mut self,
+            object: &crate::semantic_execution_player::WasmCallbackProvisionalMobject,
+        ) {
+            self.callback_provisionals.push(object.local_token());
         }
 
         #[wasm_bindgen(js_name = appendMobject)]

@@ -130,8 +130,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// Extend an unpublished transaction, then preflight it atomically.
     ///
     /// On either extension or preflight failure, this restores the exact prior
-    /// transaction, allocator, and preflight proof. The small callers below
-    /// select only their mutation source and error vocabulary.
+    /// mutation prefix and preflight proof. Local-token allocation remains
+    /// monotonic: a token exposed by a rejected extension is never reused by a
+    /// later retry, preventing an escaped phase-local token from aliasing a new
+    /// declaration. The small callers below select only their mutation source
+    /// and error vocabulary.
     fn with_recoverable_extension<E>(
         self,
         allow_repeated_membership: Option<bool>,
