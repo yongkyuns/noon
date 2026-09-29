@@ -356,7 +356,7 @@ impl SemanticStore {
             }
         } else {
             for (_, handle) in installed {
-                self.unregister_semantic_text_resource_dependencies(handle);
+                self.abort_semantic_text_resource_dependencies(handle);
                 let resource = self
                     .text_resources
                     .remove(handle.id)
@@ -422,7 +422,7 @@ impl SemanticStore {
         let result = publish(self, &handles);
         if result.is_err() {
             for handle in handles {
-                self.unregister_semantic_text_resource_dependencies(handle);
+                self.abort_semantic_text_resource_dependencies(handle);
                 self.text_resources
                     .remove(handle.id)
                     .expect("fresh unpublished text is removable");
@@ -863,6 +863,65 @@ mod tests {
                 assert_eq!(store.font_resources().len(), 1);
             }
         }
+    }
+
+    #[test]
+    fn failed_text_admission_keeps_preexisting_raw_font_and_geometry() {
+        let mut store = SemanticStore::new();
+        let geometry = store
+            .insert_geometry_path(
+                crate::VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(2.0, 1.0)),
+            )
+            .unwrap();
+        let (mut resource, fonts) = glyph_resource();
+        let face = resource.runs[0].font.clone();
+        let raw_font = store
+            .font_resources
+            .intern_face(
+                &face,
+                fonts
+                    .get_for_face(&face)
+                    .expect("fixture font")
+                    .data
+                    .clone(),
+            )
+            .unwrap();
+        resource.vector_items = Arc::from([crate::TextVectorItem {
+            geometry,
+            transform: TextAffineTransform::IDENTITY,
+            style: crate::TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: None,
+        }]);
+        resource.render_items = Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+        let mut parts = resource.parts.to_vec();
+        parts[0].vector_count = 1;
+        resource.parts = Arc::from(parts);
+        let before = (
+            store.text_resources().stats(),
+            store.font_resources().stats(),
+            store.geometry_resources().stats(),
+        );
+
+        let result = store.with_derived_text_resources(vec![resource], &fonts, |_, _| {
+            Err::<(), Error>(Error::Import(SemanticTextImportError::MissingFont(
+                crate::FontResourceKey::from_face(&face),
+            )))
+        });
+
+        assert!(matches!(result, Err(Error::Import(_))));
+        assert_eq!(
+            (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+            ),
+            before
+        );
+        assert!(store.font_resources().get(raw_font).is_some());
+        assert!(store.geometry_resources().get(geometry).is_some());
     }
 
     #[test]

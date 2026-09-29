@@ -244,6 +244,21 @@ impl SemanticStore {
         &mut self,
         handle: TextResourceHandle,
     ) {
+        self.unregister_semantic_text_resource_dependencies_inner(handle, true);
+    }
+
+    /// Undo provisional admission without turning pre-existing raw resources
+    /// into retirement candidates. The caller removes only the fresh text
+    /// entry, leaving the arena exactly as it was before the failed callback.
+    pub(crate) fn abort_semantic_text_resource_dependencies(&mut self, handle: TextResourceHandle) {
+        self.unregister_semantic_text_resource_dependencies_inner(handle, false);
+    }
+
+    fn unregister_semantic_text_resource_dependencies_inner(
+        &mut self,
+        handle: TextResourceHandle,
+        retire_dependencies: bool,
+    ) {
         if !self.resource_references.registered_texts.remove(&handle) {
             return;
         }
@@ -252,14 +267,17 @@ impl SemanticStore {
             if SemanticResourceReferences::release(
                 &mut self.resource_references.geometries,
                 geometry,
-            ) {
+            ) && retire_dependencies
+            {
                 self.resource_retirement_candidates
                     .geometries
                     .push(geometry);
             }
         }
         for font in fonts {
-            if SemanticResourceReferences::release(&mut self.resource_references.fonts, font) {
+            if SemanticResourceReferences::release(&mut self.resource_references.fonts, font)
+                && retire_dependencies
+            {
                 self.resource_retirement_candidates.fonts.push(font);
             }
         }
