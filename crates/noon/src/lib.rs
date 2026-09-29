@@ -140,6 +140,7 @@ mod scene_membership;
 mod scene_ordering;
 mod sector_authoring;
 mod semantic_mobject;
+mod source_reconciliation;
 mod state_replacement;
 mod svg_authoring;
 pub mod synchronized_plot_presentation;
@@ -241,10 +242,10 @@ pub use noon_core::{
     RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFunctionPlotRole, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
     SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle,
-    SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill,
-    TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A,
-    BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
+    SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, SourceIdentity,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError,
+    TextSourceFill, TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK,
+    BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
     DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD,
     GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK,
     MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B,
@@ -270,6 +271,10 @@ pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{Scene, SceneSection, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
+pub use source_reconciliation::{
+    SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
+    SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
+};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 #[cfg(feature = "latex")]
