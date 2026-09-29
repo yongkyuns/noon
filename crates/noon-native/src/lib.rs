@@ -586,7 +586,6 @@ impl NativeApp {
             .preparer
             .prepare_planned_publication_visible(
                 &gpu.device,
-                &gpu.queue,
                 &publication,
                 visibility.object_indices(),
                 metrics,

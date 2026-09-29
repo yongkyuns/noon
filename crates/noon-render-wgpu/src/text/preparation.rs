@@ -330,14 +330,14 @@ impl RetainedTextQuadPreparer {
     pub fn prepare<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         frame: &FrameState,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         let changes = FrameChanges::all();
-        self.prepare_with_changes(device, queue, frame, &changes, texts, fonts, metrics)
+        self.prepare_with_changes(device, frame, &changes, texts, fonts, metrics)
     }
 
     /// Prepare retained text while preserving runtime dirty-state locality.
@@ -349,7 +349,7 @@ impl RetainedTextQuadPreparer {
     pub fn prepare_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -365,7 +365,7 @@ impl RetainedTextQuadPreparer {
 
         if self.can_update_objects(frame, changes, texts, metrics)? {
             if let Some(updated) =
-                self.update_objects(device, queue, frame, changes, texts, fonts, metrics)?
+                self.update_objects(device, frame, changes, texts, fonts, metrics)?
             {
                 self.incremental_stats.object_update_frames = self
                     .incremental_stats
@@ -387,7 +387,7 @@ impl RetainedTextQuadPreparer {
             self.incremental_stats.fallback_rebuilds =
                 self.incremental_stats.fallback_rebuilds.saturating_add(1);
         }
-        self.full_rebuild(device, queue, frame, texts, fonts, metrics)?;
+        self.full_rebuild(device, frame, texts, fonts, metrics)?;
         Ok(self.prepared_frame(frame.time, true))
     }
 
@@ -469,7 +469,7 @@ impl RetainedTextQuadPreparer {
     fn update_objects(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -495,7 +495,6 @@ impl RetainedTextQuadPreparer {
             let rerastered = (phase_changed || translation_changed)
                 && self.reprepare_object_glyphs(
                     device,
-                    queue,
                     index as u32,
                     &state,
                     object,
@@ -564,7 +563,7 @@ impl RetainedTextQuadPreparer {
     fn reprepare_object_glyphs(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         object_index: u32,
         state: &PreparedTextObjectState,
         object: &noon_runtime::FrameObjectState,
@@ -598,7 +597,6 @@ impl RetainedTextQuadPreparer {
                 }
                 self.prepare_run(
                     device,
-                    queue,
                     object_index,
                     state.text,
                     run_index,
@@ -707,7 +705,7 @@ impl RetainedTextQuadPreparer {
     fn full_rebuild(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         frame: &FrameState,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
@@ -763,7 +761,6 @@ impl RetainedTextQuadPreparer {
                         }
                         self.prepare_run(
                             device,
-                            queue,
                             object_index,
                             text_handle,
                             run_index,
@@ -808,7 +805,7 @@ impl RetainedTextQuadPreparer {
     fn prepare_run(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+
         object_index: u32,
         text_handle: TextResourceHandle,
         run_index: u32,
@@ -847,7 +844,7 @@ impl RetainedTextQuadPreparer {
                 phase,
             )?;
             let key = raster_key(fonts, run, glyph.glyph_id, pixel_size, phase)?;
-            let entry = self.atlas.insert(device, queue, key, raster.as_ref())?;
+            let entry = self.atlas.insert(device, key, raster.as_ref())?;
             let GlyphAtlasEntry::Image(atlas_image) = entry else {
                 self.stats.empty_glyphs += 1;
                 continue;
@@ -1349,11 +1346,11 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
 
         let prepared = preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
         assert!(!prepared.mask_quads.is_empty());
         assert!(prepared.color_quads.is_empty());
@@ -1390,11 +1387,11 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         let prepared = preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
         let actual = prepared
             .items
@@ -1421,11 +1418,11 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
 
         let prepared = preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
         assert!(prepared.mask_quads.is_empty());
         assert!(prepared.color_quads.is_empty());
@@ -1445,11 +1442,11 @@ mod tests {
         let handle = texts.insert(artifact.resource).unwrap();
         let mut frame = retained_frame(handle, true, scene_transform());
         frame.reveals[0] = 0.4;
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
 
         let prepared = preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
         assert!(prepared.mask_quads.is_empty());
         assert!(matches!(
@@ -1465,11 +1462,11 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, false, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
 
         let prepared = preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
         assert!(prepared.items.is_empty());
         assert!(prepared.mask_quads.is_empty());
@@ -1487,19 +1484,12 @@ mod tests {
         let mut translated = scene_transform();
         translated.translation = Vec2::new(2.0, -2.0);
         let second_frame = retained_frame(handle, true, translated);
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
 
         let first_quad = {
             let prepared = preparer
-                .prepare(
-                    &device,
-                    &queue,
-                    &first_frame,
-                    &texts,
-                    &artifact.fonts,
-                    metrics(),
-                )
+                .prepare(&device, &first_frame, &texts, &artifact.fonts, metrics())
                 .unwrap();
             prepared.mask_quads[0]
         };
@@ -1510,14 +1500,7 @@ mod tests {
 
         let second_quad = {
             let prepared = preparer
-                .prepare(
-                    &device,
-                    &queue,
-                    &second_frame,
-                    &texts,
-                    &artifact.fonts,
-                    metrics(),
-                )
+                .prepare(&device, &second_frame, &texts, &artifact.fonts, metrics())
                 .unwrap();
             prepared.mask_quads[0]
         };
@@ -1537,14 +1520,13 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -1561,7 +1543,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::default(),
                     &texts,
@@ -1590,14 +1571,13 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let mut frame = two_text_frame(handle);
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         let (before, batches) = {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::all(),
                     &texts,
@@ -1628,7 +1608,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![1]),
                     &texts,
@@ -1641,7 +1620,7 @@ mod tests {
         let fresh = {
             let mut fresh_preparer = RetainedTextQuadPreparer::new(256).unwrap();
             fresh_preparer
-                .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+                .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
                 .unwrap()
                 .mask_quads
                 .to_vec()
@@ -1679,10 +1658,10 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let mut frame = two_text_frame(handle);
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(48).unwrap();
         preparer
-            .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
             .unwrap();
 
         for step in 1..=32 {
@@ -1691,7 +1670,6 @@ mod tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![1]),
                     &texts,
@@ -1702,7 +1680,7 @@ mod tests {
             let actual = prepared.mask_quads.to_vec();
             let mut fresh = RetainedTextQuadPreparer::new(48).unwrap();
             let expected = fresh
-                .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+                .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
                 .unwrap();
             assert_eq!(actual.len(), expected.mask_quads.len());
             for (actual, expected) in actual.iter().zip(expected.mask_quads) {
@@ -1726,29 +1704,15 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let initial = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut sparse = RetainedTextQuadPreparer::new(256).unwrap();
         let mut dense = RetainedTextQuadPreparer::new(256).unwrap();
 
         sparse
-            .prepare(
-                &device,
-                &queue,
-                &initial,
-                &texts,
-                &artifact.fonts,
-                metrics(),
-            )
+            .prepare(&device, &initial, &texts, &artifact.fonts, metrics())
             .unwrap();
         dense
-            .prepare(
-                &device,
-                &queue,
-                &initial,
-                &texts,
-                &artifact.fonts,
-                metrics(),
-            )
+            .prepare(&device, &initial, &texts, &artifact.fonts, metrics())
             .unwrap();
 
         let mut final_frame = initial.clone();
@@ -1758,7 +1722,6 @@ mod tests {
             dense
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &final_frame,
                     &FrameChanges::objects(vec![0]),
                     &texts,
@@ -1774,7 +1737,6 @@ mod tests {
         let sparse_quads = sparse
             .prepare_with_changes(
                 &device,
-                &queue,
                 &final_frame,
                 &FrameChanges::objects(vec![0]),
                 &texts,
@@ -1799,28 +1761,14 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let initial = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut sparse = RetainedTextQuadPreparer::new(2048).unwrap();
         let mut dense = RetainedTextQuadPreparer::new(2048).unwrap();
         sparse
-            .prepare(
-                &device,
-                &queue,
-                &initial,
-                &texts,
-                &artifact.fonts,
-                metrics(),
-            )
+            .prepare(&device, &initial, &texts, &artifact.fonts, metrics())
             .unwrap();
         dense
-            .prepare(
-                &device,
-                &queue,
-                &initial,
-                &texts,
-                &artifact.fonts,
-                metrics(),
-            )
+            .prepare(&device, &initial, &texts, &artifact.fonts, metrics())
             .unwrap();
 
         let mut final_frame = initial.clone();
@@ -1836,7 +1784,6 @@ mod tests {
             dense
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &final_frame,
                     &FrameChanges::objects(vec![0]),
                     &texts,
@@ -1852,7 +1799,6 @@ mod tests {
         let sparse_quads = sparse
             .prepare_with_changes(
                 &device,
-                &queue,
                 &final_frame,
                 &FrameChanges::objects(vec![0]),
                 &texts,
@@ -1884,13 +1830,12 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let mut frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -1902,7 +1847,6 @@ mod tests {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 &texts,
@@ -1923,13 +1867,12 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let mut frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -1941,7 +1884,6 @@ mod tests {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 &texts,
@@ -1961,13 +1903,12 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -1979,7 +1920,7 @@ mod tests {
         assert!(matches!(
             preparer.prepare_with_changes(
                 &device,
-                &queue,
+
                 &frame,
                 &FrameChanges::all(),
                 &missing,
@@ -1992,7 +1933,6 @@ mod tests {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::default(),
                 &texts,
@@ -2011,13 +1951,12 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -2028,7 +1967,6 @@ mod tests {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::default(),
                 &texts,
@@ -2047,12 +1985,11 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
         let frame = retained_frame(handle, true, scene_transform());
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -2066,7 +2003,6 @@ mod tests {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::default(),
                 &texts,

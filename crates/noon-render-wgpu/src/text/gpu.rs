@@ -938,8 +938,7 @@ mod tests {
             },
             data: Arc::from([255, 200, 100, 0]),
         });
-        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, &queue, key, &raster).unwrap()
-        else {
+        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, key, &raster).unwrap() else {
             panic!("visible mask glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
@@ -973,6 +972,7 @@ mod tests {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Noon text glyph noop encoder"),
         });
+        atlas.encode_pending_uploads(&mut encoder);
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -996,6 +996,7 @@ mod tests {
                 .unwrap()
         };
         queue.submit(Some(encoder.finish()));
+        atlas.acknowledge_pending_uploads();
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(stats.instances_drawn, 1);
         assert_eq!(stats.deferred_items, 0);
@@ -1007,18 +1008,16 @@ mod tests {
         let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
         for glyph_id in 1..=2 {
             let image = mask_raster(4, 2, 100 + glyph_id as u8);
-            let GlyphAtlasEntry::Image(entry) = atlas
-                .insert(&device, &queue, raster_key(glyph_id), &image)
-                .unwrap()
+            let GlyphAtlasEntry::Image(entry) =
+                atlas.insert(&device, raster_key(glyph_id), &image).unwrap()
             else {
                 panic!("visible mask glyph must allocate an atlas image");
             };
             assert_eq!(entry.page, 0);
         }
         let raster = mask_raster(1, 1, 255);
-        let GlyphAtlasEntry::Image(page_one) = atlas
-            .insert(&device, &queue, raster_key(3), &raster)
-            .unwrap()
+        let GlyphAtlasEntry::Image(page_one) =
+            atlas.insert(&device, raster_key(3), &raster).unwrap()
         else {
             panic!("visible mask glyph must allocate an atlas image");
         };
@@ -1053,6 +1052,7 @@ mod tests {
 
         let (_target, view) = noop_target(&device, "Noon text page-one noop target");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        atlas.encode_pending_uploads(&mut encoder);
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -1074,6 +1074,7 @@ mod tests {
             renderer.draw_item(&mut pass, &items[0], 1).unwrap()
         };
         queue.submit(Some(encoder.finish()));
+        atlas.acknowledge_pending_uploads();
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(stats.instances_drawn, 1);
     }
@@ -1093,8 +1094,7 @@ mod tests {
             },
             data: Arc::from([255]),
         });
-        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, &queue, key, &raster).unwrap()
-        else {
+        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, key, &raster).unwrap() else {
             panic!("visible glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {

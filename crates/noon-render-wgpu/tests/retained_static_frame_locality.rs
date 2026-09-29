@@ -42,7 +42,7 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
 
@@ -50,7 +50,6 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -68,7 +67,6 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &no_changes,
                 &texts,
@@ -131,7 +129,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -151,7 +148,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -167,7 +163,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![STATIC_OBJECTS / 2 + 1]),
                 &texts,
@@ -192,7 +187,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
                     &texts,
@@ -226,14 +220,13 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
 
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -246,7 +239,6 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -279,7 +271,7 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let fonts = artifact.fonts;
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
     frame.objects.push(FrameObjectState {
@@ -300,7 +292,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -313,7 +304,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -344,7 +334,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,

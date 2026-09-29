@@ -60,7 +60,6 @@ impl RetainedFramePreparer {
     pub fn prepare_planned_publication_visible<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         publication: &RendererPublication<'_>,
         visible_object_indices: &[usize],
         metrics: TextDeviceMetrics,
@@ -78,13 +77,7 @@ impl RetainedFramePreparer {
         if publication.active_family_animation_indices().is_empty() {
             self.release_planned_family_realization();
             return self
-                .prepare_publication_visible(
-                    device,
-                    queue,
-                    publication,
-                    visible_object_indices,
-                    metrics,
-                )
+                .prepare_publication_visible(device, publication, visible_object_indices, metrics)
                 .map_err(Into::into);
         }
 
@@ -102,7 +95,6 @@ impl RetainedFramePreparer {
         )?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
-            queue,
             &frame,
             publication.family_animation_plans(),
             publication.changes(),
@@ -141,7 +133,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_plan_set_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
@@ -152,7 +143,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
         let images = self.stage_image_publication(device, frame.retained, changes, None)?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
-            device, queue, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
+            device, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
         )?;
         prepared.commit_images(images, None);
         Ok(prepared)
@@ -165,7 +156,6 @@ impl RetainedFramePreparer {
     pub fn prepare_active_family_plan_set_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         active_indices: &std::collections::BTreeSet<usize>,
@@ -179,7 +169,6 @@ impl RetainedFramePreparer {
         let images = self.stage_image_publication(device, frame.retained, changes, Some(images))?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
-            queue,
             frame,
             plans,
             changes,
@@ -198,7 +187,6 @@ impl RetainedFramePreparer {
     fn prepare_family_plan_set_with_changes_inner<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
@@ -229,7 +217,6 @@ impl RetainedFramePreparer {
         {
             return self.prepare_cached_family_plan_set(
                 device,
-                queue,
                 frame,
                 plans,
                 changes,
@@ -251,7 +238,6 @@ impl RetainedFramePreparer {
         }
         self.prepare_canonical_mixed_baseline(
             device,
-            queue,
             frame.retained,
             changes,
             texts,
@@ -515,7 +501,6 @@ impl RetainedFramePreparer {
     fn prepare_cached_family_plan_set<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
@@ -530,15 +515,7 @@ impl RetainedFramePreparer {
         if changes_include_text(frame.retained, changes) {
             let prepared_text = self
                 .text
-                .prepare_with_changes(
-                    device,
-                    queue,
-                    frame.retained,
-                    changes,
-                    texts,
-                    fonts,
-                    metrics,
-                )
+                .prepare_with_changes(device, frame.retained, changes, texts, fonts, metrics)
                 .map_err(RetainedPrepareError::from)?;
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,

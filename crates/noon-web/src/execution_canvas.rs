@@ -1555,7 +1555,6 @@ mod wasm {
                     .direct_preparer
                     .prepare_planned_publication_visible(
                         &self.device,
-                        &self.queue,
                         &publication,
                         visibility.object_indices(),
                         metrics,

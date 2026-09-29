@@ -503,7 +503,6 @@ mod wasm {
                 self.preparer
                     .prepare_with_image_resources(
                         &self.device,
-                        &self.queue,
                         frame,
                         &self.pending_changes,
                         resources.texts(),
@@ -522,7 +521,6 @@ mod wasm {
                 self.preparer
                     .prepare_active_family_plan_set_with_changes(
                         &self.device,
-                        &self.queue,
                         &family_frame,
                         plans,
                         self.mirror.active_family_animation_indices(),

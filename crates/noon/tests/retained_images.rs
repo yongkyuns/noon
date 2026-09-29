@@ -31,7 +31,6 @@ fn upload(
     let prepared = preparer
         .prepare_publication(
             device,
-            queue,
             &publication,
             TextDeviceMetrics::uniform(32.0).unwrap(),
         )
@@ -198,7 +197,6 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
         let prepared = preparer
             .prepare_publication(
                 &device,
-                &queue,
                 &publication,
                 TextDeviceMetrics::uniform(32.0).unwrap(),
             )
@@ -245,7 +243,7 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     let object = scene.image(options()).unwrap();
     scene.add(&object).unwrap();
     let session = scene.execution_session().unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
@@ -255,7 +253,6 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     for changes in [FrameChanges::all(), FrameChanges::default()] {
         let result = preparer.prepare_with_image_resources(
             &device,
-            &queue,
             session.frame(),
             &changes,
             &texts,
@@ -274,7 +271,6 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     assert!(preparer
         .prepare_with_image_resources(
             &device,
-            &queue,
             session.frame(),
             &FrameChanges::default(),
             &texts,
@@ -312,7 +308,6 @@ fn skipped_image_generation_reconciles_without_reuploading_pixels() {
     preparer
         .prepare_publication(
             &device,
-            &queue,
             &session.take_renderer_publication(),
             TextDeviceMetrics::uniform(32.0).unwrap(),
         )
@@ -394,7 +389,6 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         let prepared = preparer
             .prepare_publication(
                 &device,
-                &queue,
                 &session.take_renderer_publication(),
                 TextDeviceMetrics::uniform(32.0).unwrap(),
             )

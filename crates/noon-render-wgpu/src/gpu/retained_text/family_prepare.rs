@@ -95,7 +95,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -105,7 +104,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_family_with_changes(
-            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+            device, frame, plan, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -113,7 +112,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
@@ -125,7 +123,6 @@ impl RetainedFramePreparer {
         let images = self.stage_image_publication(device, frame.retained, changes, None)?;
         self.prepare_canonical_mixed_baseline(
             device,
-            queue,
             frame.retained,
             changes,
             texts,

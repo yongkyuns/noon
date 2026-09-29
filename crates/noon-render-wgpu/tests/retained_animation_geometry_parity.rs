@@ -38,14 +38,13 @@ fn assert_prepares_path(frame: &FrameState) {
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     preparer.set_painter_order(&[0]);
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             frame,
             &FrameChanges::all(),
             &texts,
@@ -69,7 +68,6 @@ fn assert_prepares_path(frame: &FrameState) {
         let warm = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &next,
                 &FrameChanges::objects(vec![0]),
                 &texts,

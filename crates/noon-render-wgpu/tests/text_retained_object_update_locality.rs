@@ -70,13 +70,12 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
     let text = texts.insert(artifact.resource).unwrap();
     let mut frame = large_text_frame(text);
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -99,7 +98,6 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![CHANGED_INDEX]),
                 &texts,
@@ -135,13 +133,12 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
     frame.reveals[CHANGED_INDEX] = 0.5;
 
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -174,7 +171,6 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![CHANGED_INDEX]),
                 &texts,
@@ -207,14 +203,13 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     let text = texts.insert(artifact.resource).unwrap();
     let mut frame = single_text_frame(text);
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let initial_generation = preparer.atlas().generation();
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -228,7 +223,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::default(),
             &texts,
@@ -242,7 +236,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![0]),
             &texts,
@@ -256,7 +249,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![0]),
             &texts,
