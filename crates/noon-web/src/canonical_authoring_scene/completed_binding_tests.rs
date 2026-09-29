@@ -240,3 +240,115 @@ fn matching_nested_rate_scopes_preserve_child_defaults_and_outer_duration() {
         assert!(context.contains_mobject(&target_leaf).unwrap());
     }
 }
+
+fn committed_callback_membership_player() -> (
+    CanonicalAuthoringScene,
+    crate::SemanticExecutionPlayer,
+    noon::Mobject,
+) {
+    let (mut context, source, _, target, _) = fixture();
+    context
+        .add_updater(&source, HostCallbackId::new(91), 0.0, None)
+        .unwrap();
+    let mut player = context.take_execution_player(1.0, 91).unwrap();
+    let phase: serde_json::Value = serde_json::from_str(
+        &player
+            .initial_callback_phase_json()
+            .unwrap()
+            .expect("updater begins a required callback phase"),
+    )
+    .unwrap();
+    let token = player
+        .session_mut_for_test()
+        .pending_callback_token()
+        .expect("callback is pending");
+    player
+        .stage_required_callback_membership(
+            token,
+            &SceneMembershipBatch::callback_existing(
+                SceneMembershipBatchKind::Add,
+                [target.clone()],
+            ),
+        )
+        .unwrap();
+    player
+        .commit_callback_phase_json(
+            &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
+        )
+        .unwrap();
+    (context, player, target)
+}
+
+#[test]
+fn callback_binding_association_accepts_the_rightful_leased_player_after_commit() {
+    let (mut context, player, target) = committed_callback_membership_player();
+    let revision = context.scene.revision();
+    let identity = player.ownership_identity();
+
+    context
+        .associate_published_callback_mobjects(
+            &player,
+            binding_batch(vec![(ObjectId::new(1), target.clone())]),
+        )
+        .unwrap();
+
+    assert_eq!(context.scene.revision(), revision);
+    assert_eq!(context.live_execution_ownership(), "transferred");
+    assert_eq!(context.bindings[&ObjectId::new(1)], target.node_id());
+    assert_eq!(context.identities[&target.node_id()], ObjectId::new(1));
+    assert_eq!(player.ownership_identity(), identity);
+}
+
+#[test]
+fn callback_binding_association_rejects_precommit_foreign_and_duplicate_batches_atomically() {
+    let (mut context, source, _, target, _) = fixture();
+    context
+        .add_updater(&source, HostCallbackId::new(92), 0.0, None)
+        .unwrap();
+    let mut player = context.take_execution_player(1.0, 92).unwrap();
+    player.initial_callback_phase_json().unwrap().unwrap();
+    let bindings = context.bindings.clone();
+    let identities = context.identities.clone();
+    let revision = context.scene.revision();
+
+    assert!(context
+        .associate_published_callback_mobjects(
+            &player,
+            binding_batch(vec![(ObjectId::new(1), target.clone())]),
+        )
+        .is_err());
+    assert_eq!(context.bindings, bindings);
+    assert_eq!(context.identities, identities);
+    assert_eq!(context.scene.revision(), revision);
+
+    let (mut committed_context, committed_player, committed_target) =
+        committed_callback_membership_player();
+    let bindings = committed_context.bindings.clone();
+    let identities = committed_context.identities.clone();
+    let revision = committed_context.scene.revision();
+    let foreign = CanonicalAuthoringScene::default()
+        .build_live_player(1.0, 93)
+        .unwrap();
+    assert!(committed_context
+        .associate_published_callback_mobjects(
+            &foreign,
+            binding_batch(vec![(ObjectId::new(1), committed_target.clone())]),
+        )
+        .is_err());
+    assert_eq!(committed_context.bindings, bindings);
+    assert_eq!(committed_context.identities, identities);
+    assert_eq!(committed_context.scene.revision(), revision);
+
+    assert!(committed_context
+        .associate_published_callback_mobjects(
+            &committed_player,
+            binding_batch(vec![
+                (ObjectId::new(1), committed_target.clone()),
+                (ObjectId::new(2), committed_target),
+            ]),
+        )
+        .is_err());
+    assert_eq!(committed_context.bindings, bindings);
+    assert_eq!(committed_context.identities, identities);
+    assert_eq!(committed_context.scene.revision(), revision);
+}

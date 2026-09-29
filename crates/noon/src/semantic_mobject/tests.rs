@@ -467,6 +467,26 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
 }
 
 #[test]
+fn analytic_options_materialize_without_resource_admission() {
+    let mut circle = ManimGeometryOptions::circle(0.75).unwrap();
+    circle.set_translation(2.0, -1.5).unwrap();
+    circle.set_z_index(3.0).unwrap();
+    circle.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
+
+    let state = circle.inline_state().unwrap().unwrap();
+    assert!(matches!(
+        &state.content,
+        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) if *radius == 0.75
+    ));
+    assert_eq!(state.transform.translation.x, 2.0);
+    assert_eq!(state.transform.translation.y, -1.5);
+    assert_eq!(state.z_index(), 3.0);
+
+    let path = ManimGeometryOptions::path(VectorPath::new().move_to(Vec2::ZERO)).unwrap();
+    assert_eq!(path.inline_state().unwrap(), None);
+}
+
+#[test]
 fn manim_line_endpoints_preserve_f64_transform_and_color_prefers_visible_fill() {
     let mut scene = Scene::new();
     let mut line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();

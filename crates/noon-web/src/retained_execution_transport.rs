@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 8;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -89,9 +89,30 @@ pub struct RetainedTransportObjectState {
     pub render_geometry: Option<GeometryRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_transform: Option<Transform2D>,
-    /// Index into the immutable geometry table installed with this session's bundle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub render_geometry_resource: Option<u32>,
+    /// Generation-qualified arena reference, encoded as a decimal string so JS
+    /// metadata parsing cannot round a high generation before Rust receives it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "render_geometry_id_json"
+    )]
+    pub render_geometry_resource: Option<u64>,
+}
+
+mod render_geometry_id_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(id: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        id.map(|id| id.to_string()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|id| id.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,9 +167,8 @@ pub enum RetainedExecutionTransportError {
     DuplicateObject(ObjectId),
     UnknownSlot(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
-    ContentIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
-    InvalidRenderGeometryResource(u32),
+    InvalidRenderGeometryResource(u64),
     AmbiguousRenderGeometry(TransportSlotId),
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
@@ -220,11 +240,6 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 "retained execution slot {}:{} changed object identity without a snapshot",
                 slot.slot, slot.generation
             ),
-            Self::ContentIdentityChanged(slot) => write!(
-                formatter,
-                "retained execution slot {}:{} changed content identity without a snapshot",
-                slot.slot, slot.generation
-            ),
             Self::TextRenderGeometry(slot) => write!(
                 formatter,
                 "retained text slot {}:{} cannot carry transient render geometry",
@@ -272,7 +287,7 @@ pub struct RetainedExecutionDeltaEncoder {
     initialized: bool,
     snapshot_orders: Vec<Option<u32>>,
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
-    render_geometry_indices: Option<HashMap<usize, u32>>,
+    render_geometry_indices: Option<HashMap<usize, u64>>,
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
 }
 
@@ -304,7 +319,7 @@ impl RetainedExecutionDeltaEncoder {
             .map(|(index, geometry)| {
                 (
                     Arc::as_ptr(geometry) as usize,
-                    u32::try_from(index).expect("compiled geometry table exceeds u32"),
+                    u64::try_from(index).expect("compiled geometry table exceeds u64"),
                 )
             })
             .collect();
@@ -621,7 +636,7 @@ pub struct RetainedExecutionFrameMirror {
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
     object_indices: HashMap<ObjectId, usize>,
-    render_geometries: Arc<[Arc<GeometryRef>]>,
+    render_geometries: Vec<crate::retained_resource_transport::RenderGeometrySlot>,
     resource_session: Option<u32>,
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
@@ -656,12 +671,12 @@ impl RetainedExecutionFrameMirror {
     }
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
-        geometries: Arc<[Arc<GeometryRef>]>,
+        geometries: &[crate::retained_resource_transport::RenderGeometrySlot],
         text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     ) -> Self {
         Self {
             resource_session: session,
-            render_geometries: geometries,
+            render_geometries: geometries.to_vec(),
             text_handles,
             ..Self::default()
         }
@@ -717,12 +732,16 @@ impl RetainedExecutionFrameMirror {
         session: u32,
     ) -> Result<Option<Arc<GeometryRef>>, RetainedExecutionTransportError> {
         match object.render_geometry_resource {
-            Some(index) if self.resource_session == Some(session) => self
-                .render_geometries
-                .get(index as usize)
-                .cloned()
-                .map(Some)
-                .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index)),
+            Some(index) if self.resource_session == Some(session) => {
+                let (slot, generation) =
+                    crate::retained_resource_transport::render_geometry_parts(index);
+                self.render_geometries
+                    .get(slot as usize)
+                    .filter(|entry| entry.generation == generation)
+                    .and_then(|entry| entry.geometry.clone())
+                    .map(Some)
+                    .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
+            }
             Some(index) => {
                 Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
             }
@@ -990,11 +1009,8 @@ impl RetainedExecutionFrameMirror {
                         object.slot,
                     ));
                 }
-                if !incremental_content_identity_matches(&current.content, &content) {
-                    return Err(RetainedExecutionTransportError::ContentIdentityChanged(
-                        object.slot,
-                    ));
-                }
+                // Typed resource resolution above already validates new content.
+                // Content replacement does not change this retained object's identity.
                 (index, false)
             } else {
                 if self.object_indices.contains_key(&object.object)
@@ -1198,25 +1214,6 @@ impl RetainedExecutionFrameMirror {
     }
 }
 
-fn incremental_content_identity_matches(
-    current: &ObjectContentRef,
-    next: &ObjectContentRef,
-) -> bool {
-    match (current, next) {
-        (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
-        (ObjectContentRef::Image(current), ObjectContentRef::Image(next)) => {
-            current.resource() == next.resource()
-        }
-        // Text resources are immutable, but a live numeric binding can replace the
-        // version behind one retained object. The enclosing family envelope stages
-        // that resource addition before this mirror resolves the row, so preserving
-        // the text content kind preserves the retained slot without requiring a
-        // complete-scene snapshot.
-        (ObjectContentRef::Text(_), ObjectContentRef::Text(_)) => true,
-        _ => false,
-    }
-}
-
 fn validate_envelope_header(
     delta: &RetainedExecutionDeltaEnvelope,
 ) -> Result<(), RetainedExecutionTransportError> {
@@ -1263,7 +1260,7 @@ fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<Geom
 fn transport_object(
     frame: &FrameState,
     index: usize,
-    render_geometry_resource: Option<u32>,
+    render_geometry_resource: Option<u64>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -1388,7 +1385,7 @@ mod tests {
             )
         })
         .collect();
-        RetainedExecutionFrameMirror::with_installed_resources(None, Arc::from([]), handles)
+        RetainedExecutionFrameMirror::with_installed_resources(None, &[], handles)
     }
 
     fn test_mirror_with_render_geometries(
@@ -1397,7 +1394,15 @@ mod tests {
     ) -> RetainedExecutionFrameMirror {
         let mut mirror = test_mirror();
         mirror.resource_session = Some(session);
-        mirror.render_geometries = geometries;
+        mirror.render_geometries = geometries
+            .iter()
+            .map(
+                |geometry| crate::retained_resource_transport::RenderGeometrySlot {
+                    generation: 0,
+                    geometry: Some(geometry.clone()),
+                },
+            )
+            .collect();
         mirror
     }
 
@@ -1832,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_content_swap_requires_snapshot() {
+    fn incremental_content_swap_preserves_slot_and_unrelated_rows() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(3);
         let initial = encoder
@@ -1851,10 +1856,12 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            mirror.apply(delta),
-            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
-        ));
+        let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert_eq!(changes.object_indices(), &[1]);
+        assert!(changes.added_indices().is_empty());
+        assert!(changes.removed_indices().is_empty());
+        assert_eq!(mirror.frame().unwrap(), &changed);
     }
 
     #[test]
@@ -2080,6 +2087,22 @@ mod tests {
             Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(0))
         ));
         assert!(mirror.frame().is_none());
+    }
+
+    #[test]
+    fn high_generation_render_resource_survives_json_metadata_roundtrip() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut delta = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let id = crate::retained_resource_transport::render_geometry_id(7, 2_200_000);
+        assert!(id > (1_u64 << 53));
+        delta.objects[0].render_geometry_resource = Some(id);
+        let json = serde_json::to_string(&delta).unwrap();
+        assert!(json.contains(&format!("\"render_geometry_resource\":\"{id}\"")));
+        let reparsed: RetainedExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(reparsed.objects[0].render_geometry_resource, Some(id));
     }
 }
 

@@ -262,7 +262,7 @@ impl RasterImageResourceArena {
     /// Retire a semantic-store resource after its last durable semantic owner
     /// has gone away. Resource IDs are intentionally not reused, so stale image
     /// handles cannot alias a later payload.
-    pub(crate) fn remove(
+    pub fn remove(
         &mut self,
         handle: RasterImageResourceHandle,
     ) -> Option<Arc<RasterImageResource>> {

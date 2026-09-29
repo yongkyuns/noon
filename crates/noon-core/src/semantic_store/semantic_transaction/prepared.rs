@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+};
 
 use super::*;
 use crate::{
@@ -67,6 +70,11 @@ struct PreparedTransactionParts {
     planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
 }
 
+enum PreparedExtensionError<E> {
+    Extension(E),
+    Preflight(SemanticMutationTransactionError),
+}
+
 impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub(super) fn new(
         transaction: SemanticMutationTransaction,
@@ -119,23 +127,19 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.transaction
     }
 
-    /// Consume this unpublished proof after an existing-handle planner has read
-    /// it, then re-preflight the combined transaction under the same exclusive
-    /// store borrow. This is intentionally not `Clone`: provisional names and
-    /// transaction provenance remain in their original allocation domain.
-    pub(crate) fn with_existing_plan(
+    /// Extend an unpublished transaction, then preflight it atomically.
+    ///
+    /// On either extension or preflight failure, this restores the exact prior
+    /// mutation prefix and preflight proof. Local-token allocation remains
+    /// monotonic: a token exposed by a rejected extension is never reused by a
+    /// later retry, preventing an escaped phase-local token from aliasing a new
+    /// declaration. The small callers below select only their mutation source
+    /// and error vocabulary.
+    fn with_recoverable_extension<E>(
         self,
-        plan: SemanticMutationTransaction,
-    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
-        debug_assert!(plan.mutations.iter().all(|mutation| {
-            !matches!(
-                mutation,
-                SemanticMutation::AddNode { .. } | SemanticMutation::AddAnimation { .. }
-            ) && mutation
-                .node_references()
-                .into_iter()
-                .all(|node| node.existing().is_some())
-        }));
+        allow_repeated_membership: Option<bool>,
+        extend: impl FnOnce(&mut SemanticMutationTransaction, &SemanticStore) -> Result<(), E>,
+    ) -> Result<Self, (Box<Self>, PreparedExtensionError<E>)> {
         let Self {
             store,
             mut transaction,
@@ -143,14 +147,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             next_revision,
             planned_nodes,
         } = self;
-        // Extend the original transaction in place. A rejected extension
-        // truncates the candidate before reconstructing its prior proof, so a
-        // callback keeps exact transaction/allocator provenance without
-        // cloning a growing mutation prefix on every staged operation.
         let original_len = transaction.mutations.len();
         let original_repeated_membership = transaction.allow_repeated_membership_mutations;
-        transaction.allow_repeated_membership_mutations = true;
-        transaction.mutations.extend(plan.mutations);
+        if let Some(allow_repeated_membership) = allow_repeated_membership {
+            transaction.allow_repeated_membership_mutations = allow_repeated_membership;
+        }
+        if let Err(error) = extend(&mut transaction, store) {
+            transaction.mutations.truncate(original_len);
+            transaction.allow_repeated_membership_mutations = original_repeated_membership;
+            return Err((
+                Box::new(Self {
+                    store,
+                    transaction,
+                    preflight,
+                    next_revision,
+                    planned_nodes,
+                }),
+                PreparedExtensionError::Extension(error),
+            ));
+        }
         let PreparedTransactionParts {
             preflight: candidate_preflight,
             next_revision: candidate_next_revision,
@@ -168,7 +183,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         next_revision,
                         planned_nodes,
                     }),
-                    error,
+                    PreparedExtensionError::Preflight(error),
                 ));
             }
         };
@@ -178,6 +193,58 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             preflight: candidate_preflight,
             next_revision: candidate_next_revision,
             planned_nodes: candidate_planned_nodes,
+        })
+    }
+
+    /// Consume this unpublished proof after an existing-handle planner has read
+    /// it, then re-preflight the combined transaction under the same exclusive
+    /// store borrow. This is intentionally not `Clone`: provisional names and
+    /// transaction provenance remain in their original allocation domain.
+    pub(crate) fn with_existing_plan(
+        self,
+        plan: SemanticMutationTransaction,
+    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
+        debug_assert!(plan.mutations.iter().all(|mutation| {
+            !matches!(
+                mutation,
+                SemanticMutation::AddNode { .. } | SemanticMutation::AddAnimation { .. }
+            ) && mutation
+                .node_references()
+                .into_iter()
+                .all(|node| node.existing().is_some())
+        }));
+        self.with_recoverable_extension(Some(true), move |transaction, _store| {
+            transaction.mutations.extend(plan.mutations);
+            Ok::<(), Infallible>(())
+        })
+        .map_err(|(prepared, error)| match error {
+            PreparedExtensionError::Extension(never) => match never {},
+            PreparedExtensionError::Preflight(error) => (prepared, error),
+        })
+    }
+
+    /// Extend this prepared proof with one shared pending-node scene admission.
+    ///
+    /// This keeps the transaction-local allocator and prior mutation prefix in
+    /// place. Both planner rejection and final preflight rejection truncate the
+    /// attempted edge/order suffix before reconstructing the original proof.
+    pub(crate) fn with_pending_scene_admission(
+        self,
+        scene_root: SemanticNodeId,
+        admitted: &[SemanticTransactionNodeRef],
+    ) -> Result<Self, (Box<Self>, crate::PreparedSemanticMembershipErrorKind)> {
+        self.with_recoverable_extension(Some(true), |transaction, store| {
+            crate::stage_semantic_scene_admission(store, scene_root, admitted, transaction)
+        })
+        .map_err(|(prepared, error)| match error {
+            PreparedExtensionError::Extension(error) => (
+                prepared,
+                crate::PreparedSemanticMembershipErrorKind::Operation(error),
+            ),
+            PreparedExtensionError::Preflight(error) => (
+                prepared,
+                crate::PreparedSemanticMembershipErrorKind::Transaction(error),
+            ),
         })
     }
 
@@ -232,6 +299,34 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Existing(node) => self.store.node(node).map(|_| node),
             SemanticTransactionNodeRef::Pending(token) => self.planned_nodes.get(&token).copied(),
         }
+    }
+
+    /// Extend this prepared proof with authored writes to pending nodes while
+    /// retaining the exact prior proof when the added writes fail preflight.
+    ///
+    /// Callback-local construction uses this for a phase-bound object before it
+    /// has a durable semantic identity. The closure appends ordinary semantic
+    /// transaction mutations; it does not introduce a second patch vocabulary.
+    pub fn with_pending_object_update(
+        self,
+        update: impl FnOnce(&mut SemanticMutationTransaction),
+    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
+        // Pending-only coalescing can replace a mutation that was already in
+        // the prefix. Keep a bounded exact snapshot so a late invalid update
+        // restores that declaration as well as appended suffix mutations.
+        // Local-token allocation intentionally remains monotonic on recovery.
+        let original_mutations = self.transaction.mutations.clone();
+        self.with_recoverable_extension(None, |transaction, _store| {
+            update(transaction);
+            Ok::<(), Infallible>(())
+        })
+        .map_err(|(mut prepared, error)| {
+            prepared.transaction.mutations = original_mutations;
+            match error {
+                PreparedExtensionError::Extension(never) => match never {},
+                PreparedExtensionError::Preflight(error) => (prepared, error),
+            }
+        })
     }
 
     /// Re-preflight this still-unpublished batch with compiler-derived scalar tracks.

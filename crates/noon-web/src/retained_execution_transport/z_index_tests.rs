@@ -148,6 +148,7 @@ fn real_transient_packing_preserves_nonzero_anchor_layers_on_both_sides() {
             family_states: Vec::new(),
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: crate::RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,

@@ -554,6 +554,7 @@ class _CanonicalCallbackContext:
         # one typed semantic transaction and is the sole publication authority.
         self._membership_finalizers: list[Callable[[], None]] = []
         self._membership_wrappers: dict[str, object] = {}
+        self._next_provisional_binding_id: int | None = None
 
     def stage_membership(self, batch: object, finalize: Callable[[], None]) -> None:
         if self._callback_player is None:
@@ -567,6 +568,112 @@ class _CanonicalCallbackContext:
             operation="callback.membership",
         )
         self._membership_finalizers.append(finalize)
+
+    def stage_analytic_geometry(self, options: object) -> object:
+        """Create one phase-local analytic object through the pinned player."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        return engine_call(
+            self._callback_player.stageCallbackAnalyticGeometry,
+            json.dumps(self.token, separators=(",", ":")),
+            options,
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_shift(self, provisional: object, offset: _base.Vec2) -> None:
+        """Stage one authored construction translation, never an effective row."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackProvisionalShift,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            float(offset.x),
+            float(offset.y),
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_set_fill(
+        self,
+        provisional: object,
+        color: _base.Color,
+        opacity: float | None,
+    ) -> None:
+        """Stage an authored fill beside the provisional declaration."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackProvisionalFill,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            float(color.red),
+            float(color.green),
+            float(color.blue),
+            float(color.alpha),
+            None if opacity is None else float(opacity),
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_center(self, provisional: object) -> _base.Vec2:
+        """Read the prepared local declaration without assigning it a node ID."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        point = engine_call(
+            self._callback_player.callbackProvisionalCenter,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        return _base.Vec2(float(point.x), float(point.y))
+
+    def reserve_provisional_binding(self, scene: _base.Scene, mobject: _base.Mobject, provisional: object):
+        """Reserve a callback-local derived wrapper ID without assigning a node ID.
+
+        Several separate Scene.add calls can be staged before Rust publishes any
+        binding. This counter prevents their delayed Python wrappers from
+        selecting the same derived object ID.
+        """
+        if self._next_provisional_binding_id is None:
+            self._next_provisional_binding_id = scene._next_object_id
+        object_id = self._next_provisional_binding_id
+        self._next_provisional_binding_id += 1
+        from _manim_scene import _reserve_typed_binding
+        return _reserve_typed_binding(mobject, scene, provisional, None, object_id=object_id)
+
+    @staticmethod
+    def provisional_membership_key(provisional: object) -> str:
+        """Read the opaque phase-local key used by the Rust membership view."""
+        key = getattr(provisional, "localKey", None)
+        if key is None:
+            raise RuntimeError("callback provisional object has no local membership key")
+        return str(key)
+
+    def resolve_provisional(self, provisional: object) -> object:
+        """Redeem one phase-local name after Rust committed the whole callback."""
+        if self._callback_player is None:
+            raise RuntimeError("callback provisional construction has no pinned player")
+        return engine_call(
+            self._callback_player.resolveCallbackProvisionalMobject,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+
+    def associate_published(self, batch: object) -> None:
+        engine_call(
+            self._callback_player.associatePublishedCallbackMobjects,
+            self._authoring_context,
+            batch,
+            operation="callback.membership_binding",
+        )
 
     def membership_root_keys(self) -> list[str] | None:
         if self._callback_player is None:
@@ -1069,6 +1176,24 @@ def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContex
     return None
 
 
+def _canonical_provisional_context(
+    mobject: _base.Mobject,
+) -> tuple[_CanonicalCallbackContext, object] | None:
+    """Return one exact callback-local construction capability.
+
+    The marker has no semantic slot or generation. It is accepted only while
+    the owning callback context is active, so ordinary callback rows retain
+    their batched effective-write path.
+    """
+    context = getattr(mobject, "_callback_provisional_context", None)
+    provisional = getattr(mobject, "_callback_provisional_handle", None)
+    if (not isinstance(context, _CanonicalCallbackContext)
+            or provisional is None
+            or _ACTIVE_CANONICAL_CONTEXT.get() is not context):
+        return None
+    return context, provisional
+
+
 def active_callback_membership_context(scene: _base.Scene) -> _CanonicalCallbackContext | None:
     """Return the one phase-local structural collector for this exact Scene."""
     context = _ACTIVE_CANONICAL_CONTEXT.get()
@@ -1102,6 +1227,10 @@ def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
 
 
 def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        context, local = provisional
+        return context.provisional_center(local)
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._get_center(self)
@@ -1110,6 +1239,11 @@ def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
 
 
 def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        context, local = provisional
+        context.provisional_shift(local, _base._as_vec2(direction))
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._shift(self, direction)
@@ -1207,6 +1341,15 @@ def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobje
 def _canonical_set_fill(
     self: _base.Mobject, color: _base.Color | None = None, opacity: float | None = None
 ) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        if color is None:
+            raise NotImplementedError(
+                "callback provisional fill requires an explicit Color in this slice"
+            )
+        context, local = provisional
+        context.provisional_set_fill(local, color, opacity)
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._set_fill(self, color, opacity)
@@ -1277,7 +1420,8 @@ def _canonical_vmobject_set_fill(
     opacity: float | None = None,
     family: bool = True,
 ) -> _base.Mobject:
-    if _canonical_phase_context(self) is not None:
+    if (_canonical_phase_context(self) is not None
+            or _canonical_provisional_context(self) is not None):
         del family
         if color is not None:
             from _manim_compat import _as_color

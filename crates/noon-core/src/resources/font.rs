@@ -232,7 +232,8 @@ impl FontResourceArena {
 
     /// Release one font buffer after the final text dependency disappears.
     /// Reused slots receive a new resource version, so old handles stay stale.
-    pub(crate) fn remove(&mut self, handle: FontResourceHandle) {
+    /// Retire this exact versioned face after its final installed text dependency.
+    pub fn remove(&mut self, handle: FontResourceHandle) {
         if handle.arena != self.namespace {
             return;
         }

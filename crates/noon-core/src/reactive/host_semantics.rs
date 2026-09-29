@@ -1,58 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Ordered phases for one evaluated frame.
-///
-/// The order is semantic, not an implementation suggestion. A backend may fuse
-/// phases internally, but observable writes must be equivalent to this sequence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FrameExecutionPhase {
-    Timeline,
-    NativeDynamic,
-    HostCallbacks,
-    DerivedState,
-    Render,
-}
-
-impl FrameExecutionPhase {
-    pub const ORDERED: [Self; 5] = [
-        Self::Timeline,
-        Self::NativeDynamic,
-        Self::HostCallbacks,
-        Self::DerivedState,
-        Self::Render,
-    ];
-}
-
-/// Property-producing phases that may intentionally target the same property.
-///
-/// Noon uses ordered composition rather than rejecting the scene globally. The
-/// later phase sees the value produced by the earlier phase and wins when both
-/// phases write the same property in one frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DynamicDriverPhase {
-    Timeline,
-    NativeDynamic,
-    HostCallbacks,
-}
-
-impl DynamicDriverPhase {
-    pub const ORDERED: [Self; 3] = [Self::Timeline, Self::NativeDynamic, Self::HostCallbacks];
-
-    pub const fn precedence(self) -> u8 {
-        match self {
-            Self::Timeline => 0,
-            Self::NativeDynamic => 1,
-            Self::HostCallbacks => 2,
-        }
-    }
-
-    pub const fn overrides(self, other: Self) -> bool {
-        self.precedence() >= other.precedence()
-    }
-}
-
 /// How much execution history a host callback needs for an exact seek.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,27 +78,6 @@ pub enum HostReadModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn execution_phase_order_is_explicit_and_stable() {
-        assert_eq!(
-            FrameExecutionPhase::ORDERED,
-            [
-                FrameExecutionPhase::Timeline,
-                FrameExecutionPhase::NativeDynamic,
-                FrameExecutionPhase::HostCallbacks,
-                FrameExecutionPhase::DerivedState,
-                FrameExecutionPhase::Render,
-            ]
-        );
-    }
-
-    #[test]
-    fn later_dynamic_phase_overrides_earlier_phase() {
-        assert!(DynamicDriverPhase::HostCallbacks.overrides(DynamicDriverPhase::NativeDynamic));
-        assert!(DynamicDriverPhase::NativeDynamic.overrides(DynamicDriverPhase::Timeline));
-        assert!(!DynamicDriverPhase::Timeline.overrides(DynamicDriverPhase::HostCallbacks));
-    }
 
     #[test]
     fn replay_class_maps_to_exact_seek_requirement() {

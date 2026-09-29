@@ -458,3 +458,56 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         buffer.unmap();
     });
 }
+
+#[test]
+fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
+    let mut scene = Scene::new();
+    let mut target = scene.circle(0.5).unwrap();
+    // Content replacement preserves style; use the supported image style for
+    // both directions so this exercises residency rather than style rejection.
+    target.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    target.set_stroke_width(0.0).unwrap();
+    target.disable_stroke().unwrap();
+    let sibling = scene.image(options()).unwrap();
+    let image = scene.image(options()).unwrap();
+    let geometry = scene.circle(1.0).unwrap();
+    scene
+        .add_many(&[(&target).into(), (&sibling).into()])
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut text = renderer.create_retained_text_state(&device, &queue);
+    let mut preparer = RetainedFramePreparer::new();
+    upload(
+        &mut session,
+        &mut preparer,
+        &mut renderer,
+        &device,
+        &queue,
+        &mut text,
+    );
+    let slot = session.execution_slot_for_frame_index(0).unwrap();
+    let sibling_before = session.frame().objects[1].clone();
+    for replacement in [&image, &geometry] {
+        scene
+            .live(&mut session)
+            .replace_content(&target, replacement)
+            .unwrap();
+        let publication = session.take_renderer_publication();
+        assert_eq!(publication.changes().object_indices(), &[0]);
+        let prepared = preparer
+            .prepare_publication(
+                &device,
+                &publication,
+                TextDeviceMetrics::uniform(32.0).unwrap(),
+            )
+            .unwrap();
+        let stats = renderer.upload_retained(&device, &queue, &prepared, &mut text);
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(slot));
+        assert_eq!(session.frame().objects[1], sibling_before);
+        assert!(stats.bytes_uploaded() > 0);
+    }
+    assert!(session.frame().objects[0].geometry().is_some());
+    assert_eq!(renderer.image_residency_stats().objects, 1);
+}

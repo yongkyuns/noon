@@ -3,11 +3,13 @@ use crate::{execution_source::LiveProgramExecutionSource, NativeViewportConfig};
 use noon::ExecutionSession;
 use noon_core::{
     NativeEventOccurrence, NativeEventSource, ReactiveValue, SemanticMutationTransaction,
-    SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
-    SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticVec3, StoredGeometry,
+    SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
+    SemanticStore,
 };
 
 const SIZE: PhysicalSize<u32> = PhysicalSize::new(800, 400);
+
+use noon::example_scenes::pointer_input_trace as shared_trace;
 
 struct Fixture {
     app: NativeApp,
@@ -34,64 +36,18 @@ fn signal(
 
 impl Fixture {
     fn new() -> Self {
-        let mut store = SemanticStore::new();
-        let root = store.insert_family();
-        let target =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 0.5,
-            }));
-        let unrelated =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 0.5,
-            }));
-        for object in [target, unrelated] {
-            store.add_semantic_family_member(root, object).unwrap();
-        }
-        let position = signal(
-            &mut store,
-            root,
-            SemanticNativeInputSource::State(NativeStateSource::PointerPosition),
-            SemanticSignalValue::Vec3(SemanticVec3::ZERO),
-        );
-        let button = signal(
-            &mut store,
-            root,
-            SemanticNativeInputSource::State(NativeStateSource::PointerButton { button: 0 }),
-            SemanticSignalValue::Bool(false),
-        );
-        let down = signal(
-            &mut store,
-            root,
-            SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button: 0 }),
-            SemanticSignalValue::Scalar(0.0),
-        );
-        let up = signal(
-            &mut store,
-            root,
-            SemanticNativeInputSource::Event(NativeEventSource::PointerUp { button: 0 }),
-            SemanticSignalValue::Scalar(0.0),
-        );
-        let viewport = signal(
-            &mut store,
-            root,
-            SemanticNativeInputSource::State(NativeStateSource::ViewportSize),
-            SemanticSignalValue::Vec3(SemanticVec3::ZERO),
-        );
-        store
-            .bind_semantic_signal(position, target, SemanticObjectProperty::Translation)
-            .unwrap();
-        store
-            .bind_semantic_signal(down, target, SemanticObjectProperty::RotationZ)
-            .unwrap();
-        let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        let fixture = shared_trace::Fixture::new();
+        let mut session =
+            ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+        session.enable_pointer_fill_selection(4.0).unwrap();
         Self {
             app: NativeApp::new(session, NativeViewportConfig::default()),
-            position,
-            button,
-            down,
-            up,
-            viewport,
-            unrelated,
+            position: fixture.position,
+            button: fixture.button,
+            down: fixture.down,
+            up: fixture.up,
+            viewport: fixture.viewport,
+            unrelated: fixture.unrelated,
         }
     }
     fn value(&self, signal: SemanticNodeId) -> &ReactiveValue {
@@ -119,38 +75,58 @@ impl Fixture {
 #[test]
 fn paused_move_press_and_release_use_one_coherent_session_path() {
     let mut f = Fixture::new();
-    f.move_to(200.0, 100.0);
-    f.app.static_session_mut().take_frame_changes();
-    let before = f.app.session().publication_context();
-    f.edge(ElementState::Pressed);
+    let mut before_press = None;
+    for (index, step) in shared_trace::TRACE.iter().enumerate() {
+        match step.kind {
+            "move" => f.move_to(f64::from(step.x), f64::from(step.y)),
+            "press" => f.edge(ElementState::Pressed),
+            "release" => f.edge(ElementState::Released),
+            kind => panic!("unknown shared trace step {kind}"),
+        }
+        if index == 0 {
+            f.app.static_session_mut().take_frame_changes();
+            before_press = Some(f.app.session().publication_context());
+        } else if index == 1 {
+            assert_eq!(f.value(f.down), &ReactiveValue::Scalar(1.0));
+            assert_eq!(
+                f.app.session().publication_context().frame_epoch(),
+                before_press.unwrap().frame_epoch().checked_next().unwrap()
+            );
+            assert_eq!(
+                f.app
+                    .static_session_mut()
+                    .take_frame_changes()
+                    .object_indices(),
+                &[0]
+            );
+            assert!(f.app.session().wake_state().is_quiescent());
+        }
+    }
     assert_eq!(
         f.value(f.position),
-        &ReactiveValue::Vec2(Vec2::new(-4.0, 2.0))
-    );
-    assert_eq!(f.value(f.button), &ReactiveValue::Bool(true));
-    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(1.0));
-    assert_eq!(f.app.session().frame().time, 0.0);
-    assert_eq!(
-        f.app.session().publication_context().frame_epoch(),
-        before.frame_epoch().checked_next().unwrap()
-    );
-    assert_eq!(
-        f.app
-            .static_session_mut()
-            .take_frame_changes()
-            .object_indices(),
-        &[0]
-    );
-    assert!(f.app.session().wake_state().is_quiescent());
-    f.move_to(600.0, 300.0);
-    f.edge(ElementState::Released);
-    assert_eq!(
-        f.value(f.position),
-        &ReactiveValue::Vec2(Vec2::new(4.0, -2.0))
+        &ReactiveValue::Vec2(Vec2::new(
+            shared_trace::EXPECTED_POSITION.0,
+            shared_trace::EXPECTED_POSITION.1,
+        ))
     );
     assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
-    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(1.0));
-    assert_eq!(f.app.next_input_sequence, 4);
+    assert_eq!(
+        f.value(f.down),
+        &ReactiveValue::Scalar(shared_trace::EXPECTED_DOWN_COUNT)
+    );
+    assert_eq!(
+        f.value(f.up),
+        &ReactiveValue::Scalar(shared_trace::EXPECTED_UP_COUNT)
+    );
+    assert_eq!(f.app.next_input_sequence, shared_trace::EXPECTED_SEQUENCE);
+    assert_eq!(
+        f.app.session().frame().time,
+        shared_trace::EXPECTED_FRAME_TIME
+    );
+    assert_eq!(
+        f.app.session().selected_pointer_target().is_some(),
+        shared_trace::EXPECTED_SELECTED
+    );
 }
 
 #[test]

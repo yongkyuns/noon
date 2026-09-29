@@ -1485,6 +1485,7 @@ try {
       return requestSceneRun();
     },
   };
+  performance.mark("noon-playground-source-ready");
 
   window.addEventListener(
     "pagehide",

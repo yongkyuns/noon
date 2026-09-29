@@ -27,6 +27,8 @@ mod ownership_tests;
 #[cfg(test)]
 mod wait_bootstrap_tests;
 
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::CallbackPhaseToken;
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
@@ -39,6 +41,11 @@ enum OwnedSceneMembershipMember {
     Mobject {
         wrapper_id: Option<ObjectId>,
         handle: noon::Mobject,
+    },
+    #[cfg(any(target_arch = "wasm32", test))]
+    CallbackProvisional {
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
     },
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Family(noon::MobjectFamily),
@@ -62,6 +69,15 @@ pub(crate) struct SceneMembershipBatch {
     bindings: Vec<(ObjectId, noon::Mobject)>,
 }
 
+#[cfg(test)]
+pub(crate) enum CallbackMembershipTestMember {
+    Existing(noon::Mobject),
+    Provisional {
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    },
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
     #[cfg(test)]
@@ -80,6 +96,45 @@ impl SceneMembershipBatch {
                 .collect(),
             bindings: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn callback_ordered(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = CallbackMembershipTestMember>,
+    ) -> Self {
+        Self {
+            kind,
+            members: members
+                .into_iter()
+                .map(|member| match member {
+                    CallbackMembershipTestMember::Existing(handle) => {
+                        OwnedSceneMembershipMember::Mobject {
+                            wrapper_id: None,
+                            handle,
+                        }
+                    }
+                    CallbackMembershipTestMember::Provisional { token, local } => {
+                        OwnedSceneMembershipMember::CallbackProvisional { token, local }
+                    }
+                })
+                .collect(),
+            bindings: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn callback_with_provisional(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = noon::Mobject>,
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    ) -> Self {
+        let mut batch = Self::callback_existing(kind, members);
+        batch
+            .members
+            .push(OwnedSceneMembershipMember::CallbackProvisional { token, local });
+        batch
     }
 
     /// Validate only existing typed handles for one required callback's scene
@@ -143,6 +198,90 @@ impl SceneMembershipBatch {
         apply(request)
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_callback_provisionals(&self) -> bool {
+        self.members.iter().any(|member| {
+            matches!(
+                member,
+                OwnedSceneMembershipMember::CallbackProvisional { .. }
+            )
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn callback_provisionals(&self) -> Option<Vec<noon_core::SemanticLocalNodeToken>> {
+        let locals = self
+            .members
+            .iter()
+            .filter_map(|member| match member {
+                OwnedSceneMembershipMember::CallbackProvisional { local, .. } => Some(*local),
+                OwnedSceneMembershipMember::Mobject { .. }
+                | OwnedSceneMembershipMember::Family(_) => None,
+            })
+            .collect::<Vec<_>>();
+        (!locals.is_empty()).then_some(locals)
+    }
+
+    /// Validate one ordered callback-local Scene.add batch. Existing typed
+    /// handles retain their original store provenance; pending names retain the
+    /// exact callback token that created them. The returned references preserve
+    /// source argument order for the shared pending-node admission planner.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn with_callback_mixed_addition<R>(
+        &self,
+        expected_token: CallbackPhaseToken,
+        store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+        apply: impl FnOnce(Vec<noon_core::SemanticTransactionNodeRef>) -> Result<R, AuthoringFailure>,
+    ) -> Result<R, AuthoringFailure> {
+        if self.kind != SceneMembershipBatchKind::Add {
+            return Err(AuthoringFailure::new(
+                "unsupported_operation",
+                "callback.membership_operation",
+                "callback-local objects currently support Scene.add only",
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.members.len());
+        let mut members = Vec::with_capacity(self.members.len());
+        for member in &self.members {
+            let reference = match member {
+                OwnedSceneMembershipMember::Mobject { wrapper_id, handle } => {
+                    if wrapper_id.is_some() {
+                        return Err("callback membership cannot reserve wrapper bindings".into());
+                    }
+                    if !std::rc::Rc::ptr_eq(store, handle.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    handle.validate().map_err(AuthoringFailure::from)?;
+                    handle.node_id().into()
+                }
+                OwnedSceneMembershipMember::Family(family) => {
+                    if !std::rc::Rc::ptr_eq(store, family.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    family.validate().map_err(AuthoringFailure::from)?;
+                    family.node_id().into()
+                }
+                OwnedSceneMembershipMember::CallbackProvisional { token, local } => {
+                    if *token != expected_token {
+                        return Err("callback provisional geometry token is stale".into());
+                    }
+                    (*local).into()
+                }
+            };
+            if !seen.insert(reference) {
+                return Err("callback membership request contains a duplicate Mobject".into());
+            }
+            members.push(reference);
+        }
+        apply(members)
+    }
+
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -183,6 +322,10 @@ impl SceneMembershipBatch {
                     wrapper_id: Some(_),
                     ..
                 } => Err("family membership does not accept wrapper binding IDs".into()),
+                #[cfg(any(target_arch = "wasm32", test))]
+                OwnedSceneMembershipMember::CallbackProvisional { .. } => {
+                    Err("callback-local membership requires the pinned callback collector".into())
+                }
                 OwnedSceneMembershipMember::Family(family) => Ok(family.into()),
             })
             .collect()
@@ -2511,6 +2654,32 @@ impl CanonicalAuthoringScene {
         Ok(new_bindings)
     }
 
+    /// Associate callback-created language identities after the exact leased
+    /// player has committed its required callback phase.
+    ///
+    /// This is derived wrapper bookkeeping only. The batch may reserve bindings
+    /// for already-published direct-root objects, but cannot replay membership,
+    /// mutate semantic state, or advance either revision. The context remains
+    /// transferred while the rightful player performs this acknowledgement.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn associate_published_callback_mobjects(
+        &mut self,
+        player: &crate::SemanticExecutionPlayer,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        self.validate_execution_player_return(player)
+            .map_err(|error| AuthoringFailure::from(error.to_string()))?;
+        if player.has_pending_callback_phase() {
+            return Err("published callback association cannot precede callback completion".into());
+        }
+        if player.scene_revision() != self.scene.revision() {
+            return Err(
+                "published callback association requires a coherent execution revision".into(),
+            );
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
     /// Associate language identities with already-published membership, without
     /// replaying a semantic edit or changing the retained execution session.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2518,9 +2687,6 @@ impl CanonicalAuthoringScene {
         &mut self,
         batch: SceneMembershipBatch,
     ) -> Result<(), AuthoringFailure> {
-        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
-            return Err("published association accepts binding reservations only".into());
-        }
         let player = self
             .player_ownership
             .local()
@@ -2530,6 +2696,20 @@ impl CanonicalAuthoringScene {
         }
         if player.scene_revision() != self.scene.revision() {
             return Err("published association requires a coherent execution revision".into());
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
+    /// Validate and atomically install derived bindings for already-published
+    /// direct-root Mobjects. Both local completed-segment and leased callback
+    /// acknowledgement paths share this proof.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_published_binding_reservations(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
+            return Err("published association accepts add binding reservations only".into());
         }
         let new_bindings = self.validate_membership_bindings(&batch)?;
         for (_, handle) in &batch.bindings {
@@ -2593,6 +2773,12 @@ impl CanonicalAuthoringScene {
                         ));
                     }
                     borrowed.push(noon::MobjectTarget::Object(handle));
+                }
+                #[cfg(any(target_arch = "wasm32", test))]
+                OwnedSceneMembershipMember::CallbackProvisional { .. } => {
+                    return Err(
+                        "callback-local membership requires the pinned callback collector".into(),
+                    );
                 }
                 OwnedSceneMembershipMember::Family(family) => {
                     if !std::rc::Rc::ptr_eq(
@@ -3158,7 +3344,7 @@ mod wasm {
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
             self.inner
-                .associate_published_mobjects(batch.inner)
+                .associate_published_mobjects(batch.into_inner().map_err(js_error)?)
                 .map_err(js_error)
         }
 
@@ -3196,7 +3382,21 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
-        pub(crate) fn into_inner(self) -> SceneMembershipBatch {
+        pub(crate) fn into_inner(self) -> Result<SceneMembershipBatch, String> {
+            if self.inner.members.iter().any(|member| {
+                matches!(
+                    member,
+                    OwnedSceneMembershipMember::CallbackProvisional { .. }
+                )
+            }) {
+                return Err(
+                    "callback-local membership batch requires the pinned callback collector".into(),
+                );
+            }
+            Ok(self.inner)
+        }
+
+        pub(crate) fn into_callback_batch(self) -> SceneMembershipBatch {
             self.inner
         }
 
@@ -3248,6 +3448,22 @@ mod wasm {
                     bindings: Vec::new(),
                 },
             })
+        }
+
+        /// Append one phase-local callback object to this existing typed batch.
+        /// The batch remains inert until the exact callback token consumes all
+        /// original and local references in one shared planner operation.
+        #[wasm_bindgen(js_name = appendCallbackProvisional)]
+        pub fn append_callback_provisional(
+            &mut self,
+            object: &crate::semantic_execution_player::WasmCallbackProvisionalMobject,
+        ) {
+            self.inner
+                .members
+                .push(OwnedSceneMembershipMember::CallbackProvisional {
+                    token: object.callback_token(),
+                    local: object.local_token(),
+                });
         }
 
         #[wasm_bindgen(js_name = appendMobject)]
@@ -4857,7 +5073,7 @@ mod wasm {
         #[wasm_bindgen(js_name = editMembership)]
         pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
             self.inner
-                .edit_membership(batch.inner)
+                .edit_membership(batch.into_inner().map_err(typed_js_error)?)
                 .map_err(typed_js_error)
         }
 
@@ -7543,10 +7759,11 @@ mod wasm {
             batch: WasmSceneMembershipBatch,
             z_index: f64,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            if batch.inner.kind != SceneMembershipBatchKind::Add {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            if batch.kind != SceneMembershipBatchKind::Add {
                 return Err(typed_js_error("family creation requires an add batch"));
             }
-            let members = batch.inner.family_members().map_err(typed_js_error)?;
+            let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
                 .live_family(&members, z_index)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
@@ -7560,13 +7777,14 @@ mod wasm {
             handle: &crate::WasmAuthoringFamilyHandle,
             batch: WasmSceneMembershipBatch,
         ) -> Result<Vec<u8>, JsValue> {
-            let adding = match batch.inner.kind {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            let adding = match batch.kind {
                 SceneMembershipBatchKind::Add => true,
                 SceneMembershipBatchKind::Remove => false,
                 _ => return Err(typed_js_error("family membership requires add or remove")),
             };
             let family = handle.semantic_family()?;
-            let members = batch.inner.family_members().map_err(typed_js_error)?;
+            let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?

@@ -26,8 +26,13 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 7;
-const AUTHORING_STARTUP_METRICS_VERSION = 1;
+const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
+const authoringMilestones = {
+  performanceTimeOriginMs: performance.timeOrigin,
+  firstSceneContextCreatedAtMs: null,
+  authoringWorkerReadyAtMs: null,
+};
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -38,7 +43,10 @@ let activeAuthoringRun = null;
 let fatalAuthoringFailure = false;
 
 pyodidePromise
-  .then(() => post("ready"))
+  .then(() => {
+    authoringMilestones.authoringWorkerReadyAtMs = performance.now();
+    post("ready");
+  })
   .catch(failAuthoringWorker);
 
 // Interpreter-fatal rejections may never settle runPythonAsync. Forward them
@@ -82,8 +90,12 @@ async function initializePyodide() {
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const resourcesReadyAt = performance.now();
   const authoringStore = new WasmAuthoringStore();
-  self.noonCreateCanonicalAuthoringSceneContext = () =>
-    authoringStore.createSceneContext();
+  const authoringStoreCreatedAt = performance.now();
+  self.noonCreateCanonicalAuthoringSceneContext = () => {
+    const context = authoringStore.createSceneContext();
+    authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
+    return context;
+  };
   self.noonCreateAuthoringValueTrackerHandle = (initial) =>
     authoringStore.createValueTracker(initial);
   self.noonRegisterSemanticExecution = (context) => {
@@ -116,6 +128,8 @@ async function initializePyodide() {
   };
   self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
     completeContinuationCallback(context, tokenJson, patchBatchJson);
+  self.noonAcknowledgeSemanticContinuationCallback = (context, tokenJson, failure) =>
+    acknowledgeContinuationCallback(context, tokenJson, failure);
   self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
     failContinuationCallback(context, tokenJson, message);
   self.noonReadSemanticContinuationCallback = (context, tokenJson, requestJson) =>
@@ -124,6 +138,22 @@ async function initializePyodide() {
     stageContinuationCallbackMembership(context, tokenJson, batch);
   self.noonContinuationMembershipRootKeys = (context, tokenJson) =>
     continuationMembershipRootKeys(context, tokenJson);
+  self.noonStageSemanticContinuationAnalyticGeometry = (context, tokenJson, options) =>
+    stageContinuationCallbackAnalyticGeometry(context, tokenJson, options);
+  self.noonStageSemanticContinuationProvisionalShift = (context, tokenJson, object, x, y) =>
+    stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y);
+  self.noonStageSemanticContinuationProvisionalFill = (
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  ) => stageContinuationCallbackProvisionalFill(
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  );
+  self.noonSemanticContinuationProvisionalCenter = (context, tokenJson, object) =>
+    continuationCallbackProvisionalCenter(context, tokenJson, object);
+  self.noonResolveSemanticContinuationProvisionalMobject = (context, tokenJson, object) =>
+    resolveContinuationCallbackProvisionalMobject(context, tokenJson, object);
+  self.noonAssociateSemanticContinuationCallbackMobjects = (context, tokenJson, batch) =>
+    committedContinuationCallbackPlayer(context, tokenJson)
+      .associatePublishedCallbackMobjects(context, batch);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -343,15 +373,19 @@ sys.path.insert(0, "/tmp")
 import noon
 `);
   const importsReadyAt = performance.now();
-  self.__noonAuthoringStartupMetrics = Object.freeze({
+  const startupMetrics = {
     version: AUTHORING_STARTUP_METRICS_VERSION,
+    ...authoringMilestones,
     totalMs: importsReadyAt,
     moduleGraphLoadMs: moduleGraphReadyAt,
     initializeMs: importsReadyAt - initializeStartedAt,
     startupResourcesMs: resourcesReadyAt - initializeStartedAt,
     noonWebInitMs: resourceDurations.noonWebInitMs,
+    noonWebInitReadyAtMs: resourceDurations.noonWebInitReadyAtMs,
     pyodideInitMs: resourceDurations.pyodideInitMs,
+    pyodideInitReadyAtMs: resourceDurations.pyodideInitReadyAtMs,
     compatibilityBundleMs: resourceDurations.compatibilityBundleMs,
+    compatibilityBundleReadyAtMs: resourceDurations.compatibilityBundleReadyAtMs,
     authoringBindingsMs: bindingsReadyAt - resourcesReadyAt,
     compatibilityFsInstallMs: compatibilityFilesReadyAt - bindingsReadyAt,
     compatibilityImportInstallMs: importsReadyAt - compatibilityFilesReadyAt,
@@ -360,7 +394,23 @@ import noon
       (total, module) => total + module.source.length,
       0,
     ),
+    resourcesReadyAtMs: resourcesReadyAt,
+    authoringStoreCreatedAtMs: authoringStoreCreatedAt,
+    bindingsReadyAtMs: bindingsReadyAt,
+    compatibilityFilesReadyAtMs: compatibilityFilesReadyAt,
+    importsReadyAtMs: importsReadyAt,
+  };
+  Object.defineProperties(startupMetrics, {
+    firstSceneContextCreatedAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.firstSceneContextCreatedAtMs,
+    },
+    authoringWorkerReadyAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.authoringWorkerReadyAtMs,
+    },
   });
+  self.__noonAuthoringStartupMetrics = Object.freeze(startupMetrics);
   return pyodide;
 }
 
@@ -374,6 +424,7 @@ function measureStartupTask(metrics, key, task) {
   }
   return Promise.resolve(result).then((value) => {
     metrics[key] = performance.now() - startedAt;
+    metrics[`${key.replace(/Ms$/, "")}ReadyAtMs`] = performance.now();
     return value;
   });
 }
@@ -439,6 +490,8 @@ function registerContinuationContext(context) {
     callbackRead: null,
     pending: null,
     callbackRequest: null,
+    callbackCommit: null,
+    committedCallbackPlayer: null,
     terminal: false,
   };
   semanticContexts.set(contextId, entry);
@@ -493,6 +546,9 @@ function requestContinuationCallback(continuation, phase, player) {
   if (continuation.callbackRequest !== null) {
     return Promise.reject(new Error("semantic continuation already has a required callback request"));
   }
+  if (continuation.callbackCommit !== null) {
+    return Promise.reject(new Error("semantic continuation callback commit is not acknowledged"));
+  }
   let phaseTokenJson;
   try {
     phaseTokenJson = JSON.stringify(phase?.token);
@@ -503,6 +559,7 @@ function requestContinuationCallback(continuation, phase, player) {
     return Promise.reject(new Error("canonical callback phase is missing its token"));
   }
   return new Promise((resolve, reject) => {
+    continuation.committedCallbackPlayer = null;
     continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null, player };
     const pending = continuation.pending;
     continuation.pending = null;
@@ -526,6 +583,65 @@ function continuationMembershipRootKeys(context, tokenJson) {
     throw new Error("semantic continuation callback has no pinned membership collector");
   }
   return callback.player.callbackMembershipRootKeys(tokenJson);
+}
+
+function stageContinuationCallbackAnalyticGeometry(context, tokenJson, options) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackAnalyticGeometry !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.stageCallbackAnalyticGeometry(tokenJson, options);
+}
+
+function stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalShift !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalShift(tokenJson, object, x, y);
+}
+
+function stageContinuationCallbackProvisionalFill(
+  context, tokenJson, object, red, green, blue, alpha, opacity,
+) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalFill !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalFill(
+    tokenJson, object, red, green, blue, alpha, opacity,
+  );
+}
+
+function continuationCallbackProvisionalCenter(context, tokenJson, object) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.callbackProvisionalCenter !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.callbackProvisionalCenter(tokenJson, object);
+}
+
+function committedContinuationCallbackPlayer(context, tokenJson) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
+    throw new Error("semantic continuation has no completed callback player");
+  }
+  const completed = continuation.committedCallbackPlayer;
+  const player = completed?.tokenJson === tokenJson ? completed.player : null;
+  if (player === null || player === undefined) {
+    throw new Error("semantic continuation callback has no committed provisional geometry collector");
+  }
+  return player;
+}
+
+function resolveContinuationCallbackProvisionalMobject(context, tokenJson, object) {
+  const player = committedContinuationCallbackPlayer(context, tokenJson);
+  return player.resolveCallbackProvisionalMobject(tokenJson, object);
 }
 
 function continuationCallbackRequest(context, tokenJson) {
@@ -619,8 +735,43 @@ function completeContinuationCallback(context, tokenJson, patchBatchJson) {
     throw new Error("semantic continuation callback cannot complete while a callback read is pending");
   }
   const next = awaitContinuationEvent(continuation);
+  continuation.committedCallbackPlayer = { tokenJson, player: callback.player };
   continuation.callbackRequest = null;
   callback.resolve(patchBatchJson);
+  return next;
+}
+
+// Rust has published, but the suspended source must attach its Python wrappers
+// before the endpoint starts another phase or returns/consumes the player lease.
+function requestContinuationCallbackCommit(continuation, phase) {
+  const tokenJson = JSON.stringify(phase.token);
+  if (continuation.terminal || continuation.pending === null ||
+      continuation.callbackRequest !== null || continuation.callbackCommit !== null ||
+      continuation.committedCallbackPlayer?.tokenJson !== tokenJson) {
+    return Promise.reject(new Error("stale semantic continuation callback commit"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.callbackCommit = { tokenJson, resolve, reject };
+    const pending = continuation.pending;
+    continuation.pending = null;
+    pending.resolve(continuationEvent("callback_committed", {
+      phase: { token: phase.token, region: phase.region ?? 0 },
+    }));
+  });
+}
+
+function acknowledgeContinuationCallback(context, tokenJson, failure = null) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
+    throw new Error("stale semantic continuation callback acknowledgement");
+  }
+  const commit = continuation.callbackCommit;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackCommit = null;
+  continuation.committedCallbackPlayer = null;
+  if (failure === null || failure === undefined) commit.resolve();
+  else commit.reject(new Error(String(failure)));
   return next;
 }
 
@@ -642,7 +793,8 @@ function failContinuationCallback(context, tokenJson, message) {
 
 function completeContinuation(continuation, generation) {
   if (continuation.terminal || generation !== continuation.generation ||
-      continuation.pending === null || continuation.callbackRequest !== null) {
+      continuation.pending === null || continuation.callbackRequest !== null ||
+      continuation.callbackCommit !== null) {
     throw new Error("stale semantic continuation completion");
   }
   const { resolve } = continuation.pending;
@@ -653,6 +805,11 @@ function completeContinuation(continuation, generation) {
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  continuation.committedCallbackPlayer = null;
+  if (continuation.callbackCommit !== null) {
+    continuation.callbackCommit.reject(error instanceof Error ? error : new Error(String(error)));
+    continuation.callbackCommit = null;
+  }
   if (continuation.callbackRequest !== null) {
     const callback = continuation.callbackRequest;
     continuation.callbackRequest = null;
@@ -798,8 +955,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     : continuationOnly
     ? (frame, player) => requestContinuationCallback(continuation, frame, player)
     : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
-  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
+  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined
     ? null
+    : continuationOnly
+    ? (frame) => requestContinuationCallbackCommit(continuation, frame)
     : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
   const discardRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
     ? null

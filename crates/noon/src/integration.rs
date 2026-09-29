@@ -37,7 +37,7 @@ pub use crate::execution_session::{
     CallbackSequence, CallbackTermination, CallbackTerminationKind,
     CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticObject,
     EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
-    StructuralPublicationStats,
+    StaleViewportQuery, StructuralPublicationStats,
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};

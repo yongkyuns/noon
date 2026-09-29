@@ -180,6 +180,7 @@ mod wasm {
             self.program
                 .session()
                 .renderer_viewport_query_union(queries)
+                .expect("fresh viewport queries share this publication")
         }
 
         fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
@@ -337,7 +338,9 @@ mod wasm {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
                     let query = session.query_viewports(bounds);
-                    session.renderer_viewport_query(query)
+                    session
+                        .renderer_viewport_query(query)
+                        .expect("fresh viewport query shares this publication")
                 }
                 DirectSourceAuthority::Program(program) => program.query_viewports(bounds),
             }

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     RetainedExecutionDeltaEnvelope, RetainedFamilyPlanTransport, RetainedFamilyTransportError,
-    RetainedFamilyTransportState, RetainedResourceBundle,
+    RetainedFamilyTransportState, RetainedResourceBundle, RetainedResourceRetirements,
 };
 
 pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
@@ -172,6 +172,8 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub family_plans: Vec<RetainedFamilyPlanTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_additions: Option<RetainedResourceBundle>,
+    #[serde(default, skip_serializing_if = "RetainedResourceRetirements::is_empty")]
+    pub resource_retirements: RetainedResourceRetirements,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transient_presentations: Vec<RetainedTransientPresentationOccurrence>,
     /// Complete session-only overlay for this transport sequence; absence clears.
@@ -201,6 +203,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -236,6 +239,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -261,6 +265,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             )?,
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -299,6 +304,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -319,6 +325,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         if let Some(overlay) = self.selection_overlay {
             overlay.validate()?;
         }
+        self.resource_retirements.validate()?;
         let mut seen = HashSet::with_capacity(self.family_states.len());
         for entry in &self.family_states {
             if !seen.insert(entry.object) {
@@ -687,6 +694,7 @@ fn validated_state_updates(
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedFamilyExecutionTransportError {
+    Resource(crate::RetainedResourceTransportError),
     Family(RetainedFamilyTransportError),
     ExpectedSnapshot,
     ExpectedIncremental,
@@ -724,6 +732,7 @@ pub enum RetainedFamilyExecutionTransportError {
 impl std::fmt::Display for RetainedFamilyExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
             Self::ExpectedSnapshot => formatter
                 .write_str("family execution snapshot requires a retained snapshot envelope"),
@@ -815,6 +824,12 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
 }
 
 impl std::error::Error for RetainedFamilyExecutionTransportError {}
+
+impl From<crate::RetainedResourceTransportError> for RetainedFamilyExecutionTransportError {
+    fn from(value: crate::RetainedResourceTransportError) -> Self {
+        Self::Resource(value)
+    }
+}
 
 impl From<RetainedFamilyTransportError> for RetainedFamilyExecutionTransportError {
     fn from(value: RetainedFamilyTransportError) -> Self {
@@ -1111,6 +1126,7 @@ mod tests {
                 RetainedFamilyPlanTransport::from_plan(&plan),
             ],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1136,6 +1152,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1170,6 +1187,7 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1208,6 +1226,7 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1268,6 +1287,7 @@ mod tests {
                 global_span: None,
             }],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1297,6 +1317,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,
@@ -1309,6 +1330,7 @@ mod tests {
                     family_states: Vec::new(),
                     family_plans: Vec::new(),
                     resource_additions: None,
+                    resource_retirements: RetainedResourceRetirements::default(),
                     transient_presentations: Vec::new(),
                     selection_overlay: None,
                     pointer_view: None,
@@ -1346,6 +1368,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
             transient_presentations: Vec::new(),
             selection_overlay: None,
             pointer_view: None,

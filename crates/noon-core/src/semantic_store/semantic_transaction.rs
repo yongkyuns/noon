@@ -581,6 +581,57 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Replace a prior staged property write for one transaction-local object.
+    ///
+    /// Pending construction may receive several source-level transform updates
+    /// before publication. Coalescing only this local-node declaration avoids
+    /// weakening duplicate-write validation for durable scene identities.
+    pub fn replace_pending_object_property(
+        &mut self,
+        object: SemanticLocalNodeToken,
+        property: SemanticObjectProperty,
+        value: impl Into<SemanticSignalValue>,
+    ) -> &mut Self {
+        let value = value.into();
+        if let Some(SemanticMutation::SetProperty {
+            value: staged_value,
+            ..
+        }) = self.mutations.iter_mut().rev().find(|mutation| {
+            matches!(mutation, SemanticMutation::SetProperty {
+                object: SemanticTransactionNodeRef::Pending(candidate),
+                property: candidate_property,
+                ..
+            } if *candidate == object && *candidate_property == property)
+        }) {
+            *staged_value = value;
+            return self;
+        }
+        self.set_property(object, property, value)
+    }
+
+    /// Replace a prior staged style write for one transaction-local object.
+    /// This has the same narrow coalescing scope as
+    /// [`Self::replace_pending_object_property`].
+    pub fn replace_pending_object_style(
+        &mut self,
+        object: SemanticLocalNodeToken,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        if let Some(SemanticMutation::ReplaceStyle {
+            style: staged_style,
+            ..
+        }) = self.mutations.iter_mut().rev().find(|mutation| {
+            matches!(mutation, SemanticMutation::ReplaceStyle {
+                object: SemanticTransactionNodeRef::Pending(candidate),
+                ..
+            } if *candidate == object)
+        }) {
+            *staged_style = style;
+            return self;
+        }
+        self.replace_style(object, style)
+    }
+
     /// Replace the one authored primary-click indication on an object. `None`
     /// clears the declaration without creating a second interaction registry.
     pub fn set_click_indicate(

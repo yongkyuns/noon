@@ -28,6 +28,7 @@ async function startLiveAuthoring() {
     status.dataset.liveAuthoring = "preloading";
     await afterInitialPaint();
     if (disposed) return;
+    performance.mark("noon-live-authoring-preload-start");
     await gallery.run();
     if (!disposed) {
       status.dataset.liveAuthoring =

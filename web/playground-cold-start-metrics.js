@@ -32,8 +32,8 @@ export function preloadedColdStartMilestones(timestamps) {
 }
 
 export function validateAuthoringStartupMetrics(metrics) {
-  if (!isRecord(metrics) || metrics.version !== 1) {
-    throw new TypeError("authoring startup metrics must use schema version 1");
+  if (!isRecord(metrics) || metrics.version !== 2) {
+    throw new TypeError("authoring startup metrics must use schema version 2");
   }
   const durationFields = [
     "totalMs",
@@ -46,6 +46,15 @@ export function validateAuthoringStartupMetrics(metrics) {
     "authoringBindingsMs",
     "compatibilityFsInstallMs",
     "compatibilityImportInstallMs",
+    "performanceTimeOriginMs",
+    "resourcesReadyAtMs",
+    "authoringStoreCreatedAtMs",
+    "bindingsReadyAtMs",
+    "compatibilityFilesReadyAtMs",
+    "importsReadyAtMs",
+    "noonWebInitReadyAtMs",
+    "pyodideInitReadyAtMs",
+    "compatibilityBundleReadyAtMs",
   ];
   for (const field of durationFields) {
     const value = metrics[field];
@@ -69,10 +78,25 @@ export function validateAuthoringStartupMetrics(metrics) {
       "authoring startup compatibility source chars must be a non-negative safe integer",
     );
   }
+  for (const field of ["firstSceneContextCreatedAtMs", "authoringWorkerReadyAtMs"]) {
+    const value = metrics[field];
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      throw new TypeError(`authoring startup metric ${field} must be null or finite and non-negative`);
+    }
+  }
+  validateOrderedMilestones(metrics, [
+    "resourcesReadyAtMs",
+    "authoringStoreCreatedAtMs",
+    "bindingsReadyAtMs",
+    "compatibilityFilesReadyAtMs",
+    "importsReadyAtMs",
+    "authoringWorkerReadyAtMs",
+    ...(metrics.firstSceneContextCreatedAtMs === null ? [] : ["firstSceneContextCreatedAtMs"]),
+  ], "authoring startup");
   return Object.freeze({ ...metrics });
 }
 
-export function summarizeAuthoringStartup(metrics) {
+export function summarizeAuthoringStartup(metrics, { navigationStartEpochMs = null } = {}) {
   const checked = validateAuthoringStartupMetrics(metrics);
   const resources = [
     ["noon-web", checked.noonWebInitMs],
@@ -86,7 +110,7 @@ export function summarizeAuthoringStartup(metrics) {
     checked.authoringBindingsMs +
     checked.compatibilityFsInstallMs +
     checked.compatibilityImportInstallMs;
-  return Object.freeze({
+  const summary = {
     ...checked,
     criticalResource,
     criticalResourceMs,
@@ -98,7 +122,28 @@ export function summarizeAuthoringStartup(metrics) {
       checked.moduleGraphLoadMs -
       checked.startupResourcesMs -
       postResourceBootstrapMs,
-  });
+  };
+  if (navigationStartEpochMs !== null) {
+    if (!Number.isFinite(navigationStartEpochMs) || navigationStartEpochMs < 0) {
+      throw new TypeError("navigationStartEpochMs must be finite and non-negative");
+    }
+    const epoch = (timestamp) => timestamp === null
+      ? null
+      : checked.performanceTimeOriginMs + timestamp - navigationStartEpochMs;
+    summary.navigationTimelineMs = Object.freeze({
+      noonWebReady: epoch(checked.noonWebInitReadyAtMs),
+      pyodideReady: epoch(checked.pyodideInitReadyAtMs),
+      compatibilityBundleReady: epoch(checked.compatibilityBundleReadyAtMs),
+      resourcesReady: epoch(checked.resourcesReadyAtMs),
+      authoringStoreCreated: epoch(checked.authoringStoreCreatedAtMs),
+      bindingsReady: epoch(checked.bindingsReadyAtMs),
+      compatibilityFilesReady: epoch(checked.compatibilityFilesReadyAtMs),
+      importsReady: epoch(checked.importsReadyAtMs),
+      authoringWorkerReady: epoch(checked.authoringWorkerReadyAtMs),
+      firstSceneContextCreated: epoch(checked.firstSceneContextCreatedAtMs),
+    });
+  }
+  return Object.freeze(summary);
 }
 
 export function classifyWorkerUrl(url) {

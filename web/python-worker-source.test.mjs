@@ -4,6 +4,18 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("authoring startup exposes readiness and first semantic Scene context timestamps", () => {
+  assert.match(source, /performanceTimeOriginMs:\s*performance\.timeOrigin/);
+  assert.match(source, /authoringMilestones\.authoringWorkerReadyAtMs\s*=\s*performance\.now\(\)/);
+  assert.match(source, /authoringMilestones\.firstSceneContextCreatedAtMs\s*\?\?=\s*performance\.now\(\)/);
+  assert.match(source, /resourcesReadyAtMs:\s*resourcesReadyAt/);
+  assert.match(source, /noonWebInitReadyAtMs:\s*resourceDurations\.noonWebInitReadyAtMs/);
+  assert.match(source, /pyodideInitReadyAtMs:\s*resourceDurations\.pyodideInitReadyAtMs/);
+  assert.match(source, /compatibilityBundleReadyAtMs:\s*resourceDurations\.compatibilityBundleReadyAtMs/);
+  assert.match(source, /importsReadyAtMs:\s*importsReadyAt/);
+  assert.match(source, /metrics\[`\$\{key\.replace\(\/Ms\$\/,[^)]*\)\}ReadyAtMs`\]\s*=\s*performance\.now\(\)/);
+});
+
 test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /function\s+validateRequest\s*\(/);
   assert.doesNotMatch(source, /validateHostRequest|attach_engine_port|runCallbackPhase/);
@@ -173,6 +185,74 @@ test("semantic continuation delivers required callback work to its suspended sou
   assert.match(source, /continuationOnly\s*\?\s*\(frame, player\)\s*=>\s*requestContinuationCallback\(continuation, frame, player\)/);
 });
 
+test("continuation provisional geometry keeps the pinned player through Rust commit", () => {
+  assert.match(source, /noonStageSemanticContinuationAnalyticGeometry/);
+  assert.match(source, /noonResolveSemanticContinuationProvisionalMobject/);
+  assert.match(source, /callback\.player\.stageCallbackAnalyticGeometry\(tokenJson, options\)/);
+  assert.match(source, /callback\.player\.stageCallbackProvisionalShift\(tokenJson, object, x, y\)/);
+  assert.match(source, /callback\.player\.stageCallbackProvisionalFill\(/);
+  assert.match(source, /callback\.player\.callbackProvisionalCenter\(tokenJson, object\)/);
+  assert.match(source, /continuation\.committedCallbackPlayer = \{ tokenJson, player: callback\.player \}/);
+  assert.match(source, /player\.resolveCallbackProvisionalMobject\(tokenJson, object\)/);
+});
+
+test("source wrapper acknowledgement holds the committed player before next phase or return", async () => {
+  const continuation = {
+    context: {}, generation: 1, terminal: false, pending: null,
+    callbackRequest: null, callbackCommit: null, committedCallbackPlayer: null,
+  };
+  const api = new Function("activeAuthoringRun", `
+    ${source.slice(source.indexOf("function continuationEvent("), source.indexOf("function isContinuationControl("))}
+    return { awaitContinuationEvent, requestContinuationCallback,
+      completeContinuationCallback, requestContinuationCallbackCommit,
+      acknowledgeContinuationCallback, resolveContinuationCallbackProvisionalMobject,
+      completeContinuation, failContinuation };
+  `)({ continuation });
+  const phase = { token: { sequence: 1 }, objects: [{ expensive: "read view" }] };
+  const token = JSON.stringify(phase.token);
+  const player = { resolveCallbackProvisionalMobject: () => "published handle" };
+  const firstEvent = api.awaitContinuationEvent(continuation);
+  const result = api.requestContinuationCallback(continuation, phase, player);
+  assert.equal(JSON.parse(await firstEvent).kind, "callback");
+  const publicationEvent = api.completeContinuationCallback(continuation.context, token, "batch");
+  assert.equal(await result, "batch");
+  let acknowledged = false;
+  const commit = api.requestContinuationCallbackCommit(continuation, phase);
+  commit.then(() => { acknowledged = true; });
+  assert.deepEqual(JSON.parse(await publicationEvent), {
+    kind: "callback_committed", phase: { token: phase.token, region: 0 },
+  });
+  assert.equal(acknowledged, false);
+  await assert.rejects(api.requestContinuationCallback(continuation, phase, player), /suspended source|not acknowledged/);
+  assert.throws(() => api.completeContinuation(continuation, 1), /stale/);
+  assert.throws(() => api.acknowledgeContinuationCallback(continuation.context, "stale"), /stale/);
+  assert.equal(api.resolveContinuationCallbackProvisionalMobject(continuation.context, token, {}), "published handle");
+  const nextEvent = api.acknowledgeContinuationCallback(continuation.context, token);
+  await commit;
+  assert.equal(acknowledged, true);
+  assert.equal(continuation.committedCallbackPlayer, null);
+  api.completeContinuation(continuation, 1);
+  assert.equal(JSON.parse(await nextEvent).kind, "complete");
+});
+
+test("canceling while Python attaches wrappers rejects the commit acknowledgement", async () => {
+  const continuation = {
+    context: {}, terminal: false, pending: { resolve() {}, reject() {} },
+    callbackRequest: null, callbackCommit: null,
+    committedCallbackPlayer: { tokenJson: '{"sequence":1}', player: {} },
+  };
+  const api = new Function("activeAuthoringRun", `
+    ${source.slice(source.indexOf("function continuationEvent("), source.indexOf("function isContinuationControl("))}
+    return { requestContinuationCallbackCommit, failContinuation };
+  `)({ continuation });
+  const commit = api.requestContinuationCallbackCommit(continuation, { token: { sequence: 1 } });
+  const rejected = assert.rejects(commit, /canceled/);
+  api.failContinuation(continuation, new Error("canceled"));
+  await rejected;
+  assert.equal(continuation.callbackCommit, null);
+  assert.equal(continuation.committedCallbackPlayer, null);
+});
+
 test("suspended callback reads stay token-pinned and cannot settle after cancellation", () => {
   assert.match(source, /noonReadSemanticContinuationCallback/);
   assert.match(source, /function\s+readContinuationCallback\s*\(/);
@@ -319,5 +399,40 @@ test("continuation membership helpers retain the endpoint player pinned to the p
   assert.deepEqual(calls, [
     ["stage", '{"sequence":1}', batch],
     ["read", '{"sequence":1}'],
+  ]);
+});
+
+test("continuation provisional helpers use the exact phase player", () => {
+  const start = source.indexOf("function stageContinuationCallbackAnalyticGeometry");
+  const end = source.indexOf("function readContinuationCallback", start);
+  assert.ok(start >= 0 && end > start, "provisional helper boundaries must exist");
+  const context = {};
+  const calls = [];
+  const player = {
+    stageCallbackAnalyticGeometry(token, options) { calls.push(["create", token, options]); return { localKey: "local:1" }; },
+    stageCallbackProvisionalShift(token, object, x, y) { calls.push(["shift", token, object, x, y]); },
+    stageCallbackProvisionalFill(token, object, ...rgba) { calls.push(["fill", token, object, ...rgba]); },
+    callbackProvisionalCenter(token, object) { calls.push(["center", token, object]); return { x: 2, y: -1 }; },
+  };
+  const helpers = new Function("activeAuthoringRun", `${source.slice(start, end)}
+    return {
+      stageContinuationCallbackAnalyticGeometry,
+      stageContinuationCallbackProvisionalShift,
+      stageContinuationCallbackProvisionalFill,
+      continuationCallbackProvisionalCenter,
+    };`
+  )({ continuation: { context, terminal: false, callbackRequest: {
+    phaseTokenJson: '{"sequence":2}', player,
+  } } });
+  const object = { localKey: "local:1" };
+  assert.deepEqual(helpers.stageContinuationCallbackAnalyticGeometry(context, '{"sequence":2}', { circle: 1 }), object);
+  helpers.stageContinuationCallbackProvisionalShift(context, '{"sequence":2}', object, 3, -4);
+  helpers.stageContinuationCallbackProvisionalFill(context, '{"sequence":2}', object, .1, .2, .3, .4, .5);
+  assert.deepEqual(helpers.continuationCallbackProvisionalCenter(context, '{"sequence":2}', object), { x: 2, y: -1 });
+  assert.deepEqual(calls, [
+    ["create", '{"sequence":2}', { circle: 1 }],
+    ["shift", '{"sequence":2}', object, 3, -4],
+    ["fill", '{"sequence":2}', object, .1, .2, .3, .4, .5],
+    ["center", '{"sequence":2}', object],
   ]);
 });

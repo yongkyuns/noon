@@ -124,7 +124,9 @@ impl NativeExecutionSource for StaticExecutionSource {
 
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
         let query = self.session.query_viewports(bounds);
-        self.session.renderer_viewport_query(query)
+        self.session
+            .renderer_viewport_query(query)
+            .expect("fresh viewport query shares this publication")
     }
 
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
@@ -274,6 +276,7 @@ where
         self.program
             .session()
             .renderer_viewport_query_union(queries)
+            .expect("fresh viewport queries share this publication")
     }
 
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import playwright from "playwright";
 
 import { PlaygroundGeneration } from "../web/playground-generation.js";
+import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
 
 function stressGenerationGate() {
   const generations = new PlaygroundGeneration();
@@ -148,12 +149,23 @@ try {
       holdNextExample: null,
       holdReached: 0,
       release: null,
+      holdNextSourceRun: false,
+      sourceHoldReached: 0,
+      heldSourceRun: null,
     };
     window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
       afterAuthoring(payload) {
         const race = window.__noonRace;
         race.authoringCounts[payload.exampleId] =
           (race.authoringCounts[payload.exampleId] ?? 0) + 1;
+        if (race.holdNextSourceRun) {
+          race.holdNextSourceRun = false;
+          race.sourceHoldReached += 1;
+          race.heldSourceRun = { ...payload };
+          return new Promise((resolve) => {
+            race.release = resolve;
+          });
+        }
         if (race.holdNextExample !== payload.exampleId) return undefined;
         race.holdNextExample = null;
         race.holdReached += 1;
@@ -162,7 +174,10 @@ try {
         });
       },
       beforeReconcile(payload) {
-        window.__noonRace.reconciles.push(payload.exampleId);
+        window.__noonRace.reconciles.push({
+          exampleId: payload.exampleId,
+          runGeneration: payload.runGeneration,
+        });
       },
     };
   });
@@ -214,12 +229,12 @@ try {
   assert.equal(staleRace.patchExample, "parity-create-circle");
   assert.ok(staleRace.diagnostics.staleDrops >= 1, "stale result must be counted");
   assert.equal(
-    staleRace.reconciles.includes("parity-different-rotations"),
+    staleRace.reconciles.some(({ exampleId }) => exampleId === "parity-different-rotations"),
     false,
     "stale authored scene must never reach reconcileScene",
   );
   assert.equal(
-    staleRace.reconciles.at(-1),
+    staleRace.reconciles.at(-1)?.exampleId,
     "parity-create-circle",
     "newest selection must own the final reconciliation",
   );
@@ -257,11 +272,71 @@ try {
   );
   assert.equal(duplicateFinal, duplicateBaseline + 1);
 
+  const sourceRaceBaseline = await page.evaluate(async () => ({
+    staleDrops: window.__noonExampleGallery.generationDiagnostics.staleDrops,
+    metrics: await window.__noonExampleGallery.executionMetrics(),
+    reconciles: window.__noonRace.reconciles.length,
+  }));
+  await page.evaluate(() => { window.__noonRace.holdNextSourceRun = true; });
+  await submitSourceText(page, SUPERSEDED_SOURCE);
+  await page.waitForFunction(
+    () => window.__noonRace.sourceHoldReached === 1 && window.__noonRace.heldSourceRun !== null,
+    null,
+    { timeout: 60_000 },
+  );
+  const heldSourceRun = await page.evaluate(() => window.__noonRace.heldSourceRun);
+  assert.ok(Number.isSafeInteger(heldSourceRun.runGeneration));
+  await submitSourceText(page, NEWEST_SOURCE);
+  const newerSourceGeneration = await page.evaluate(
+    () => window.__noonExampleGallery.generationDiagnostics.runGeneration,
+  );
+  assert.ok(newerSourceGeneration > heldSourceRun.runGeneration,
+    "new source input must invalidate the authored older run before it is released");
+  await page.evaluate(() => {
+    const release = window.__noonRace.release;
+    window.__noonRace.release = null;
+    release?.();
+  });
+  await waitForApplied(page, "parity-create-circle", browserErrors);
+  const sourceRace = await page.evaluate(async (baseline) => ({
+    source: document.querySelector("#python-scene-source")?.value,
+    patch: {
+      state: document.querySelector("#patch-status")?.dataset.state,
+      runGeneration: Number(document.querySelector("#patch-status")?.dataset.runGeneration),
+    },
+    diagnostics: window.__noonExampleGallery.generationDiagnostics,
+    reconciles: window.__noonRace.reconciles.slice(baseline.reconciles),
+    metrics: await window.__noonExampleGallery.executionMetrics(),
+  }), sourceRaceBaseline);
+  assert.equal(sourceRace.source, NEWEST_SOURCE);
+  assert.equal(sourceRace.patch.state, "applied");
+  assert.equal(sourceRace.patch.runGeneration, sourceRace.diagnostics.runGeneration);
+  assert.ok(sourceRace.diagnostics.staleDrops > sourceRaceBaseline.staleDrops,
+    "superseded source run must be rejected by the controller generation gate");
+  assert.equal(sourceRace.reconciles.some(({ runGeneration }) =>
+    runGeneration === heldSourceRun.runGeneration), false,
+  "the obsolete source must never reach semantic reconciliation");
+  assert.equal(sourceRace.reconciles.at(-1)?.runGeneration, sourceRace.patch.runGeneration,
+    "newest accepted source must own the final semantic reconciliation");
+  assert.equal(sourceRace.metrics?.metrics?.objectCount, 2,
+    "the newest source's distinct two-object scene must own the runtime");
+  assert.notEqual(sourceRace.metrics?.metrics?.presentedSession,
+    sourceRaceBaseline.metrics?.metrics?.presentedSession,
+  "newest source must reconcile into a distinct presented session");
+
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ playground generations: 500 seeded operations + ${staleRace.diagnostics.staleDrops} stale result(s) rejected; duplicate Run coalesced`,
+    `✓ playground generations: 500 seeded operations + ${sourceRace.diagnostics.staleDrops} stale result(s) rejected; duplicate Run coalesced; older edited source never reconciled`,
   );
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
+}
+
+async function submitSourceText(page, source) {
+  await page.evaluate((value) => {
+    const editor = document.querySelector("#python-scene-source");
+    editor.value = value;
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }, source);
 }

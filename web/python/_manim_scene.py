@@ -491,13 +491,13 @@ def _stage_callback_membership(
     *,
     key: str | None,
 ) -> None:
-    """Stage existing typed handles for this one required callback phase.
+    """Stage one callback-local membership operation through the Rust collector.
 
-    New constructors, group/family expansion, explicit keys, foreground, and
-    painter reorders stay deliberately unsupported until their provisional and
-    binding rules are part of the same collector. This path carries the
-    original typed handles straight to the Rust player and delays only Python
-    wrapper attachment until that player commits the whole callback.
+    Existing typed handles retain their original provenance. One newly created
+    analytic Mobject may be admitted through its phase-bound local token; its
+    normal semantic handle and Python binding appear only after the shared
+    callback publication succeeds. Groups, keys, foreground, and reorders stay
+    outside this initial provisional slice.
     """
     if kind not in {"add", "remove", "clear"}:
         raise NotImplementedError(
@@ -507,6 +507,103 @@ def _stage_callback_membership(
         raise NotImplementedError(
             "canonical callback membership does not support provisional keyed construction"
         )
+    provisional = [
+        (value, getattr(value, "_callback_provisional_handle", None),
+         getattr(value, "_callback_provisional_context", None))
+        for value in values
+    ]
+    if any(handle is not None for _, handle, _ in provisional):
+        if kind != "add":
+            raise NotImplementedError(
+                "canonical callback provisional Mobjects currently support Scene.add only"
+            )
+
+        # Validate the complete mixed argument list before a Rust admission is
+        # staged. The one batch below then gives Rust every original and local
+        # target at once, so a caught bad argument cannot retain an earlier
+        # member from this source-level Scene.add call.
+        seen: set[str] = set()
+        entries: list[tuple[_base.Mobject, object | None, object | None]] = []
+        provisional_bindings: list[tuple[_base.Mobject, object, object, str]] = []
+        for member, provisional_handle, owner in provisional:
+            if not isinstance(member, _base.Mobject):
+                raise NotImplementedError(
+                    "canonical callback membership currently accepts Mobjects only"
+                )
+            if provisional_handle is not None:
+                if owner is not callback:
+                    raise RuntimeError("callback provisional Mobject belongs to another callback phase")
+                identity = callback.provisional_membership_key(provisional_handle)
+                reservation = callback.reserve_provisional_binding(
+                    scene, member, provisional_handle
+                )
+                provisional_bindings.append((member, provisional_handle, reservation, identity))
+                entries.append((member, None, provisional_handle))
+            else:
+                if member._object is None or member._object.id not in scene._binding_handles:
+                    raise NotImplementedError(
+                        "callback membership Mobject requires a bound typed semantic handle"
+                    )
+                if member._scene is not None and member._scene is not scene:
+                    raise ValueError("callback membership Mobject belongs to another Scene")
+                handle = getattr(member, "_semantic_handle", None)
+                if handle is None:
+                    raise RuntimeError("callback membership Mobject requires a typed semantic handle")
+                identity = _semantic_wrapper_key(member)
+                entries.append((member, handle, None))
+            if identity in seen:
+                raise ValueError("membership request contains a duplicate Mobject")
+            seen.add(identity)
+
+        batch = engine_call(
+            _context(scene).beginMembershipBatch,
+            "add",
+            operation="callback.membership",
+        )
+        try:
+            for _, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+                else:
+                    engine_call(
+                        batch.appendCallbackProvisional,
+                        provisional_handle,
+                        operation="callback.provisional_membership",
+                    )
+        except Exception:
+            batch.free()
+            raise
+
+        def finalize() -> None:
+            resolved = [
+                (member, callback.resolve_provisional(provisional_handle), reservation, local_key)
+                for member, provisional_handle, reservation, local_key in provisional_bindings
+            ]
+            bindings = engine_call(_context(scene).beginMembershipBatch, "add")
+            for _, handle, reservation, _ in resolved:
+                engine_call(bindings.reserveMobjectBinding, str(reservation.object.id), handle)
+            callback.associate_published(bindings)
+            registry = _membership_registry(scene)
+            for member, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    member._bind(scene, member._object)
+                    registry[_semantic_wrapper_key(member)] = member
+            for member, handle, reservation, local_key in resolved:
+                _semantic_handles._attach_shared_handle(member, handle)
+                _commit_typed_binding(member, scene, reservation, handle)
+                member._canonical_live_target_context = _context(scene)
+                registry[_semantic_wrapper_key(member)] = member
+                del member._callback_provisional_handle
+                del member._callback_provisional_context
+                callback._membership_wrappers.pop(local_key, None)
+
+        callback.stage_membership(batch, finalize)
+        for member, _, _, local_key in provisional_bindings:
+            callback._membership_wrappers[local_key] = member
+        for member, handle, _ in entries:
+            if handle is not None:
+                callback._membership_wrappers[_semantic_wrapper_key(member)] = member
+        return
     members: list[tuple[_base.Mobject, object]] = []
     for value in values:
         if not isinstance(value, _base.Mobject):
@@ -1019,6 +1116,90 @@ class _ContinuationCallbackPlayer:
             operation="callback.membership_read",
         )
 
+    def stageCallbackAnalyticGeometry(self, token_json: str, options: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationAnalyticGeometry
+        return engine_call(
+            noonStageSemanticContinuationAnalyticGeometry,
+            self._context,
+            token_json,
+            options,
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalShift(
+        self, token_json: str, object: object, x: float, y: float
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalShift
+        engine_call(
+            noonStageSemanticContinuationProvisionalShift,
+            self._context,
+            token_json,
+            object,
+            float(x),
+            float(y),
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalFill(
+        self, token_json: str, object: object, red: float, green: float,
+        blue: float, alpha: float, opacity: float | None,
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalFill
+        engine_call(
+            noonStageSemanticContinuationProvisionalFill,
+            self._context,
+            token_json,
+            object,
+            float(red),
+            float(green),
+            float(blue),
+            float(alpha),
+            opacity,
+            operation="callback.provisional_geometry",
+        )
+
+    def callbackProvisionalCenter(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonSemanticContinuationProvisionalCenter
+        return engine_call(
+            noonSemanticContinuationProvisionalCenter,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
+        )
+
+    def resolveCallbackProvisionalMobject(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonResolveSemanticContinuationProvisionalMobject
+        return engine_call(
+            noonResolveSemanticContinuationProvisionalMobject,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
+        )
+
+    def associatePublishedCallbackMobjects(self, context: object, batch: object) -> None:
+        if context is not self._context:
+            raise RuntimeError("continuation callback bindings belong to another context")
+        from js import noonAssociateSemanticContinuationCallbackMobjects
+        engine_call(
+            noonAssociateSemanticContinuationCallbackMobjects,
+            context,
+            self._token_json,
+            batch,
+            operation="callback.membership_binding",
+        )
+
 
 def _service_semantic_continuation_event(
     scene: _base.Scene, event_json: object, *, prepared_callback=None
@@ -1034,6 +1215,21 @@ def _service_semantic_continuation_event(
     kind = event["kind"]
     if kind == "complete":
         return None
+    if kind == "callback_committed":
+        import _manim_updaters
+        from js import noonAcknowledgeSemanticContinuationCallback
+
+        phase = event["phase"]
+        failure = None
+        try:
+            _manim_updaters.complete_canonical_callback_phase(
+                _manim_updaters.canonical_callback_session_id(scene), phase
+            )
+        except Exception as error:
+            failure = str(error)
+        return noonAcknowledgeSemanticContinuationCallback(
+            _context(scene), _json(phase["token"]), failure
+        )
     if kind != "callback":
         raise RuntimeError(f"unsupported semantic continuation event: {kind}")
     phase = event.get("phase")
@@ -1100,10 +1296,6 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
                     _manim_updaters.canonical_callback_session_id(scene), completed_phase
                 )
             raise
-        if completed_phase is not None:
-            _manim_updaters.complete_canonical_callback_phase(
-                _manim_updaters.canonical_callback_session_id(scene), completed_phase
-            )
 
 
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
@@ -1128,11 +1320,6 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
                     _manim_updaters.canonical_callback_session_id(scene), event["phase"]
                 )
             raise
-        if event["kind"] == "callback":
-            import _manim_updaters
-            _manim_updaters.complete_canonical_callback_phase(
-                _manim_updaters.canonical_callback_session_id(scene), event["phase"]
-            )
     return scene
 
 

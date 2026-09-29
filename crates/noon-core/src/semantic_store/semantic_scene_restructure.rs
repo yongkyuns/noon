@@ -382,6 +382,20 @@ pub fn stage_prepared_semantic_scene_membership<'a>(
     }
 }
 
+/// Extend a prepared callback transaction with direct-root admission of newly
+/// created object tokens. The same sparse projection planner validates and
+/// stages the edge/order edits; rejection returns the original proof intact.
+pub fn stage_prepared_semantic_scene_admission<'a>(
+    prepared: PreparedSemanticMutationTransaction<'a>,
+    scene_root: SemanticNodeId,
+    admitted: &[SemanticTransactionNodeRef],
+) -> Result<PreparedSemanticMutationTransaction<'a>, PreparedSemanticMembershipError<'a>> {
+    match prepared.with_pending_scene_admission(scene_root, admitted) {
+        Ok(prepared) => Ok(prepared),
+        Err((prepared, kind)) => Err(PreparedSemanticMembershipError { prepared, kind }),
+    }
+}
+
 fn plan_membership_in_view<V: MembershipView>(
     view: &V,
     scene_root: SemanticNodeId,

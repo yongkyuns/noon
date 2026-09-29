@@ -295,3 +295,104 @@ fn canceled_pending_object_consumes_no_insertion_order_capacity() {
     assert_eq!(result.resolve(canceled), None);
     assert_eq!(store.next_insertion_order(), u64::MAX);
 }
+
+#[test]
+fn rejected_pending_extension_never_reuses_an_escaped_local_token() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let mut rejected = None;
+    let result = prepared.with_pending_object_update(|transaction| {
+        let local = transaction.create_node(SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 }),
+        ));
+        rejected = Some(local);
+        transaction.set_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+    });
+    let Err((prepared, error)) = result else {
+        panic!("non-finite pending update must fail preflight");
+    };
+    assert!(matches!(
+        error,
+        SemanticMutationTransactionError::PendingNonFinitePropertyValue { .. }
+    ));
+
+    let escaped = rejected.expect("the rejected extension exposed one local token");
+    let mut recovered = prepared.into_transaction();
+    let retry = recovered.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 3.0 },
+    )));
+    assert_ne!(retry, escaped);
+
+    let result = recovered.prepare(&mut store).unwrap().commit();
+    assert!(result.resolve(escaped).is_none());
+    assert!(result.resolve(retry).is_some());
+}
+
+#[test]
+fn pending_property_coalescing_restores_the_prior_prefix_after_a_late_failure() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let prepared = match prepared.with_pending_object_update(|transaction| {
+        transaction
+            .replace_pending_object_property(
+                local,
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(1.0, 2.0, 0.0),
+            )
+            .replace_pending_object_style(
+                local,
+                SemanticStyle {
+                    fill_opacity: 0.25,
+                    ..SemanticStyle::default()
+                },
+            );
+    }) {
+        Ok(prepared) => prepared,
+        Err(_) => panic!("finite pending update must remain valid"),
+    };
+    let result = prepared.with_pending_object_update(|transaction| {
+        transaction
+            .replace_pending_object_property(
+                local,
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(9.0, 9.0, 0.0),
+            )
+            .replace_pending_object_style(
+                local,
+                SemanticStyle {
+                    fill_opacity: 0.75,
+                    ..SemanticStyle::default()
+                },
+            )
+            .replace_pending_object_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+    });
+    let Err((prepared, error)) = result else {
+        panic!("non-finite pending update must fail preflight");
+    };
+    assert!(matches!(
+        error,
+        SemanticMutationTransactionError::PendingNonFinitePropertyValue { .. }
+    ));
+    let state = prepared.proposed_object_state(local).unwrap();
+    assert_eq!(
+        state.transform.translation,
+        SemanticVec3::new(1.0, 2.0, 0.0)
+    );
+    assert_eq!(state.style.fill_opacity, 0.25);
+    let result = prepared.commit();
+    let node = result.resolve(local).unwrap();
+    let state = store.semantic_object_state_checked(node).unwrap();
+    assert_eq!(
+        state.transform.translation,
+        SemanticVec3::new(1.0, 2.0, 0.0)
+    );
+    assert_eq!(state.style.fill_opacity, 0.25);
+}
