@@ -541,5 +541,6 @@ fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(p.session.publication_context().scene_revision(), before);
-    assert!(!input(&mut p, "release", 1, Some(old), 1, 500.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(old), 1, 500.0).is_err());
+    assert_eq!(p.session.publication_context().scene_revision(), before);
 }
