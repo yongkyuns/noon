@@ -281,6 +281,7 @@ async function captureSelection(context, entry, result) {
       assert.equal(outsideExpectedRoi, 0, "drag changed pixels outside the rectangle's right-side region");
       await writeFile(path.join(output, `${entry.id}-dragged.png`), dragged);
       stage = "Run to restore the authored scene";
+      await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
       await page.getByRole("button", { name: "Run", exact: true }).click();
       await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
       await page.waitForFunction((duration) => {

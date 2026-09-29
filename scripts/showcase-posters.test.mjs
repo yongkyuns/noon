@@ -35,8 +35,7 @@ test("native-input posters require drag, background no-op, reset, and current so
   const entry = manifest.entries.find(item => item.playback_capability === "nonreplayable-native-input");
   assert.ok(entry, "native-input lesson is in the showcase manifest");
   const source = await read(entry.path);
-  // The native-input capture is awaiting its first retained poster; use an existing
-  // decoded showcase PNG only to exercise this metadata contract.
+  // Use an independent showcase PNG to isolate the metadata admission contract.
   const png = await read(manifest.entries[0].thumbnail);
   const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
   const posterHash = sha256(png);

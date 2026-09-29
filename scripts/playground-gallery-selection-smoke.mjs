@@ -146,13 +146,7 @@ try {
   report.browserErrors = errors;
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error" && message.text().startsWith("Failed to load resource:")) {
-      // Curated posters may be intentionally pending while the browser-runtime
-      // gate runs. Keep these visible in the report without treating them as
-      // Rust/input failures.
-      report.resourceWarnings ??= [];
-      report.resourceWarnings.push(message.text());
-    } else if (message.type() === "error" || message.type() === "warning" &&
+    if (message.type() === "error" || message.type() === "warning" &&
         /Recoverable Python callback error|\[Noon input\]/.test(message.text())) errors.push(message.text());
   });
 
