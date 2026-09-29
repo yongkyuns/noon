@@ -206,7 +206,7 @@ impl SemanticExecutionPlayer {
     /// Read one local provisional geometry object through the callback's prepared semantic
     /// transaction. Retained paths deliberately use the typed path getters
     /// below: no provisional durable object state is fabricated for them.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     pub(crate) fn callback_provisional_object_state(
         &mut self,
         expected_token: CallbackPhaseToken,
