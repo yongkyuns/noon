@@ -1038,7 +1038,7 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
         .stage_required_callback_provisional_shift(token, local, 0.5, 1.5)
         .unwrap();
     player
-        .stage_required_callback_provisional_fill(token, local, 0.2, 0.4, 0.8, 0.75, Some(0.6))
+        .stage_required_callback_provisional_fill(token, local, [0.2, 0.4, 0.8, 0.75], Some(0.6))
         .unwrap();
     assert_eq!(
         player.callback_provisional_center(token, local).unwrap(),

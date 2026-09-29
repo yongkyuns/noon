@@ -2160,13 +2160,9 @@ impl SemanticExecutionPlayer {
         &mut self,
         expected_token: CallbackPhaseToken,
         local: noon_core::SemanticLocalNodeToken,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
+        components: [f64; 4],
         opacity: Option<f64>,
     ) -> Result<(), AuthoringFailure> {
-        let components = [red, green, blue, alpha];
         if components
             .into_iter()
             .any(|component| !component.is_finite() || !(0.0..=1.0).contains(&component))
@@ -2181,6 +2177,7 @@ impl SemanticExecutionPlayer {
         let mut style = self
             .callback_provisional_object_state(expected_token, local)?
             .style;
+        let [red, green, blue, alpha] = components;
         style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::Color::rgba(
             red as f32,
             green as f32,
@@ -4022,10 +4019,7 @@ impl SemanticExecutionPlayer {
         self.stage_required_callback_provisional_fill(
             token,
             object.local,
-            red,
-            green,
-            blue,
-            alpha,
+            [red, green, blue, alpha],
             opacity,
         )
         .map_err(crate::authoring_error::js_error)
