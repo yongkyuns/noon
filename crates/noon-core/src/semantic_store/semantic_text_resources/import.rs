@@ -5,6 +5,9 @@ use crate::{
     TextResourceHandle,
 };
 
+const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
+const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
+
 /// A compiled text payload rejected before any dependency is imported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTextImportError {
@@ -72,9 +75,10 @@ impl SemanticStore {
         &mut self,
         identity: crate::TextCompilationIdentity,
         handle: TextResourceHandle,
-    ) {
-        const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
-        const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
+    ) -> bool {
+        if compiled_identity_bytes(&identity) > MAX_COMPILED_TEXT_IDENTITY_BYTES {
+            return false;
+        }
         match self
             .compiled_text_resources
             .insert(identity.clone(), handle)
@@ -100,6 +104,7 @@ impl SemanticStore {
             }
         }
         self.reclaim_semantic_resource_candidates();
+        true
     }
     pub fn text_resources(&self) -> &TextResourceArena {
         &self.text_resources
@@ -186,7 +191,7 @@ impl SemanticStore {
             self.forget_compiled_text_resource(&identity);
         }
         let handle = self.import_text_resource(resource, fonts, geometries)?;
-        self.remember_compiled_text_resource(identity, handle);
+        let _ = self.remember_compiled_text_resource(identity, handle);
         Ok(handle)
     }
 }
@@ -306,20 +311,21 @@ mod tests {
     }
 
     #[test]
-    fn compiled_identity_index_is_byte_bounded() {
+    fn oversized_compiled_identity_does_not_reclaim_its_raw_import() {
         let mut store = SemanticStore::new();
-        let oversized = crate::TextCompilationIdentity {
+        let identity = crate::TextCompilationIdentity {
             descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
             font_contents: Arc::from([]),
         };
-        store.remember_compiled_text_resource(
-            oversized,
-            crate::TextResourceHandle {
-                arena: 1,
-                id: crate::TextResourceId::new(1),
-                version: 0,
-            },
-        );
+        let handle = store
+            .import_compiled_text_resource(
+                identity,
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        assert!(store.text_resources().get(handle).is_some());
         assert!(store.compiled_text_resources.is_empty());
         assert_eq!(store.compiled_text_resource_retained_bytes, 0);
     }

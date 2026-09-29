@@ -231,6 +231,17 @@ impl SemanticStore {
         }
     }
 
+    /// Retire a fresh compiler helper that could not enter the bounded identity
+    /// cache. Only the dependency-batch admission path calls this; arbitrary raw
+    /// text handles remain valid lookup capabilities.
+    pub(crate) fn retire_compiled_text_helper(&mut self, handle: TextResourceHandle) {
+        if self.text_resources.get(handle).is_some()
+            && !self.resource_references.texts.contains_key(&handle)
+        {
+            self.resource_retirement_candidates.texts.push(handle);
+        }
+    }
+
     /// Text dependencies belong to the text arena entry itself, rather than only
     /// to an object that currently presents it. This keeps fonts and vector paths
     /// alive for inert compiled text awaiting attachment.

@@ -352,7 +352,9 @@ impl SemanticStore {
         })();
         if result.is_ok() {
             for (identity, handle) in installed {
-                self.remember_compiled_text_resource(identity, handle);
+                if !self.remember_compiled_text_resource(identity, handle) {
+                    self.retire_compiled_text_helper(handle);
+                }
             }
         } else {
             for (_, handle) in installed {
@@ -925,6 +927,40 @@ mod tests {
             ),
             plateau.unwrap()
         );
+    }
+
+    #[test]
+    fn oversized_compiled_helper_retires_after_composition() {
+        let (dependency, fonts, geometry) = glyph_vector_resource();
+        let identity = crate::TextCompilationIdentity {
+            descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
+            font_contents: Arc::from([]),
+        };
+        let mut store = SemanticStore::new();
+        store
+            .with_compiled_text_dependency_batch(
+                vec![(identity, dependency, fonts, geometry)],
+                |store, handles| {
+                    Ok::<_, Error>(vec![store
+                        .text_resources()
+                        .get(handles[0])
+                        .expect("fresh compiled helper")
+                        .clone()])
+                },
+                |store, handles| {
+                    let mut transaction = SemanticMutationTransaction::new();
+                    transaction.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+                        handles[1],
+                    )));
+                    transaction.apply(store).map_err(Error::from)
+                },
+            )
+            .unwrap();
+
+        assert!(store.compiled_text_resources.is_empty());
+        assert_eq!(store.text_resources().len(), 1);
+        assert_eq!(store.font_resources().len(), 1);
+        assert_eq!(store.geometry_resources().len(), 1);
     }
 
     #[test]
