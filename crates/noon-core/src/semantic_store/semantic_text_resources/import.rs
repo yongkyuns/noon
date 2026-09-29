@@ -5,6 +5,9 @@ use crate::{
     TextResourceHandle,
 };
 
+const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
+const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
+
 /// A compiled text payload rejected before any dependency is imported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTextImportError {
@@ -44,7 +47,8 @@ impl SemanticStore {
         &mut self,
         identity: &crate::TextCompilationIdentity,
     ) {
-        if self.compiled_text_resources.remove(identity).is_some() {
+        if let Some(handle) = self.compiled_text_resources.remove(identity) {
+            self.release_compiled_text_resource(handle);
             self.compiled_text_resource_retained_bytes = self
                 .compiled_text_resource_retained_bytes
                 .saturating_sub(compiled_identity_bytes(identity));
@@ -57,22 +61,40 @@ impl SemanticStore {
             }
         }
     }
+    pub(crate) fn forget_compiled_text_resources_for(&mut self, handle: TextResourceHandle) {
+        let identities = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(identity, candidate)| (*candidate == handle).then_some(identity.clone()))
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.forget_compiled_text_resource(&identity);
+        }
+    }
     pub(super) fn remember_compiled_text_resource(
         &mut self,
         identity: crate::TextCompilationIdentity,
         handle: TextResourceHandle,
-    ) {
-        const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
-        const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
-        if self
+    ) -> bool {
+        if compiled_identity_bytes(&identity) > MAX_COMPILED_TEXT_IDENTITY_BYTES {
+            return false;
+        }
+        match self
             .compiled_text_resources
             .insert(identity.clone(), handle)
-            .is_none()
         {
-            self.compiled_text_resource_retained_bytes = self
-                .compiled_text_resource_retained_bytes
-                .saturating_add(compiled_identity_bytes(&identity));
-            self.compiled_text_resource_order.push_back(identity);
+            None => {
+                self.retain_compiled_text_resource(handle);
+                self.compiled_text_resource_retained_bytes = self
+                    .compiled_text_resource_retained_bytes
+                    .saturating_add(compiled_identity_bytes(&identity));
+                self.compiled_text_resource_order.push_back(identity);
+            }
+            Some(previous) if previous != handle => {
+                self.release_compiled_text_resource(previous);
+                self.retain_compiled_text_resource(handle);
+            }
+            Some(_) => {}
         }
         while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES
             || self.compiled_text_resource_retained_bytes > MAX_COMPILED_TEXT_IDENTITY_BYTES
@@ -81,6 +103,8 @@ impl SemanticStore {
                 self.forget_compiled_text_resource(&expired);
             }
         }
+        self.reclaim_semantic_resource_candidates();
+        true
     }
     pub fn text_resources(&self) -> &TextResourceArena {
         &self.text_resources
@@ -142,10 +166,12 @@ impl SemanticStore {
                 self.geometry_resources.insert_path(path.as_ref().clone())
             });
         }
-        Ok(self
+        let handle = self
             .text_resources
             .insert(resource)
-            .expect("text resource preflighted"))
+            .expect("text resource preflighted");
+        self.register_semantic_text_resource_dependencies(handle);
+        Ok(handle)
     }
 
     /// Import a normalized compiled resource, or reuse its existing immutable
@@ -165,7 +191,7 @@ impl SemanticStore {
             self.forget_compiled_text_resource(&identity);
         }
         let handle = self.import_text_resource(resource, fonts, geometries)?;
-        self.remember_compiled_text_resource(identity, handle);
+        let _ = self.remember_compiled_text_resource(identity, handle);
         Ok(handle)
     }
 }
@@ -285,20 +311,21 @@ mod tests {
     }
 
     #[test]
-    fn compiled_identity_index_is_byte_bounded() {
+    fn oversized_compiled_identity_does_not_reclaim_its_raw_import() {
         let mut store = SemanticStore::new();
-        let oversized = crate::TextCompilationIdentity {
+        let identity = crate::TextCompilationIdentity {
             descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
             font_contents: Arc::from([]),
         };
-        store.remember_compiled_text_resource(
-            oversized,
-            crate::TextResourceHandle {
-                arena: 1,
-                id: crate::TextResourceId::new(1),
-                version: 0,
-            },
-        );
+        let handle = store
+            .import_compiled_text_resource(
+                identity,
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        assert!(store.text_resources().get(handle).is_some());
         assert!(store.compiled_text_resources.is_empty());
         assert_eq!(store.compiled_text_resource_retained_bytes, 0);
     }

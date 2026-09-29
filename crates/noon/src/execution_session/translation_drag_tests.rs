@@ -665,12 +665,12 @@ fn sealed_history_rejects_drag_configuration_without_changing_policy_or_frame() 
 }
 
 #[test]
-fn drag_waits_for_pending_segment_before_acquiring_a_persistent_edit() {
+fn target_animation_blocks_drag_acquisition_without_acknowledging_input() {
     use noon_core::AnimationOptions;
-    let (mut store, target, unrelated, mut session) = fixture();
+    let (mut store, target, _, mut session) = fixture();
     let endpoint = store.insert_semantic_object(circle(12.0));
     let animation = store
-        .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
+        .insert_semantic_transform_animation(target, endpoint, AnimationOptions::new())
         .unwrap();
     let segment = session
         .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
@@ -699,17 +699,6 @@ fn drag_waits_for_pending_segment_before_acquiring_a_persistent_edit() {
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
     session.complete_segment(&mut store, segment).unwrap();
-    submit(
-        &mut session,
-        &mut store,
-        1,
-        NativePointerInputKind::Press {
-            position: position(0.0),
-            button: 0,
-        },
-    )
-    .unwrap();
-    assert!(session.translation_drag_active());
 }
 
 #[test]
@@ -743,4 +732,145 @@ fn active_drag_rejects_new_animation_without_installing_tracks() {
     session
         .activate_animation_segment(&store, animation, AnimationOptions::new())
         .unwrap();
+}
+
+#[test]
+fn unrelated_animation_and_drag_resolve_in_either_order_or_cancel() {
+    use noon_core::AnimationOptions;
+    for resolution in [
+        "release-before-completion",
+        "release-after-completion",
+        "cancel",
+    ] {
+        let (mut store, target, unrelated, mut session) = fixture();
+        let endpoint = store.insert_semantic_object(circle(12.0));
+        let animation = store
+            .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
+            .unwrap();
+        let segment = session
+            .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+            .unwrap();
+        let authored_before = store.scene_revision();
+        submit(
+            &mut session,
+            &mut store,
+            1,
+            NativePointerInputKind::Press {
+                position: position(0.0),
+                button: 0,
+            },
+        )
+        .unwrap();
+        submit(
+            &mut session,
+            &mut store,
+            2,
+            NativePointerInputKind::Move(position(3.0)),
+        )
+        .unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+        assert_eq!(translation(&session, unrelated), Vec2::new(11.0, 0.0));
+        assert_eq!(store.scene_revision(), authored_before);
+        if resolution == "release-before-completion" {
+            let receipt = submit(
+                &mut session,
+                &mut store,
+                3,
+                NativePointerInputKind::Release {
+                    position: position(3.0),
+                    button: 0,
+                },
+            )
+            .unwrap();
+            assert!(receipt.undo.is_some());
+            assert_eq!(
+                store.scene_revision(),
+                authored_before.checked_next().unwrap()
+            );
+            assert_eq!(session.frame().time, 0.5);
+        } else if resolution == "cancel" {
+            submit(
+                &mut session,
+                &mut store,
+                3,
+                NativePointerInputKind::Cancel(NativePointerCancellation::CaptureLost),
+            )
+            .unwrap();
+            assert_eq!(translation(&session, target), Vec2::ZERO);
+            assert_eq!(store.scene_revision(), authored_before);
+        }
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(translation(&session, unrelated), Vec2::new(12.0, 0.0));
+        if resolution == "release-after-completion" {
+            assert!(session.translation_drag_active());
+            assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+            let before_release = store.scene_revision();
+            let receipt = submit(
+                &mut session,
+                &mut store,
+                3,
+                NativePointerInputKind::Release {
+                    position: position(3.0),
+                    button: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                store.scene_revision(),
+                before_release.checked_next().unwrap()
+            );
+            receipt
+                .undo
+                .unwrap()
+                .undo(&mut session, &mut store)
+                .unwrap();
+            assert_eq!(translation(&session, target), Vec2::ZERO);
+            assert_eq!(translation(&session, unrelated), Vec2::new(12.0, 0.0));
+        }
+        assert!(!session.translation_drag_active());
+        let authored = store.semantic_object_state_checked(unrelated).unwrap();
+        assert_eq!(
+            authored.transform.translation,
+            SemanticVec3::new(12.0, 0.0, 0.0)
+        );
+    }
+}
+
+#[test]
+fn structural_segment_cannot_acquire_a_drag_even_on_an_unrelated_object() {
+    let (mut store, target, unrelated, mut session) = fixture();
+    let root = store.node(unrelated).unwrap().parents()[0];
+    session
+        .declare_and_activate_fade(
+            &mut store,
+            root,
+            unrelated,
+            noon_core::SemanticFadeDirection::Out,
+            noon_core::AnimationOptions::new().run_time(1.0),
+        )
+        .unwrap();
+    let before = session.publication_context();
+    let token = session.native_pointer_input_token().unwrap();
+    assert_eq!(
+        submit(
+            &mut session,
+            &mut store,
+            1,
+            NativePointerInputKind::Press {
+                position: position(0.0),
+                button: 0,
+            }
+        ),
+        Err(TranslationDragError::Publication(
+            ExecutionSessionPublicationError::SegmentCompletionPending,
+        ))
+    );
+    assert_eq!(session.native_pointer_input_token().unwrap(), token);
+    assert_eq!(session.publication_context(), before);
+    assert!(!session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::ZERO);
 }

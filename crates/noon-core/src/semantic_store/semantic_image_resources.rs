@@ -337,6 +337,31 @@ mod tests {
     }
 
     #[test]
+    fn replacing_the_last_image_owner_reclaims_its_pixels() {
+        let mut store = SemanticStore::new();
+        let first = create(&mut store, Arc::from([71; 8]));
+        let second = create(&mut store, Arc::from([71; 8]));
+        let handle = store
+            .semantic_object_state_checked(first)
+            .unwrap()
+            .content
+            .image()
+            .unwrap()
+            .resource();
+
+        let mut replace_first = SemanticMutationTransaction::new();
+        replace_first.replace_content(first, StoredGeometry::Circle { radius: 1.0 });
+        replace_first.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_some());
+
+        let mut replace_second = SemanticMutationTransaction::new();
+        replace_second.replace_content(second, StoredGeometry::Circle { radius: 2.0 });
+        replace_second.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_none());
+        assert!(store.raster_image_resources().is_empty());
+    }
+
+    #[test]
     fn transform_to_allows_same_image_resource_and_rejects_resource_morph() {
         let mut store = SemanticStore::new();
         let source = create(&mut store, Arc::from([47; 8]));

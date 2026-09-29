@@ -544,13 +544,53 @@ test("Rust wake directives admit one animation drive and one deadline without id
 test("renderer telemetry timestamps pending snapshots without inventing presentations", () => {
   const harness = createWorkerHarness();
   let now = 1000;
-  harness.context.performance = { now: () => now };
+  harness.context.performance = { now: () => now, timeOrigin: 50_000 };
   const before = vm.runInContext("currentMetrics()", harness.context);
   now = 2000;
   const after = vm.runInContext("currentMetrics()", harness.context);
   assert.equal(before.sampledAtMs, 1000);
   assert.equal(after.sampledAtMs, 2000);
+  assert.equal(before.performanceTimeOriginMs, 50_000);
+  assert.equal(before.firstPresentedAtMs, null);
   assert.equal(after.presentedFrames, before.presentedFrames);
+});
+
+test("first presentation timestamp latches only after renderer reports a successful present", () => {
+  const harness = createWorkerHarness();
+  let now = 100;
+  harness.context.performance = { now: () => now, timeOrigin: 70_000 };
+  harness.context.shouldRender = false;
+  vm.runInContext(`
+    renderer = {
+      render: () => shouldRender,
+      rendererBackend: () => "WebGPU",
+      gpuGeneration: () => 1,
+      time: () => 0,
+      objectCount: () => 1,
+      lastDrawCalls: () => 1,
+      lastInstancesDrawn: () => 1,
+      lastBytesUploaded: () => 0,
+      lastGeometryCacheMisses: () => 0,
+    };
+    mode = null;
+    needsPresent = true;
+  `, harness.context);
+
+  assert.equal(vm.runInContext("tryPresent()", harness.context), false);
+  assert.equal(vm.runInContext("currentMetrics().presentedFrames", harness.context), 0);
+  assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), null);
+
+  now = 142;
+  harness.context.shouldRender = true;
+  assert.equal(vm.runInContext("tryPresent()", harness.context), true);
+  const first = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(first.presentedFrames, 1);
+  assert.equal(first.firstPresentedAtMs, 142);
+  assert.equal(first.performanceTimeOriginMs, 70_000);
+
+  now = 250;
+  vm.runInContext("needsPresent = true; tryPresent()", harness.context);
+  assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), 142);
 });
 
 test("idle continuation retries a pending surface publication without advancing the engine", async () => {
@@ -699,6 +739,7 @@ test("clamped zero-to-one resize stays idle and later real resizes still present
   const sizes = [];
   let presents = 0;
   const context = vm.createContext({
+    performance: { now: () => 0, timeOrigin: 0 },
     rendererStub: {
       resize: (width, height) => sizes.push([width, height]),
       render: () => { presents += 1; return true; },

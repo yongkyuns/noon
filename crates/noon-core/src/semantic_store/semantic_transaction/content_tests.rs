@@ -360,4 +360,31 @@ fn imported_same_store_text_is_valid_for_add_and_replace() {
         store.semantic_object_state_checked(object).unwrap().content,
         SemanticObjectContent::Text(second)
     );
+    assert!(store.text_resources().get(first).is_none());
+    assert!(store.text_resources().get(second).is_some());
+}
+
+#[test]
+fn remove_then_readd_in_one_transaction_keeps_the_resource_live() {
+    let mut store = SemanticStore::new();
+    let path = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 1.0)),
+        )
+        .unwrap();
+    let old =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(path)));
+    let replacement =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }));
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.replace_content(old, StoredGeometry::Circle { radius: 1.0 });
+    transaction.replace_content(replacement, StoredGeometry::Resource(path));
+    transaction.apply(&mut store).unwrap();
+
+    assert!(store.geometry_resources().get(path).is_some());
 }

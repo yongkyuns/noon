@@ -24,6 +24,7 @@ use prepared_value::PreparedPublication;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+    TranslationDrag(SemanticNodeId),
     Callback(super::CallbackPhaseToken),
 }
 
@@ -189,17 +190,25 @@ impl ExecutionSession {
         {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
-        if self.pending_segment_completion.is_some()
-            && purpose != SemanticPublicationPurpose::SegmentCompletion
-        {
-            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        if let Some(pending) = self.pending_segment_completion.as_ref() {
+            let admitted = purpose == SemanticPublicationPurpose::SegmentCompletion
+                || matches!(purpose, SemanticPublicationPurpose::TranslationDrag(target)
+                    if pending.allows_translation_drag(target));
+            if !admitted {
+                return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+            }
         }
-        // A drag owns the target's effective Position until it either commits
-        // one authored reconciliation or is explicitly cancelled.  This bounded
-        // session policy rejects concurrent source edits rather than allowing a
-        // later release to overwrite a newly authored value.
-        if self.translation_drag.is_active() {
-            return Err(ExecutionSessionPublicationError::TranslationDragActive);
+        // Ordinary edits cannot overwrite a held Position. An unrelated segment
+        // may still finish through the same atomic publication lane.
+        if let Some(target) = self.translation_drag.target() {
+            let independent_completion = purpose == SemanticPublicationPurpose::SegmentCompletion
+                && self
+                    .pending_segment_completion
+                    .as_ref()
+                    .is_some_and(|pending| pending.allows_translation_drag(target));
+            if !independent_completion {
+                return Err(ExecutionSessionPublicationError::TranslationDragActive);
+            }
         }
         Ok(())
     }

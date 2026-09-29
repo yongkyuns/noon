@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import noon as _base
-from _noon_errors import engine_await, raise_engine_error
+from _noon_errors import engine_await, engine_call, raise_engine_error
 
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
@@ -132,6 +132,7 @@ class _CanonicalCallbackSession:
     callback_ids: list[tuple[Callable[..., Any], int]]
     targets: dict[tuple[int, int], _base.Mobject]
     next_callback_id: int = 0
+    pending_callback_context: "_CanonicalCallbackContext | None" = None
 
     def callback_id(self, callback: Callable[..., Any]) -> tuple[int, bool]:
         for existing, callback_id in self.callback_ids:
@@ -518,17 +519,28 @@ class _PhasePropertyRow:
 
 
 class _CanonicalCallbackContext:
-    """Property-only Python overlay over a Rust-prepared phase view.
+    """Phase-local effective rows plus Rust-owned existing-handle membership staging.
 
-    Rows contain only effective scalar properties and a Rust-derived world AABB.
-    They intentionally cannot carry geometry, identity, membership, or authored state.
+    Python can read and write the prepared effective rows, then stage ordered
+    membership edits for already-bound handles through the pinned Rust player.
+    The player retains semantic identity, transaction ownership, and the one
+    callback publication; Python only delays wrapper associations until commit.
     """
 
-    def __init__(self, frame: dict[str, Any], authoring_context: object) -> None:
+    def __init__(
+        self,
+        frame: dict[str, Any],
+        authoring_context: object,
+        *,
+        callback_player: object | None = None,
+        scene: _base.Scene | None = None,
+    ) -> None:
         self.time = float(frame["time"])
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
         self._authoring_context = authoring_context
+        self._callback_player = callback_player
+        self._scene = scene
         self._operations = authoring_context
         self._frame_items = {
             _phase_node_key(item["node"]): item for item in frame["objects"]
@@ -538,6 +550,43 @@ class _CanonicalCallbackContext:
         self._prefetch_errors: dict[tuple[int, int], Exception] = {}
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
+        # Python retains only delayed wrapper bookkeeping. The player owns the
+        # one typed semantic transaction and is the sole publication authority.
+        self._membership_finalizers: list[Callable[[], None]] = []
+        self._membership_wrappers: dict[str, object] = {}
+
+    def stage_membership(self, batch: object, finalize: Callable[[], None]) -> None:
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback structural staging requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackMembership,
+            json.dumps(self.token, separators=(",", ":")),
+            batch,
+            operation="callback.membership",
+        )
+        self._membership_finalizers.append(finalize)
+
+    def membership_root_keys(self) -> list[str] | None:
+        if self._callback_player is None:
+            return None
+        return [str(key) for key in engine_call(
+            self._callback_player.callbackMembershipRootKeys,
+            json.dumps(self.token, separators=(",", ":")),
+            operation="callback.membership_read",
+        )]
+
+    def finalize_membership(self) -> None:
+        # All finalizers were validated before the Rust commit. They mutate
+        # derived Python wrapper associations only after its one publication.
+        for finalize in self._membership_finalizers:
+            finalize()
+        self._membership_finalizers.clear()
+
+    def discard_membership(self) -> None:
+        self._membership_finalizers.clear()
+        self._membership_wrappers.clear()
 
     def _read(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Suspend this exact callback invocation for one Rust-pinned read miss."""
@@ -1020,6 +1069,14 @@ def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContex
     return None
 
 
+def active_callback_membership_context(scene: _base.Scene) -> _CanonicalCallbackContext | None:
+    """Return the one phase-local structural collector for this exact Scene."""
+    context = _ACTIVE_CANONICAL_CONTEXT.get()
+    if isinstance(context, _CanonicalCallbackContext) and context._scene is scene:
+        return context
+    return None
+
+
 def _canonical_row(mobject: _base.Mobject) -> tuple[_CanonicalCallbackContext, tuple[int, int], _PhasePropertyRow] | None:
     context = _canonical_phase_context(mobject)
     if context is None:
@@ -1276,7 +1333,7 @@ def _canonical_vmobject_set_opacity(
 async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
     """Prepare bounded capture reads before executing this callback phase once."""
     session = _CANONICAL_SESSIONS[int(session_id)]
-    context = _CanonicalCallbackContext(frame, session.context)
+    context = _CanonicalCallbackContext(frame, session.context, scene=session.scene)
     from _manim_reactive import ValueTracker
 
     callbacks = [session.callbacks[int(item["callback_id"])] for item in frame.get("invocations", [])]
@@ -1285,7 +1342,7 @@ async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any
 
 
 def run_canonical_callback_phase(
-    session_id: int, frame: dict[str, Any], *, prepared_context=None
+    session_id: int, frame: dict[str, Any], *, prepared_context=None, callback_player=None
 ) -> str:
     """Invoke one Rust-selected callback phase and return only effective writes.
 
@@ -1300,7 +1357,15 @@ def run_canonical_callback_phase(
     except KeyError as error:
         raise ValueError(f"unknown canonical Noon updater session {session_id}") from error
 
-    context = prepared_context or _CanonicalCallbackContext(frame, session.context)
+    context = prepared_context or _CanonicalCallbackContext(
+        frame,
+        session.context,
+        callback_player=callback_player,
+        scene=session.scene,
+    )
+    if prepared_context is not None:
+        context._callback_player = callback_player
+        context._scene = session.scene
     if context.token != frame["token"] or context._authoring_context is not session.context:
         raise RuntimeError("prepared canonical callback reads belong to a different phase")
     scene_key = id(session.scene)
@@ -1337,11 +1402,36 @@ def run_canonical_callback_phase(
                     f"{target[0]}:{target[1]}"
                 ) from error
             _invoke(callback, mobject, context.delta_time)
+    except Exception:
+        context.discard_membership()
+        raise
     finally:
         _ACTIVE_CANONICAL_CONTEXT.reset(context_token)
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
+    session.pending_callback_context = context
     return _json_phase(context.effective_batch())
+
+
+def complete_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> None:
+    """Commit Python-only wrapper bindings after the player published the phase."""
+    session = _CANONICAL_SESSIONS[int(session_id)]
+    context = session.pending_callback_context
+    if context is None or context.token != frame.get("token"):
+        raise RuntimeError("canonical callback completion does not match the pending phase")
+    try:
+        context.finalize_membership()
+    finally:
+        session.pending_callback_context = None
+
+
+def discard_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> None:
+    """Drop delayed wrapper work when the exact Rust callback phase aborts."""
+    session = _CANONICAL_SESSIONS.get(int(session_id))
+    context = None if session is None else session.pending_callback_context
+    if context is not None and context.token == frame.get("token"):
+        context.discard_membership()
+        session.pending_callback_context = None
 
 
 def _json_phase(value: object) -> str:

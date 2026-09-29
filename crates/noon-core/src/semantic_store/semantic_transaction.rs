@@ -466,6 +466,10 @@ pub struct SemanticMutationTransaction {
     id: u32,
     next_token: u32,
     mutations: Vec<SemanticMutation>,
+    // Prepared existing-handle membership stages are composed in callback
+    // order. Their preflight overlay already validates each transition, while
+    // the ordinary public transaction path continues to reject repeated keys.
+    allow_repeated_membership_mutations: bool,
 }
 
 pub(super) struct SemanticTransactionPreflight {
@@ -490,6 +494,7 @@ impl Default for SemanticMutationTransaction {
             id,
             next_token: 0,
             mutations: Vec::new(),
+            allow_repeated_membership_mutations: false,
         }
     }
 }
@@ -1526,6 +1531,19 @@ impl SemanticMutationTransaction {
         PreparedSemanticMutationTransaction::new(self, store)
     }
 
+    /// Validate while retaining this exact transaction when preflight rejects it.
+    ///
+    /// A callback collector can report one caught operation failure and continue
+    /// staging its previously accepted operations without cloning transaction
+    /// identity or local-node allocation state.
+    pub fn prepare_recoverable(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<PreparedSemanticMutationTransaction<'_>, (Self, SemanticMutationTransactionError)>
+    {
+        PreparedSemanticMutationTransaction::new_recoverable(self, store)
+    }
+
     /// Preflight the complete transaction, then commit every changed mutation.
     pub fn apply(
         self,
@@ -1777,7 +1795,14 @@ impl SemanticMutationTransaction {
             }
 
             if let Some(key) = mutation.key() {
-                if !targets.insert(key) {
+                let repeated_membership = matches!(
+                    key,
+                    SemanticMutationKey::FamilyEdge { .. }
+                        | SemanticMutationKey::FamilyOrder { .. }
+                );
+                if !(self.allow_repeated_membership_mutations && repeated_membership)
+                    && !targets.insert(key)
+                {
                     return Err(duplicate_mutation_error(index, key));
                 }
             }
@@ -2860,18 +2885,6 @@ fn apply_object_property(
             unreachable!("semantic property value kind was validated during transaction preflight")
         }
     }
-}
-
-fn set_object_content(
-    store: &mut SemanticStore,
-    object: SemanticNodeId,
-    content: SemanticObjectContent,
-) {
-    store
-        .node_mut(object)
-        .and_then(|node| node.semantic_object_state_mut())
-        .expect("preflighted semantic object must remain valid while transaction owns the store")
-        .content = content;
 }
 
 pub(super) fn validate_object_content_resource(

@@ -113,6 +113,10 @@ pub struct Scene {
     cursor: f64,
     sections: Vec<SceneSection>,
     execution: Option<ExecutionSession>,
+    // Source generations advance even when declarations are unchanged. Keep
+    // the watermark with the scene owner so replacing a reconciler cannot
+    // admit an older asynchronous result after a successful no-op generation.
+    pub(crate) source_generation: Option<crate::SourceGeneration>,
 }
 impl Default for Scene {
     fn default() -> Self {
@@ -142,6 +146,7 @@ impl Scene {
             cursor: 0.0,
             sections: Vec::new(),
             execution: None,
+            source_generation: None,
         }
     }
     /// Raw shared arena access for explicit integration, not live mutation.

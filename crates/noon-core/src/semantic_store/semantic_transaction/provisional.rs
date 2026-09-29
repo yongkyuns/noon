@@ -84,6 +84,41 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn last_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        family
+            .existing()
+            .and_then(|family| self.store.node(family))
+            .and_then(|node| node.last_member())
+            .map(Into::into)
+    }
+
+    pub(super) fn next_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        let (family, member) = (family.existing()?, member.existing()?);
+        self.store
+            .node(family)
+            .and_then(|node| node.next_member(member))
+            .map(Into::into)
+    }
+
+    pub(super) fn previous_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        let (family, member) = (family.existing()?, member.existing()?);
+        self.store
+            .node(family)
+            .and_then(|node| node.previous_member(member))
+            .map(Into::into)
+    }
+
     pub(super) fn existing_node_is_scene_owned_or_parented(
         &self,
         node: SemanticNodeId,

@@ -34,9 +34,11 @@ pub use semantic_scene_operations::*;
 
 mod semantic_scene_restructure;
 pub use semantic_scene_restructure::{
-    plan_semantic_scene_membership, semantic_scene_root_contains,
+    plan_prepared_semantic_scene_membership, plan_semantic_scene_membership,
+    semantic_scene_root_contains, stage_prepared_semantic_scene_membership,
     stage_semantic_foreground_removal, stage_semantic_scene_admission,
-    stage_semantic_scene_lifecycle_membership, SemanticSceneMembershipRequest,
+    stage_semantic_scene_lifecycle_membership, PreparedSemanticMembershipError,
+    PreparedSemanticMembershipErrorKind, SemanticSceneMembershipRequest,
 };
 
 mod semantic_declarations;
@@ -84,6 +86,9 @@ mod semantic_text_resources;
 use semantic_references::SemanticIncomingReference;
 pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
 pub use semantic_text_resources::SemanticTextImportError;
+
+mod resource_reclamation;
+use resource_reclamation::{SemanticResourceReferences, SemanticResourceRetirementCandidates};
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -597,6 +602,9 @@ pub struct SemanticStore {
     compiled_text_resources: HashMap<crate::TextCompilationIdentity, crate::TextResourceHandle>,
     compiled_text_resource_order: VecDeque<crate::TextCompilationIdentity>,
     compiled_text_resource_retained_bytes: usize,
+    resource_references: SemanticResourceReferences,
+    resource_retirement_candidates: SemanticResourceRetirementCandidates,
+    resource_reclamation_defer_depth: usize,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -689,7 +697,7 @@ impl Clone for SemanticStore {
                         .sum::<usize>()
             })
             .sum();
-        Self {
+        let mut cloned = Self {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
@@ -698,6 +706,9 @@ impl Clone for SemanticStore {
             compiled_text_resources,
             compiled_text_resource_order,
             compiled_text_resource_retained_bytes,
+            resource_references: SemanticResourceReferences::default(),
+            resource_retirement_candidates: SemanticResourceRetirementCandidates::default(),
+            resource_reclamation_defer_depth: 0,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
@@ -711,7 +722,9 @@ impl Clone for SemanticStore {
             inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
-        }
+        };
+        cloned.rebuild_semantic_resource_references();
+        cloned
     }
 }
 
@@ -848,6 +861,12 @@ impl SemanticStore {
             self.inset_2d_displays.insert(id);
         }
         self.register_semantic_references_for_owner(id);
+        let resource_state = self
+            .node(id)
+            .and_then(SemanticNode::semantic_object_state)
+            .expect("newly inserted semantic object has state")
+            .clone();
+        self.retain_semantic_object_resources(&resource_state);
         id
     }
 
@@ -1549,6 +1568,10 @@ impl SemanticStore {
         self.incoming_references.remove(&id);
         self.table_layouts.remove(&id);
 
+        if let Some(state) = node.semantic_object_state() {
+            self.release_semantic_object_resources(state);
+        }
+
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
         slot.generation = slot
@@ -1563,6 +1586,7 @@ impl SemanticStore {
             slots_written: writes,
             cycle_nodes_visited: 0,
         };
+        self.reclaim_semantic_resource_candidates();
         Ok(removed)
     }
 

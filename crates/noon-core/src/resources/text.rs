@@ -934,6 +934,23 @@ impl TextResourceArena {
         })
     }
 
+    /// Iterate the currently live versioned handles. This remains arena-local and
+    /// is used only while cloning a semantic store to rebuild derived ownership
+    /// indexes; ordinary resource mutations never scan it.
+    pub(crate) fn handles(&self) -> impl Iterator<Item = TextResourceHandle> + '_ {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                entry.value.as_ref()?;
+                Some(TextResourceHandle {
+                    arena: self.namespace,
+                    id: text_resource_id(index, entry.generation),
+                    version: entry.version,
+                })
+            })
+    }
+
     pub fn replace(
         &mut self,
         id: TextResourceId,

@@ -311,6 +311,8 @@ impl SemanticStore {
         handles.try_reserve_exact(dependencies.len())?;
         installed.try_reserve_exact(dependencies.len())?;
 
+        self.begin_semantic_resource_reclamation_defer();
+        let newly_interned_fonts = self.intern_prepared_fonts(&staged_fonts);
         let result = (|| {
             for (identity, resource, _fonts, geometry) in dependencies {
                 let cached = resolved.get(&identity).copied().or_else(|| {
@@ -350,10 +352,13 @@ impl SemanticStore {
         })();
         if result.is_ok() {
             for (identity, handle) in installed {
-                self.remember_compiled_text_resource(identity, handle);
+                if !self.remember_compiled_text_resource(identity, handle) {
+                    self.retire_compiled_text_helper(handle);
+                }
             }
         } else {
             for (_, handle) in installed {
+                self.abort_semantic_text_resource_dependencies(handle);
                 let resource = self
                     .text_resources
                     .remove(handle.id)
@@ -369,7 +374,11 @@ impl SemanticStore {
                         .expect("unpublished dependency path remains removable");
                 }
             }
+            for handle in newly_interned_fonts {
+                self.font_resources.remove(handle);
+            }
         }
+        self.end_semantic_resource_reclamation_defer();
         result
     }
 
@@ -396,29 +405,53 @@ impl SemanticStore {
     {
         let mut handles = Vec::new();
         handles.try_reserve_exact(inputs.len())?;
+        // The callback may replace the final current owner of a font or vector
+        // dependency with one of these fresh text handles. Keep reclamation
+        // deferred while their dependency closure is made visible, so the
+        // nested semantic transaction cannot retire that shared dependency in
+        // the gap before this scope finishes publication.
+        self.begin_semantic_resource_reclamation_defer();
+        let newly_interned_fonts = self.intern_prepared_fonts(&fonts);
         for (resource, _) in inputs {
-            handles.push(
-                self.text_resources
-                    .insert(resource)
-                    .expect("text batch preflighted"),
-            );
+            let handle = self
+                .text_resources
+                .insert(resource)
+                .expect("text batch preflighted");
+            self.register_semantic_text_resource_dependencies(handle);
+            handles.push(handle);
         }
 
         let result = publish(self, &handles);
         if result.is_err() {
             for handle in handles {
+                self.abort_semantic_text_resource_dependencies(handle);
                 self.text_resources
                     .remove(handle.id)
                     .expect("fresh unpublished text is removable");
             }
-        } else {
-            for (_, (face, data)) in fonts {
-                self.font_resources
-                    .intern_face(&face, data)
-                    .expect("font batch preflighted");
+            for handle in newly_interned_fonts {
+                self.font_resources.remove(handle);
             }
         }
+        self.end_semantic_resource_reclamation_defer();
         result
+    }
+
+    fn intern_prepared_fonts(
+        &mut self,
+        fonts: &PreparedGlyphFonts,
+    ) -> Vec<crate::FontResourceHandle> {
+        fonts
+            .values()
+            .filter_map(|(face, data)| {
+                let was_present = self.font_resources.get_for_face(face).is_some();
+                let handle = self
+                    .font_resources
+                    .intern_face(face, data.clone())
+                    .expect("font batch preflighted");
+                (!was_present).then_some(handle)
+            })
+            .collect()
     }
 
     /// Publish glyph-only text resources and one cold semantic transaction.
@@ -709,11 +742,284 @@ mod tests {
         (resource, fonts, geometry)
     }
 
+    #[test]
+    fn text_dependencies_survive_inert_admission_and_replacement() {
+        for replace_during_admission in [false, true] {
+            let mut store = SemanticStore::new();
+            let geometry = store
+                .insert_geometry_path(
+                    crate::VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(2.0, 1.0)),
+                )
+                .unwrap();
+            let (mut first, fonts) = glyph_resource();
+            first.vector_items = Arc::from([crate::TextVectorItem {
+                geometry,
+                transform: TextAffineTransform::IDENTITY,
+                style: crate::TextVectorStyle::default(),
+                source_span: None,
+                semantic_key: None,
+            }]);
+            first.render_items =
+                Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+            let mut parts = first.parts.to_vec();
+            parts[0].vector_count = 1;
+            first.parts = Arc::from(parts);
+            let owner = Cell::new(None);
+
+            store
+                .with_derived_text_resources(vec![first.clone()], &fonts, |store, handles| {
+                    let mut transaction = SemanticMutationTransaction::new();
+                    let token = transaction.create_node(SemanticNodeCreation::object(
+                        SemanticObjectState::new(handles[0]),
+                    ));
+                    let result = transaction.apply(store).map_err(Error::from)?;
+                    owner.set(result.resolve(token));
+                    Ok::<_, Error>(result)
+                })
+                .unwrap();
+            let second = Cell::new(None);
+            store
+                .with_derived_text_resources(vec![first], &fonts, |store, handles| {
+                    second.set(Some(handles[0]));
+                    if replace_during_admission {
+                        let mut replace = SemanticMutationTransaction::new();
+                        replace.replace_content(owner.get().unwrap(), handles[0]);
+                        replace.apply(store).map_err(Error::from)?;
+                    }
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            let second = second.get().unwrap();
+            if !replace_during_admission {
+                let mut replace = SemanticMutationTransaction::new();
+                replace.replace_content(owner.get().unwrap(), second);
+                replace.apply(&mut store).unwrap();
+            }
+
+            assert!(store.text_resources().get(second).is_some());
+            assert!(store.geometry_resources().get(geometry).is_some());
+            assert_eq!(store.font_resources().len(), 1);
+
+            assert_eq!(
+                store
+                    .semantic_object_state_checked(owner.get().unwrap())
+                    .unwrap()
+                    .content,
+                crate::SemanticObjectContent::Text(second)
+            );
+        }
+    }
+
     fn identity(label: &str) -> crate::TextCompilationIdentity {
         crate::TextCompilationIdentity {
             descriptor: Arc::from(label.as_bytes()),
             font_contents: Arc::from([Arc::<[u8]>::from([1, 2, 3])]),
         }
+    }
+
+    #[test]
+    fn compiled_glyph_dependency_batch_keeps_fonts_through_admission_and_rollback() {
+        for reject in [false, true] {
+            let (dependency, fonts) = glyph_resource();
+            let composed = dependency.clone();
+            let mut store = SemanticStore::new();
+            let before = (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+            );
+            let result = store.with_compiled_text_dependency_batch(
+                vec![(
+                    identity("glyph-dependency-batch"),
+                    dependency,
+                    fonts,
+                    GeometryResourceArena::new(),
+                )],
+                |_, _| Ok::<_, Error>(vec![composed]),
+                |store, handles| {
+                    let mut transaction = SemanticMutationTransaction::new();
+                    let mut state = SemanticObjectState::new(handles[0]);
+                    if reject {
+                        state.style.object_opacity = f64::NAN;
+                    }
+                    transaction.add_node(SemanticNodeCreation::object(state));
+                    transaction.apply(store).map_err(Error::from)
+                },
+            );
+            if reject {
+                assert!(matches!(result, Err(Error::Transaction(_))));
+                assert_eq!(
+                    (
+                        store.text_resources().stats(),
+                        store.font_resources().stats(),
+                        store.geometry_resources().stats(),
+                    ),
+                    before
+                );
+                assert!(store.compiled_text_resources.is_empty());
+            } else {
+                assert!(result.is_ok());
+                assert_eq!(store.text_resources().len(), 2);
+                assert_eq!(store.font_resources().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn compiled_dependency_cache_reclaims_unattached_helpers_at_its_bound() {
+        let mut store = SemanticStore::new();
+        let owner = Cell::new(None);
+        let mut plateau = None;
+
+        for index in 0..384 {
+            let (dependency, fonts, geometry) = glyph_vector_resource();
+            store
+                .with_compiled_text_dependency_batch(
+                    vec![(
+                        identity(&format!("helper-{index}")),
+                        dependency,
+                        fonts,
+                        geometry,
+                    )],
+                    |store, handles| {
+                        Ok::<_, Error>(vec![store
+                            .text_resources()
+                            .get(handles[0])
+                            .expect("fresh compiled helper")
+                            .clone()])
+                    },
+                    |store, handles| {
+                        let mut transaction = SemanticMutationTransaction::new();
+                        if let Some(existing) = owner.get() {
+                            transaction.replace_content(existing, handles[0]);
+                        } else {
+                            let token = transaction.create_node(SemanticNodeCreation::object(
+                                SemanticObjectState::new(handles[0]),
+                            ));
+                            let result = transaction.apply(store).map_err(Error::from)?;
+                            owner.set(result.resolve(token));
+                            return Ok::<_, Error>(result);
+                        }
+                        transaction.apply(store).map_err(Error::from)
+                    },
+                )
+                .unwrap();
+            if index == 255 {
+                plateau = Some((
+                    store.text_resources().stats(),
+                    store.font_resources().stats(),
+                    store.geometry_resources().stats(),
+                ));
+            }
+        }
+
+        assert_eq!(store.compiled_text_resources.len(), 128);
+        assert_eq!(store.text_resources().len(), 129);
+        assert_eq!(store.font_resources().len(), 1);
+        assert_eq!(store.geometry_resources().len(), 128);
+        assert_eq!(
+            (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+            ),
+            plateau.unwrap()
+        );
+    }
+
+    #[test]
+    fn oversized_compiled_helper_retires_after_composition() {
+        let (dependency, fonts, geometry) = glyph_vector_resource();
+        let identity = crate::TextCompilationIdentity {
+            descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
+            font_contents: Arc::from([]),
+        };
+        let mut store = SemanticStore::new();
+        store
+            .with_compiled_text_dependency_batch(
+                vec![(identity, dependency, fonts, geometry)],
+                |store, handles| {
+                    Ok::<_, Error>(vec![store
+                        .text_resources()
+                        .get(handles[0])
+                        .expect("fresh compiled helper")
+                        .clone()])
+                },
+                |store, handles| {
+                    let mut transaction = SemanticMutationTransaction::new();
+                    transaction.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+                        handles[0],
+                    )));
+                    transaction.apply(store).map_err(Error::from)
+                },
+            )
+            .unwrap();
+
+        assert!(store.compiled_text_resources.is_empty());
+        assert_eq!(store.text_resources().len(), 1);
+        assert_eq!(store.font_resources().len(), 1);
+        assert_eq!(store.geometry_resources().len(), 1);
+    }
+
+    #[test]
+    fn failed_text_admission_keeps_preexisting_raw_font_and_geometry() {
+        let mut store = SemanticStore::new();
+        let geometry = store
+            .insert_geometry_path(
+                crate::VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(2.0, 1.0)),
+            )
+            .unwrap();
+        let (mut resource, fonts) = glyph_resource();
+        let face = resource.runs[0].font.clone();
+        let raw_font = store
+            .font_resources
+            .intern_face(
+                &face,
+                fonts
+                    .get_for_face(&face)
+                    .expect("fixture font")
+                    .data
+                    .clone(),
+            )
+            .unwrap();
+        resource.vector_items = Arc::from([crate::TextVectorItem {
+            geometry,
+            transform: TextAffineTransform::IDENTITY,
+            style: crate::TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: None,
+        }]);
+        resource.render_items = Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+        let mut parts = resource.parts.to_vec();
+        parts[0].vector_count = 1;
+        resource.parts = Arc::from(parts);
+        let before = (
+            store.text_resources().stats(),
+            store.font_resources().stats(),
+            store.geometry_resources().stats(),
+        );
+
+        let result = store.with_derived_text_resources(vec![resource], &fonts, |_, _| {
+            Err::<(), Error>(Error::Import(SemanticTextImportError::MissingFont(
+                crate::FontResourceKey::from_face(&face),
+            )))
+        });
+
+        assert!(matches!(result, Err(Error::Import(_))));
+        assert_eq!(
+            (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+            ),
+            before
+        );
+        assert!(store.font_resources().get(raw_font).is_some());
+        assert!(store.geometry_resources().get(geometry).is_some());
     }
 
     #[test]
@@ -734,15 +1040,15 @@ mod tests {
                 fonts,
                 &geometry,
                 |store, base| {
-                    // The enclosing compiler admission has validated these fonts,
-                    // but neither it nor the derived admission may publish them early.
-                    assert!(store.font_resources().is_empty());
+                    // The enclosing dependency scope installs fonts before the
+                    // first text can retain its dependency closure.
+                    assert_eq!(store.font_resources().len(), 1);
                     let resource = store.text_resources().get(base).unwrap();
                     let part = resource
                         .projected_part(&resource.parts[0], store.geometry_resources())
                         .unwrap();
                     store.with_derived_text_resources(vec![part], &part_fonts, |store, handles| {
-                        assert!(store.font_resources().is_empty());
+                        assert_eq!(store.font_resources().len(), 1);
                         let mut transaction = SemanticMutationTransaction::new();
                         let mut state = SemanticObjectState::new(handles[0]);
                         if reject {

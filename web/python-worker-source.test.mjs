@@ -170,7 +170,7 @@ test("semantic continuation delivers required callback work to its suspended sou
   assert.match(source, /pending\.resolve\(continuationEvent\("callback",\s*\{ phase \}\)\)/);
   assert.match(source, /callback\.resolve\(patchBatchJson\)/);
   assert.match(source, /callback\.reject\(new Error\(message\)\)/);
-  assert.match(source, /continuationOnly\s*\?\s*\(frame\)\s*=>\s*requestContinuationCallback/);
+  assert.match(source, /continuationOnly\s*\?\s*\(frame, player\)\s*=>\s*requestContinuationCallback\(continuation, frame, player\)/);
 });
 
 test("suspended callback reads stay token-pinned and cannot settle after cancellation", () => {
@@ -296,4 +296,28 @@ test("explicit endpoint reconnect returns the existing runtime lease before reat
   assert.equal(entry.endpoints.has(old), false);
   assert.equal(entry.endpoints.size, 1);
   assert.equal(leased, true);
+});
+
+test("continuation membership helpers retain the endpoint player pinned to the phase", () => {
+  const start = source.indexOf("function stageContinuationCallbackMembership");
+  const end = source.indexOf("function readContinuationCallback", start);
+  assert.ok(start >= 0 && end > start, "membership helper boundaries must exist");
+  const context = {};
+  const calls = [];
+  const player = {
+    stageCallbackMembership(token, batch) { calls.push(["stage", token, batch]); },
+    callbackMembershipRootKeys(token) { calls.push(["read", token]); return ["3:1", "4:1"]; },
+  };
+  const helpers = new Function("activeAuthoringRun", `${source.slice(start, end)}
+    return { stageContinuationCallbackMembership, continuationMembershipRootKeys };`
+  )({ continuation: { context, terminal: false, callbackRequest: {
+    phaseTokenJson: '{"sequence":1}', player,
+  } } });
+  const batch = { originalHandles: true };
+  helpers.stageContinuationCallbackMembership(context, '{"sequence":1}', batch);
+  assert.deepEqual(helpers.continuationMembershipRootKeys(context, '{"sequence":1}'), ["3:1", "4:1"]);
+  assert.deepEqual(calls, [
+    ["stage", '{"sequence":1}', batch],
+    ["read", '{"sequence":1}'],
+  ]);
 });
