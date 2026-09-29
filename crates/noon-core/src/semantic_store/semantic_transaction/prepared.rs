@@ -311,13 +311,21 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self,
         update: impl FnOnce(&mut SemanticMutationTransaction),
     ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
+        // Pending-only coalescing can replace a mutation that was already in
+        // the prefix. Keep a bounded exact snapshot so a late invalid update
+        // restores that declaration as well as appended suffix mutations.
+        // Local-token allocation intentionally remains monotonic on recovery.
+        let original_mutations = self.transaction.mutations.clone();
         self.with_recoverable_extension(None, |transaction, _store| {
             update(transaction);
             Ok::<(), Infallible>(())
         })
-        .map_err(|(prepared, error)| match error {
-            PreparedExtensionError::Extension(never) => match never {},
-            PreparedExtensionError::Preflight(error) => (prepared, error),
+        .map_err(|(mut prepared, error)| {
+            prepared.transaction.mutations = original_mutations;
+            match error {
+                PreparedExtensionError::Extension(never) => match never {},
+                PreparedExtensionError::Preflight(error) => (prepared, error),
+            }
         })
     }
 

@@ -330,3 +330,70 @@ fn rejected_pending_extension_never_reuses_an_escaped_local_token() {
     assert!(result.resolve(escaped).is_none());
     assert!(result.resolve(retry).is_some());
 }
+
+#[test]
+fn pending_property_coalescing_restores_the_prior_prefix_after_a_late_failure() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let prepared = prepared
+        .with_pending_object_update(|transaction| {
+            transaction
+                .replace_pending_object_property(
+                    local,
+                    SemanticObjectProperty::Translation,
+                    SemanticVec3::new(1.0, 2.0, 0.0),
+                )
+                .replace_pending_object_style(
+                    local,
+                    SemanticStyle {
+                        fill_opacity: 0.25,
+                        ..SemanticStyle::default()
+                    },
+                );
+        })
+        .unwrap();
+    let (prepared, error) = prepared
+        .with_pending_object_update(|transaction| {
+            transaction
+                .replace_pending_object_property(
+                    local,
+                    SemanticObjectProperty::Translation,
+                    SemanticVec3::new(9.0, 9.0, 0.0),
+                )
+                .replace_pending_object_style(
+                    local,
+                    SemanticStyle {
+                        fill_opacity: 0.75,
+                        ..SemanticStyle::default()
+                    },
+                )
+                .replace_pending_object_property(
+                    local,
+                    SemanticObjectProperty::RotationZ,
+                    f64::NAN,
+                );
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SemanticMutationTransactionError::InvalidNodeObjectState { .. }
+    ));
+    let state = prepared.proposed_object_state(local).unwrap();
+    assert_eq!(
+        state.transform.translation,
+        SemanticVec3::new(1.0, 2.0, 0.0)
+    );
+    assert_eq!(state.style.fill_opacity, 0.25);
+    let result = prepared.commit();
+    let node = result.resolve(local).unwrap();
+    let state = store.semantic_object_state_checked(node).unwrap();
+    assert_eq!(
+        state.transform.translation,
+        SemanticVec3::new(1.0, 2.0, 0.0)
+    );
+    assert_eq!(state.style.fill_opacity, 0.25);
+}

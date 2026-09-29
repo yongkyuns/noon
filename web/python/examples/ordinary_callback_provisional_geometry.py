@@ -26,15 +26,20 @@ class OrdinaryCallbackProvisionalGeometry(Scene):
                 .set_fill(Color(0.1, 0.8, 0.4), opacity=0.6)
             )
             assert candidate.get_center() == (2.0, -1.0)
-            self.add(anchor, candidate)
-            assert self.mobjects == [anchor, candidate]
+            second = Circle(radius=0.15).shift((3.0, -1.0, 0.0))
+            # Separate source-level adds share one pending callback collector;
+            # their delayed wrapper bindings must receive distinct IDs.
+            self.add(candidate)
+            self.add(second)
+            assert self.mobjects == [anchor, candidate, second]
             mobject.shift((0.5, 0.0, 0.0))
-            created.append(candidate)
+            created.extend([candidate, second])
 
         anchor.add_updater(construct_once)
         await self.wait(0.25)
-        assert len(created) == 1
-        assert created[0]._scene is self
+        assert len(created) == 2
+        assert all(candidate._scene is self for candidate in created)
         assert created[0].get_center() == (2.0, -1.0)
+        assert created[1].get_center() == (3.0, -1.0)
         assert anchor.get_center() == (0.5, 0.0)
-        assert self.mobjects == [anchor, created[0]]
+        assert self.mobjects == [anchor, *created]
