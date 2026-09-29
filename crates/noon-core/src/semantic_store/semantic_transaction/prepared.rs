@@ -66,7 +66,24 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         transaction: SemanticMutationTransaction,
         store: &'a mut SemanticStore,
     ) -> Result<Self, SemanticMutationTransactionError> {
-        let (preflight, next_revision, planned_nodes) = Self::preflight_parts(&transaction, store)?;
+        Self::new_recoverable(transaction, store).map_err(|(_, error)| error)
+    }
+
+    pub(super) fn new_recoverable(
+        transaction: SemanticMutationTransaction,
+        store: &'a mut SemanticStore,
+    ) -> Result<
+        Self,
+        (
+            SemanticMutationTransaction,
+            SemanticMutationTransactionError,
+        ),
+    > {
+        let (preflight, next_revision, planned_nodes) =
+            match Self::preflight_parts(&transaction, store) {
+                Ok(parts) => parts,
+                Err(error) => return Err((transaction, error)),
+            };
         Ok(Self {
             store,
             transaction,
@@ -79,6 +96,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// The published store, held read-only while this batch is staged.
     pub fn store(&self) -> &SemanticStore {
         self.store
+    }
+
+    /// Discard this preflight proof and recover its exact unpublished
+    /// transaction.
+    ///
+    /// This is intentionally consuming: the returned transaction keeps its
+    /// transaction identity and local-node allocator, while releasing the
+    /// exclusive store borrow held by the proof. Callback collectors use it to
+    /// stage several fallible existing-handle operations before preparing one
+    /// final publication. It never clones or commits authored state.
+    pub fn into_transaction(self) -> SemanticMutationTransaction {
+        self.transaction
     }
 
     /// Consume this unpublished proof after an existing-handle planner has read
@@ -100,25 +129,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }));
         let Self {
             store,
-            transaction,
+            mut transaction,
             preflight,
             next_revision,
             planned_nodes,
         } = self;
-        // This candidate is never exposed or committed independently. It keeps
-        // the original transaction provenance while proving the extension; on
-        // failure the original prepared proof is reconstructed unchanged.
-        let mut candidate = SemanticMutationTransaction {
-            id: transaction.id,
-            next_token: transaction.next_token,
-            mutations: transaction.mutations.clone(),
-            allow_repeated_membership_mutations: true,
-        };
-        candidate.mutations.extend(plan.mutations);
+        // Extend the original transaction in place. A rejected extension
+        // truncates the candidate before reconstructing its prior proof, so a
+        // callback keeps exact transaction/allocator provenance without
+        // cloning a growing mutation prefix on every staged operation.
+        let original_len = transaction.mutations.len();
+        let original_repeated_membership = transaction.allow_repeated_membership_mutations;
+        transaction.allow_repeated_membership_mutations = true;
+        transaction.mutations.extend(plan.mutations);
         let (candidate_preflight, candidate_next_revision, candidate_planned_nodes) =
-            match Self::preflight_parts(&candidate, store) {
+            match Self::preflight_parts(&transaction, store) {
                 Ok(parts) => parts,
                 Err(error) => {
+                    transaction.mutations.truncate(original_len);
+                    transaction.allow_repeated_membership_mutations = original_repeated_membership;
                     return Err((
                         Self {
                             store,

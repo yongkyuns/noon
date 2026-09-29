@@ -1279,7 +1279,7 @@ impl ExecutionSession {
                 super::ExecutionSessionPublicationError::Semantic(error),
             )
         })?;
-        self.commit_prepared_required_callback_transaction(batch, prepared)
+        self.commit_prepared_required_callback_transaction(batch, prepared, None)
     }
 
     /// Commit after inspecting provisional objects through the existing semantic
@@ -1289,6 +1289,7 @@ impl ExecutionSession {
         &mut self,
         batch: EffectivePropertyBatch,
         prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
+        order_root: Option<SemanticNodeId>,
     ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionCallbackError> {
         let token = batch.token;
         let (effective, domains) = self.prepare_callback_writes(batch)?;
@@ -1299,7 +1300,7 @@ impl ExecutionSession {
                 Some(effective).into(),
                 super::publication::SemanticPublicationPurpose::Callback(token),
                 None,
-                None,
+                order_root,
             )
             .map_err(ExecutionSessionCallbackError::Publication)?;
         self.finish_callback_publication(
@@ -1516,7 +1517,7 @@ mod tests {
         );
         let planned = prepared.planned_node_id(provisional).unwrap();
         let result = session
-            .commit_prepared_required_callback_transaction(batch, prepared)
+            .commit_prepared_required_callback_transaction(batch, prepared, None)
             .unwrap();
         assert_eq!(result.resolve(provisional), Some(planned));
         assert_eq!(session.pending_callback_token(), None);

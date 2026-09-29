@@ -30,6 +30,10 @@ fn prepared_sparse_order_preserves_neighbors_through_remove_append_and_reorder()
         .reorder_member(family, appended, Some(last));
     let prepared = transaction.prepare(&mut store).unwrap();
     assert_eq!(
+        prepared.family_members(family).unwrap(),
+        vec![first.into(), appended.into(), last.into()]
+    );
+    assert_eq!(
         prepared.family_first_member_existing(family).unwrap(),
         Some(first)
     );
@@ -163,6 +167,36 @@ fn family_preflight_detects_cycle_created_only_by_multiple_pending_adds() {
     assert!(store.node(second).unwrap().members().is_empty());
     assert!(store.node(third).unwrap().members().is_empty());
     assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
+fn wide_staged_family_cycle_checks_preserve_ordered_adjacency_without_quadratic_rescans() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let nested = store.insert_family();
+    let mut transaction = SemanticMutationTransaction::new();
+    // A later cycle check traverses this staged root. The preflight must use
+    // its family-indexed adjacency once, rather than repeatedly scanning the
+    // growing ordered result for each staged member.
+    for _ in 0..4_096 {
+        transaction.add_member(root, store.insert_family());
+    }
+    transaction
+        .add_member(root, nested)
+        .add_member(nested, root);
+
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::Family {
+            index: 4_097,
+            error: SemanticSceneOperationError::Store(SemanticStoreError::FamilyCycle {
+                family: nested,
+                member: root,
+            }),
+        })
+    );
+    assert!(store.node(root).unwrap().members().is_empty());
+    assert!(store.node(nested).unwrap().members().is_empty());
 }
 
 #[test]

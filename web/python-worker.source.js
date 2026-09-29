@@ -120,6 +120,10 @@ async function initializePyodide() {
     failContinuationCallback(context, tokenJson, message);
   self.noonReadSemanticContinuationCallback = (context, tokenJson, requestJson) =>
     readContinuationCallback(context, tokenJson, requestJson);
+  self.noonStageSemanticContinuationMembership = (context, tokenJson, batch) =>
+    stageContinuationCallbackMembership(context, tokenJson, batch);
+  self.noonContinuationMembershipRootKeys = (context, tokenJson) =>
+    continuationMembershipRootKeys(context, tokenJson);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -482,7 +486,7 @@ function continuationEvent(kind, value = {}) {
   return JSON.stringify({ kind, ...value });
 }
 
-function requestContinuationCallback(continuation, phase) {
+function requestContinuationCallback(continuation, phase, player) {
   if (continuation.terminal || continuation.pending === null) {
     return Promise.reject(new Error("required callback reached a continuation without a suspended source"));
   }
@@ -499,11 +503,29 @@ function requestContinuationCallback(continuation, phase) {
     return Promise.reject(new Error("canonical callback phase is missing its token"));
   }
   return new Promise((resolve, reject) => {
-    continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null };
+    continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null, player };
     const pending = continuation.pending;
     continuation.pending = null;
     pending.resolve(continuationEvent("callback", { phase }));
   });
+}
+
+function stageContinuationCallbackMembership(context, tokenJson, batch) {
+  const callback = continuationCallbackRequest(context, tokenJson);
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackMembership !== "function") {
+    throw new Error("semantic continuation callback has no pinned membership collector");
+  }
+  callback.player.stageCallbackMembership(tokenJson, batch);
+}
+
+function continuationMembershipRootKeys(context, tokenJson) {
+  const callback = continuationCallbackRequest(context, tokenJson);
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.callbackMembershipRootKeys !== "function") {
+    throw new Error("semantic continuation callback has no pinned membership collector");
+  }
+  return callback.player.callbackMembershipRootKeys(tokenJson);
 }
 
 function continuationCallbackRequest(context, tokenJson) {
@@ -774,8 +796,14 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   const runRequiredCallbackPhase = entry.callbackSessionId === undefined
     ? null
     : continuationOnly
-    ? (frame) => requestContinuationCallback(continuation, frame)
-    : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+    ? (frame, player) => requestContinuationCallback(continuation, frame, player)
+    : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
+  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
+    ? null
+    : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
+  const discardRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
+    ? null
+    : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, false);
   if (request.replaceExistingEndpoint) {
     if (continuationOnly || (continuation?.contextId === request.contextId && !continuation.terminal)) {
       throw new Error("cannot replace an endpoint while source continuation is active");
@@ -805,6 +833,8 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
       },
       onCallbackReadAvailable: (read) => { continuation.callbackRead = read; },
     } : null,
+    completeRequiredCallbackPhase,
+    discardRequiredCallbackPhase,
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
@@ -921,18 +951,43 @@ json.dumps(
   }
 }
 
-async function runCanonicalCallbackPhase(pyodide, sessionId, frame) {
+async function runCanonicalCallbackPhase(pyodide, sessionId, frame, player) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
   globals.set("__noon_callback_session", sessionId);
   globals.set("__noon_callback_frame_json", JSON.stringify(frame));
+  globals.set("__noon_callback_player", player);
   try {
     return await pyodide.runPythonAsync(
       `
 import json
 import _manim_updaters
 _manim_updaters.run_canonical_callback_phase(
+    int(__noon_callback_session),
+    json.loads(__noon_callback_frame_json),
+    callback_player=__noon_callback_player,
+)
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
+async function finishCanonicalCallbackPhase(pyodide, sessionId, frame, committed) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
+  try {
+    await pyodide.runPythonAsync(
+      `
+import json
+import _manim_updaters
+_manim_updaters.${committed ? "complete_canonical_callback_phase" : "discard_canonical_callback_phase"}(
     int(__noon_callback_session),
     json.loads(__noon_callback_frame_json),
 )

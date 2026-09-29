@@ -235,8 +235,9 @@ impl MembershipView for PreparedMembershipView<'_, '_> {
         n: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
         let mut parents = Vec::new();
+        let mut seen = HashSet::new();
         for parent in StoreMembershipView(self.prepared.store()).parents(n)? {
-            if self.contains(parent, n)? {
+            if self.contains(parent, n)? && seen.insert(parent) {
                 parents.push(parent);
             }
         }
@@ -245,7 +246,7 @@ impl MembershipView for PreparedMembershipView<'_, '_> {
             .staged_parent_additions_existing(n)
             .map_err(prepared_read_error)?
         {
-            if !parents.contains(&parent) {
+            if seen.insert(parent) {
                 parents.push(parent);
             }
         }

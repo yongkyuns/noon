@@ -21,7 +21,7 @@ from _noon_errors import (
 
 
 class CallbackFixture:
-    def __init__(self, with_tracker=False, with_families=False):
+    def __init__(self, with_tracker=False, with_families=False, bind_detached=False):
         self.store = wasm.WasmAuthoringStore.new()
         self.context = self.store.createSceneContext()
         self.target = self.store.createManimCircle(0.5)
@@ -34,6 +34,8 @@ class CallbackFixture:
                     members.appendMobject("", handle)
                 self.families.append(self.store.createFamily(members, 0))
         self.context.bindMobject("0", self.target)
+        if bind_detached:
+            self.context.bindMobject("1", self.detached)
         self.context.addUpdater(self.target, "1", 0)
         self.tracker = self.context.createValueTracker(2.0) if with_tracker else None
         self.context.beginOrdinaryWait(0.25)
@@ -117,6 +119,42 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         self.assertEqual(fixture.state(), before)
         self.assertIsNone(fixture.player.drainDeltaJson())
         return error
+
+    def test_typed_callback_membership_stages_ordered_existing_handles_until_one_commit(self):
+        fixture = CallbackFixture(bind_detached=True)
+        self.addCleanup(fixture.close)
+        remove = wasm.WasmSceneMembershipBatch.new("remove")
+        remove.appendMobject("", fixture.target)
+        add = wasm.WasmSceneMembershipBatch.new("add")
+        add.appendMobject("", fixture.target)
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            json.dumps(fixture.phase["token"]),
+            remove,
+            operation="callback.membership",
+        )
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            json.dumps(fixture.phase["token"]),
+            add,
+            operation="callback.membership",
+        )
+        self.assertEqual(
+            list(fixture.player.callbackMembershipRootKeys(json.dumps(fixture.phase["token"]))),
+            [
+                f"{fixture.detached.semanticSlot}:{fixture.detached.semanticGeneration}",
+                f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
+            ],
+        )
+        fixture.commit()
+        fixture.phase = None
+        self.assertEqual(
+            list(fixture.context.rootMembershipKeys()),
+            [
+                f"{fixture.detached.semanticSlot}:{fixture.detached.semanticGeneration}",
+                f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
+            ],
+        )
 
     def test_foreign_abort_receipts_reject_even_with_matching_sequence_numbers(self):
         for method in ("failCallbackPhaseJson", "interruptCallbackPhaseJson"):

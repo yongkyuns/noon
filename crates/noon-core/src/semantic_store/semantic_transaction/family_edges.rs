@@ -13,7 +13,6 @@ pub(super) struct FamilyEdgePreflight {
     added_members: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     added_parents: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     order: FamilyOrderOverlay,
-    events: Vec<FamilyEdgeEvent>,
 }
 
 /// Sparse ordered-edge overlay.  Only endpoints touched by a staged edge or
@@ -30,17 +29,6 @@ struct FamilyOrderOverlay {
 struct FamilyOrderLink {
     previous: Option<SemanticTransactionNodeRef>,
     next: Option<SemanticTransactionNodeRef>,
-}
-
-#[derive(Debug)]
-enum FamilyEdgeEvent {
-    Add(SemanticTransactionNodeRef, SemanticTransactionNodeRef),
-    Remove(SemanticTransactionNodeRef, SemanticTransactionNodeRef),
-    Reorder {
-        family: SemanticTransactionNodeRef,
-        member: SemanticTransactionNodeRef,
-        before: Option<SemanticTransactionNodeRef>,
-    },
 }
 
 impl FamilyEdgePreflight {
@@ -101,7 +89,6 @@ impl FamilyEdgePreflight {
         self.added_members.entry(family).or_default().push(member);
         self.added_parents.entry(member).or_default().push(family);
         self.order.append(catalog, family, member);
-        self.events.push(FamilyEdgeEvent::Add(family, member));
         Ok(true)
     }
 
@@ -118,7 +105,6 @@ impl FamilyEdgePreflight {
         if changed {
             self.overrides.insert((family, member), false);
             self.order.detach(catalog, family, member);
-            self.events.push(FamilyEdgeEvent::Remove(family, member));
         }
         Ok(changed)
     }
@@ -146,11 +132,6 @@ impl FamilyEdgePreflight {
         if changed {
             self.order.detach(catalog, family, member);
             self.order.insert_before(catalog, family, member, before);
-            self.events.push(FamilyEdgeEvent::Reorder {
-                family,
-                member,
-                before,
-            });
         }
         Ok(changed)
     }
@@ -160,41 +141,27 @@ impl FamilyEdgePreflight {
         store: &crate::SemanticStore,
         family: SemanticTransactionNodeRef,
     ) -> Vec<SemanticTransactionNodeRef> {
-        let mut members = match family {
-            SemanticTransactionNodeRef::Existing(family) => store
-                .node(family)
-                .map(|node| node.members().into_iter().map(Into::into).collect())
-                .unwrap_or_default(),
-            SemanticTransactionNodeRef::Pending(_) => Vec::new(),
-        };
-        for event in &self.events {
-            match *event {
-                FamilyEdgeEvent::Add(event_family, member) if event_family == family => {
-                    if !members.contains(&member) {
-                        members.push(member);
-                    }
-                }
-                FamilyEdgeEvent::Remove(event_family, member) if event_family == family => {
-                    members.retain(|candidate| *candidate != member);
-                }
-                FamilyEdgeEvent::Reorder {
-                    family: event_family,
-                    member,
-                    before,
-                } if event_family == family => {
-                    if let Some(position) =
-                        members.iter().position(|candidate| *candidate == member)
-                    {
-                        members.remove(position);
-                        let position = before
-                            .and_then(|anchor| {
-                                members.iter().position(|candidate| *candidate == anchor)
-                            })
-                            .unwrap_or(members.len());
-                        members.insert(position, member);
-                    }
-                }
-                _ => {}
+        // The sparse link overlay is the single order representation. Walking
+        // it follows untouched store links and only the locally changed links;
+        // replaying every staged event here would make a wide family's read
+        // proportional to unrelated callback edits.
+        let mut members = Vec::new();
+        let mut seen = HashSet::new();
+        let mut member = self.order.first_for_read(store, family);
+        while let Some(current) = member {
+            // Preflight rejects cycles before the overlay is observable. Keep
+            // this guard so a malformed future overlay cannot loop a read.
+            if !seen.insert(current) {
+                break;
+            }
+            member = self.order.next_for_read(store, family, current);
+            if self
+                .overrides
+                .get(&(family, current))
+                .copied()
+                .unwrap_or(true)
+            {
+                members.push(current);
             }
         }
         members
@@ -327,13 +294,17 @@ impl FamilyEdgePreflight {
                 .copied()
                 .unwrap_or(true)
         });
+        // `added_members` is already indexed by family. Keep a local set only
+        // for this traversal so a wide staged root does not rescan its growing
+        // ordered output for every child while preflighting a later cycle.
+        let mut present = members.iter().copied().collect::<HashSet<_>>();
         for member in self.added_members.get(&family).into_iter().flatten() {
             if self
                 .overrides
                 .get(&(family, *member))
                 .copied()
                 .unwrap_or(false)
-                && !members.contains(member)
+                && present.insert(*member)
             {
                 members.push(*member);
             }
@@ -343,6 +314,39 @@ impl FamilyEdgePreflight {
 }
 
 impl FamilyOrderOverlay {
+    fn first_for_read(
+        &self,
+        store: &crate::SemanticStore,
+        family: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        match self.first.get(&family) {
+            Some(member) => *member,
+            None => family
+                .existing()
+                .and_then(|family| store.node(family))
+                .and_then(|node| node.first_member())
+                .map(Into::into),
+        }
+    }
+
+    fn next_for_read(
+        &self,
+        store: &crate::SemanticStore,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        match self.links.get(&(family, member)) {
+            Some(link) => link.next,
+            None => {
+                let (family, member) = (family.existing()?, member.existing()?);
+                store
+                    .node(family)
+                    .and_then(|node| node.next_member(member))
+                    .map(Into::into)
+            }
+        }
+    }
+
     fn first_existing(
         &self,
         store: &crate::SemanticStore,

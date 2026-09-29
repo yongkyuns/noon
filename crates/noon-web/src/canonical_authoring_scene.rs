@@ -46,7 +46,7 @@ enum OwnedSceneMembershipMember {
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SceneMembershipBatchKind {
+pub(crate) enum SceneMembershipBatchKind {
     Add,
     AddForeground,
     RemoveForeground,
@@ -56,7 +56,7 @@ enum SceneMembershipBatchKind {
     BringToBack,
 }
 
-struct SceneMembershipBatch {
+pub(crate) struct SceneMembershipBatch {
     kind: SceneMembershipBatchKind,
     members: Vec<OwnedSceneMembershipMember>,
     bindings: Vec<(ObjectId, noon::Mobject)>,
@@ -64,12 +64,30 @@ struct SceneMembershipBatch {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
+    #[cfg(test)]
+    pub(crate) fn callback_existing(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = noon::Mobject>,
+    ) -> Self {
+        Self {
+            kind,
+            members: members
+                .into_iter()
+                .map(|handle| OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                })
+                .collect(),
+            bindings: Vec::new(),
+        }
+    }
+
     /// Validate only existing typed handles for one required callback's scene
     /// membership edit. The callback boundary cannot create Python bindings or
     /// infer identity from a numeric node slot: every target stays attached to
     /// its original semantic store until this closure stages the shared core
     /// request.
-    fn with_existing_callback_membership<R>(
+    pub(crate) fn with_existing_callback_membership<R>(
         &self,
         store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
         apply: impl FnOnce(SemanticSceneMembershipRequest<'_>) -> Result<R, AuthoringFailure>,
@@ -3178,6 +3196,10 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
+        pub(crate) fn into_inner(self) -> SceneMembershipBatch {
+            self.inner
+        }
+
         pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
             if self.inner.kind != SceneMembershipBatchKind::Add {
                 return Err("copy references require an add batch".into());

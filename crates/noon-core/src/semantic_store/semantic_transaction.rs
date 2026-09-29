@@ -1531,6 +1531,19 @@ impl SemanticMutationTransaction {
         PreparedSemanticMutationTransaction::new(self, store)
     }
 
+    /// Validate while retaining this exact transaction when preflight rejects it.
+    ///
+    /// A callback collector can report one caught operation failure and continue
+    /// staging its previously accepted operations without cloning transaction
+    /// identity or local-node allocation state.
+    pub fn prepare_recoverable(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<PreparedSemanticMutationTransaction<'_>, (Self, SemanticMutationTransactionError)>
+    {
+        PreparedSemanticMutationTransaction::new_recoverable(self, store)
+    }
+
     /// Preflight the complete transaction, then commit every changed mutation.
     pub fn apply(
         self,

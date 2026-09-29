@@ -401,6 +401,15 @@ def _reconcile_completed_family_bindings(
 
 
 def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
+    from _manim_updaters import active_callback_membership_context
+
+    callback = active_callback_membership_context(scene)
+    if callback is not None:
+        keys = callback.membership_root_keys()
+        if keys is not None:
+            wrappers = dict(_membership_registry(scene))
+            wrappers.update(callback._membership_wrappers)
+            return [wrappers[key] for key in keys if key in wrappers]
     registry = _membership_registry(scene)
     return [
         registry[str(key)]
@@ -428,6 +437,12 @@ def _canonical_edit_membership(
     *,
     key: str | None = None,
 ) -> None:
+    from _manim_updaters import active_callback_membership_context
+
+    callback = active_callback_membership_context(scene)
+    if callback is not None:
+        _stage_callback_membership(scene, callback, kind, values, key=key)
+        return
     if key is not None and (
         kind != "add"
         or len(values) != 1
@@ -466,6 +481,83 @@ def _canonical_edit_membership(
     for value in values:
         _register_membership_wrappers(scene, value)
     _sync_membership_wrapper_attachments(scene, kind, values)
+
+
+def _stage_callback_membership(
+    scene: _base.Scene,
+    callback: object,
+    kind: str,
+    values: tuple[object, ...],
+    *,
+    key: str | None,
+) -> None:
+    """Stage existing typed handles for this one required callback phase.
+
+    New constructors, group/family expansion, explicit keys, foreground, and
+    painter reorders stay deliberately unsupported until their provisional and
+    binding rules are part of the same collector. This path carries the
+    original typed handles straight to the Rust player and delays only Python
+    wrapper attachment until that player commits the whole callback.
+    """
+    if kind not in {"add", "remove", "clear"}:
+        raise NotImplementedError(
+            "canonical callbacks currently stage Scene.add, Scene.remove, and Scene.clear"
+        )
+    if key is not None:
+        raise NotImplementedError(
+            "canonical callback membership does not support provisional keyed construction"
+        )
+    members: list[tuple[_base.Mobject, object]] = []
+    for value in values:
+        if not isinstance(value, _base.Mobject):
+            raise NotImplementedError(
+                "canonical callback membership currently accepts existing Mobjects only"
+            )
+        if value._object is None or value._object.id not in scene._binding_handles:
+            raise NotImplementedError(
+                "canonical callback membership cannot bind provisional Mobjects"
+            )
+        if value._scene is not None and value._scene is not scene:
+            raise ValueError("callback membership Mobject belongs to another Scene")
+        handle = getattr(value, "_semantic_handle", None)
+        if handle is None:
+            raise RuntimeError("callback membership Mobject requires a typed semantic handle")
+        members.append((value, handle))
+    if kind == "clear" and members:
+        raise ValueError("Scene.clear does not accept membership arguments")
+    batch = engine_call(
+        _context(scene).beginMembershipBatch,
+        kind,
+        operation="callback.membership",
+    )
+    try:
+        for _, handle in members:
+            engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+    except Exception:
+        batch.free()
+        raise
+
+    def finalize() -> None:
+        registry = _membership_registry(scene)
+        if kind == "add":
+            for member, _ in members:
+                member._bind(scene, member._object)
+                registry[_semantic_wrapper_key(member)] = member
+        elif kind == "remove":
+            for member, _ in members:
+                if member._scene is scene:
+                    member._canonical_live_target_context = _context(scene)
+                    member._scene = None
+        else:
+            for member in registry.values():
+                if isinstance(member, _base.Mobject) and member._scene is scene:
+                    member._canonical_live_target_context = _context(scene)
+                    member._scene = None
+
+    callback.stage_membership(batch, finalize)
+    if kind == "add":
+        for member, _ in members:
+            callback._membership_wrappers[_semantic_wrapper_key(member)] = member
 
 
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
@@ -896,6 +988,37 @@ def _continuation_event(event_json: object) -> dict[str, object]:
     return event
 
 
+class _ContinuationCallbackPlayer:
+    """Token-scoped forwarding to the endpoint's existing leased player."""
+
+    def __init__(self, context: object, token_json: str) -> None:
+        self._context = context
+        self._token_json = token_json
+
+    def stageCallbackMembership(self, token_json: str, batch: object) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback membership token is stale")
+        from js import noonStageSemanticContinuationMembership
+        engine_call(
+            noonStageSemanticContinuationMembership,
+            self._context,
+            token_json,
+            batch,
+            operation="callback.membership",
+        )
+
+    def callbackMembershipRootKeys(self, token_json: str):
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback membership token is stale")
+        from js import noonContinuationMembershipRootKeys
+        return engine_call(
+            noonContinuationMembershipRootKeys,
+            self._context,
+            token_json,
+            operation="callback.membership_read",
+        )
+
+
 def _service_semantic_continuation_event(
     scene: _base.Scene, event_json: object, *, prepared_callback=None
 ) -> object | None:
@@ -929,7 +1052,10 @@ def _service_semantic_continuation_event(
     token_json = _json(phase["token"])
     try:
         batch_json = _manim_updaters.run_canonical_callback_phase(
-            session_id, phase, prepared_context=prepared_callback
+            session_id,
+            phase,
+            prepared_context=prepared_callback,
+            callback_player=_ContinuationCallbackPlayer(context, token_json),
         )
     except Exception as error:
         # Failing the exact pending phase latches terminal Rust state. Its
@@ -945,6 +1071,7 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
     while True:
         prepared = None
         event = _continuation_event(event_json)
+        completed_phase = None
         if event["kind"] == "callback":
             import _manim_updaters
             from js import noonFailSemanticContinuationCallback
@@ -958,12 +1085,17 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
                     _context(scene), _json(event["phase"]["token"]), str(error)
                 ), operation="Scene.continuation")
                 continue
+            completed_phase = event["phase"]
         next_event = _service_semantic_continuation_event(
             scene, event_json, prepared_callback=prepared
         )
         if next_event is None:
             return
         event_json = await engine_await(next_event, operation="Scene.continuation")
+        if completed_phase is not None:
+            _manim_updaters.complete_canonical_callback_phase(
+                _manim_updaters.canonical_callback_session_id(scene), completed_phase
+            )
 
 
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
@@ -975,10 +1107,16 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
 
     event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
+        event = _continuation_event(event_json)
         next_event = _service_semantic_continuation_event(scene, event_json)
         if next_event is None:
             break
         event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
+        if event["kind"] == "callback":
+            import _manim_updaters
+            _manim_updaters.complete_canonical_callback_phase(
+                _manim_updaters.canonical_callback_session_id(scene), event["phase"]
+            )
     return scene
 
 
