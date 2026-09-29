@@ -405,6 +405,19 @@ impl SceneInstance {
             }
         }
 
+        // Pointer translation leases join after ordinary timeline/reactive
+        // evaluation. They own only Position, retaining the rest of the row's
+        // current effective channels and requiring no frame tick while idle.
+        for (&object_index, &translation) in &self.translation_drag_rows {
+            if !self.object_slot_is_live(object_index) {
+                continue;
+            }
+            let row = rows
+                .entry(object_index)
+                .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
+            row.transform.translation = translation;
+        }
+
         let numeric_text = match reactive.as_ref() {
             Some(reactive) => self
                 .prepare_changed_numeric_text(reactive)

@@ -58,6 +58,7 @@ pub(super) struct PreparedScalarPublicationContract {
 pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
     SegmentCompletionPending,
+    TranslationDragActive,
     ForeignSemanticStore,
     ReplaySealed,
     StaleSceneRevision {
@@ -81,6 +82,9 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             }
             Self::SegmentCompletionPending => f.write_str(
                 "an active animation segment must be completed before authored publication",
+            ),
+            Self::TranslationDragActive => f.write_str(
+                "cancel or release the active translation drag before authored publication",
             ),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
@@ -116,6 +120,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::RequiredCallbackPending
             | Self::ReplaySealed
             | Self::SegmentCompletionPending
+            | Self::TranslationDragActive
             | Self::ForeignSemanticStore
             | Self::StaleSceneRevision { .. }
             | Self::UnknownObject(_) => None,
@@ -188,6 +193,15 @@ impl ExecutionSession {
             && purpose != SemanticPublicationPurpose::SegmentCompletion
         {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
+        // A drag owns the target's effective Position until it either commits
+        // one authored reconciliation or is explicitly cancelled.  This bounded
+        // session policy rejects concurrent source edits rather than allowing a
+        // later release to overwrite a newly authored value.
+        if purpose == SemanticPublicationPurpose::AuthoredMutation
+            && self.translation_drag.is_active()
+        {
+            return Err(ExecutionSessionPublicationError::TranslationDragActive);
         }
         Ok(())
     }

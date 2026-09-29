@@ -1,0 +1,334 @@
+use noon_core::{
+    NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
+    NativePointerInputKind, NativePointerPosition, SemanticMutationTransaction,
+    SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
+};
+
+use super::{
+    ExecutionSession, ExecutionSessionPublicationError, NativePointerInputToken,
+    TranslationDragError,
+};
+
+const POINTER: NativePointerId = NativePointerId {
+    source: 91,
+    pointer: 7,
+};
+
+fn circle(x: f64) -> SemanticObjectState {
+    let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.transform.translation = SemanticVec3::new(x, 0.0, 0.0);
+    state
+}
+
+fn fixture() -> (
+    SemanticStore,
+    noon_core::SemanticNodeId,
+    noon_core::SemanticNodeId,
+    ExecutionSession,
+) {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let target = store.insert_semantic_object(circle(0.0));
+    let unrelated = store.insert_semantic_object(circle(10.0));
+    store.add_semantic_family_member(root, target).unwrap();
+    store.add_semantic_family_member(root, unrelated).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.set_translation_drag_targets([target]);
+    session.take_frame_changes();
+    (store, target, unrelated, session)
+}
+
+fn position(x: f32) -> NativePointerPosition {
+    NativePointerPosition::new(Vec2::new(x, 0.0), Vec2::new(x * 10.0, 100.0)).unwrap()
+}
+
+fn input(
+    session: &ExecutionSession,
+    sequence: u64,
+    kind: NativePointerInputKind,
+) -> (NativePointerInputToken, NativePointerInput) {
+    let token = session.native_pointer_input_token().unwrap();
+    let input = NativePointerInput::new(
+        sequence,
+        token.pointer(),
+        token.context(),
+        NativeInputModifiers::default(),
+        kind,
+    );
+    (token, input)
+}
+
+fn submit(
+    session: &mut ExecutionSession,
+    store: &mut SemanticStore,
+    sequence: u64,
+    kind: NativePointerInputKind,
+) -> Result<super::TranslationDragReceipt, TranslationDragError> {
+    let (token, input) = input(session, sequence, kind);
+    session.submit_translation_drag_input(store, &token, input)
+}
+
+fn translation(session: &ExecutionSession, node: noon_core::SemanticNodeId) -> Vec2 {
+    let object = session.execution_object_id(node).unwrap();
+    let index = session
+        .frame()
+        .objects
+        .iter()
+        .position(|row| row.id == object)
+        .unwrap();
+    session.frame().objects[index].transform.translation
+}
+
+#[test]
+fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
+    let (mut store, target, unrelated, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert!(session.translation_drag_active());
+    assert!(session.wake_state().is_quiescent());
+
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(3.0)),
+    )
+    .unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+    assert_eq!(translation(&session, unrelated), Vec2::new(10.0, 0.0));
+    assert_eq!(session.take_frame_changes().object_indices().len(), 1);
+    assert!(session.wake_state().is_quiescent());
+
+    let receipt = submit(
+        &mut session,
+        &mut store,
+        3,
+        NativePointerInputKind::Release {
+            position: position(3.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert!(!session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(3.0, 0.0, 0.0)
+    );
+    let undo = receipt.undo.unwrap();
+    undo.undo(&mut session, &mut store).unwrap();
+    assert_eq!(translation(&session, target), Vec2::ZERO);
+}
+
+#[test]
+fn stale_release_is_rejected_without_losing_the_lease_or_authored_value() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    let (stale, release) = input(
+        &session,
+        3,
+        NativePointerInputKind::Release {
+            position: position(2.0),
+            button: 0,
+        },
+    );
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(2.0)),
+    )
+    .unwrap();
+    assert!(matches!(
+        session.submit_translation_drag_input(&mut store, &stale, release),
+        Err(TranslationDragError::Input(_))
+    ));
+    assert!(session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::ZERO
+    );
+}
+
+#[test]
+fn cancellation_discards_the_effective_lease_without_authoring_a_value() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(4.0)),
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        3,
+        NativePointerInputKind::Cancel(NativePointerCancellation::CaptureLost),
+    )
+    .unwrap();
+    assert!(!session.translation_drag_active());
+    assert_eq!(translation(&session, target), Vec2::ZERO);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::ZERO
+    );
+}
+
+#[test]
+fn active_drag_rejects_source_edits_until_cancelled() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(
+        target,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(9.0, 0.0, 0.0),
+    );
+    assert_eq!(
+        session.apply_semantic_transaction(&mut store, transaction),
+        Err(ExecutionSessionPublicationError::TranslationDragActive)
+    );
+    session.cancel_translation_drag();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(
+        target,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(9.0, 0.0, 0.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(9.0, 0.0));
+}
+
+#[test]
+fn translation_signal_driver_rejects_press_without_acknowledging_it() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let target = store.insert_semantic_object(circle(0.0));
+    store.add_semantic_family_member(root, target).unwrap();
+    let signal = store
+        .insert_semantic_input_signal(SemanticVec3::ZERO)
+        .unwrap();
+    store
+        .bind_semantic_signal(signal, target, SemanticObjectProperty::Translation)
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.set_translation_drag_targets([target]);
+    let (token, press) = input(
+        &session,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    );
+    assert_eq!(
+        session.submit_translation_drag_input(&mut store, &token, press),
+        Err(TranslationDragError::DriverConflict)
+    );
+    assert!(!session.translation_drag_active());
+    // The same sequence remains admissible through the ordinary ingress because
+    // rejected acquisition did not acknowledge it.
+    session.submit_native_pointer_input(&token, press).unwrap();
+}
+
+#[test]
+fn undo_rejects_a_later_authored_revision() {
+    let (mut store, target, unrelated, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(2.0)),
+    )
+    .unwrap();
+    let undo = submit(
+        &mut session,
+        &mut store,
+        3,
+        NativePointerInputKind::Release {
+            position: position(2.0),
+            button: 0,
+        },
+    )
+    .unwrap()
+    .undo
+    .unwrap();
+    let mut later = SemanticMutationTransaction::new();
+    later.set_property(
+        unrelated,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(12.0, 0.0, 0.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, later)
+        .unwrap();
+    assert_eq!(
+        undo.undo(&mut session, &mut store),
+        Err(TranslationDragError::StaleUndo)
+    );
+    assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
+}

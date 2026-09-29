@@ -228,6 +228,27 @@ pub(super) struct PreparedInputPublication {
     timeline: Option<noon_runtime::SignalTimelinePreview>,
 }
 
+/// One fully validated native occurrence split at the existing runtime
+/// publication boundary.  It owns no queue or snapshot: the prepared frame is
+/// still the runtime's sparse evaluation and metadata is committed only after
+/// that frame (or a shared authored publication) succeeds.
+pub(super) struct PreparedNativePointerPublication {
+    frame: noon_runtime::PreparedFrameEvaluation,
+    effective: noon_runtime::PreparedEffectivePropertyBatch,
+    timeline: Option<noon_runtime::SignalTimelinePreview>,
+    input: NativePointerInput,
+    previous: PublicationContext,
+    selection: super::selection::PreparedPointerSelection,
+    action: Option<noon_runtime::PreparedTransientAnimation>,
+}
+
+pub(super) struct PreparedNativePointerMetadata {
+    input: NativePointerInput,
+    previous: PublicationContext,
+    selection: super::selection::PreparedPointerSelection,
+    action: Option<noon_runtime::PreparedTransientAnimation>,
+}
+
 impl ExecutionSession {
     /// Whether a native reactive route or transient selection consumes this pointer.
     ///
@@ -331,9 +352,45 @@ impl ExecutionSession {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let effective = self
+            .runtime
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        self.submit_native_pointer_input_with_effective(token, input, effective, false)
+    }
+
+    /// Commit one typed native occurrence and a preflighted scoped effective
+    /// write in the same prepared-frame publication. Gesture policy lives in
+    /// sibling session modules; this remains the sole pointer admission lane.
+    pub(super) fn submit_native_pointer_input_with_effective(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        effective: noon_runtime::PreparedEffectivePropertyBatch,
+        suppress_click_action: bool,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let prepared = self.prepare_native_pointer_input_with_effective(
+            token,
+            input,
+            effective,
+            suppress_click_action,
+        )?;
+        self.commit_prepared_native_pointer_input(prepared)
+    }
+
+    pub(super) fn prepare_native_pointer_input_with_effective(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        effective: noon_runtime::PreparedEffectivePropertyBatch,
+        suppress_click_action: bool,
+    ) -> Result<PreparedNativePointerPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
         let selection = self.prepare_pointer_selection(token, input)?;
-        let action = self.prepare_click_animation(selection.click)?;
+        let action = (!suppress_click_action)
+            .then(|| self.prepare_click_animation(selection.click))
+            .transpose()?
+            .flatten();
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -346,9 +403,47 @@ impl ExecutionSession {
         if let Some(event) = input.button_event() {
             self.append_native_event_inputs(&event, &mut inputs);
         }
-        if !inputs.is_empty() {
-            self.apply_reactive_input_batch(inputs)?;
+        let mut prepared = self.prepare_reactive_input_batch(inputs)?;
+        prepared.effective = effective;
+        self.runtime
+            .preflight_prepared_frame_commit(&prepared.frame, &prepared.effective)
+            .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        Ok(PreparedNativePointerPublication {
+            frame: prepared.frame,
+            effective: prepared.effective,
+            timeline: prepared.timeline,
+            input,
+            previous,
+            selection,
+            action,
+        })
+    }
+
+    pub(super) fn commit_prepared_native_pointer_input(
+        &mut self,
+        prepared: PreparedNativePointerPublication,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        self.runtime
+            .commit_prepared_frame(frame, effective)
+            .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        self.commit_prepared_native_pointer_metadata(timeline, metadata)
+    }
+
+    pub(super) fn commit_prepared_native_pointer_metadata(
+        &mut self,
+        timeline: Option<noon_runtime::SignalTimelinePreview>,
+        metadata: PreparedNativePointerMetadata,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        if let Some(preview) = timeline {
+            self.signal_timeline.commit(preview);
         }
+        let PreparedNativePointerMetadata {
+            input,
+            previous,
+            selection,
+            action,
+        } = metadata;
         self.last_native_event_sequence = Some(input.sequence());
         self.pointer_selection = selection.state;
         self.pointer_selection.hover.accept(input);
@@ -587,6 +682,29 @@ impl ExecutionSession {
     pub(super) fn retire_pointer_view_binding(&mut self) {
         self.pointer_input.binding = None;
         self.pointer_selection.cancel_press();
+    }
+}
+
+impl PreparedNativePointerPublication {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        noon_runtime::PreparedFrameEvaluation,
+        noon_runtime::PreparedEffectivePropertyBatch,
+        Option<noon_runtime::SignalTimelinePreview>,
+        PreparedNativePointerMetadata,
+    ) {
+        (
+            self.frame,
+            self.effective,
+            self.timeline,
+            PreparedNativePointerMetadata {
+                input: self.input,
+                previous: self.previous,
+                selection: self.selection,
+                action: self.action,
+            },
+        )
     }
 }
 

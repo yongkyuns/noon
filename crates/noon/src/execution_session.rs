@@ -7,11 +7,15 @@ mod input;
 mod inspection;
 #[cfg(test)]
 mod matching_foreground_tests;
+mod translation_drag;
+#[cfg(test)]
+mod translation_drag_tests;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
 pub use inspection::InspectionNavigationError;
+pub use translation_drag::{TranslationDragError, TranslationDragReceipt, TranslationDragUndo};
 mod hover;
 pub use hover::PointerHoverTransition;
 mod picking;
@@ -752,6 +756,7 @@ pub struct ExecutionSession {
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
     interaction_bindings: interactions::InteractionBindings,
+    translation_drag: translation_drag::TranslationDragState,
     inspection: inspection::SessionInspectionView,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
@@ -795,6 +800,7 @@ impl Clone for ExecutionSession {
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
             interaction_bindings: self.interaction_bindings.clone(),
+            translation_drag: self.translation_drag.clone(),
             inspection: self.inspection,
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
@@ -967,6 +973,7 @@ impl ExecutionSession {
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
             interaction_bindings: Default::default(),
+            translation_drag: Default::default(),
             inspection: inspection::SessionInspectionView::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,

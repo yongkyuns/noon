@@ -322,5 +322,19 @@ impl SceneInstance {
     }
 }
 
+impl TransientAnimations {
+    /// Whether a live transient effect owns one exact target/property lane.
+    /// This intentionally does not make an effect on another object a global
+    /// barrier to a drag.
+    pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
+        self.active.get(&object).is_some_and(|effect| {
+            effect
+                .channels
+                .iter()
+                .any(|channel| channel.property == property)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests;
