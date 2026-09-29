@@ -377,7 +377,8 @@ def _consume_geometry_options(options: object, kind: str = "geometry"):
 def _attach_geometry_options(
     self: _base.Mobject, options: object, kind: str = "geometry"
 ) -> None:
-    scene = _reactive._current_authoring_scene()
+    reactive = sys.modules.get("_manim_reactive")
+    scene = None if reactive is None else reactive._current_authoring_scene()
     if scene is not None:
         from _manim_updaters import active_callback_membership_context
 
