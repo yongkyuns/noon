@@ -39,8 +39,13 @@ pub(crate) trait NativeExecutionSource {
         frame: &PointerFrameSnapshot,
     ) -> Result<(), NativeHostError> {
         frame.validate_presentation(self.session(), frame.view())?;
+        self.refresh_pointer_hover(frame)?;
         self.admit_presented_publication(frame.publication())
     }
+    fn refresh_pointer_hover(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), NativeHostError>;
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery;
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError>;
     fn timeline(&self) -> TimelineWakeState;
@@ -208,6 +213,16 @@ impl NativeExecutionSource for StaticExecutionSource {
         Ok(())
     }
 
+    fn refresh_pointer_hover(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), NativeHostError> {
+        self.session
+            .refresh_pointer_hover(frame, frame.view())
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     fn session(&self) -> &ExecutionSession {
         &self.session
     }
@@ -373,6 +388,16 @@ where
                 .map_err(|error| NativeHostError::Program(error.to_string()))?;
         }
         Ok(())
+    }
+
+    fn refresh_pointer_hover(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), NativeHostError> {
+        self.program
+            .refresh_pointer_hover(frame)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
     fn session(&self) -> &ExecutionSession {

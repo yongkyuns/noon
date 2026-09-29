@@ -4268,7 +4268,8 @@ impl SemanticExecutionPlayer {
     pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
         let receipt =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
-        self.worker_pointer_presentation.note_presented(receipt)
+        self.worker_pointer_presentation
+            .note_presented(&mut self.session, receipt)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

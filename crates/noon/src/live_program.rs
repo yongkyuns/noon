@@ -221,6 +221,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
         Ok(())
     }
 
+    /// Observe a successfully presented frame without advancing the continuation
+    /// or opening its input/publication barriers.
+    pub fn refresh_pointer_hover(
+        &mut self,
+        frame: &crate::integration::PointerFrameSnapshot,
+    ) -> Result<Option<crate::PointerHoverTransition>, crate::integration::PointerFrameError> {
+        self.scene
+            .owned_execution_mut()
+            .refresh_pointer_hover(frame, frame.view())
+    }
+
     /// Configure transient selection without exposing a mutable execution session.
     pub fn set_pointer_fill_selection(
         &mut self,

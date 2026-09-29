@@ -24,6 +24,14 @@ pub(super) struct PlayerPointerTarget<'a> {
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
+    fn observe_pointer_frame(
+        &mut self,
+        frame: &noon::integration::PointerFrameSnapshot,
+    ) -> Result<(), noon::integration::PointerFrameError> {
+        self.session
+            .refresh_pointer_hover(frame, frame.view())
+            .map(|_| ())
+    }
     fn session(&self) -> &ExecutionSession {
         self.session
     }

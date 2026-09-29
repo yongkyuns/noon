@@ -43,6 +43,15 @@ pub struct PointerHoverTransition {
 }
 
 impl ExecutionSession {
+    /// Last precisely observed hover target. Retired or detached identities are
+    /// never exposed even when no subsequent frame has been presented yet.
+    pub fn hovered_pointer_target(&self) -> Option<SemanticNodeId> {
+        self.pointer_selection.hover.surface?;
+        let target = self.pointer_selection.hover.target?;
+        (self.pointer_selection.enabled() && self.semantic_object_is_reachable(target))
+            .then_some(target)
+    }
+
     /// Refresh hover after presenting a frame, including geometry moving beneath
     /// a stationary pointer. Uses the last admitted surface position with this
     /// exact frame's camera. Hosts must invalidate/rebind input on view changes.
@@ -55,7 +64,9 @@ impl ExecutionSession {
         displayed: &PointerFrameSnapshot,
         view: PointerFrameView,
     ) -> Result<Option<PointerHoverTransition>, PointerFrameError> {
-        displayed.validate_current(self, view)?;
+        // Observation of an already published frame does not deliver input or
+        // mutate a driver. A pending callback may pin this exact visible frame.
+        displayed.validate_presentation(self, view)?;
         if !self.pointer_selection.enabled() {
             return Ok(None);
         }

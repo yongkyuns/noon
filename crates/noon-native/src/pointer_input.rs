@@ -171,6 +171,14 @@ impl NativeApp {
             Err(error) => return self.reject_pointer_frame(error),
         };
         self.admit_pointer_kind(&token, kind(position))?;
+        // A pointer move over unchanged content needs no repaint. Geometry
+        // changes wait for the normal successful-presentation observation.
+        if frame
+            .validate_presentation(self.execution.session(), view)
+            .is_ok()
+        {
+            self.execution.refresh_pointer_hover(&frame)?;
+        }
         Ok(PointerDispatch::Admitted)
     }
 

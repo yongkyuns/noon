@@ -632,3 +632,19 @@ fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
 }
 
 mod inspection;
+
+#[test]
+fn direct_static_pointer_motion_observes_hover_without_a_redraw() {
+    let mut f = Fixture::new();
+    f.present();
+    let publication = f.session.publication_context();
+    assert!(f.send(input(BrowserPointerKind::Move)).unwrap());
+    assert_eq!(f.session.hovered_pointer_target(), Some(f.target));
+    let mut outside = input(BrowserPointerKind::Move);
+    outside.surface_x = Some(700.0);
+    assert!(f.send(outside).unwrap());
+    assert_eq!(f.session.hovered_pointer_target(), None);
+    assert_eq!(f.session.publication_context(), publication);
+    assert!(!f.host.needs_refresh(&f.session));
+    assert_eq!(f.session.frame().time, 0.0);
+}

@@ -83,6 +83,10 @@ mod wasm {
     /// only drive its current segment, consume a renderer publication, admit that
     /// exact publication after presentation, and forward typed platform input.
     trait DirectLiveProgram: BrowserPointerTarget {
+        fn refresh_pointer_hover(
+            &mut self,
+            frame: &noon::integration::PointerFrameSnapshot,
+        ) -> Result<(), JsValue>;
         fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue>;
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue>;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
@@ -224,6 +228,16 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        fn refresh_pointer_hover(
+            &mut self,
+            frame: &noon::integration::PointerFrameSnapshot,
+        ) -> Result<(), JsValue> {
+            self.program
+                .refresh_pointer_hover(frame)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
         fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue> {
             self.program
                 .emit_native_event(occurrence)
@@ -238,6 +252,12 @@ mod wasm {
     {
         fn session(&self) -> &ExecutionSession {
             self.program.session()
+        }
+        fn observe_pointer_frame(
+            &mut self,
+            frame: &noon::integration::PointerFrameSnapshot,
+        ) -> Result<(), noon::integration::PointerFrameError> {
+            self.program.refresh_pointer_hover(frame).map(|_| ())
         }
         fn configure_pointer(
             &mut self,
@@ -312,6 +332,19 @@ mod wasm {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => session,
                 DirectSourceAuthority::Program(program) => program.session(),
+            }
+        }
+
+        fn refresh_pointer_hover(
+            &mut self,
+            frame: &noon::integration::PointerFrameSnapshot,
+        ) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .refresh_pointer_hover(frame, frame.view())
+                    .map(|_| ())
+                    .map_err(js_error),
+                DirectSourceAuthority::Program(program) => program.refresh_pointer_hover(frame),
             }
         }
 
@@ -1634,6 +1667,7 @@ mod wasm {
                 frame
                     .validate_presentation(self.source.session(), frame.view())
                     .map_err(js_error)?;
+                self.source.refresh_pointer_hover(frame)?;
             }
             self.pointer_presentation.did_present(pointer_frame);
             self.surface_frame_pending = false;

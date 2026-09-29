@@ -618,3 +618,46 @@ fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
     assert!(input(&mut p, "release", 1, Some(old), 1, 500.0).is_err());
     assert_eq!(p.session.publication_context().scene_revision(), before);
 }
+
+#[test]
+fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
+    let (mut p, first) = ready();
+    assert!(input(&mut p, "move", 1, Some(first), 1, 400.0).unwrap());
+    let target = p.session.hovered_pointer_target().expect("center hover");
+    let sequence = p.next_native_event_sequence;
+    let mut phase = p
+        .session
+        .begin_required_callback_phase(0.0, [target])
+        .unwrap();
+    phase
+        .set_transform(
+            target,
+            noon_core::Transform2D {
+                translation: Vec2::new(4.0, 0.0),
+                ..noon_core::Transform2D::IDENTITY
+            },
+        )
+        .unwrap();
+    p.session
+        .commit_required_callback_phase(phase.finish())
+        .unwrap();
+    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    // A delayed old receipt never retargets the current publication.
+    assert!(acknowledge(
+        &mut p,
+        WorkerPointerReceipt {
+            presentation: 2,
+            ..first
+        }
+    ));
+    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    let next = receipt(&delta(&mut p), 3);
+    assert!(acknowledge(&mut p, next));
+    assert_eq!(p.session.hovered_pointer_target(), None);
+    assert_eq!(p.next_native_event_sequence, sequence);
+    assert_eq!(p.session.frame().time, 0.0);
+    assert!(input(&mut p, "move", 1, Some(next), 1, 600.0).unwrap());
+    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    assert!(input(&mut p, "cancel", 1, None, 1, 0.0).unwrap());
+    assert_eq!(p.session.hovered_pointer_target(), None);
+}
