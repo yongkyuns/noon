@@ -2,7 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod compaction;
 mod derived_display_evaluation;
+pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
 mod effective_write;
 mod execution_slots;
 mod frame;

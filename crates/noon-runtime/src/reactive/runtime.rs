@@ -242,6 +242,27 @@ impl ReactiveRuntime {
             self.targets_by_object[object_index].push(target_index);
         }
     }
+
+    /// Rebuild dense row-target lookup after the explicit compiled-row
+    /// maintenance barrier. Compute state stays intact; bindings are resolved
+    /// again through their stable `ObjectId` keys without evaluation.
+    pub(crate) fn remap_object_indices(&mut self, compiled: &CompiledScene) {
+        self.targets_by_object = vec![Vec::new(); compiled.objects().len()];
+        for (&(raw_object, _), &target_index) in &self.target_lookup {
+            let object_index = compiled
+                .object_index(ObjectId::new(raw_object))
+                .expect("live reactive target survives compiled-row compaction")
+                as usize;
+            self.targets[target_index].object_index = object_index;
+            self.targets_by_object[object_index].push(target_index);
+        }
+    }
+
+    pub(crate) fn has_retired_targets(&self, compiled: &CompiledScene) -> bool {
+        self.target_lookup
+            .keys()
+            .any(|(raw_object, _)| compiled.object_index(ObjectId::new(*raw_object)).is_none())
+    }
 }
 
 impl SceneInstance {

@@ -351,6 +351,7 @@ impl ExecutionSession {
         }
         self.last_native_event_sequence = Some(input.sequence());
         self.pointer_selection = selection.state;
+        self.pointer_selection.hover.accept(input);
         if let Some(action) = action {
             self.runtime
                 .start_transient_animation(action)

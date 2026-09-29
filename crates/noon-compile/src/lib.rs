@@ -5,8 +5,10 @@
 pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
+mod compaction;
 mod execution_patch;
 mod graph_dependencies;
+pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
 mod replay_revision;
 pub use replay_revision::CompiledReplayRevision;
 mod semantic_lowering;
@@ -1088,6 +1090,11 @@ impl CompiledScene {
 
     pub const fn live_object_count(&self) -> usize {
         self.live_object_count
+    }
+
+    /// Retired execution rows retained for same-identity re-entry or replay.
+    pub fn retired_object_slot_count(&self) -> usize {
+        self.retired_object_indices.len()
     }
 
     pub fn painter_order(&self) -> &[u32] {

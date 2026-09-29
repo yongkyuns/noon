@@ -195,7 +195,8 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionInset2DError, ExecutionSessionPublicationError, InspectionNavigationError,
+    ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
     SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;

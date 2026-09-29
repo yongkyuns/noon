@@ -12,10 +12,16 @@ pub use input::{
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
 pub use inspection::InspectionNavigationError;
+mod hover;
+pub use hover::PointerHoverTransition;
 mod picking;
 pub use picking::{PointerFillOutcome, PointerFillQuery, PointerFillUnsupported};
 mod interactions;
+mod maintenance;
+#[cfg(test)]
+mod maintenance_tests;
 mod selection;
+pub use maintenance::ExecutionSessionMaintenanceError;
 pub use selection::{
     pointer_selection_overlay_color, PointerSelectionClick, PointerSelectionHighlight,
     PointerSelectionPresentation,

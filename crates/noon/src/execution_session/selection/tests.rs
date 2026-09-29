@@ -912,3 +912,77 @@ fn authored_click_indicate_ignores_background_drag_and_rejects_invalid_ticks_ato
     session.advance_interactions(1.5).unwrap();
     assert_eq!(session.frame(), &before);
 }
+
+#[test]
+fn stationary_hover_tracks_presented_geometry_and_cancellation_without_input_replay() {
+    let (mut store, root, target, _) = fixture();
+    let endpoint = store.insert_semantic_object(circle(4.0));
+    let animation = store
+        .insert_semantic_transform_animation(target, endpoint, AnimationOptions::new())
+        .unwrap();
+    let mut session = session(&store, root);
+    session
+        .activate_animation_segment(
+            &store,
+            animation,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    submit(
+        &mut session,
+        0,
+        NativePointerInputKind::Move(position(0.0, 100.0)),
+    );
+    let view = session
+        .inspection_pointer_view(1, Vec2::new(200.0, 200.0))
+        .unwrap();
+    let first = session.capture_pointer_frame(view).unwrap();
+    let publication = session.publication_context();
+    let entered = session
+        .refresh_pointer_hover(&first, view)
+        .unwrap()
+        .unwrap();
+    assert_eq!((entered.previous, entered.current), (None, Some(target)));
+    assert_eq!(entered.precise_tests, 1);
+    assert_eq!(session.publication_context(), publication);
+    assert!(session
+        .refresh_pointer_hover(&first, view)
+        .unwrap()
+        .is_none());
+
+    session.advance_to(1.0).unwrap();
+    assert!(session.refresh_pointer_hover(&first, view).is_err());
+    let moved = session.capture_pointer_frame(view).unwrap();
+    let left = session
+        .refresh_pointer_hover(&moved, view)
+        .unwrap()
+        .unwrap();
+    assert_eq!((left.previous, left.current), (Some(target), None));
+    assert_eq!(left.precise_tests, 0);
+    assert_eq!(session.last_native_event_sequence, Some(0));
+
+    // Move to the object's new center, then cancel at the same scene epoch.
+    submit(
+        &mut session,
+        1,
+        NativePointerInputKind::Move(position(2.0, 150.0)),
+    );
+    let entered = session
+        .refresh_pointer_hover(&moved, view)
+        .unwrap()
+        .unwrap();
+    assert_eq!(entered.current, Some(target));
+    submit(
+        &mut session,
+        2,
+        NativePointerInputKind::Cancel(NativePointerCancellation::FocusLost),
+    );
+    let left = session
+        .refresh_pointer_hover(&moved, view)
+        .unwrap()
+        .unwrap();
+    assert_eq!((left.previous, left.current), (Some(target), None));
+    assert_eq!(session.frame().time, 1.0);
+}

@@ -78,6 +78,7 @@ pub(super) struct PointerSelectionState {
     pending: Option<PendingClick>,
     selected: Option<SemanticNodeId>,
     buttons: [u64; 4],
+    pub(super) hover: super::hover::PointerHoverState,
 }
 
 impl PointerSelectionState {
@@ -95,6 +96,7 @@ impl PointerSelectionState {
     }
 
     pub(super) fn cancel_press(&mut self) {
+        self.hover.cancel();
         self.pending = None;
         self.buttons = [0; 4];
     }
