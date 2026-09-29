@@ -279,6 +279,7 @@ fn hidpi_changes_logical_units_not_scene_position_and_invalidates_old_binding() 
 fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() {
     for scale in [1.0, 2.0] {
         let mut f = Fixture::new();
+        f.app.pointer_scale_changed(SIZE, scale).unwrap();
         let sample = |f: &mut Fixture, x, y| {
             model_presentation(&mut f.app, SIZE, scale);
             f.app
@@ -298,7 +299,7 @@ fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() 
         sample(&mut f, 310.0, 190.0);
         assert_eq!(
             f.value(f.viewport),
-            &ReactiveValue::Vec2(Vec2::new(800.0 / scale, 400.0 / scale))
+            &ReactiveValue::Vec2(Vec2::new((800.0 / scale) as f32, (400.0 / scale) as f32))
         );
         assert_eq!(
             f.value(f.position),
@@ -318,7 +319,7 @@ fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() 
         assert_eq!(f.app.next_input_sequence, 4);
         assert_eq!(
             f.app.pointer.surface,
-            Some(Vec2::new(320.0 / scale, 190.0 / scale))
+            Some(Vec2::new((320.0 / scale) as f32, (190.0 / scale) as f32))
         );
 
         sample(&mut f, 310.0, 190.0);
@@ -332,7 +333,7 @@ fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() 
             "cancel is not a release"
         );
         assert_eq!(f.app.session().frame().time, 0.0);
-        assert_eq!(f.app.next_input_sequence, 7);
+        assert_eq!(f.app.next_input_sequence, 8);
     }
 }
 
