@@ -111,6 +111,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
           close: async () => events.push("browser:close"),
         };
       } }])),
+      disableAuthoringJspi: async () => {},
       waitForBrowserObservation,
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {} }),
@@ -119,7 +120,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
         bounds: { x: 0, y: 0, ...size }, deviceScaleFactor,
       }),
-      window: { __noonExampleGallery: gallery, __noonInspectionTest: inspection },
+      window: { __noonNoJspiWorkerWrapped: true, __noonExampleGallery: gallery, __noonInspectionTest: inspection },
       document: { querySelector: (selector) => {
         if (selector === ".playback-controls") return {
           dataset: { busy: "false", elapsedSeconds: "2.6" },
@@ -159,6 +160,7 @@ test("successful legacy clear and source-declared indication retain their captur
   assert.equal(report.clearDifference, 0);
   assert.equal(report.indicatedChanged, 501);
   assert.equal(report.authoredInteraction, "click-indicate");
+  assert.equal(report.noJspi, true);
   assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");

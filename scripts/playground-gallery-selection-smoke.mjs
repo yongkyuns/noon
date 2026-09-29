@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
-import { playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
+import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
@@ -42,7 +42,7 @@ let runtimeCache;
 const captures = {};
 const report = {
   browser: browserName, profile: profileName, input: profile.hasTouch ? "touch" : "mouse",
-  legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate",
+  legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate", noJspi: true,
 };
 let failure;
 
@@ -79,6 +79,15 @@ async function waitForPresentation(page, previous) {
     previous,
     { timeout: 15000 },
   );
+}
+
+async function waitForAuthoring(page) {
+  await page.waitForFunction(() => {
+    const state = document.querySelector("#patch-status")?.dataset.state;
+    return state === "error" || state === "applied" && !window.__noonExampleGallery.runInFlight;
+  }, null, { timeout: 60000 });
+  assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied",
+    await page.evaluate(() => document.querySelector("#patch-status")?.value));
 }
 
 async function waitForExactPixels(canvas, baseline, label) {
@@ -128,9 +137,11 @@ try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext(profile);
   await runtimeCache.install(context);
+  await disableAuthoringJspi(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
   const errors = [];
+  report.browserErrors = errors;
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
@@ -148,13 +159,7 @@ try {
   await layoutReplayViewport(canvas, captureSize);
   await canvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
   await page.evaluate(() => window.__noonExampleGallery.run());
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#patch-status")?.dataset.state === "applied" &&
-      window.__noonExampleGallery.runInFlight === false,
-    null,
-    { timeout: 60000 },
-  );
+  await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
     "pointer-fill-selection",
@@ -221,11 +226,7 @@ try {
   await layoutReplayViewport(authoredCanvas, captureSize);
   await authoredCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
   await page.evaluate(() => window.__noonExampleGallery.run());
-  await page.waitForFunction(
-    () => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight,
-    null,
-    { timeout: 60000 },
-  );
+  await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
     "none",
@@ -332,6 +333,8 @@ try {
   await waitForPresentation(page, beforeZoomOut);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
+  assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true,
+    "selection smoke must run the production authoring worker without JSPI");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
   assert.deepEqual(errors, []);
 } catch (error) {
