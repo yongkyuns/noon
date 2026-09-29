@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import { PNG } from "pngjs";
+import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 const { webkit, devices } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -113,32 +114,7 @@ try {
     const startup = new Promise((resolve) => { releaseStartup = resolve; });
     releasePendingStartup = releaseStartup;
     if (variant.disableJspi) {
-      await context.addInitScript(() => {
-        window.Worker = new Proxy(window.Worker, {
-          construct(target, args, newTarget) {
-            const workerArgs = [...args];
-            const workerUrl = new URL(workerArgs[0], window.location.href);
-            if (workerUrl.pathname.endsWith("/python-worker.js")) {
-              workerArgs[0] = new URL("./python-worker-no-jspi-test.js", workerUrl);
-              window.__mobileNoJspiWorkerWrapped = true;
-            }
-            return Reflect.construct(target, workerArgs, newTarget);
-          },
-        });
-      });
-      await context.route("**/python-worker-no-jspi-test.js", async (route) => {
-        await startup;
-        await route.fulfill({
-          status: 200,
-          contentType: "text/javascript",
-          body: [
-            "delete WebAssembly.promising;",
-            "delete WebAssembly.Suspending;",
-            "if ('promising' in WebAssembly || 'Suspending' in WebAssembly) throw new Error('JSPI test precondition failed');",
-            "await import('./python-worker.js');",
-          ].join("\n"),
-        });
-      });
+      await disableAuthoringJspi(context, { beforeImport: () => startup });
     } else {
       await context.route("**/python-worker.js", async (route) => {
         const response = await route.fetch();
@@ -208,7 +184,7 @@ try {
     assert.ok(observation, "mobile source did not publish its intermediate transformation");
     if (variant.disableJspi) {
       assert.equal(
-        await page.evaluate(() => window.__mobileNoJspiWorkerWrapped),
+        await page.evaluate(() => window.__noonNoJspiWorkerWrapped),
         true,
         "mobile no-JSPI smoke did not wrap the production authoring worker",
       );

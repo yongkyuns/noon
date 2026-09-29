@@ -37,3 +37,34 @@ export async function waitForBrowserObservation(page, predicate, argument, { tim
     await page.waitForTimeout(25);
   }
 }
+
+// Import the unchanged, attested worker only after removing JSPI in its realm.
+// A mobile viewport alone does not model an iPhone's interpreter capabilities.
+export async function disableAuthoringJspi(context, { beforeImport } = {}) {
+  await context.addInitScript(() => {
+    window.Worker = new Proxy(window.Worker, {
+      construct(target, args, newTarget) {
+        const workerArgs = [...args];
+        const workerUrl = new URL(workerArgs[0], window.location.href);
+        if (workerUrl.pathname.endsWith("/python-worker.js")) {
+          workerArgs[0] = new URL("./python-worker-no-jspi-test.js", workerUrl);
+          window.__noonNoJspiWorkerWrapped = true;
+        }
+        return Reflect.construct(target, workerArgs, newTarget);
+      },
+    });
+  });
+  await context.route("**/python-worker-no-jspi-test.js", async (route) => {
+    await beforeImport?.();
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: [
+        "delete WebAssembly.promising;",
+        "delete WebAssembly.Suspending;",
+        "if ('promising' in WebAssembly || 'Suspending' in WebAssembly) throw new Error('JSPI test precondition failed');",
+        "await import('./python-worker.js');",
+      ].join("\n"),
+    });
+  });
+}

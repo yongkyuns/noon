@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
-import { playgroundLaunchOptions } from './playground-browser-support.mjs';
+import { disableAuthoringJspi, playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 
@@ -106,23 +106,17 @@ try {
     const caseStartedAt = performance.now();
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
+    if (noJspi) await disableAuthoringJspi(context);
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion, noJspi }) => {
+    await context.addInitScript(({ channel, protocolVersion }) => {
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
           const workerArgs = [...args];
-          if (noJspi) {
-            const workerUrl = new URL(workerArgs[0], window.location.href);
-            if (workerUrl.pathname.endsWith('/python-worker.js')) {
-              workerArgs[0] = new URL('./python-worker-no-jspi-test.js', workerUrl);
-              window.__galleryNoJspiWorkerWrapped = true;
-            }
-          }
           const workerScriptUrl = new URL(workerArgs[0], window.location.href).href;
           const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', ({ data }) => {
@@ -144,23 +138,11 @@ try {
           return worker;
         },
       });
-    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
+    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
-    if (noJspi) await context.route('**/python-worker-no-jspi-test.js', async route => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/javascript',
-        body: [
-          'delete WebAssembly.promising;',
-          'delete WebAssembly.Suspending;',
-          'if ("promising" in WebAssembly || "Suspending" in WebAssembly) throw new Error("Unable to disable JSPI for gallery smoke");',
-          'await import("./python-worker.js");',
-        ].join('\n'),
-      });
-    });
     const pendingRequests = new Map();
     context.on('request', request => pendingRequests.set(request, {
       url: request.url(), resourceType: request.resourceType(), startedAt: performance.now(),
@@ -219,8 +201,8 @@ try {
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
-          if (noJspi && browserName === 'chromium') {
-            assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
+          if (noJspi) {
+            assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true,
               'no-JSPI smoke did not wrap the production authoring worker');
           }
           const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());

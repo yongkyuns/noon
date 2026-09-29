@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 import textwrap
 from unittest.mock import patch
@@ -226,6 +228,39 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "RetainedZoom.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_click_indicate_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_pointer_selection.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="showcase_pointer_selection.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "PointerSelection.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_click_binding_overrides_cannot_hide_uncompiled_barriers(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertIs(methods.get("on_click"), noon.Scene.on_click)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        scene.on_click = lambda *args: scene.wait(1)
+        self.assertFalse(has_portable_scene_methods(scene, **methods))
+
+        class Override(noon.Scene):
+            def on_click(self, *args):
+                return self.wait(1)
+
+        class Descriptor(noon.Scene):
+            @property
+            def on_click(self):
+                raise AssertionError("admission invoked authored descriptor")
+
+        for scene_type in (Override, Descriptor):
+            with self.subTest(scene_type=scene_type):
+                self.assertFalse(has_portable_scene_methods(object.__new__(scene_type), **methods))
+
     def test_decorators_are_not_replayed_or_unwrapped(self):
         effects = []
         def decorate(function):
@@ -285,7 +320,8 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
 
     async def test_unmatched_portable_construct_keeps_ordinary_fallback(self):
-        import _manim_scene
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            import _manim_scene
         import noon
 
         events = []
