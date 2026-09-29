@@ -1091,7 +1091,14 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
         )
         if next_event is None:
             return
-        event_json = await engine_await(next_event, operation="Scene.continuation")
+        try:
+            event_json = await engine_await(next_event, operation="Scene.continuation")
+        except Exception:
+            if completed_phase is not None:
+                _manim_updaters.discard_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), completed_phase
+                )
+            raise
         if completed_phase is not None:
             _manim_updaters.complete_canonical_callback_phase(
                 _manim_updaters.canonical_callback_session_id(scene), completed_phase
@@ -1111,7 +1118,15 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
         next_event = _service_semantic_continuation_event(scene, event_json)
         if next_event is None:
             break
-        event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
+        try:
+            event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
+        except Exception:
+            if event["kind"] == "callback":
+                import _manim_updaters
+                _manim_updaters.discard_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), event["phase"]
+                )
+            raise
         if event["kind"] == "callback":
             import _manim_updaters
             _manim_updaters.complete_canonical_callback_phase(
