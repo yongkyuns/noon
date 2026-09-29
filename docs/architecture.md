@@ -592,16 +592,18 @@ Noon distinguishes clocks/sequences that must not be conflated:
 
 Compatibility updater `dt` is defined from authored/simulation-time advancement. A paused scene may process pointer/keyboard/editor input while authored `dt == 0`. Behavior that explicitly reads wall time, network time or another external clock is externally timed/non-deterministic unless the source is recorded and replayed by an explicit policy.
 
-Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move:
+Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move. `LiveSession` and `LiveProgram` accept ordinary `Mobject` handles, retain the existing store gate, and route each occurrence to the same session policy:
 
 ```rust
-session.set_translation_drag_targets([circle]);
-let token = session.native_pointer_input_token()?;
+program.set_translation_drag_targets([&circle])?;
+let token = program.configure_native_pointer_input(pointer, view_revision)?;
 let press = NativePointerInput::new(1, token.pointer(), token.context(), modifiers, press_kind);
-session.submit_translation_drag_input(&mut store, &token, press)?;
+program.submit_translation_drag_input(&token, press)?;
 ```
 
 Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition; stale or failed releases retain the lease without acknowledging the occurrence.
+
+The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable typed-ingress round trip.
 
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 

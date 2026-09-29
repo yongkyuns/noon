@@ -15,7 +15,7 @@ pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
-use crate::execution_session::EffectiveSemanticObject;
+use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken};
 use crate::{
     semantic_mobject::authoring_render_f64,
     semantic_mobject::{
@@ -28,14 +28,15 @@ use crate::{
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest, ValueTracker,
+    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
-    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
+    AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
+    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticSubsetDisplayMode, SemanticVec3,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -384,6 +385,7 @@ pub enum LiveSessionError {
     Advance(ExecutionSegmentAdvanceError),
     Completion(ExecutionSegmentCompletionError),
     Publication(ExecutionSessionPublicationError),
+    TranslationDrag(TranslationDragError),
 }
 
 impl std::fmt::Display for LiveSessionError {
@@ -403,6 +405,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Advance(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
         }
     }
 }
@@ -419,6 +422,7 @@ impl std::error::Error for LiveSessionError {
             Self::Advance(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Publication(error) => Some(error),
+            Self::TranslationDrag(error) => Some(error),
             Self::ForeignMobjectStore | Self::Mobject(_) | Self::Animation(_) => None,
         }
     }
@@ -477,6 +481,42 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    /// Configure the semantic objects that may acquire the session-owned
+    /// translation-drag lease. The platform still supplies only typed pointer
+    /// occurrences; it never chooses an object identity per event.
+    pub fn set_translation_drag_targets<'target>(
+        &mut self,
+        targets: impl IntoIterator<Item = &'target Mobject>,
+    ) -> Result<(), LiveSessionError> {
+        let mut nodes = Vec::new();
+        for target in targets {
+            if !Rc::ptr_eq(self.store, target.integration_store()) {
+                return Err(LiveSessionError::ForeignMobjectStore);
+            }
+            target.validate().map_err(LiveSessionError::from)?;
+            nodes.push(target.node_id());
+        }
+        self.session
+            .set_translation_drag_targets(nodes)
+            .map_err(LiveSessionError::TranslationDrag)
+    }
+
+    /// Deliver one normalized native pointer occurrence through the shared
+    /// drag policy and ordinary native-input publication path.
+    ///
+    /// Non-captured occurrences retain normal pointer/hover/click behavior;
+    /// a captured primary drag alone acquires the scoped Position lease.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        self.session
+            .submit_translation_drag_input(&mut store, token, input)
+            .map_err(LiveSessionError::TranslationDrag)
+    }
+
     /// Publish one object-owned restoring `click -> Indicate` declaration
     /// through the live semantic transaction path.
     pub fn on_click_indicate(
