@@ -233,8 +233,8 @@ pub(super) struct PreparedInputPublication {
 /// still the runtime's sparse evaluation and metadata is committed only after
 /// that frame (or a shared authored publication) succeeds.
 pub(super) struct PreparedNativePointerPublication {
-    frame: noon_runtime::PreparedFrameEvaluation,
-    effective: noon_runtime::PreparedEffectivePropertyBatch,
+    frame: Option<noon_runtime::PreparedFrameEvaluation>,
+    effective: Option<noon_runtime::PreparedEffectivePropertyBatch>,
     timeline: Option<noon_runtime::SignalTimelinePreview>,
     input: NativePointerInput,
     previous: PublicationContext,
@@ -403,15 +403,24 @@ impl ExecutionSession {
         if let Some(event) = input.button_event() {
             self.append_native_event_inputs(&event, &mut inputs);
         }
-        let mut prepared = self.prepare_reactive_input_batch(inputs)?;
-        prepared.effective = effective;
-        self.runtime
-            .preflight_prepared_frame_commit(&prepared.frame, &prepared.effective)
-            .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        let (frame, effective, timeline) = if inputs.is_empty() && effective.is_empty() {
+            (None, None, None)
+        } else {
+            let mut prepared = self.prepare_reactive_input_batch(inputs)?;
+            prepared.effective = effective;
+            self.runtime
+                .preflight_prepared_frame_commit(&prepared.frame, &prepared.effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
+            (
+                Some(prepared.frame),
+                Some(prepared.effective),
+                prepared.timeline,
+            )
+        };
         Ok(PreparedNativePointerPublication {
-            frame: prepared.frame,
-            effective: prepared.effective,
-            timeline: prepared.timeline,
+            frame,
+            effective,
+            timeline,
             input,
             previous,
             selection,
@@ -424,9 +433,11 @@ impl ExecutionSession {
         prepared: PreparedNativePointerPublication,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
         let (frame, effective, timeline, metadata) = prepared.into_parts();
-        self.runtime
-            .commit_prepared_frame(frame, effective)
-            .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        if let (Some(frame), Some(effective)) = (frame, effective) {
+            self.runtime
+                .commit_prepared_frame(frame, effective)
+                .map_err(ExecutionSessionInputError::PreparedCommit)?;
+        }
         self.commit_prepared_native_pointer_metadata(timeline, metadata)
     }
 
@@ -689,8 +700,8 @@ impl PreparedNativePointerPublication {
     pub(super) fn into_parts(
         self,
     ) -> (
-        noon_runtime::PreparedFrameEvaluation,
-        noon_runtime::PreparedEffectivePropertyBatch,
+        Option<noon_runtime::PreparedFrameEvaluation>,
+        Option<noon_runtime::PreparedEffectivePropertyBatch>,
         Option<noon_runtime::SignalTimelinePreview>,
         PreparedNativePointerMetadata,
     ) {

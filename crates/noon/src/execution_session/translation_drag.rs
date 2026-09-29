@@ -7,6 +7,7 @@ use noon_core::{
     SemanticNodeId, SemanticObjectProperty, SemanticStore, SemanticVec3, Vec2,
 };
 
+use super::publication::{PreparedRuntimePublication, SemanticPublicationPurpose};
 use super::{
     ExecutionSession, ExecutionSessionInputError, NativePointerInputPublication,
     NativePointerInputToken, PointerFillOutcome,
@@ -129,7 +130,14 @@ impl ExecutionSession {
             self.runtime
                 .suspend_translation_drag(active.object)
                 .expect("active drag retains a live runtime lease");
-            let effective = self.empty_effective_batch();
+            let effective = self
+                .prepared_drag_batch(
+                    active.object,
+                    self.runtime
+                        .translation_drag_base(active.object)
+                        .expect("active drag retains a compiled object"),
+                )
+                .expect("compiled drag base is a valid effective translation");
             // Cancellation without a pointer occurrence still needs to restore
             // the base frame; use the existing prepared input evaluation rather
             // than mutating the live row directly.
@@ -141,6 +149,8 @@ impl ExecutionSession {
             self.runtime
                 .commit_prepared_frame(frame, effective)
                 .expect("suspended drag restoration was prepared against this frame");
+            self.runtime
+                .clear_translation_drag_effective_driver(active.object);
         }
     }
 
@@ -223,6 +233,16 @@ impl ExecutionSession {
             self.prepared_drag_batch(start.object, start.translation)?
         } else if let Some((active, translation)) = update {
             self.prepared_drag_batch(active.object, translation)?
+        } else if let Some(active) = active.filter(|active| {
+            active.pointer == input.pointer()
+                && matches!(input.kind(), NativePointerInputKind::Cancel(_))
+        }) {
+            self.prepared_drag_batch(
+                active.object,
+                self.runtime
+                    .translation_drag_base(active.object)
+                    .ok_or(TranslationDragError::RetiredTarget)?,
+            )?
         } else {
             self.empty_effective_batch()
         };
@@ -234,7 +254,7 @@ impl ExecutionSession {
                 )
         });
         if let Some(active) = release {
-            self.preflight_drag_authored_translation(store, active.node, active.translation)?;
+            return self.commit_drag_release(store, token, input, active);
         }
 
         let cancellation = active.filter(|active| {
@@ -270,47 +290,70 @@ impl ExecutionSession {
                 ..active
             });
         }
-        let undo = if let Some(active) = release {
-            // Keep the scoped lease until semantic publication succeeds.  If an
-            // unexpected publication failure occurs, the captured target and its
-            // effective position remain intact for an explicit cancel or retry.
-            match self.apply_drag_authored_translation(
-                store,
-                active.node,
-                SemanticVec3::new(
-                    f64::from(active.translation.x),
-                    f64::from(active.translation.y),
-                    0.0,
-                ),
-            ) {
-                Ok(()) => {
-                    self.translation_drag.active = None;
-                    self.runtime.release_translation_drag(active.object);
-                    let after = SemanticVec3::new(
-                        f64::from(active.translation.x),
-                        f64::from(active.translation.y),
-                        0.0,
-                    );
-                    Some(TranslationDragUndo {
-                        store: store.identity().clone(),
-                        runtime: self.runtime_identity(),
-                        scene_revision: store.scene_revision(),
-                        node: active.node,
-                        before: active.authored_before,
-                        after,
-                    })
-                }
-                Err(error) => return Err(error),
-            }
-        } else {
-            if cancellation.is_some() {
-                self.translation_drag.active = None;
-            }
-            None
-        };
+        if cancellation.is_some() {
+            self.translation_drag.active = None;
+            self.runtime
+                .clear_translation_drag_effective_driver(cancellation.expect("checked").object);
+        }
         Ok(TranslationDragReceipt {
             input: publication,
-            undo,
+            undo: None,
+        })
+    }
+
+    fn commit_drag_release(
+        &mut self,
+        store: &mut SemanticStore,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        active: ActiveDrag,
+    ) -> Result<TranslationDragReceipt, TranslationDragError> {
+        let after = SemanticVec3::new(
+            f64::from(active.translation.x),
+            f64::from(active.translation.y),
+            0.0,
+        );
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(active.node, SemanticObjectProperty::Translation, after);
+        let prepared_semantic = transaction
+            .prepare(store)
+            .map_err(|error| TranslationDragError::Semantic(error.to_string()))?;
+        let native = self.prepare_native_pointer_input_with_effective(
+            token,
+            input,
+            self.empty_effective_batch(),
+            true,
+        )?;
+        let (frame, effective, timeline, metadata) = native.into_parts();
+        self.translation_drag.active = None;
+        let publication = self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared_semantic,
+            Vec::new(),
+            PreparedRuntimePublication { effective, frame },
+            SemanticPublicationPurpose::AuthoredMutation,
+            None,
+            None,
+        );
+        if let Err(error) = publication {
+            self.translation_drag.active = Some(active);
+            return Err(TranslationDragError::Semantic(error.to_string()));
+        }
+        let input = self
+            .commit_prepared_native_pointer_metadata(timeline, metadata)
+            .expect(
+                "prepared drag release suppresses click actions and cannot fail after publication",
+            );
+        self.runtime.release_translation_drag(active.object);
+        Ok(TranslationDragReceipt {
+            input,
+            undo: Some(TranslationDragUndo {
+                store: store.identity().clone(),
+                runtime: self.runtime_identity(),
+                scene_revision: store.scene_revision(),
+                node: active.node,
+                before: active.authored_before,
+                after,
+            }),
         })
     }
 
@@ -334,24 +377,6 @@ impl ExecutionSession {
             self.translation_drag.active = active;
         }
         result
-    }
-
-    fn preflight_drag_authored_translation(
-        &self,
-        store: &mut SemanticStore,
-        node: SemanticNodeId,
-        value: Vec2,
-    ) -> Result<(), TranslationDragError> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_property(
-            node,
-            SemanticObjectProperty::Translation,
-            SemanticVec3::new(f64::from(value.x), f64::from(value.y), 0.0),
-        );
-        transaction
-            .prepare(store)
-            .map(|_| ())
-            .map_err(|error| TranslationDragError::Semantic(error.to_string()))
     }
 
     fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {

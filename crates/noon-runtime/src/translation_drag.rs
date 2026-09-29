@@ -45,6 +45,23 @@ impl SceneInstance {
         Some(translation)
     }
 
+    pub fn translation_drag_base(&self, id: ObjectId) -> Option<Vec2> {
+        let index = self.frame_index_for_object(id)?;
+        Some(
+            self.compiled
+                .objects()
+                .get(index)?
+                .base_transform
+                .translation,
+        )
+    }
+
+    pub fn clear_translation_drag_effective_driver(&mut self, id: ObjectId) {
+        if let Some(index) = self.frame_index_for_object(id) {
+            self.effective_driver_rows.remove(&index);
+        }
+    }
+
     pub fn restore_translation_drag(&mut self, id: ObjectId, translation: Vec2) {
         let index = self
             .frame_index_for_object(id)
