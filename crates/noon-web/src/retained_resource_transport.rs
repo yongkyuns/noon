@@ -734,6 +734,7 @@ impl InstalledRetainedResources {
         &self.render_geometries
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn render_geometry_preparations(
         &self,
     ) -> impl Iterator<Item = &RenderGeometryPreparation> {
