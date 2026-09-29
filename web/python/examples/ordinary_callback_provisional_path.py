@@ -30,7 +30,8 @@ class OrdinaryCallbackProvisionalPath(Scene):
                 .shift((1.5, 0.5, 0.0))
                 .set_fill(Color(0.2, 0.6, 1.0), opacity=0.7)
             )
-            assert path.get_center() == (1.5, 0.8)
+            center = path.get_center()
+            assert abs(center.x - 1.5) < 1e-6 and abs(center.y - 0.8) < 1e-6
             self.add(path)
             assert self.mobjects == [anchor, path]
             created.append(path)
@@ -39,4 +40,5 @@ class OrdinaryCallbackProvisionalPath(Scene):
         await self.wait(0.25)
         assert len(created) == 1
         assert created[0]._scene is self
-        assert created[0].get_center() == (1.5, 0.8)
+        center = created[0].get_center()
+        assert abs(center.x - 1.5) < 1e-6 and abs(center.y - 0.8) < 1e-6
