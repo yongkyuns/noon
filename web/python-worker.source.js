@@ -124,6 +124,21 @@ async function initializePyodide() {
     stageContinuationCallbackMembership(context, tokenJson, batch);
   self.noonContinuationMembershipRootKeys = (context, tokenJson) =>
     continuationMembershipRootKeys(context, tokenJson);
+  self.noonStageSemanticContinuationAnalyticGeometry = (context, tokenJson, options) =>
+    stageContinuationCallbackAnalyticGeometry(context, tokenJson, options);
+  self.noonStageSemanticContinuationProvisionalAdd = (context, tokenJson, object) =>
+    stageContinuationCallbackProvisionalAdd(context, tokenJson, object);
+  self.noonStageSemanticContinuationProvisionalShift = (context, tokenJson, object, x, y) =>
+    stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y);
+  self.noonStageSemanticContinuationProvisionalFill = (
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  ) => stageContinuationCallbackProvisionalFill(
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  );
+  self.noonSemanticContinuationProvisionalCenter = (context, tokenJson, object) =>
+    continuationCallbackProvisionalCenter(context, tokenJson, object);
+  self.noonResolveSemanticContinuationProvisionalMobject = (context, tokenJson, object) =>
+    resolveContinuationCallbackProvisionalMobject(context, tokenJson, object);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -439,6 +454,7 @@ function registerContinuationContext(context) {
     callbackRead: null,
     pending: null,
     callbackRequest: null,
+    committedCallbackPlayer: null,
     terminal: false,
   };
   semanticContexts.set(contextId, entry);
@@ -503,6 +519,7 @@ function requestContinuationCallback(continuation, phase, player) {
     return Promise.reject(new Error("canonical callback phase is missing its token"));
   }
   return new Promise((resolve, reject) => {
+    continuation.committedCallbackPlayer = null;
     continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null, player };
     const pending = continuation.pending;
     continuation.pending = null;
@@ -526,6 +543,69 @@ function continuationMembershipRootKeys(context, tokenJson) {
     throw new Error("semantic continuation callback has no pinned membership collector");
   }
   return callback.player.callbackMembershipRootKeys(tokenJson);
+}
+
+function stageContinuationCallbackAnalyticGeometry(context, tokenJson, options) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackAnalyticGeometry !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.stageCallbackAnalyticGeometry(tokenJson, options);
+}
+
+function stageContinuationCallbackProvisionalAdd(context, tokenJson, object) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalAdd !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalAdd(tokenJson, object);
+}
+
+function stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalShift !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalShift(tokenJson, object, x, y);
+}
+
+function stageContinuationCallbackProvisionalFill(
+  context, tokenJson, object, red, green, blue, alpha, opacity,
+) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalFill !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalFill(
+    tokenJson, object, red, green, blue, alpha, opacity,
+  );
+}
+
+function continuationCallbackProvisionalCenter(context, tokenJson, object) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.callbackProvisionalCenter !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.callbackProvisionalCenter(tokenJson, object);
+}
+
+function resolveContinuationCallbackProvisionalMobject(context, tokenJson, object) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal) {
+    throw new Error("semantic continuation has no completed callback player");
+  }
+  const completed = continuation.committedCallbackPlayer;
+  const player = completed?.tokenJson === tokenJson ? completed.player : null;
+  if (player === null || player === undefined ||
+      typeof player.resolveCallbackProvisionalMobject !== "function") {
+    throw new Error("semantic continuation callback has no committed provisional geometry collector");
+  }
+  return player.resolveCallbackProvisionalMobject(tokenJson, object);
 }
 
 function continuationCallbackRequest(context, tokenJson) {
@@ -619,6 +699,7 @@ function completeContinuationCallback(context, tokenJson, patchBatchJson) {
     throw new Error("semantic continuation callback cannot complete while a callback read is pending");
   }
   const next = awaitContinuationEvent(continuation);
+  continuation.committedCallbackPlayer = { tokenJson, player: callback.player };
   continuation.callbackRequest = null;
   callback.resolve(patchBatchJson);
   return next;

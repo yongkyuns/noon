@@ -491,13 +491,13 @@ def _stage_callback_membership(
     *,
     key: str | None,
 ) -> None:
-    """Stage existing typed handles for this one required callback phase.
+    """Stage one callback-local membership operation through the Rust collector.
 
-    New constructors, group/family expansion, explicit keys, foreground, and
-    painter reorders stay deliberately unsupported until their provisional and
-    binding rules are part of the same collector. This path carries the
-    original typed handles straight to the Rust player and delays only Python
-    wrapper attachment until that player commits the whole callback.
+    Existing typed handles retain their original provenance. One newly created
+    analytic Mobject may be admitted through its phase-bound local token; its
+    normal semantic handle and Python binding appear only after the shared
+    callback publication succeeds. Groups, keys, foreground, and reorders stay
+    outside this initial provisional slice.
     """
     if kind not in {"add", "remove", "clear"}:
         raise NotImplementedError(
@@ -507,6 +507,84 @@ def _stage_callback_membership(
         raise NotImplementedError(
             "canonical callback membership does not support provisional keyed construction"
         )
+    provisional = [
+        (value, getattr(value, "_callback_provisional_handle", None),
+         getattr(value, "_callback_provisional_context", None))
+        for value in values
+    ]
+    if any(handle is not None for _, handle, _ in provisional):
+        if kind != "add":
+            raise NotImplementedError(
+                "canonical callback provisional Mobjects currently support Scene.add only"
+            )
+        seen: set[str] = set()
+        for member, provisional_handle, owner in provisional:
+            if not isinstance(member, _base.Mobject):
+                raise NotImplementedError(
+                    "canonical callback membership currently accepts Mobjects only"
+                )
+            if provisional_handle is not None:
+                if owner is not callback:
+                    raise RuntimeError("callback provisional Mobject belongs to another callback phase")
+                identity = callback.provisional_membership_key(provisional_handle)
+            else:
+                identity = _semantic_wrapper_key(member)
+            if identity in seen:
+                raise ValueError("membership request contains a duplicate Mobject")
+            seen.add(identity)
+
+        # Stage each argument in source order against the one collector-owned
+        # transaction. That keeps `Scene.add(existing, new)` ordered by the
+        # shared prepared planner, rather than making a Python membership list.
+        for member, provisional_handle, _ in provisional:
+            if provisional_handle is not None:
+                reservation = _reserve_typed_binding(member, scene, provisional_handle, None)
+                local_key = callback.provisional_membership_key(provisional_handle)
+
+                def finalize(
+                    member=member,
+                    provisional_handle=provisional_handle,
+                    reservation=reservation,
+                ) -> None:
+                    handle = callback.resolve_provisional(provisional_handle)
+                    _semantic_handles._attach_shared_handle(member, handle)
+                    _commit_typed_binding(member, scene, reservation, handle)
+                    member._canonical_live_target_context = _context(scene)
+                    _membership_registry(scene)[_semantic_wrapper_key(member)] = member
+                    del member._callback_provisional_handle
+                    del member._callback_provisional_context
+
+                callback.stage_provisional_add(provisional_handle, finalize)
+                callback._membership_wrappers[local_key] = member
+                continue
+
+            if member._object is None or member._object.id not in scene._binding_handles:
+                raise NotImplementedError(
+                    "callback membership Mobject requires a bound typed semantic handle"
+                )
+            if member._scene is not None and member._scene is not scene:
+                raise ValueError("callback membership Mobject belongs to another Scene")
+            handle = getattr(member, "_semantic_handle", None)
+            if handle is None:
+                raise RuntimeError("callback membership Mobject requires a typed semantic handle")
+            batch = engine_call(
+                _context(scene).beginMembershipBatch,
+                "add",
+                operation="callback.membership",
+            )
+            try:
+                engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+            except Exception:
+                batch.free()
+                raise
+
+            def finalize_existing(member=member) -> None:
+                member._bind(scene, member._object)
+                _membership_registry(scene)[_semantic_wrapper_key(member)] = member
+
+            callback.stage_membership(batch, finalize_existing)
+            callback._membership_wrappers[_semantic_wrapper_key(member)] = member
+        return
     members: list[tuple[_base.Mobject, object]] = []
     for value in values:
         if not isinstance(value, _base.Mobject):
@@ -1017,6 +1095,90 @@ class _ContinuationCallbackPlayer:
             self._context,
             token_json,
             operation="callback.membership_read",
+        )
+
+    def stageCallbackAnalyticGeometry(self, token_json: str, options: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationAnalyticGeometry
+        return engine_call(
+            noonStageSemanticContinuationAnalyticGeometry,
+            self._context,
+            token_json,
+            options,
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalAdd(self, token_json: str, object: object) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalAdd
+        engine_call(
+            noonStageSemanticContinuationProvisionalAdd,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_membership",
+        )
+
+    def stageCallbackProvisionalShift(
+        self, token_json: str, object: object, x: float, y: float
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalShift
+        engine_call(
+            noonStageSemanticContinuationProvisionalShift,
+            self._context,
+            token_json,
+            object,
+            float(x),
+            float(y),
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalFill(
+        self, token_json: str, object: object, red: float, green: float,
+        blue: float, alpha: float, opacity: float | None,
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalFill
+        engine_call(
+            noonStageSemanticContinuationProvisionalFill,
+            self._context,
+            token_json,
+            object,
+            float(red),
+            float(green),
+            float(blue),
+            float(alpha),
+            opacity,
+            operation="callback.provisional_geometry",
+        )
+
+    def callbackProvisionalCenter(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonSemanticContinuationProvisionalCenter
+        return engine_call(
+            noonSemanticContinuationProvisionalCenter,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
+        )
+
+    def resolveCallbackProvisionalMobject(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonResolveSemanticContinuationProvisionalMobject
+        return engine_call(
+            noonResolveSemanticContinuationProvisionalMobject,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
         )
 
 

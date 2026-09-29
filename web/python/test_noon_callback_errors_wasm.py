@@ -146,7 +146,13 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
                 f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
             ],
         )
-        fixture.commit()
+        transform = copy.deepcopy(fixture.phase["objects"][0]["transform"])
+        transform["translation"]["x"] = 1.25
+        fixture.commit([{
+            "kind": "transform",
+            "object": fixture.phase["objects"][0]["node"],
+            "transform": transform,
+        }])
         fixture.phase = None
         self.assertEqual(
             list(fixture.context.rootMembershipKeys()),
@@ -155,6 +161,74 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
                 f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
             ],
         )
+        frame = json.loads(fixture.player.debugFrameJson())
+        self.assertEqual(frame["objects"][0]["transform"]["translation"]["x"], 1.25)
+
+    def test_analytic_callback_constructor_resolves_one_phase_bound_handle_after_commit(self):
+        fixture = self.fixture()
+        token = json.dumps(fixture.phase["token"])
+        before = list(fixture.context.rootMembershipKeys())
+        options = wasm.WasmManimGeometryOptions.rectangle(1.5, 0.5)
+        options.setTranslation(2.0, -1.0)
+        provisional = engine_call(
+            fixture.player.stageCallbackAnalyticGeometry,
+            token,
+            options,
+            operation="callback.provisional_geometry",
+        )
+        engine_call(
+            fixture.player.stageCallbackProvisionalShift,
+            token,
+            provisional,
+            0.5,
+            1.5,
+            operation="callback.provisional_geometry",
+        )
+        engine_call(
+            fixture.player.stageCallbackProvisionalFill,
+            token,
+            provisional,
+            0.2,
+            0.4,
+            0.8,
+            0.75,
+            0.6,
+            operation="callback.provisional_geometry",
+        )
+        center = engine_call(
+            fixture.player.callbackProvisionalCenter,
+            token,
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        self.assertEqual((center.x, center.y), (2.5, 0.5))
+        center.free()
+        engine_call(
+            fixture.player.stageCallbackProvisionalAdd,
+            token,
+            provisional,
+            operation="callback.provisional_membership",
+        )
+        self.assertEqual(list(fixture.context.rootMembershipKeys()), before)
+        fixture.commit()
+        handle = engine_call(
+            fixture.player.resolveCallbackProvisionalMobject,
+            token,
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        self.addCleanup(handle.free)
+        self.assertIn(
+            f"{handle.semanticSlot}:{handle.semanticGeneration}",
+            list(fixture.context.rootMembershipKeys()),
+        )
+        with self.assertRaises(NoonStalePublicationError):
+            engine_call(
+                fixture.player.resolveCallbackProvisionalMobject,
+                token,
+                provisional,
+                operation="callback.provisional_geometry",
+            )
 
     def test_foreign_abort_receipts_reject_even_with_matching_sequence_numbers(self):
         for method in ("failCallbackPhaseJson", "interruptCallbackPhaseJson"):

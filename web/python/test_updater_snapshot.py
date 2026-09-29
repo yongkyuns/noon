@@ -680,6 +680,29 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             self.token = token
             return ["1:2", "3:4"]
 
+        def stageCallbackAnalyticGeometry(self, token, options):
+            self.staged.append((token, "analytic", options))
+            return "provisional"
+
+        def stageCallbackProvisionalAdd(self, token, provisional) -> None:
+            self.staged.append((token, "add", provisional))
+
+        def stageCallbackProvisionalShift(self, token, provisional, x, y) -> None:
+            self.staged.append((token, "shift", provisional, x, y))
+
+        def stageCallbackProvisionalFill(
+            self, token, provisional, red, green, blue, alpha, opacity
+        ) -> None:
+            self.staged.append((token, "fill", provisional, red, green, blue, alpha, opacity))
+
+        def callbackProvisionalCenter(self, token, provisional):
+            self.staged.append((token, "center", provisional))
+            return type("Point", (), {"x": 2.5, "y": -1.0})()
+
+        def resolveCallbackProvisionalMobject(self, token, provisional):
+            self.staged.append((token, "resolve", provisional))
+            return "durable"
+
     def context(self):
         return updaters._CanonicalCallbackContext(
             {"time": 0.0, "delta_time": 0.0, "token": {"generation": 9}, "objects": []},
@@ -708,4 +731,42 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
         self.assertEqual(context.membership_root_keys(), ["1:2", "3:4"])
         context.finalize_membership()
         self.assertEqual(finalized, ["first", "second"])
+
+    def test_provisional_geometry_resolves_only_after_callback_completion(self) -> None:
+        context = self.context()
+        provisional = context.stage_analytic_geometry("circle-options")
+        resolved = []
+        context.stage_provisional_add(
+            provisional, lambda: resolved.append(context.resolve_provisional(provisional))
+        )
+        self.assertEqual(resolved, [])
+        self.assertEqual(
+            context._callback_player.staged,
+            [
+                ('{"generation":9}', "analytic", "circle-options"),
+                ('{"generation":9}', "add", "provisional"),
+            ],
+        )
+        context.finalize_membership()
+        self.assertEqual(resolved, ["durable"])
+        self.assertEqual(context._callback_player.staged[-1], ('{"generation":9}', "resolve", "provisional"))
         self.assertEqual(context._membership_finalizers, [])
+
+    def test_provisional_property_operations_stay_separate_from_effective_rows(self) -> None:
+        context = self.context()
+        provisional = context.stage_analytic_geometry("circle-options")
+        context.provisional_shift(provisional, updaters._base.Vec2(0.5, -1.0))
+        context.provisional_set_fill(
+            provisional, updaters._base.Color(0.2, 0.4, 0.8, 0.75), 0.6
+        )
+        self.assertEqual(context.provisional_center(provisional), updaters._base.Vec2(2.5, -1.0))
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertEqual(
+            context._callback_player.staged,
+            [
+                ('{"generation":9}', "analytic", "circle-options"),
+                ('{"generation":9}', "shift", "provisional", 0.5, -1.0),
+                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                ('{"generation":9}', "center", "provisional"),
+            ],
+        )

@@ -377,6 +377,19 @@ def _consume_geometry_options(options: object, kind: str = "geometry"):
 def _attach_geometry_options(
     self: _base.Mobject, options: object, kind: str = "geometry"
 ) -> None:
+    scene = _reactive._current_authoring_scene()
+    if scene is not None:
+        from _manim_updaters import active_callback_membership_context
+
+        callback = active_callback_membership_context(scene)
+        if callback is not None:
+            # The provisional name deliberately is not a durable semantic
+            # handle. Scene.add stages it through the same callback collector;
+            # the finalizer replaces this marker only after Rust commits.
+            _initialize_shared_wrapper(self)
+            self._callback_provisional_handle = callback.stage_analytic_geometry(options)
+            self._callback_provisional_context = callback
+            return
     handle, context = _consume_geometry_options(options, kind)
     _attach_shared_handle(self, handle)
     if context is not None:

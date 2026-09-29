@@ -333,14 +333,8 @@ impl ManimGeometryOptions {
         store: &mut SemanticStore,
         publish: impl FnOnce(&mut SemanticStore, SemanticObjectState) -> Result<T, AuthoringError>,
     ) -> Result<T, AuthoringError> {
-        if !self.geometry.is_finite()
-            || !self.transform.translation.is_finite()
-            || !self.transform.scale.is_finite()
-            || !self.transform.rotation_z.is_finite()
-            || !self.style.is_finite()
-            || !self.z_index.is_finite()
-        {
-            return Err(AuthoringError::NonFiniteObjectState);
+        if let Some(state) = self.inline_state()? {
+            return publish(store, state);
         }
         let Self {
             geometry,
@@ -350,36 +344,11 @@ impl ManimGeometryOptions {
             role,
         } = self;
         match geometry {
-            GeometryRef::Circle { radius } => publish(
-                store,
-                manim_geometry_state(
-                    StoredGeometry::Circle { radius },
-                    transform,
-                    style,
-                    z_index,
-                    role,
-                ),
-            ),
-            GeometryRef::Rectangle { size } => publish(
-                store,
-                manim_geometry_state(
-                    StoredGeometry::Rectangle { size },
-                    transform,
-                    style,
-                    z_index,
-                    role,
-                ),
-            ),
-            GeometryRef::Line { start, end } => publish(
-                store,
-                manim_geometry_state(
-                    StoredGeometry::Line { start, end },
-                    transform,
-                    style,
-                    z_index,
-                    role,
-                ),
-            ),
+            GeometryRef::Circle { .. }
+            | GeometryRef::Rectangle { .. }
+            | GeometryRef::Line { .. } => {
+                unreachable!("inline geometry returned from inline_state")
+            }
             GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
                 publish(
                     store,
@@ -396,6 +365,47 @@ impl ManimGeometryOptions {
                 crate::UnsupportedAuthoringOperation::ExternalGeometry,
             )),
         }
+    }
+
+    /// Materialize analytic geometry without admitting an arena resource.
+    ///
+    /// The callback collector uses this narrow split for provisional Circle,
+    /// Rectangle, and Line nodes: their state can be prepared and inspected
+    /// before the callback publishes. Vector paths deliberately return `None`
+    /// so their payload remains owned by the later scoped resource-admission
+    /// boundary rather than entering the store before the whole callback can
+    /// commit.
+    pub fn inline_state(&self) -> Result<Option<SemanticObjectState>, AuthoringError> {
+        if !self.geometry.is_finite()
+            || !self.transform.translation.is_finite()
+            || !self.transform.scale.is_finite()
+            || !self.transform.rotation_z.is_finite()
+            || !self.style.is_finite()
+            || !self.z_index.is_finite()
+        {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        let geometry = match &self.geometry {
+            GeometryRef::Circle { radius } => StoredGeometry::Circle { radius: *radius },
+            GeometryRef::Rectangle { size } => StoredGeometry::Rectangle { size: *size },
+            GeometryRef::Line { start, end } => StoredGeometry::Line {
+                start: *start,
+                end: *end,
+            },
+            GeometryRef::VectorPath(_) => return Ok(None),
+            GeometryRef::External(_) => {
+                return Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::ExternalGeometry,
+                ));
+            }
+        };
+        Ok(Some(manim_geometry_state(
+            geometry,
+            self.transform,
+            self.style.clone(),
+            self.z_index,
+            self.role,
+        )))
     }
 
     /// State-only materialization for remaining callers tracked by #1603.
