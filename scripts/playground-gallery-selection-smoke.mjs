@@ -9,6 +9,8 @@ import playwright from "playwright";
 import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
+import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
+import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_GALLERY_SELECTION_PORT ?? 4217);
@@ -144,7 +146,8 @@ try {
   report.browserErrors = errors;
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "error" || message.type() === "warning" &&
+        /Recoverable Python callback error|\[Noon input\]/.test(message.text())) errors.push(message.text());
   });
 
   await page.goto(`${base}?example=noon-pointer-selection`, { waitUntil: "domcontentloaded" });
@@ -333,6 +336,118 @@ try {
   await waitForPresentation(page, beforeZoomOut);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
+
+  if (browserName === "webkit" && profileName === "mobile-dpr2") {
+    const rawManifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const nativeInputEntry = normalizeShowcaseManifest(rawManifest).examples.find(entry => entry.id === "showcase-translation-drag");
+    assert.ok(nativeInputEntry, "native-input drag lesson is missing from the curated showcase");
+    assert.equal(nativeInputEntry.playbackCapability, "nonreplayable-native-input");
+    await page.goto(`${base}?catalog=showcase&example=${nativeInputEntry.id}`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
+    const dragCanvas = page.locator("#scene");
+    await layoutReplayViewport(dragCanvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
+    await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
+    await page.evaluate(() => window.__noonExampleGallery.run());
+    await waitForAuthoring(page);
+    await page.waitForFunction(duration => {
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+    }, nativeInputEntry.duration, { timeout: 30000 });
+    const nativeBackend = await page.locator("#status").getAttribute("data-renderer-backend");
+    assert.ok(["WebGL2", "WebGPU"].includes(nativeBackend), "native drag did not use a real renderer backend");
+    const firstPassState = await readLiveState(page);
+    assertNonreplayableShowcase(nativeInputEntry, firstPassState, nativeBackend);
+    const dragBox = await dragCanvas.boundingBox();
+    assert.ok(dragBox && dragBox.width > 0 && dragBox.height > 0, "native drag canvas is not drawable");
+    const nativeBaseline = await dragCanvas.screenshot();
+    captures.nativeDragBaseline = nativeBaseline;
+    const assertNoNativeInputError = async stage => {
+      const state = await page.evaluate(() => ({
+        patchState: document.querySelector("#patch-status")?.dataset.state,
+        patchText: document.querySelector("#patch-status")?.value,
+        runtimeText: document.querySelector("#status-text")?.textContent,
+      }));
+      assert.notEqual(state.patchState, "error", `${stage}: native/Rust input failed: ${state.patchText || state.runtimeText}`);
+      assert.doesNotMatch(state.runtimeText || "", /^Error:/, `${stage}: runtime reported an error`);
+      assert.deepEqual(errors, [], `${stage}: browser reported a Rust/input error`);
+    };
+    const touchPoint = (x, y) => ({ clientX: dragBox.x + dragBox.width * x, clientY: dragBox.y + dragBox.height * y });
+    const dispatchTouchPointer = async (type, point, buttons, button = -1) => dragCanvas.evaluate((canvas, packet) => {
+      const event = new PointerEvent(packet.type, {
+        bubbles: true, cancelable: true, pointerId: 73, pointerType: "touch", isPrimary: true,
+        clientX: packet.clientX, clientY: packet.clientY, button: packet.button, buttons: packet.buttons,
+      });
+      return canvas.dispatchEvent(event);
+    }, { type, ...point, buttons, button });
+    const waitForNativeChange = async (baseline, label) => {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const image = await dragCanvas.screenshot();
+        if (changedPixels(baseline, image) > 500) return image;
+        await page.waitForTimeout(25);
+      }
+      throw new Error(`${label} did not produce visible Rust-owned translation`);
+    };
+    const samples = [];
+    const sendSample = async (type, x, y, buttons, button = -1) => {
+      const point = touchPoint(x, y);
+      samples.push({ type, pointerType: "touch", x, y, buttons });
+      await dispatchTouchPointer(type, point, buttons, button);
+    };
+    const preReleaseFrames = await presentedFrames(page);
+    await sendSample("pointerdown", 0.68, 0.5, 1, 0);
+    await sendSample("pointermove", 0.72, 0.5, 1);
+    await sendSample("pointermove", 0.77, 0.5, 1);
+    await sendSample("pointerup", 0.82, 0.5, 0, 0);
+    await assertNoNativeInputError("touch release");
+    await waitForPresentation(page, preReleaseFrames);
+    const released = await waitForNativeChange(nativeBaseline, "released touch drag");
+    captures.nativeDragReleased = released;
+    const releasedFrames = await presentedFrames(page);
+    await sendSample("pointermove", 0.9, 0.6, 0);
+    await page.waitForTimeout(100);
+    assert.equal(changedPixels(released, await dragCanvas.screenshot()), 0, "released touch continued translating the rectangle");
+    assert.equal(await presentedFrames(page), releasedFrames, "released touch left native input work active");
+
+    const beforeCancelFrames = await presentedFrames(page);
+    await sendSample("pointerdown", 0.82, 0.5, 1, 0);
+    await sendSample("pointermove", 0.76, 0.5, 1);
+    await sendSample("pointercancel", 0.76, 0.5, 0);
+    await assertNoNativeInputError("touch cancellation");
+    await waitForPresentation(page, beforeCancelFrames);
+    const cancelled = await dragCanvas.screenshot();
+    assert.ok(changedPixels(released, cancelled) > 500, "touch cancel sample did not retain its admitted drag translation");
+    const afterCancel = await presentedFrames(page);
+    await sendSample("pointermove", 0.58, 0.5, 1);
+    await page.waitForTimeout(100);
+    assert.equal(changedPixels(cancelled, await dragCanvas.screenshot()), 0, "cancelled touch continued translating the rectangle");
+    assert.equal(await presentedFrames(page), afterCancel, "cancelled touch left native input work active");
+    await assertSettled(page, "cancelled native drag");
+
+    await page.locator("#replace-scene").click();
+    await waitForAuthoring(page);
+    await page.waitForFunction(duration => {
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+    }, nativeInputEntry.duration, { timeout: 30000 });
+    assertNonreplayableShowcase(nativeInputEntry, await readLiveState(page), nativeBackend);
+    const nativeReset = await waitForExactPixels(dragCanvas, nativeBaseline, "public Run after touch drag/cancel");
+    captures.nativeDragRunReset = nativeReset;
+    report.nativeInputDrag = {
+      capability: nativeInputEntry.playbackCapability,
+      limitation: nativeInputEntry.playbackLimitation,
+      backend: nativeBackend,
+      deviceScaleFactor: profile.deviceScaleFactor,
+      pointerSamples: samples,
+      releasedDragChangedPixels: changedPixels(nativeBaseline, released),
+      cancelledDragChangedPixels: changedPixels(released, cancelled),
+      runRestoresExactBaseline: true,
+    };
+    assert.deepEqual(errors, [], "Rust/browser input path reported an error during native drag");
+    assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied",
+      "Rust input failure changed the public Run state");
+  }
+
   assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true,
     "selection smoke must run the production authoring worker without JSPI");
   report.authoredRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
