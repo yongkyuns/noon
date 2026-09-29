@@ -259,9 +259,9 @@ fn committed_callback_membership_player() -> (
     )
     .unwrap();
     let token = player
-        .pending_callback_phase
-        .expect("callback is pending")
-        .0;
+        .session_mut_for_test()
+        .pending_callback_token()
+        .expect("callback is pending");
     player
         .stage_required_callback_membership(
             token,
