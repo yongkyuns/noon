@@ -186,7 +186,7 @@ test("semantic continuation delivers required callback work to its suspended sou
 });
 
 test("continuation provisional geometry keeps the pinned player through Rust commit", () => {
-  assert.match(source, /noonStageSemanticContinuationAnalyticGeometry/);
+  assert.match(source, /noonStageSemanticContinuationProvisionalGeometry/);
   assert.match(source, /noonResolveSemanticContinuationProvisionalMobject/);
   assert.match(source, /callback\.player\.stageCallbackProvisionalGeometry\(tokenJson, options\)/);
   assert.match(source, /callback\.player\.stageCallbackProvisionalShift\(tokenJson, object, x, y\)/);

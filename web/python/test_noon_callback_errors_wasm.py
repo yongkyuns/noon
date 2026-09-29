@@ -167,7 +167,7 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
             [0.0, 1.25],
         )
 
-    def test_analytic_callback_constructor_resolves_one_phase_bound_handle_after_commit(self):
+    def test_provisional_callback_constructor_resolves_one_phase_bound_handle_after_commit(self):
         fixture = self.fixture()
         token = json.dumps(fixture.phase["token"])
         before = list(fixture.context.rootMembershipKeys())

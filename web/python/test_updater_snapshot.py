@@ -681,7 +681,7 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             return ["1:2", "3:4"]
 
         def stageCallbackProvisionalGeometry(self, token, options):
-            self.staged.append((token, "analytic", options))
+            self.staged.append((token, "provisional_geometry", options))
             return "provisional"
 
         def stageCallbackProvisionalShift(self, token, provisional, x, y) -> None:
@@ -741,7 +741,7 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
         self.assertEqual(
             context._callback_player.staged,
             [
-                ('{"generation":9}', "analytic", "circle-options"),
+                ('{"generation":9}', "provisional_geometry", "circle-options"),
                 ('{"generation":9}', "shift", "provisional", 0.5, -1.0),
                 ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
                 ('{"generation":9}', "center", "provisional"),

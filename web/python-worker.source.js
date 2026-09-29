@@ -138,7 +138,7 @@ async function initializePyodide() {
     stageContinuationCallbackMembership(context, tokenJson, batch);
   self.noonContinuationMembershipRootKeys = (context, tokenJson) =>
     continuationMembershipRootKeys(context, tokenJson);
-  self.noonStageSemanticContinuationAnalyticGeometry = (context, tokenJson, options) =>
+  self.noonStageSemanticContinuationProvisionalGeometry = (context, tokenJson, options) =>
     stageContinuationCallbackProvisionalGeometry(context, tokenJson, options);
   self.noonStageSemanticContinuationProvisionalShift = (context, tokenJson, object, x, y) =>
     stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y);

@@ -494,7 +494,7 @@ def _stage_callback_membership(
     """Stage one callback-local membership operation through the Rust collector.
 
     Existing typed handles retain their original provenance. One newly created
-    analytic Mobject may be admitted through its phase-bound local token; its
+    provisional geometry Mobject may be admitted through its phase-bound local token; its
     normal semantic handle and Python binding appear only after the shared
     callback publication succeeds. Groups, keys, foreground, and reorders stay
     outside this initial provisional slice.
@@ -1119,9 +1119,9 @@ class _ContinuationCallbackPlayer:
     def stageCallbackProvisionalGeometry(self, token_json: str, options: object) -> object:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonStageSemanticContinuationAnalyticGeometry
+        from js import noonStageSemanticContinuationProvisionalGeometry
         return engine_call(
-            noonStageSemanticContinuationAnalyticGeometry,
+            noonStageSemanticContinuationProvisionalGeometry,
             self._context,
             token_json,
             options,

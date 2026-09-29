@@ -1079,7 +1079,7 @@ fn required_callback_membership_publishes_one_existing_handle_edit() {
 }
 
 #[test]
-fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
+fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     let mut scene = noon::Scene::new();
     let callback_target = scene.circle(1.0).unwrap();
     scene.add(&callback_target).unwrap();
