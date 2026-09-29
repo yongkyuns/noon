@@ -2722,6 +2722,8 @@ class SelectedAlignment(Scene):
   for (const [fixture, objectCount] of [
     ["ordinary_callback_membership_atomic", 3],
     ["ordinary_callback_provisional_geometry", 4],
+    ["ordinary_callback_provisional_path", 2],
+    ["ordinary_mixed_updater_order", 3],
   ]) {
     const callbackSource = await readFile(
       path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",
