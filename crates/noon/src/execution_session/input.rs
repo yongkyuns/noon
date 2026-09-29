@@ -258,6 +258,7 @@ impl ExecutionSession {
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
         !self.interaction_bindings.is_empty()
+            || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self
                 .reactive_projection

@@ -546,3 +546,39 @@ fn uncaptured_drag_input_preserves_ordinary_click_actions() {
     assert!(session.runtime.interactions_active());
     assert!(receipt.undo.is_none());
 }
+
+#[test]
+fn configured_drag_interest_prevents_sealing_unrecorded_interaction_history() {
+    let (_, target, _, mut session) = fixture();
+    assert!(session.has_native_pointer_subscribers());
+    session.begin_replay_retention(Default::default()).unwrap();
+    assert_eq!(
+        session.seal_replay(),
+        Err(noon_runtime::ReplayError::UnsupportedDomain)
+    );
+    session.discard_replay_retention();
+    session.set_translation_drag_targets([]).unwrap();
+    assert!(!session.has_native_pointer_subscribers());
+    session.begin_replay_retention(Default::default()).unwrap();
+    session.set_translation_drag_targets([target]).unwrap();
+    assert_eq!(
+        session.seal_replay(),
+        Err(noon_runtime::ReplayError::UnsupportedDomain)
+    );
+}
+
+#[test]
+fn sealed_history_rejects_drag_configuration_without_changing_policy_or_frame() {
+    let (_, target, _, mut session) = fixture();
+    session.set_translation_drag_targets([]).unwrap();
+    session.begin_replay_retention(Default::default()).unwrap();
+    session.seal_replay().unwrap();
+    let before = session.publication_context();
+    assert_eq!(
+        session.set_translation_drag_targets([target]),
+        Err(TranslationDragError::ReplaySealed)
+    );
+    assert_eq!(session.publication_context(), before);
+    assert!(!session.has_native_pointer_subscribers());
+    assert!(session.replay_is_sealed());
+}

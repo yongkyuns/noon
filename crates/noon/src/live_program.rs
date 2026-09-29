@@ -296,14 +296,8 @@ impl<C: LiveContinuation> LiveProgram<C> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, LiveProgramError<C::Error>> {
-        self.ensure_host_input_available("deliver contextual pointer input")?;
-        let publication = self
-            .scene
-            .owned_execution_mut()
-            .submit_native_pointer_input(token, input)
-            .map_err(LiveProgramError::Input)?;
-        self.refresh_pending_publication();
-        Ok(publication)
+        self.submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
     }
 
     /// Deliver one typed pointer occurrence through the configured translation
@@ -323,7 +317,10 @@ impl<C: LiveContinuation> LiveProgram<C> {
             .scene
             .owned_execution_mut()
             .submit_translation_drag_input(&mut store.borrow_mut(), token, input)
-            .map_err(LiveProgramError::TranslationDrag)?;
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => LiveProgramError::Input(error),
+                error => LiveProgramError::TranslationDrag(error),
+            })?;
         self.refresh_pending_publication();
         Ok(publication)
     }

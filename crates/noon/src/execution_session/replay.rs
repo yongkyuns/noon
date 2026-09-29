@@ -17,7 +17,10 @@ impl ExecutionSession {
             return Err(ReplayError::Incomplete);
         }
         self.runtime.begin_replay_retention(limits)?;
-        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
+        if !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+        {
             self.runtime.invalidate_replay_domain();
         }
         self.replay_pinned_exits = Some(Default::default());
@@ -32,7 +35,10 @@ impl ExecutionSession {
         {
             return Err(ReplayError::Incomplete);
         }
-        if !self.callback_schedule.is_empty() || self.derived_display_plan.is_some() {
+        if !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+        {
             return Err(ReplayError::UnsupportedDomain);
         }
         self.runtime.seal_replay()

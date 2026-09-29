@@ -83,9 +83,7 @@ fn finished_program_routes_typed_drag_input_without_frontend_target_selection() 
             button: 0,
         },
     );
-    program
-        .submit_translation_drag_input(&token, press)
-        .unwrap();
+    program.submit_native_pointer_input(&token, press).unwrap();
 
     let token = program.native_pointer_input_token().unwrap();
     let release = NativePointerInput::new(
@@ -100,10 +98,10 @@ fn finished_program_routes_typed_drag_input_without_frontend_target_selection() 
         },
     );
     let receipt = program
-        .submit_translation_drag_input(&token, release)
+        .submit_native_pointer_input(&token, release)
         .unwrap();
 
-    assert!(receipt.undo.is_some());
+    assert_eq!(receipt.input(), release);
     assert_eq!(
         circle.state().unwrap().transform.translation,
         crate::SemanticVec3::new(2.0, 0.0, 0.0)

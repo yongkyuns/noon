@@ -32,6 +32,10 @@ pub(super) struct TranslationDragState {
 }
 
 impl TranslationDragState {
+    pub(super) fn has_targets(&self) -> bool {
+        !self.targets.is_empty()
+    }
+
     pub(super) const fn is_active(&self) -> bool {
         self.active.is_some()
     }
@@ -45,6 +49,7 @@ pub enum TranslationDragError {
     DriverConflict,
     RetiredTarget,
     StaleUndo,
+    ReplaySealed,
     Semantic(String),
 }
 impl std::fmt::Display for TranslationDragError {
@@ -60,6 +65,9 @@ impl std::fmt::Display for TranslationDragError {
             Self::StaleUndo => {
                 f.write_str("translation drag undo no longer matches the live scene")
             }
+            Self::ReplaySealed => f.write_str(
+                "discard sealed replay before configuring or acquiring a translation drag",
+            ),
             Self::Semantic(error) => f.write_str(error),
         }
     }
@@ -117,8 +125,15 @@ impl ExecutionSession {
         &mut self,
         targets: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<(), TranslationDragError> {
+        self.ensure_direct_input_ingress_available()?;
+        if self.runtime.replay_is_sealed() {
+            return Err(TranslationDragError::ReplaySealed);
+        }
         self.cancel_translation_drag()?;
         self.translation_drag.targets = Arc::new(targets.into_iter().collect());
+        if self.translation_drag.has_targets() {
+            self.runtime.invalidate_replay_domain();
+        }
         Ok(())
     }
 
@@ -165,6 +180,12 @@ impl ExecutionSession {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<TranslationDragReceipt, TranslationDragError> {
+        if !self.translation_drag.has_targets() && !self.translation_drag.is_active() {
+            return self
+                .submit_native_pointer_input(token, input)
+                .map(|input| TranslationDragReceipt { input, undo: None })
+                .map_err(TranslationDragError::Input);
+        }
         self.require_published_store(store)
             .map_err(|_| TranslationDragError::ForeignStore)?;
         self.preflight_native_pointer_input(token, input)?;
@@ -186,6 +207,9 @@ impl ExecutionSession {
             None
         };
         let start = if let Some(node) = press_target {
+            if self.runtime.replay_is_sealed() {
+                return Err(TranslationDragError::ReplaySealed);
+            }
             let object = self
                 .execution_object_id(node)
                 .ok_or(TranslationDragError::RetiredTarget)?;
