@@ -205,7 +205,9 @@ async function directRetainedLocalityProof(expectedBackend) {
     await presentDirectFrame(renderer);
     const initialBytesUploaded = renderer.lastBytesUploaded();
     const objectCount = renderer.objectCount();
-    renderer.seekDirect(0.5);
+    // Advance normal playback; inspection seek intentionally rebuilds its frame.
+    renderer.directWakeDirectiveJson(0);
+    renderer.advanceDirectRealtime(500);
     await presentDirectFrame(renderer);
     const updateBytesUploaded = renderer.lastBytesUploaded();
     const metrics = {
