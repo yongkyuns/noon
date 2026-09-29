@@ -83,7 +83,7 @@ test("preloadedColdStartMilestones reports the automatic preload path", () => {
 
 test("authoring startup metrics expose module graph, parallel resources, and sequential bootstrap cost", () => {
   const summary = summarizeAuthoringStartup({
-    version: 1,
+    version: 2,
     totalMs: 1050,
     moduleGraphLoadMs: 150,
     initializeMs: 900,
@@ -96,7 +96,18 @@ test("authoring startup metrics expose module graph, parallel resources, and seq
     compatibilityImportInstallMs: 240,
     compatibilityModuleCount: 27,
     compatibilitySourceChars: 500_000,
-  });
+    performanceTimeOriginMs: 1_000_000,
+    resourcesReadyAtMs: 600,
+    authoringStoreCreatedAtMs: 610,
+    bindingsReadyAtMs: 620,
+    compatibilityFilesReadyAtMs: 650,
+    importsReadyAtMs: 1050,
+    noonWebInitReadyAtMs: 320,
+    pyodideInitReadyAtMs: 590,
+    compatibilityBundleReadyAtMs: 500,
+    authoringWorkerReadyAtMs: 1060,
+    firstSceneContextCreatedAtMs: 1200,
+  }, { navigationStartEpochMs: 1_000_000 });
   assert.equal(summary.moduleGraphLoadMs, 150);
   assert.equal(summary.initializeMs, 900);
   assert.equal(summary.criticalResource, "pyodide");
@@ -106,17 +117,20 @@ test("authoring startup metrics expose module graph, parallel resources, and seq
   assert.equal(summary.postResourceBootstrapMs, 290);
   assert.equal(summary.unattributedMs, 10);
   assert.equal(summary.compatibilityModuleCount, 27);
+  assert.equal(summary.navigationTimelineMs.noonWebReady, 320);
+  assert.equal(summary.navigationTimelineMs.firstSceneContextCreated, 1200);
+  assert.equal(summary.navigationTimelineMs.authoringWorkerReady, 1060);
 });
 
 test("authoring startup metrics reject malformed diagnostic payloads", () => {
   assert.throws(
-    () => validateAuthoringStartupMetrics({ version: 2 }),
-    /schema version 1/,
+    () => validateAuthoringStartupMetrics({ version: 1 }),
+    /schema version 2/,
   );
   assert.throws(
     () =>
       validateAuthoringStartupMetrics({
-        version: 1,
+        version: 2,
         totalMs: Number.NaN,
         moduleGraphLoadMs: 1,
         initializeMs: 1,
@@ -129,6 +143,17 @@ test("authoring startup metrics reject malformed diagnostic payloads", () => {
         compatibilityImportInstallMs: 1,
         compatibilityModuleCount: 27,
         compatibilitySourceChars: 1,
+        performanceTimeOriginMs: 1,
+        resourcesReadyAtMs: 1,
+        authoringStoreCreatedAtMs: 1,
+        bindingsReadyAtMs: 1,
+        compatibilityFilesReadyAtMs: 1,
+        importsReadyAtMs: 1,
+        noonWebInitReadyAtMs: 1,
+        pyodideInitReadyAtMs: 1,
+        compatibilityBundleReadyAtMs: 1,
+        authoringWorkerReadyAtMs: null,
+        firstSceneContextCreatedAtMs: null,
       }),
     /totalMs/,
   );

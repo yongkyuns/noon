@@ -4,6 +4,15 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("authoring startup exposes readiness and first semantic Scene context timestamps", () => {
+  assert.match(source, /performanceTimeOriginMs:\s*performance\.timeOrigin/);
+  assert.match(source, /authoringMilestones\.authoringWorkerReadyAtMs\s*=\s*performance\.now\(\)/);
+  assert.match(source, /authoringMilestones\.firstSceneContextCreatedAtMs\s*\?\?=\s*performance\.now\(\)/);
+  assert.match(source, /resourcesReadyAtMs:\s*resourcesReadyAt/);
+  assert.match(source, /importsReadyAtMs:\s*importsReadyAt/);
+  assert.match(source, /metrics\[`\$\{key\}ReadyAtMs`\]\s*=\s*performance\.now\(\)/);
+});
+
 test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /function\s+validateRequest\s*\(/);
   assert.doesNotMatch(source, /validateHostRequest|attach_engine_port|runCallbackPhase/);

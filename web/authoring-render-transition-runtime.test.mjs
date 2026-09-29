@@ -593,6 +593,27 @@ test("first presentation timestamp latches only after renderer reports a success
   assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), 142);
 });
 
+test("renderer-ready timestamp records GPU renderer creation before a successful present", async () => {
+  const harness = createWorkerHarness([false]);
+  let now = 125;
+  harness.context.performance = { now: () => now, timeOrigin: 70_000 };
+  Object.assign(harness.createdRenderer, {
+    objectCount: () => 1,
+    lastDrawCalls: () => 1,
+    lastInstancesDrawn: () => 1,
+    lastBytesUploaded: () => 0,
+    lastGeometryCacheMisses: () => 0,
+    lastOutlineCacheMisses: () => 0,
+  });
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+
+  const pending = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(pending.rendererReadyAtMs, 125);
+  assert.equal(pending.firstPresentedAtMs, null);
+  assert.equal(pending.performanceTimeOriginMs, 70_000);
+});
+
 test("idle continuation retries a pending surface publication without advancing the engine", async () => {
   const harness = await createManagedWakeHarness([true, false, true]);
   vm.runInContext('consumeDelta("endpoint", {session:12, sequence:4});', harness.context);

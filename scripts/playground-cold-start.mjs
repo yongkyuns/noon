@@ -113,12 +113,14 @@ try {
         waitUntil: "load",
       });
       const pageReady = monotonicNow();
+      const navigationStartEpochMs = await page.evaluate(() =>
+        performance.timeOrigin + (performance.getEntriesByType("navigation")[0]?.startTime ?? 0));
       await page.waitForFunction(
         (expectedId) => window.__noonExampleGallery?.selectedExampleId === expectedId,
         example.id,
         { timeout: 60_000 },
       );
-      const firstPresentedPromise = waitForFirstPresentedFrame(page).then(
+      const firstPresentedPromise = waitForFirstPresentedFrame(page, navigationStartEpochMs).then(
         (value) => ({ value }),
         (error) => ({ error }),
       );
@@ -148,6 +150,7 @@ try {
         await authoringWorker.evaluate(
           () => globalThis.__noonAuthoringStartupMetrics ?? null,
         ),
+        { navigationStartEpochMs },
       );
       const workerSummary = summarizeWorkers(workers);
       assert.equal(
@@ -209,6 +212,10 @@ try {
       if (failures.length > 0) throw new Error(failures.join("\n"));
       const warmRerun = {
         editToCompletedRunMs: editCompleted - editStarted,
+        firstPresentedAfterRun: {
+          measured: false,
+          reason: "renderer publications have no source-run identity to bind this frame to the edit",
+        },
         durableWorkersBefore: workersBeforeEdit,
         durableWorkersAfter: workerHandles.length,
         metrics: {
@@ -233,6 +240,7 @@ try {
         status,
         metrics,
         firstPresented,
+        rendererReady: firstPresented.rendererReady,
         browserEnvironment: { name: "Chromium", version: browserVersion },
       };
       caseReport = report;
@@ -247,6 +255,7 @@ try {
           `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint, ` +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)}), ` +
           `first worker-present ${format(firstPresented.navigationToFirstPresentedMs)} ms from navigation, ` +
+          `renderer ready ${format(firstPresented.rendererReady.navigationToRendererReadyMs)} ms from navigation, ` +
           `warm edit→completed run ${format(warmRerun.editToCompletedRunMs)} ms`,
       );
     } finally {
@@ -303,7 +312,7 @@ try {
     },
     memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. Its hostObservedAtPageMs and observationLagMs retain the page's later metrics observation separately. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. rendererReady records successful retained renderer creation after GPU setup, separately from presentation. Their host observation and poll lag remain separate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. preloadStarted is the Python authoring worker creation event. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. A warm-run first-present value is explicitly unavailable because the current renderer publication has no source-run identity. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -313,19 +322,28 @@ try {
   server.kill("SIGTERM");
 }
 
-async function waitForFirstPresentedFrame(page) {
-  return page.evaluate(async () => {
+async function waitForFirstPresentedFrame(page, navigationStartEpochMs) {
+  return page.evaluate(async (navigationStartEpochMs) => {
     const deadline = performance.now() + 240_000;
     while (performance.now() < deadline) {
       const response = await window.__noonExampleGallery?.executionMetrics?.();
       const metrics = response?.metrics;
-      if (metrics?.presentedFrames > 0 && Number.isFinite(metrics.firstPresentedAtMs) &&
+      if (metrics?.presentedFrames > 0 && Number.isFinite(metrics.rendererReadyAtMs) &&
+          Number.isFinite(metrics.firstPresentedAtMs) &&
           Number.isFinite(metrics.performanceTimeOriginMs)) {
         const observedAtPageMs = performance.now();
+        const rendererReadyAtEpochMs = metrics.performanceTimeOriginMs + metrics.rendererReadyAtMs;
         const firstPresentedAtEpochMs = metrics.performanceTimeOriginMs + metrics.firstPresentedAtMs;
-        const navigationStartEpochMs = performance.timeOrigin +
-          (performance.getEntriesByType("navigation")[0]?.startTime ?? 0);
+        if (rendererReadyAtEpochMs > firstPresentedAtEpochMs) {
+          throw new Error("renderer-ready timestamp follows first-present timestamp");
+        }
         return {
+          rendererReady: {
+            readyAtWorkerMs: metrics.rendererReadyAtMs,
+            workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
+            readyAtEpochMs: rendererReadyAtEpochMs,
+            navigationToRendererReadyMs: rendererReadyAtEpochMs - navigationStartEpochMs,
+          },
           firstPresentedAtWorkerMs: metrics.firstPresentedAtMs,
           workerTimeOriginEpochMs: metrics.performanceTimeOriginMs,
           firstPresentedAtEpochMs,
@@ -341,7 +359,7 @@ async function waitForFirstPresentedFrame(page) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     throw new Error("timed out waiting for renderer first-present telemetry");
-  });
+  }, navigationStartEpochMs);
 }
 
 async function waitForCompletedRun(page, previousGeneration = -1) {

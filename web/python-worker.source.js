@@ -26,8 +26,13 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 7;
-const AUTHORING_STARTUP_METRICS_VERSION = 1;
+const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
+const authoringMilestones = {
+  performanceTimeOriginMs: performance.timeOrigin,
+  firstSceneContextCreatedAtMs: null,
+  authoringWorkerReadyAtMs: null,
+};
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -38,7 +43,10 @@ let activeAuthoringRun = null;
 let fatalAuthoringFailure = false;
 
 pyodidePromise
-  .then(() => post("ready"))
+  .then(() => {
+    authoringMilestones.authoringWorkerReadyAtMs = performance.now();
+    post("ready");
+  })
   .catch(failAuthoringWorker);
 
 // Interpreter-fatal rejections may never settle runPythonAsync. Forward them
@@ -82,8 +90,12 @@ async function initializePyodide() {
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const resourcesReadyAt = performance.now();
   const authoringStore = new WasmAuthoringStore();
-  self.noonCreateCanonicalAuthoringSceneContext = () =>
-    authoringStore.createSceneContext();
+  const authoringStoreCreatedAt = performance.now();
+  self.noonCreateCanonicalAuthoringSceneContext = () => {
+    const context = authoringStore.createSceneContext();
+    authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
+    return context;
+  };
   self.noonCreateAuthoringValueTrackerHandle = (initial) =>
     authoringStore.createValueTracker(initial);
   self.noonRegisterSemanticExecution = (context) => {
@@ -358,8 +370,9 @@ sys.path.insert(0, "/tmp")
 import noon
 `);
   const importsReadyAt = performance.now();
-  self.__noonAuthoringStartupMetrics = Object.freeze({
+  const startupMetrics = {
     version: AUTHORING_STARTUP_METRICS_VERSION,
+    ...authoringMilestones,
     totalMs: importsReadyAt,
     moduleGraphLoadMs: moduleGraphReadyAt,
     initializeMs: importsReadyAt - initializeStartedAt,
@@ -375,7 +388,23 @@ import noon
       (total, module) => total + module.source.length,
       0,
     ),
+    resourcesReadyAtMs: resourcesReadyAt,
+    authoringStoreCreatedAtMs: authoringStoreCreatedAt,
+    bindingsReadyAtMs: bindingsReadyAt,
+    compatibilityFilesReadyAtMs: compatibilityFilesReadyAt,
+    importsReadyAtMs: importsReadyAt,
+  };
+  Object.defineProperties(startupMetrics, {
+    firstSceneContextCreatedAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.firstSceneContextCreatedAtMs,
+    },
+    authoringWorkerReadyAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.authoringWorkerReadyAtMs,
+    },
   });
+  self.__noonAuthoringStartupMetrics = Object.freeze(startupMetrics);
   return pyodide;
 }
 
@@ -389,6 +418,7 @@ function measureStartupTask(metrics, key, task) {
   }
   return Promise.resolve(result).then((value) => {
     metrics[key] = performance.now() - startedAt;
+    metrics[`${key}ReadyAtMs`] = performance.now();
     return value;
   });
 }
