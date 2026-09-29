@@ -130,17 +130,12 @@ impl ExecutionSession {
 
     pub fn cancel_translation_drag(&mut self) -> Result<(), TranslationDragError> {
         if let Some(active) = self.translation_drag.active {
-            let held = self
+            let base = self
                 .runtime
-                .suspend_translation_drag(active.object)
+                .translation_drag_base(active.object)
                 .ok_or(TranslationDragError::CancelFailed)?;
             let effective = self
-                .prepared_drag_batch(
-                    active.object,
-                    self.runtime
-                        .translation_drag_base(active.object)
-                        .ok_or(TranslationDragError::CancelFailed)?,
-                )
+                .prepared_drag_batch(active.object, base)
                 .map_err(|_| TranslationDragError::CancelFailed)?;
             // Cancellation without a pointer occurrence still needs to restore
             // the base frame; use the existing prepared input evaluation rather
@@ -148,11 +143,12 @@ impl ExecutionSession {
             let time = self.frame().time;
             let frame = match self.runtime.prepare_advance_to(time) {
                 Ok(frame) => frame,
-                Err(_) => {
-                    self.runtime.restore_translation_drag(active.object, held);
-                    return Err(TranslationDragError::CancelFailed);
-                }
+                Err(_) => return Err(TranslationDragError::CancelFailed),
             };
+            let held = self
+                .runtime
+                .suspend_translation_drag(active.object)
+                .ok_or(TranslationDragError::CancelFailed)?;
             if self
                 .runtime
                 .commit_prepared_frame(frame, effective)
