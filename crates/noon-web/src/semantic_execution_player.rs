@@ -2213,11 +2213,19 @@ impl SemanticExecutionPlayer {
         local: noon_core::SemanticLocalNodeToken,
     ) -> Result<SemanticNodeId, AuthoringFailure> {
         let Some(mut committed) = self.committed_callback_provisionals.take() else {
-            return Err("callback provisional geometry has no committed phase".into());
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry has no committed phase",
+            ));
         };
         if committed.token != token {
             self.committed_callback_provisionals = Some(committed);
-            return Err("callback provisional geometry token is stale".into());
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry token is stale",
+            ));
         }
         let Some(index) = committed
             .nodes
@@ -2225,7 +2233,11 @@ impl SemanticExecutionPlayer {
             .position(|(candidate, _)| *candidate == local)
         else {
             self.committed_callback_provisionals = Some(committed);
-            return Err("callback provisional geometry token is unknown".into());
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry token is unknown",
+            ));
         };
         let (_, node) = committed.nodes.remove(index);
         if !committed.nodes.is_empty() {

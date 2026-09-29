@@ -162,7 +162,10 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
             ],
         )
         frame = json.loads(fixture.player.debugFrameJson())
-        self.assertEqual(frame["objects"][0]["transform"]["translation"]["x"], 1.25)
+        self.assertEqual(
+            [row["transform"]["translation"]["x"] for row in frame["objects"]],
+            [0.0, 1.25],
+        )
 
     def test_analytic_callback_constructor_resolves_one_phase_bound_handle_after_commit(self):
         fixture = self.fixture()

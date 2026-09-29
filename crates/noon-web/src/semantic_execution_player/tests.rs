@@ -1094,6 +1094,11 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
     let resolved = player
         .take_committed_callback_provisional(token, local)
         .unwrap();
+    let repeated = player
+        .take_committed_callback_provisional(token, local)
+        .unwrap_err();
+    assert_eq!(repeated.category, "stale_publication");
+    assert_eq!(repeated.code, "callback.stale_provisional");
     assert_eq!(
         scene
             .integration_store()
