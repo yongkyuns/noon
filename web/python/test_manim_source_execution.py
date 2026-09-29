@@ -236,6 +236,24 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "PointerSelection.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_translation_drag_gallery_uses_portable_continuation_and_canonical_drag_binding(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_translation_drag.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="showcase_translation_drag.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "TranslationDrag.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertIs(methods.get("set_drag_targets"), noon.Scene.set_drag_targets)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        scene.set_drag_targets = lambda *args: scene.wait(1)
+        self.assertFalse(has_portable_scene_methods(scene, **methods))
+
     def test_click_binding_overrides_cannot_hide_uncompiled_barriers(self):
         import noon
         with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
