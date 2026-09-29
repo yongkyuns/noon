@@ -794,6 +794,16 @@ impl SemanticStore {
         Ok(self.geometry_resources.insert_path(path))
     }
 
+    /// Admit a path whose finiteness was proven by the owning prepared
+    /// transaction. This is crate-private so ordinary callers retain the
+    /// fallible validation boundary above.
+    pub(crate) fn insert_preflighted_geometry_path(
+        &mut self,
+        path: crate::VectorPath,
+    ) -> crate::GeometryResourceHandle {
+        self.geometry_resources.insert_path(path)
+    }
+
     /// Make a new immutable path available to one atomic semantic publication.
     /// The callback must use a preflighted/atomic transaction: on error this
     /// discards only the unpublished resource, preserving existing handles.

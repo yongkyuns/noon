@@ -1,5 +1,22 @@
 use super::*;
-use crate::{SceneRevision, SemanticVec3};
+use crate::{
+    SceneRevision, SemanticObjectContent, SemanticObjectRole, SemanticStyle, SemanticTransform2_5D,
+    SemanticVec3, Vec2, VectorPath,
+};
+
+fn pending_path_node(
+    transaction: &mut SemanticMutationTransaction,
+    path: VectorPath,
+) -> SemanticLocalNodeToken {
+    let resource = transaction.stage_geometry_path(path).unwrap();
+    transaction.create_node(SemanticNodeCreation::pending_path_object(
+        resource,
+        SemanticTransform2_5D::default(),
+        SemanticStyle::default(),
+        0.0,
+        SemanticObjectRole::default(),
+    ))
+}
 
 fn object(store: &mut SemanticStore) -> SemanticNodeId {
     store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -395,4 +412,325 @@ fn pending_property_coalescing_restores_the_prior_prefix_after_a_late_failure() 
         SemanticVec3::new(1.0, 2.0, 0.0)
     );
     assert_eq!(state.style.fill_opacity, 0.25);
+}
+
+#[test]
+fn pending_path_materializes_only_inside_final_publication_scope() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = pending_path_node(
+        &mut transaction,
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(2.0, 1.0)),
+    );
+    let result = transaction
+        .prepare(&mut store)
+        .unwrap()
+        .with_pending_geometry_paths(|prepared| Ok::<_, ()>(prepared.commit()))
+        .unwrap();
+    let node = result.resolve(local).unwrap();
+    assert_eq!(store.geometry_resources().len(), 1);
+    assert!(matches!(
+        store.semantic_object_state_checked(node).unwrap().content,
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle))
+            if store.geometry_resources().get(handle).is_some()
+    ));
+}
+
+#[test]
+fn failed_pending_path_publication_leaves_no_resource_or_semantic_state() {
+    let mut store = SemanticStore::new();
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    let error = transaction
+        .prepare(&mut store)
+        .unwrap()
+        .with_pending_geometry_paths(|_| Err::<(), _>("terminal publication failure"))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PendingGeometryPublicationError::Publication("terminal publication failure")
+    ));
+    assert_eq!(store.geometry_resources().len(), 0);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.live_node_count(), 0);
+}
+
+#[test]
+fn pending_path_payloads_are_bounded_before_store_admission() {
+    let mut transaction = SemanticMutationTransaction::new();
+    for _ in 0..SemanticMutationTransaction::MAX_PENDING_GEOMETRY_RESOURCES {
+        transaction.stage_geometry_path(VectorPath::new()).unwrap();
+    }
+    assert!(matches!(
+        transaction.stage_geometry_path(VectorPath::new()),
+        Err(SemanticMutationTransactionError::PendingGeometryLimitExceeded)
+    ));
+}
+
+#[test]
+fn pending_path_resource_extension_rollback_drops_only_its_payload_suffix() {
+    let mut store = SemanticStore::new();
+    let prepared = SemanticMutationTransaction::new()
+        .prepare(&mut store)
+        .unwrap();
+    let result = prepared.with_pending_resource_object(|transaction| {
+        let local = pending_path_node(transaction, VectorPath::new().move_to(Vec2::ZERO));
+        transaction.set_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+        Ok::<_, SemanticMutationTransactionError>(local)
+    });
+    let Err((prepared, error)) = result else {
+        panic!("late invalid path extension must fail preflight");
+    };
+    assert!(matches!(
+        error,
+        PendingResourceExtensionError::Preflight(
+            SemanticMutationTransactionError::PendingNonFinitePropertyValue { .. }
+        )
+    ));
+    let recovered = prepared.into_transaction();
+    assert!(recovered.pending_geometry_paths.is_empty());
+    assert_eq!(store.geometry_resources().len(), 0);
+}
+
+#[test]
+fn direct_pending_path_commit_materializes_before_store_admission() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    transaction.apply(&mut store).unwrap();
+    assert_eq!(store.geometry_resources().len(), 1);
+}
+
+#[test]
+fn pending_path_uses_true_staged_fields_then_materializes_them() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = pending_path_node(
+        &mut transaction,
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(4.0, 2.0)),
+    );
+    transaction.replace_pending_object_property(
+        local,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(3.0, -2.0, 1.0),
+    );
+    let mut style = SemanticStyle::default();
+    style.fill_opacity = 0.4;
+    transaction.replace_pending_object_style(local, style.clone());
+
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(
+        prepared.pending_path_transform(local).unwrap().translation,
+        SemanticVec3::new(3.0, -2.0, 1.0)
+    );
+    assert_eq!(prepared.pending_path_style(local).unwrap(), style);
+    assert_eq!(
+        prepared.pending_geometry_local_bounds(local).unwrap(),
+        Some(crate::Rect::new(Vec2::ZERO, Vec2::new(4.0, 2.0)))
+    );
+    let result = prepared
+        .with_pending_geometry_paths(|prepared| Ok::<_, ()>(prepared.commit()))
+        .unwrap();
+    let node = result.resolve(local).unwrap();
+    let state = store.semantic_object_state_checked(node).unwrap();
+    assert_eq!(
+        state.transform.translation,
+        SemanticVec3::new(3.0, -2.0, 1.0)
+    );
+    assert_eq!(state.style, style);
+}
+
+#[test]
+fn canceled_pending_path_never_enters_the_resource_arena() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    transaction.remove_node(local);
+    let result = transaction.prepare(&mut store).unwrap().commit();
+    assert_eq!(result.resolve(local), None);
+    assert_eq!(store.geometry_resources().len(), 0);
+    assert_eq!(store.live_node_count(), 0);
+}
+
+#[test]
+fn repeated_pending_path_staging_admits_each_live_payload_once() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let first = pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    let second = pending_path_node(
+        &mut transaction,
+        VectorPath::new()
+            .move_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(3.0, 0.0)),
+    );
+    let result = transaction.prepare(&mut store).unwrap().commit();
+    assert!(result.resolve(first).is_some());
+    assert!(result.resolve(second).is_some());
+    assert_eq!(store.geometry_resources().len(), 2);
+}
+
+fn pending_path_node_for_resource(
+    transaction: &mut SemanticMutationTransaction,
+    resource: SemanticLocalResourceToken,
+) -> SemanticLocalNodeToken {
+    transaction.create_node(SemanticNodeCreation::pending_path_object(
+        resource,
+        SemanticTransform2_5D::default(),
+        SemanticStyle::default(),
+        0.0,
+        SemanticObjectRole::default(),
+    ))
+}
+
+#[test]
+fn shared_pending_path_resource_materializes_once_for_two_live_nodes() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let resource = transaction
+        .stage_geometry_path(VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE))
+        .unwrap();
+    let first = pending_path_node_for_resource(&mut transaction, resource);
+    let second = pending_path_node_for_resource(&mut transaction, resource);
+
+    let result = transaction.prepare(&mut store).unwrap().commit();
+    assert!(result.resolve(first).is_some());
+    assert!(result.resolve(second).is_some());
+    assert_eq!(store.geometry_resources().len(), 1);
+}
+
+#[test]
+fn canceled_and_live_pending_paths_commit_directly_without_admitting_the_canceled_payload() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let canceled = pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    let live = pending_path_node(
+        &mut transaction,
+        VectorPath::new()
+            .move_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(3.0, 0.0)),
+    );
+    transaction.remove_node(canceled);
+
+    let result = transaction.prepare(&mut store).unwrap().commit();
+    assert_eq!(result.resolve(canceled), None);
+    assert!(result.resolve(live).is_some());
+    assert_eq!(store.geometry_resources().len(), 1);
+}
+
+#[test]
+fn canceled_and_live_pending_paths_share_the_scoped_publication_boundary() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let canceled = pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    let live = pending_path_node(
+        &mut transaction,
+        VectorPath::new()
+            .move_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(3.0, 0.0)),
+    );
+    transaction.remove_node(canceled);
+
+    let result = transaction
+        .prepare(&mut store)
+        .unwrap()
+        .with_pending_geometry_paths(|prepared| Ok::<_, ()>(prepared.commit()))
+        .unwrap();
+    assert_eq!(result.resolve(canceled), None);
+    assert!(result.resolve(live).is_some());
+    assert_eq!(store.geometry_resources().len(), 1);
+}
+
+#[test]
+fn rejected_pending_object_update_discards_its_fresh_path_payload_suffix() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = pending_path_node(
+        &mut transaction,
+        VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+    );
+    transaction.replace_pending_object_property(
+        local,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(1.0, 2.0, 0.0),
+    );
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let Err((prepared, _)) = prepared.with_pending_object_update(|transaction| {
+        transaction
+            .stage_geometry_path(VectorPath::new().move_to(Vec2::new(8.0, 0.0)))
+            .unwrap();
+        transaction.replace_pending_object_property(
+            local,
+            SemanticObjectProperty::RotationZ,
+            f64::NAN,
+        );
+    }) else {
+        panic!("non-finite extension must reject");
+    };
+    assert_eq!(prepared.transaction.pending_geometry_paths.len(), 1);
+    assert_eq!(
+        prepared.pending_path_transform(local).unwrap().translation,
+        SemanticVec3::new(1.0, 2.0, 0.0)
+    );
+}
+
+#[test]
+fn rejected_resource_extension_restores_a_coalesced_prior_property() {
+    let mut store = SemanticStore::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    transaction.replace_pending_object_property(
+        local,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(1.0, 0.0, 0.0),
+    );
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let result = prepared.with_pending_resource_object(|transaction| {
+        transaction
+            .stage_geometry_path(VectorPath::new().move_to(Vec2::ZERO))
+            .map_err(|_| "resource stage")?;
+        transaction.replace_pending_object_property(
+            local,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(9.0, 0.0, 0.0),
+        );
+        Err::<(), &'static str>("reject extension")
+    });
+    let Err((prepared, PendingResourceExtensionError::Extension("reject extension"))) = result
+    else {
+        panic!("extension error must preserve the original proof");
+    };
+    assert_eq!(prepared.transaction.pending_geometry_paths.len(), 0);
+    assert_eq!(
+        prepared
+            .proposed_object_state(local)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(1.0, 0.0, 0.0)
+    );
 }

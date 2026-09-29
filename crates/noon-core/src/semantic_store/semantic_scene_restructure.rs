@@ -589,7 +589,9 @@ pub fn stage_semantic_scene_admission(
             match mutation {
                 SemanticMutation::AddNode {
                     token,
-                    creation: SemanticNodeCreation::Object { .. },
+                    creation:
+                        SemanticNodeCreation::Object { .. }
+                        | SemanticNodeCreation::PendingPathObject { .. },
                 } if pending.contains(token) => {
                     created.insert(*token);
                 }

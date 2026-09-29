@@ -1143,14 +1143,27 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
             if color == noon_core::Color::rgba(0.2, 0.4, 0.8, 0.75)
     ));
     assert_eq!(styled.style.fill_opacity, 0.6);
-    assert!(player
+    let retained_path = player
         .stage_required_callback_analytic_geometry(
             token,
-            noon::ManimGeometryOptions::path(noon_core::VectorPath::new()).unwrap(),
+            noon::ManimGeometryOptions::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-0.5, 0.0))
+                    .line_to(noon_core::Vec2::new(0.5, 0.0))
+                    .line_to(noon_core::Vec2::new(0.0, 0.6)),
+            )
+            .unwrap(),
         )
-        .unwrap_err()
-        .message
-        .contains("scoped resource admission"));
+        .unwrap();
+    player
+        .stage_required_callback_provisional_shift(token, retained_path, 1.5, 0.5)
+        .unwrap();
+    assert_eq!(
+        player
+            .callback_provisional_center(token, retained_path)
+            .unwrap(),
+        (1.5, 0.8)
+    );
     player
         .stage_required_callback_mixed_addition(
             token,
@@ -1610,6 +1623,28 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
             ),
         )
         .unwrap();
+    let retained_path = player
+        .stage_required_callback_analytic_geometry(
+            token,
+            noon::ManimGeometryOptions::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::ZERO)
+                    .line_to(noon_core::Vec2::ONE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    player
+        .stage_required_callback_mixed_addition(
+            token,
+            &crate::canonical_authoring_scene::SceneMembershipBatch::callback_with_provisional(
+                crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                [],
+                token,
+                retained_path,
+            ),
+        )
+        .unwrap();
 
     let target_row = phase["objects"]
         .as_array()
@@ -1640,6 +1675,14 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
     assert!(player.callback_membership_transaction.is_none());
     assert_eq!(player.session.publication_context(), before_context);
     assert_eq!(player.session.frame(), &before_frame);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        0
+    );
     assert_eq!(
         scene
             .integration_store()
