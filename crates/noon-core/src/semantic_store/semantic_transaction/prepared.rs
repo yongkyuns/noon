@@ -187,16 +187,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             planned_nodes,
         } = self;
         let original_len = transaction.mutations.len();
-        let original_resource_len = transaction.pending_geometry_paths.len();
+        let original_resource_len = transaction.pending_resource_count();
         let original_repeated_membership = transaction.allow_repeated_membership_mutations;
         if let Some(allow_repeated_membership) = allow_repeated_membership {
             transaction.allow_repeated_membership_mutations = allow_repeated_membership;
         }
         if let Err(error) = extend(&mut transaction, store) {
             transaction.mutations.truncate(original_len);
-            transaction
-                .pending_geometry_paths
-                .truncate(original_resource_len);
+            transaction.truncate_pending_resources(original_resource_len);
             transaction.allow_repeated_membership_mutations = original_repeated_membership;
             return Err((
                 Box::new(Self {
@@ -217,9 +215,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             Ok(parts) => parts,
             Err(error) => {
                 transaction.mutations.truncate(original_len);
-                transaction
-                    .pending_geometry_paths
-                    .truncate(original_resource_len);
+                transaction.truncate_pending_resources(original_resource_len);
                 transaction.allow_repeated_membership_mutations = original_repeated_membership;
                 return Err((
                     Box::new(Self {

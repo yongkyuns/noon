@@ -471,11 +471,10 @@ pub enum SemanticMutationImpact {
 pub struct SemanticMutationTransaction {
     id: u32,
     next_token: u32,
-    next_resource_token: u32,
     /// Raw immutable path payloads remain transaction-owned until the final
     /// resource/publication scope materializes them. They never enter a store
     /// arena merely because a callback constructed a provisional object.
-    pending_geometry_paths: Vec<(SemanticLocalResourceToken, VectorPath)>,
+    pending_resources: Option<Box<pending_resources::PendingResourceDeclarations>>,
     mutations: Vec<SemanticMutation>,
     // Prepared existing-handle membership stages are composed in callback
     // order. Their preflight overlay already validates each transition, while
@@ -507,8 +506,7 @@ impl Default for SemanticMutationTransaction {
         Self {
             id,
             next_token: 0,
-            next_resource_token: 0,
-            pending_geometry_paths: Vec::new(),
+            pending_resources: None,
             mutations: Vec::new(),
             allow_repeated_membership_mutations: false,
         }
@@ -2456,8 +2454,12 @@ impl SemanticMutationTransaction {
                         }
                         SemanticNodeCreation::PendingPathObject { state, .. } => {
                             let resource = state.resource();
-                            if !resource.belongs_to(self.id)
-                                || self.pending_geometry_path(resource).is_none()
+                            // A canceled node has no final resource. Its payload
+                            // may already have been discarded by scoped materialization
+                            // before the transaction is preflighted again.
+                            if !removed_pending.contains(token)
+                                && (!resource.belongs_to(self.id)
+                                    || self.pending_geometry_path(resource).is_none())
                             {
                                 return Err(
                                     SemanticMutationTransactionError::UnknownPendingGeometryResource {

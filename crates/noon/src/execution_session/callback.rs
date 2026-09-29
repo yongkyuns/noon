@@ -991,7 +991,7 @@ impl ExecutionSession {
             }
             CallbackReadRequest::Object(semantic) => {
                 if let Some(object) = pending.overlay.object(semantic) {
-                    return Ok(CallbackReadValue::Object(object.clone()));
+                    return Ok(CallbackReadValue::Object(*object));
                 }
                 let execution = self
                     .execution_index

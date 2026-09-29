@@ -6,7 +6,27 @@
 
 use super::*;
 
+// Ordinary property transactions carry no resource allocation or vector header.
+// Keep the monotonic token counter with the lazily allocated resource batch.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct PendingResourceDeclarations {
+    next_token: u32,
+    paths: Vec<(SemanticLocalResourceToken, VectorPath)>,
+}
+
 impl SemanticMutationTransaction {
+    pub(super) fn pending_resource_count(&self) -> usize {
+        self.pending_resources
+            .as_ref()
+            .map_or(0, |resources| resources.paths.len())
+    }
+
+    pub(super) fn truncate_pending_resources(&mut self, len: usize) {
+        if let Some(resources) = self.pending_resources.as_mut() {
+            resources.paths.truncate(len);
+        }
+    }
+
     /// Maximum transaction-local immutable path declarations. Callback collectors
     /// impose the same bounded working-set rule before final publication.
     pub const MAX_PENDING_GEOMETRY_RESOURCES: usize = 128;
@@ -23,43 +43,67 @@ impl SemanticMutationTransaction {
         &mut self,
         path: VectorPath,
     ) -> Result<SemanticLocalResourceToken, SemanticMutationTransactionError> {
+        // Count the complete payload before recursive finite validation. Nested
+        // morph targets cannot bypass the working-set or nesting-depth bound.
+        let commands = Self::pending_path_command_count(&path)
+            .ok_or(SemanticMutationTransactionError::PendingGeometryLimitExceeded)?;
         if !path.is_finite() {
             return Err(SemanticMutationTransactionError::InvalidPendingGeometryPath);
         }
-        if self.pending_geometry_paths.len() == Self::MAX_PENDING_GEOMETRY_RESOURCES
-            || path.commands().len() > Self::MAX_PENDING_GEOMETRY_COMMANDS
+        if self.pending_resource_count() == Self::MAX_PENDING_GEOMETRY_RESOURCES
             || self
-                .pending_geometry_paths
+                .pending_resources
                 .iter()
-                .map(|(_, path)| path.commands().len())
+                .flat_map(|resources| resources.paths.iter())
+                .map(|(_, path)| {
+                    Self::pending_path_command_count(path)
+                        .expect("admitted pending path is bounded")
+                })
                 .sum::<usize>()
-                .saturating_add(path.commands().len())
+                .saturating_add(commands)
                 > Self::MAX_PENDING_GEOMETRY_COMMANDS
         {
             return Err(SemanticMutationTransactionError::PendingGeometryLimitExceeded);
         }
-        let ordinal = self.next_resource_token;
-        self.next_resource_token = self
-            .next_resource_token
+        let resources = self.pending_resources.get_or_insert_with(Default::default);
+        let ordinal = resources.next_token;
+        resources.next_token = resources
+            .next_token
             .checked_add(1)
             .ok_or(SemanticMutationTransactionError::LocalResourceTokenExhausted)?;
         let token = SemanticLocalResourceToken::new(self.id, ordinal);
-        self.pending_geometry_paths.push((token, path));
+        resources.paths.push((token, path));
         Ok(token)
+    }
+
+    fn pending_path_command_count(path: &VectorPath) -> Option<usize> {
+        let mut current = Some(path);
+        let mut commands = 0usize;
+        for _ in 0..Self::MAX_PENDING_GEOMETRY_RESOURCES {
+            let Some(path) = current else {
+                return Some(commands);
+            };
+            commands = commands.checked_add(path.commands().len())?;
+            if commands > Self::MAX_PENDING_GEOMETRY_COMMANDS {
+                return None;
+            }
+            current = path.morph_target();
+        }
+        current.is_none().then_some(commands)
     }
 
     pub(super) fn pending_geometry_path(
         &self,
         token: SemanticLocalResourceToken,
     ) -> Option<&VectorPath> {
-        token
-            .belongs_to(self.id)
-            .then(|| {
-                self.pending_geometry_paths
-                    .iter()
-                    .find_map(|(candidate, path)| (*candidate == token).then_some(path))
-            })
-            .flatten()
+        if !token.belongs_to(self.id) {
+            return None;
+        }
+        self.pending_resources
+            .as_ref()?
+            .paths
+            .iter()
+            .find_map(|(candidate, path)| (*candidate == token).then_some(path))
     }
 
     pub(super) fn take_pending_geometry_paths(
@@ -68,7 +112,10 @@ impl SemanticMutationTransaction {
     ) -> Vec<(SemanticLocalResourceToken, VectorPath)> {
         // Every unselected payload belongs to a canceled pending node and is
         // discarded here rather than admitted into the resource arena.
-        std::mem::take(&mut self.pending_geometry_paths)
+        self.pending_resources
+            .as_mut()
+            .map(|resources| std::mem::take(&mut resources.paths))
+            .unwrap_or_default()
             .into_iter()
             .filter(|(token, _)| tokens.contains(token))
             .collect()

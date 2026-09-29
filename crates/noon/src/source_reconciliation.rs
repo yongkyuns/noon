@@ -5,11 +5,6 @@
 
 use std::{collections::HashSet, error::Error};
 
-#[cfg(test)]
-mod family_tests;
-mod topology;
-pub use topology::SourceFamilyDeclaration;
-
 use noon_core::{
     SceneRevision, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
     SemanticObjectProperty, SemanticObjectState, SemanticStoreIdentity, SemanticTransactionNodeRef,
@@ -31,7 +26,7 @@ impl SourceGeneration {
     }
 }
 
-/// A keyed object declaration in a temporary source candidate.
+/// A direct, keyed object declaration in a temporary source candidate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceObjectDeclaration {
     source: SourceIdentity,
@@ -51,9 +46,9 @@ impl SourceObjectDeclaration {
 
 /// A non-live, source-keyed declaration list for one Scene root.
 ///
-/// Objects and families are inert declarations. Animation graphs, signals, and
-/// host callbacks still require an explicit migration policy; this candidate has
-/// no execution or semantic-store authority.
+/// This slice intentionally reconciles direct object declarations only. Families,
+/// animation graphs, signals, and host callbacks require their own migration policy
+/// rather than becoming a draft Scene or a second runtime authority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceCandidate {
     generation: SourceGeneration,
@@ -61,8 +56,6 @@ pub struct SourceCandidate {
     base_revision: SceneRevision,
     declarations: Vec<SourceObjectDeclaration>,
     sources: HashSet<SourceIdentity>,
-    families: Vec<SourceFamilyDeclaration>,
-    roots: Option<Vec<SourceIdentity>>,
 }
 impl SourceCandidate {
     /// Capture the authoritative Scene revision before source re-execution starts.
@@ -78,8 +71,6 @@ impl SourceCandidate {
             base_revision: scene.revision(),
             declarations: Vec::new(),
             sources: HashSet::new(),
-            families: Vec::new(),
-            roots: None,
         }
     }
     pub const fn generation(&self) -> SourceGeneration {
@@ -105,7 +96,6 @@ impl SourceCandidate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceCandidateError {
     DuplicateSourceIdentity(SourceIdentity),
-    InvalidTopology(String),
 }
 impl std::fmt::Display for SourceCandidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -113,7 +103,6 @@ impl std::fmt::Display for SourceCandidateError {
             Self::DuplicateSourceIdentity(key) => {
                 write!(f, "duplicate source identity in candidate: {key:?}")
             }
-            Self::InvalidTopology(message) => f.write_str(message),
         }
     }
 }
@@ -160,10 +149,6 @@ pub enum SourceReconciliationError {
     StaleGeneration {
         candidate: SourceGeneration,
         accepted: SourceGeneration,
-    },
-    InvalidCandidate(SourceCandidateError),
-    SharedOutsideScope {
-        node: SemanticNodeId,
     },
     ForeignSceneScope,
     ForeignCandidateScope,
@@ -213,11 +198,6 @@ impl std::fmt::Display for SourceReconciliationError {
                 candidate.get(),
                 accepted.get()
             ),
-            Self::InvalidCandidate(error) => error.fmt(f),
-            Self::SharedOutsideScope { node } => write!(
-                f,
-                "source node {node:?} is also a member outside this reconciliation scope"
-            ),
             Self::ForeignSceneScope => {
                 f.write_str("source reconciler is bound to another Scene root")
             }
@@ -264,7 +244,6 @@ impl std::fmt::Display for SourceReconciliationError {
 impl Error for SourceReconciliationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidCandidate(error) => Some(error),
             Self::LivePublication(error) => Some(error),
             Self::Authoring(error) => Some(error),
             _ => None,
@@ -325,7 +304,92 @@ impl SourceReconciler {
                 ));
             }
         }
-        let (transaction, changed) = topology::stage_candidate(scene, candidate)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let mut references = Vec::with_capacity(candidate.declarations.len());
+        let (stale, mut changed, order_changed) = {
+            let store = scene.integration_store().borrow();
+            let members = store
+                .semantic_family_members_checked(root)
+                .expect("Scene root remains a family");
+            let member_set = members.iter().copied().collect::<HashSet<_>>();
+            let mut current_sources = Vec::with_capacity(members.len());
+            for member in &members {
+                let Some(source) = store.node(*member).expect("live member").source_identity()
+                else {
+                    return Err(SourceReconciliationError::UnmanagedScopeMember {
+                        root,
+                        member: *member,
+                    });
+                };
+                current_sources.push(source.clone());
+            }
+            let mut matched = HashSet::new();
+            let mut changed = false;
+            for declaration in &candidate.declarations {
+                if let Some(node) = store.node_for_source(&declaration.source) {
+                    if !member_set.contains(&node) {
+                        return Err(SourceReconciliationError::SourceOutsideScope {
+                            source: declaration.source.clone(),
+                            node,
+                            root,
+                        });
+                    }
+                    let current = store.semantic_object_state_checked(node).map_err(|_| {
+                        SourceReconciliationError::SourceIsNotObject {
+                            source: declaration.source.clone(),
+                            node,
+                        }
+                    })?;
+                    changed |= stage_object_delta(
+                        &mut transaction,
+                        node,
+                        current,
+                        store
+                            .node(node)
+                            .expect("source node remains live during candidate staging")
+                            .host_updaters()
+                            .is_empty(),
+                        &declaration.state,
+                        &declaration.source,
+                    )?;
+                    matched.insert(node);
+                    references.push(SemanticTransactionNodeRef::Existing(node));
+                } else {
+                    let token = transaction.create_node(
+                        SemanticNodeCreation::object(declaration.state.clone())
+                            .with_source_identity(declaration.source.clone()),
+                    );
+                    transaction.add_member(root, token);
+                    references.push(SemanticTransactionNodeRef::Pending(token));
+                    changed = true;
+                }
+            }
+            let stale = members
+                .into_iter()
+                .filter(|node| !matched.contains(node))
+                .collect::<Vec<_>>();
+            changed |= !stale.is_empty();
+            let expected_sources = candidate
+                .declarations
+                .iter()
+                .map(|declaration| declaration.source.clone())
+                .collect::<Vec<_>>();
+            (stale, changed, current_sources != expected_sources)
+        };
+        changed |= order_changed;
+        if order_changed {
+            for index in (0..references.len()).rev() {
+                transaction.reorder_member_ref(
+                    root,
+                    references[index],
+                    references.get(index + 1).copied(),
+                );
+            }
+        }
+        // Node deletion is terminal in the shared transaction vocabulary.
+        for node in stale {
+            transaction.remove_node(node);
+        }
 
         if changed
             && scene
@@ -355,12 +419,13 @@ impl SourceReconciler {
         let nodes = {
             let store = scene.integration_store().borrow();
             candidate
-                .source_order()
-                .map(|source| {
+                .declarations
+                .iter()
+                .map(|declaration| {
                     (
-                        source.clone(),
+                        declaration.source.clone(),
                         store
-                            .node_for_source(source)
+                            .node_for_source(&declaration.source)
                             .expect("committed declaration resolves"),
                     )
                 })
@@ -480,7 +545,7 @@ mod tests {
     use super::*;
     use noon_core::{SemanticObjectState, SourceIdentity, StoredGeometry};
     use std::rc::Rc;
-    pub(super) fn key(name: &str) -> SourceIdentity {
+    fn key(name: &str) -> SourceIdentity {
         SourceIdentity::ExplicitKey(name.into())
     }
     fn state(x: f64) -> SemanticObjectState {
@@ -488,7 +553,7 @@ mod tests {
         state.transform.translation.x = x;
         state
     }
-    pub(super) fn candidate(
+    fn candidate(
         scene: &Scene,
         generation: u64,
         declarations: impl IntoIterator<Item = (&'static str, f64)>,

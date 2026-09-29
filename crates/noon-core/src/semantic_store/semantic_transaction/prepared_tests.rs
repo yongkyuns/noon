@@ -494,7 +494,7 @@ fn pending_path_resource_extension_rollback_drops_only_its_payload_suffix() {
         )
     ));
     let recovered = prepared.into_transaction();
-    assert!(recovered.pending_geometry_paths.is_empty());
+    assert_eq!(recovered.pending_resource_count(), 0);
     assert_eq!(store.geometry_resources().len(), 0);
 }
 
@@ -525,8 +525,10 @@ fn pending_path_uses_true_staged_fields_then_materializes_them() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(3.0, -2.0, 1.0),
     );
-    let mut style = SemanticStyle::default();
-    style.fill_opacity = 0.4;
+    let style = SemanticStyle {
+        fill_opacity: 0.4,
+        ..SemanticStyle::default()
+    };
     transaction.replace_pending_object_style(local, style.clone());
 
     let prepared = transaction.prepare(&mut store).unwrap();
@@ -693,7 +695,7 @@ fn rejected_pending_object_update_discards_its_fresh_path_payload_suffix() {
         prepared.pending_path_transform(local).unwrap().translation,
         SemanticVec3::new(1.0, 2.0, 0.0)
     );
-    assert_eq!(prepared.into_transaction().pending_geometry_paths.len(), 1);
+    assert_eq!(prepared.into_transaction().pending_resource_count(), 1);
 }
 
 #[test]
@@ -732,5 +734,31 @@ fn rejected_resource_extension_restores_a_coalesced_prior_property() {
             .translation,
         SemanticVec3::new(1.0, 0.0, 0.0)
     );
-    assert_eq!(prepared.into_transaction().pending_geometry_paths.len(), 0);
+    assert_eq!(prepared.into_transaction().pending_resource_count(), 0);
+}
+
+#[test]
+fn pending_path_budget_counts_nested_morph_payloads_and_bounds_depth() {
+    let mut transaction = SemanticMutationTransaction::new();
+    let mut target = VectorPath::new();
+    for _ in 0..SemanticMutationTransaction::MAX_PENDING_GEOMETRY_COMMANDS {
+        target = target.line_to(Vec2::ZERO);
+    }
+    let path = VectorPath::new()
+        .move_to(Vec2::ONE)
+        .with_morph_target(target);
+    assert!(matches!(
+        transaction.stage_geometry_path(path),
+        Err(SemanticMutationTransactionError::PendingGeometryLimitExceeded)
+    ));
+    assert_eq!(transaction.pending_resource_count(), 0);
+    let mut nested = VectorPath::new();
+    for _ in 0..SemanticMutationTransaction::MAX_PENDING_GEOMETRY_RESOURCES {
+        nested = VectorPath::new().with_morph_target(nested);
+    }
+    assert!(matches!(
+        transaction.stage_geometry_path(nested),
+        Err(SemanticMutationTransactionError::PendingGeometryLimitExceeded)
+    ));
+    assert_eq!(transaction.pending_resource_count(), 0);
 }
