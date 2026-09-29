@@ -44,7 +44,8 @@ impl SemanticStore {
         &mut self,
         identity: &crate::TextCompilationIdentity,
     ) {
-        if self.compiled_text_resources.remove(identity).is_some() {
+        if let Some(handle) = self.compiled_text_resources.remove(identity) {
+            self.release_compiled_text_resource(handle);
             self.compiled_text_resource_retained_bytes = self
                 .compiled_text_resource_retained_bytes
                 .saturating_sub(compiled_identity_bytes(identity));
@@ -74,15 +75,22 @@ impl SemanticStore {
     ) {
         const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
         const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
-        if self
+        match self
             .compiled_text_resources
             .insert(identity.clone(), handle)
-            .is_none()
         {
-            self.compiled_text_resource_retained_bytes = self
-                .compiled_text_resource_retained_bytes
-                .saturating_add(compiled_identity_bytes(&identity));
-            self.compiled_text_resource_order.push_back(identity);
+            None => {
+                self.retain_compiled_text_resource(handle);
+                self.compiled_text_resource_retained_bytes = self
+                    .compiled_text_resource_retained_bytes
+                    .saturating_add(compiled_identity_bytes(&identity));
+                self.compiled_text_resource_order.push_back(identity);
+            }
+            Some(previous) if previous != handle => {
+                self.release_compiled_text_resource(previous);
+                self.retain_compiled_text_resource(handle);
+            }
+            Some(_) => {}
         }
         while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES
             || self.compiled_text_resource_retained_bytes > MAX_COMPILED_TEXT_IDENTITY_BYTES
@@ -91,6 +99,7 @@ impl SemanticStore {
                 self.forget_compiled_text_resource(&expired);
             }
         }
+        self.reclaim_semantic_resource_candidates();
     }
     pub fn text_resources(&self) -> &TextResourceArena {
         &self.text_resources

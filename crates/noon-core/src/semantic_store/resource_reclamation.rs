@@ -215,6 +215,22 @@ impl SemanticStore {
         SemanticResourceReferences::retain(&mut self.resource_references.texts, handle);
     }
 
+    /// Keep a compiler-cache entry alive until that bounded cache evicts its
+    /// complete compilation identity. This is deliberately the same direct
+    /// reference accounting used by authored objects: a cache entry is a real
+    /// owner of its helper text, rather than a hint that leaves payloads behind.
+    pub(crate) fn retain_compiled_text_resource(&mut self, handle: TextResourceHandle) {
+        if self.text_resources.get(handle).is_some() {
+            self.retain_semantic_text_resource(handle);
+        }
+    }
+
+    pub(crate) fn release_compiled_text_resource(&mut self, handle: TextResourceHandle) {
+        if self.resource_references.texts.contains_key(&handle) {
+            self.release_semantic_text_resource(handle);
+        }
+    }
+
     /// Text dependencies belong to the text arena entry itself, rather than only
     /// to an object that currently presents it. This keeps fonts and vector paths
     /// alive for inert compiled text awaiting attachment.
@@ -364,6 +380,14 @@ impl SemanticStore {
         let text_handles = self.text_resources.handles().collect::<Vec<_>>();
         for handle in text_handles {
             self.register_semantic_text_resource_dependencies(handle);
+        }
+        let compiled_handles = self
+            .compiled_text_resources
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        for handle in compiled_handles {
+            self.retain_compiled_text_resource(handle);
         }
         let states = self
             .slots

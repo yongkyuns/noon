@@ -866,6 +866,68 @@ mod tests {
     }
 
     #[test]
+    fn compiled_dependency_cache_reclaims_unattached_helpers_at_its_bound() {
+        let mut store = SemanticStore::new();
+        let owner = Cell::new(None);
+        let mut plateau = None;
+
+        for index in 0..384 {
+            let (dependency, fonts, geometry) = glyph_vector_resource();
+            store
+                .with_compiled_text_dependency_batch(
+                    vec![(
+                        identity(&format!("helper-{index}")),
+                        dependency,
+                        fonts,
+                        geometry,
+                    )],
+                    |store, handles| {
+                        Ok::<_, Error>(vec![store
+                            .text_resources()
+                            .get(handles[0])
+                            .expect("fresh compiled helper")
+                            .clone()])
+                    },
+                    |store, handles| {
+                        let mut transaction = SemanticMutationTransaction::new();
+                        if let Some(existing) = owner.get() {
+                            transaction.replace_content(existing, handles[1]);
+                        } else {
+                            let token = transaction.create_node(SemanticNodeCreation::object(
+                                SemanticObjectState::new(handles[1]),
+                            ));
+                            let result = transaction.apply(store).map_err(Error::from)?;
+                            owner.set(result.resolve(token));
+                            return Ok::<_, Error>(result);
+                        }
+                        transaction.apply(store).map_err(Error::from)
+                    },
+                )
+                .unwrap();
+            if index == 255 {
+                plateau = Some((
+                    store.text_resources().stats(),
+                    store.font_resources().stats(),
+                    store.geometry_resources().stats(),
+                ));
+            }
+        }
+
+        assert_eq!(store.compiled_text_resources.len(), 128);
+        assert_eq!(store.text_resources().len(), 129);
+        assert_eq!(store.font_resources().len(), 1);
+        assert_eq!(store.geometry_resources().len(), 128);
+        assert_eq!(
+            (
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+                store.geometry_resources().stats(),
+            ),
+            plateau.unwrap()
+        );
+    }
+
+    #[test]
     fn failed_text_admission_keeps_preexisting_raw_font_and_geometry() {
         let mut store = SemanticStore::new();
         let geometry = store
