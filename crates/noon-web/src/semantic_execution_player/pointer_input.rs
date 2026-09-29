@@ -1,12 +1,81 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
-use crate::browser_pointer_input::BrowserPointerInput;
+use crate::browser_pointer_input::{BrowserPointerInput, BrowserPointerTarget};
 use crate::worker_pointer_presentation::WorkerPointerReceipt;
+use noon::integration::{
+    NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
+};
+use noon::ExecutionSession;
+use noon_core::{NativePointerId, NativePointerInput, Vec2};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkerPointerInput {
     pub input: BrowserPointerInput,
     pub presentation: Option<WorkerPointerReceipt>,
+}
+
+/// Borrowed input adapter for one player-owned semantic store/session pair.
+/// It owns no pointer policy, target set, or source state: all occurrences
+/// enter the existing session drag policy, whose empty target set preserves
+/// ordinary native pointer behavior.
+pub(super) struct PlayerPointerTarget<'a> {
+    pub(super) session: &'a mut ExecutionSession,
+    pub(super) semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    pub(super) root: Option<noon_core::SemanticNodeId>,
+}
+
+impl BrowserPointerTarget for PlayerPointerTarget<'_> {
+    fn session(&self) -> &ExecutionSession {
+        self.session
+    }
+
+    fn configure_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        view: u64,
+    ) -> Result<NativePointerInputToken, String> {
+        self.session
+            .configure_native_pointer_input(pointer, view)
+            .map_err(|error| error.to_string())
+    }
+
+    fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
+        self.session
+            .native_pointer_input_token()
+            .map_err(|error| error.to_string())
+    }
+
+    fn scroll_inspection(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, String> {
+        self.session
+            .scroll_inspection_view(frame, view, surface, delta_pixels)
+            .map_err(|error| error.to_string())
+    }
+
+    fn submit_pointer(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, String> {
+        let Some(semantics) = self.semantics.as_ref() else {
+            return self
+                .session
+                .submit_native_pointer_input(token, input)
+                .map_err(|error| error.to_string());
+        };
+        let root = self
+            .root
+            .ok_or("live semantic pointer input is missing its scene root")?;
+        noon::LiveSession::new(semantics, root, self.session)
+            .submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(test)]

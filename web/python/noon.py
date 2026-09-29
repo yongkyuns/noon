@@ -692,6 +692,14 @@ class Scene:
         """
         return _scene_operations()._on_click(self, target, animation)
 
+    def set_drag_targets(self, *mobjects: Mobject) -> Scene:
+        """Allow primary native translation dragging for these bound Mobjects.
+
+        Rust owns picking, capture, effective writes, authored reconciliation,
+        and cancellation. This declaration only selects semantic handles.
+        """
+        return _scene_operations()._set_translation_drag_targets(self, *mobjects)
+
     def pointer_position_signal(self) -> Any:
         return _scene_operations()._canonical_pointer_position_signal(self)
 

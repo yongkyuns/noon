@@ -76,6 +76,7 @@ mod admission {
     use super::*;
     use crate::browser_pointer_input::{
         self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
+        BrowserPointerTarget,
     };
     use noon::integration::PointerFrameSnapshot;
     use noon::ExecutionSession;
@@ -111,7 +112,7 @@ mod admission {
 
         pub(crate) fn set_view(
             &mut self,
-            session: &mut ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             binding: &mut Option<BrowserPointerBinding>,
             sequence: &mut u64,
             view: PointerPresentationView,
@@ -128,7 +129,7 @@ mod admission {
             }
             // Cancel before changing admission metadata; callback/sequence failure
             // must not claim that the old gesture was retired.
-            browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence, true)?;
+            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
             if let Some(old) = self.presented {
                 self.retired_presentation = old.presentation;
             }
@@ -141,7 +142,7 @@ mod admission {
 
         pub(crate) fn capture(
             &self,
-            session: &ExecutionSession,
+            session: &noon::ExecutionSession,
         ) -> Result<Option<PointerFrameSnapshot>, String> {
             self.view
                 .filter(|view| view.drawable())
@@ -213,7 +214,7 @@ mod admission {
 
         pub(crate) fn invalidate(
             &mut self,
-            session: &mut ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             binding: &mut Option<BrowserPointerBinding>,
             sequence: &mut u64,
             receipt: WorkerPointerReceipt,
@@ -224,7 +225,7 @@ mod admission {
             }
             // The physical source can deliver its eventual real release, but the
             // gesture cannot cross an unavailable surface.
-            browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence, false)?;
+            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, false)?;
             self.retired_presentation = receipt.presentation;
             self.presented = None;
             self.refresh_pending = true;
@@ -236,7 +237,7 @@ mod admission {
         /// and any held native buttons. No host camera, clock or input queue.
         pub(crate) fn scroll(
             &mut self,
-            session: &mut ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             binding: &mut Option<BrowserPointerBinding>,
             input: WorkerInspectionScroll,
         ) -> Result<Option<bool>, String> {
@@ -259,7 +260,8 @@ mod admission {
             if let Some(receipt) = input.presentation {
                 receipt.validate()?;
             }
-            let view = session
+            let view = target
+                .session()
                 .inspection_pointer_view(
                     input.view_revision,
                     Vec2::new(input.viewport_width, input.viewport_height),
@@ -274,7 +276,7 @@ mod admission {
             };
             // Request a fresh coherent view only when the issued frame itself
             // is obsolete. A stale packet must not trigger an endless repaint.
-            match issued.frame.validate_current(session, view) {
+            match issued.frame.validate_current(target.session(), view) {
                 Ok(()) => {}
                 Err(error) if browser_pointer_input::recoverable_frame_error(&error) => {
                     self.refresh_pending = true;
@@ -292,8 +294,8 @@ mod admission {
             {
                 return Ok(None);
             }
-            let changed = session
-                .scroll_inspection_view(
+            let changed = target
+                .scroll_inspection(
                     &issued.frame,
                     view,
                     Vec2::new(input.surface_x, input.surface_y),
@@ -323,7 +325,7 @@ mod admission {
 
         pub(crate) fn submit(
             &mut self,
-            session: &mut ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             binding: &mut Option<BrowserPointerBinding>,
             sequence: &mut u64,
             input: BrowserPointerInput,
@@ -358,7 +360,7 @@ mod admission {
                 .ok_or("native input event sequence exhausted")?;
             if input.cancellation().is_some() {
                 browser_pointer_input::submit_browser_pointer_input(
-                    session, binding, sequence, input,
+                    target, binding, sequence, input,
                 )?;
                 return Ok(true);
             }
@@ -368,7 +370,7 @@ mod admission {
                     && receipt.sequence == issued.sequence
                 {
                     match browser_pointer_input::submit_presented_browser_pointer_input(
-                        session,
+                        target,
                         binding,
                         sequence,
                         input,
@@ -384,7 +386,7 @@ mod admission {
                     }
                 }
             }
-            browser_pointer_input::cancel_browser_pointer_input(session, binding, sequence, true)?;
+            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
             self.rejected = Some(RejectedSource {
                 source: input.source_id,
                 pointer: input.pointer_id,

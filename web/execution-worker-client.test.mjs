@@ -654,6 +654,26 @@ test("selection configuration is not replayed through a replacement scene", asyn
   } finally { client.terminate(); await configuration; }
 });
 
+test("translation drag target declarations use the existing bounded native-input lane", async () => {
+  const { client, engine } = await startClient();
+  try {
+    for (const invalid of [undefined, null, {}, [{ slot: -1, generation: 0 }],
+      [{ slot: 0, generation: 2 ** 32 }], [{ slot: 0, generation: 0.5 }]]) {
+      await assert.rejects(client.setTranslationDragTargets(invalid), /semantic slot\/generation pairs/);
+    }
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    assert.equal(client.diagnostics.engine.nextRequestId, 0);
+
+    const declaration = observeResult(client.setTranslationDragTargets([
+      { slot: 4, generation: 2 }, { slot: 8, generation: 5 },
+    ]));
+    const sent = await waitForRequest(engine, "translation_drag_targets");
+    assert.deepEqual(sent.targets, [{ slot: 4, generation: 2 }, { slot: 8, generation: 5 }]);
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, time: 0 }));
+    assert.equal((await declaration).value.time, 0);
+  } finally { client.terminate(); }
+});
+
 // Collection-time receipt contract: real client, existing readiness yield and
 // ownership gates. These do not claim that the fake render owner draws pixels.
 async function registerPointerView(client, engine, revision = 3) {

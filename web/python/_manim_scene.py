@@ -147,6 +147,32 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
+def _set_translation_drag_targets(
+    scene: _base.Scene, *mobjects: _base.Mobject
+) -> _base.Scene:
+    """Declare source-owned drag eligibility through the canonical Rust context."""
+    handles = []
+    seen = set()
+    for mobject in mobjects:
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Scene.set_drag_targets expects Mobjects")
+        if mobject._scene is not scene:
+            raise ValueError("translation drag target must belong to this Scene")
+        handle = getattr(mobject, "_semantic_handle", None)
+        if handle is None or not bool(getattr(mobject, "_semantic_handle_fresh", False)):
+            raise RuntimeError("translation drag target requires a current semantic handle")
+        if id(handle) in seen:
+            raise ValueError("translation drag targets must be unique")
+        seen.add(id(handle))
+        handles.append(handle)
+    engine_call(
+        _context(scene).setTranslationDragTargets,
+        handles,
+        operation="Scene.set_drag_targets",
+    )
+    return scene
+
+
 def _semantic_wrapper_key(value: object) -> str:
     if not isinstance(value, (_base.Mobject, _compat.Group)):
         raise TypeError("Scene membership accepts Mobjects and Groups")

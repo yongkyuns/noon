@@ -2240,6 +2240,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_translation_drag_targets(
+        &mut self,
+        targets: &[noon::Mobject],
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_translation_drag_targets(targets.iter()))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -2631,6 +2640,15 @@ struct CallbackBatchWire {
 struct NativeStateInputWire {
     source: NativeStateSource,
     value: NativeInputValueWire,
+}
+
+/// Source-declared semantic identities for the session-owned drag policy.
+/// These are configured separately from browser pointer occurrences.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranslationDragTargetsWire {
+    targets: Vec<CallbackNodeWire>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -3148,6 +3166,34 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Configure source-declared semantic drag targets. The control payload
+    /// contains stable semantic handles, never a frontend pick result; pointer
+    /// occurrences continue through the one browser input ingress below.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setTranslationDragTargetsJson))]
+    pub fn set_translation_drag_targets_json(&mut self, json: &str) -> Result<(), String> {
+        let request: TranslationDragTargetsWire = serde_json::from_str(json)
+            .map_err(|error| format!("invalid translation drag target JSON: {error}"))?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("translation drag targets require a live semantic store")?;
+        let targets = request
+            .targets
+            .into_iter()
+            .map(|node| noon::Mobject::from_node(std::rc::Rc::clone(&semantics), node.into()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .ok_or("translation drag targets require a semantic scene root")?,
+            &mut self.session,
+        )
+        .set_translation_drag_targets(targets.iter())
+        .map_err(|error| error.to_string())
+    }
+
     /// Decode one contextual browser pointer occurrence at the genuine worker
     /// control-port boundary. Coordinates are CSS pixels relative to the content
     /// viewport. The immutable collection-time receipt selects the issued shared
@@ -3157,10 +3203,24 @@ impl SemanticExecutionPlayer {
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
         let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
-        self.worker_pointer_presentation.submit(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            semantic_root,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.clone(),
+            root: *semantic_root,
+        };
+        worker_pointer_presentation.submit(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             envelope.input,
             envelope.presentation,
         )
@@ -3173,11 +3233,20 @@ impl SemanticExecutionPlayer {
     pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
         let input = serde_json::from_str(json)
             .map_err(|error| format!("invalid inspection scroll JSON: {error}"))?;
-        self.worker_pointer_presentation.scroll(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            input,
-        )
+        let Self {
+            session,
+            semantics,
+            semantic_root,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.clone(),
+            root: *semantic_root,
+        };
+        worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3185,10 +3254,24 @@ impl SemanticExecutionPlayer {
     pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
         let view =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer view JSON: {e}"))?;
-        self.worker_pointer_presentation.set_view(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            semantic_root,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.clone(),
+            root: *semantic_root,
+        };
+        worker_pointer_presentation.set_view(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             view,
         )
     }
@@ -3206,10 +3289,24 @@ impl SemanticExecutionPlayer {
     pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
         let receipt =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
-        self.worker_pointer_presentation.invalidate(
-            &mut self.session,
-            &mut self.browser_pointer_binding,
-            &mut self.next_native_event_sequence,
+        let Self {
+            session,
+            semantics,
+            semantic_root,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.clone(),
+            root: *semantic_root,
+        };
+        worker_pointer_presentation.invalidate(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
             receipt,
         )
     }

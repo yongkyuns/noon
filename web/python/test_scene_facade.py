@@ -128,3 +128,51 @@ class SceneFacadeTests(unittest.TestCase):
             capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_drag_targets_declare_bound_handles_without_python_pointer_policy(self):
+        source = textwrap.dedent("""
+            import sys
+            from types import ModuleType, SimpleNamespace
+            bridge = ModuleType("js")
+            bridge.noonResolveAnimationOptions = lambda *args: None
+            sys.modules["js"] = bridge
+            from noon import Scene, Circle
+            from _typed_geometry_test_support import identity_only_wrapper
+
+            scene = Scene()
+            calls = []
+            scene._canonical_authoring_context = SimpleNamespace(
+                setTranslationDragTargets=lambda handles: calls.append(list(handles)))
+            circle = identity_only_wrapper(Circle)
+            circle._scene = scene
+            circle._semantic_handle = object()
+            circle._semantic_handle_fresh = True
+
+            assert scene.set_drag_targets(circle) is scene
+            assert calls == [[circle._semantic_handle]]
+            for values, error in [
+                ((circle, circle), ValueError),
+                ((object(),), TypeError),
+            ]:
+                try:
+                    scene.set_drag_targets(*values)
+                except error:
+                    pass
+                else:
+                    raise AssertionError("invalid drag declaration reached the Rust context")
+            circle._semantic_handle_fresh = False
+            try:
+                scene.set_drag_targets(circle)
+            except RuntimeError as error:
+                assert "current semantic handle" in str(error)
+            else:
+                raise AssertionError("stale drag target was accepted")
+            assert len(calls) == 1
+        """)
+        python_dir = Path(__file__).resolve().parent
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=python_dir,
+            env={**os.environ, "PYTHONPATH": str(python_dir)},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

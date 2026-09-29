@@ -260,6 +260,8 @@ pub struct CanonicalAuthoringScene {
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     #[cfg(any(target_arch = "wasm32", test))]
+    translation_drag_targets: Vec<noon::Mobject>,
+    #[cfg(any(target_arch = "wasm32", test))]
     player_ownership: PlayerOwnership,
 }
 
@@ -280,6 +282,8 @@ impl CanonicalAuthoringScene {
             scene,
             bindings: BTreeMap::new(),
             identities: BTreeMap::new(),
+            #[cfg(any(target_arch = "wasm32", test))]
+            translation_drag_targets: Vec::new(),
             #[cfg(any(target_arch = "wasm32", test))]
             player_ownership: PlayerOwnership::Unstarted,
         }
@@ -430,13 +434,46 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
-        crate::SemanticExecutionPlayer::from_live_session(
+        let mut player = crate::SemanticExecutionPlayer::from_live_session(
             self.lower_execution()?,
             std::rc::Rc::clone(self.scene.integration_store()),
             self.scene.root(),
             duration,
             transport_session,
-        )
+        )?;
+        player.set_translation_drag_targets(&self.translation_drag_targets)?;
+        Ok(player)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn set_translation_drag_targets(
+        &mut self,
+        targets: Vec<noon::Mobject>,
+    ) -> Result<(), AuthoringFailure> {
+        for target in &targets {
+            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+                return Err(noon::AuthoringError::ForeignStore.into());
+            }
+            target.validate().map_err(AuthoringFailure::from)?;
+            if !self.identities.contains_key(&target.node_id()) {
+                return Err("translation drag target is not bound to this canonical Scene".into());
+            }
+        }
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if self.player_ownership.is_unstarted() {
+            self.translation_drag_targets = targets;
+        } else {
+            self.active_live_player()?
+                .set_translation_drag_targets(&targets)
+                .map_err(AuthoringFailure::from)?;
+            // Keep the declaration with the canonical source owner as well as
+            // the currently borrowed runtime. A later explicit rebuild must
+            // receive the same source policy, never a stale pre-run list.
+            self.translation_drag_targets = targets;
+        }
+        Ok(())
     }
 
     /// Refresh a dormant presentation runtime only at an explicit run or lease
@@ -3033,6 +3070,49 @@ mod wasm {
                 .associate_published_mobjects(batch.inner)
                 .map_err(js_error)
         }
+
+        /// Declare semantic drag targets before the player is transferred to
+        /// the browser execution worker. The JS boundary supplies stable
+        /// handle generations; Rust resolves them in this context's store and
+        /// verifies their scene membership.
+        #[wasm_bindgen(js_name = setTranslationDragTargets)]
+        pub fn set_translation_drag_targets(
+            &mut self,
+            targets: js_sys::Array,
+        ) -> Result<(), JsValue> {
+            let mut values = Vec::with_capacity(targets.length() as usize);
+            for target in targets.iter() {
+                let slot = wasm_semantic_identity_component(&target, "semanticSlot")?;
+                let generation = wasm_semantic_identity_component(&target, "semanticGeneration")?;
+                let node = noon_core::SemanticNodeId::new(slot, generation);
+                let handle = noon::Mobject::from_node(
+                    std::rc::Rc::clone(self.inner.scene.integration_store()),
+                    node,
+                )
+                .map_err(js_error)?;
+                values.push(handle);
+            }
+            self.inner
+                .set_translation_drag_targets(values)
+                .map_err(js_error)
+        }
+    }
+
+    fn wasm_semantic_identity_component(target: &JsValue, name: &str) -> Result<u32, JsValue> {
+        let value = js_sys::Reflect::get(target, &JsValue::from_str(name))
+            .map_err(|_| js_error("translation drag target must be a semantic Mobject"))?;
+        let Some(value) = value.as_f64() else {
+            return Err(js_error(
+                "translation drag target must be a semantic Mobject",
+            ));
+        };
+        if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) || value.fract() != 0.0
+        {
+            return Err(js_error(
+                "translation drag target has an invalid semantic identity",
+            ));
+        }
+        Ok(value as u32)
     }
 
     /// Inert typed language-wrapper batch. Appending handles performs no semantic
@@ -7995,6 +8075,31 @@ mod tests {
             .iter()
             .map(|(id, target, options)| create_request(Some(*id), target, *options))
             .collect()
+    }
+
+    #[test]
+    fn translation_drag_targets_remain_with_the_canonical_scene_after_live_reconfiguration() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+
+        context
+            .set_translation_drag_targets(vec![circle.clone()])
+            .unwrap();
+        assert_eq!(
+            context
+                .translation_drag_targets
+                .iter()
+                .map(noon::Mobject::node_id)
+                .collect::<Vec<_>>(),
+            vec![circle.node_id()]
+        );
+
+        // Reconfiguration must affect the borrowed runtime and the canonical
+        // declaration used by a subsequent explicit execution rebuild.
+        context.live_player(1.0).unwrap();
+        context.set_translation_drag_targets(Vec::new()).unwrap();
+        assert!(context.translation_drag_targets.is_empty());
     }
 
     #[test]

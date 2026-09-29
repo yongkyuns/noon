@@ -584,6 +584,18 @@ export class ExecutionWorkerClient {
     return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
   }
 
+  async setTranslationDragTargets(targets) {
+    this.#requireStarted();
+    if (!Array.isArray(targets) || !targets.every(target =>
+      target && Number.isInteger(target.slot) && target.slot >= 0 && target.slot <= 0xffffffff &&
+      Number.isInteger(target.generation) && target.generation >= 0 && target.generation <= 0xffffffff)) {
+      throw new TypeError("translation drag targets must be semantic slot/generation pairs");
+    }
+    return this.#requestNativeInput("translation_drag_targets", {
+      targets: targets.map(({ slot, generation }) => ({ slot, generation })),
+    });
+  }
+
   // Platform view registration is not proof of presentation. Retire the locally
   // observed receipt synchronously, before registration or input can yield.
   setBrowserPointerView(revision, width, height) {
