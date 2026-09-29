@@ -1606,6 +1606,9 @@ impl SemanticExecutionPlayer {
     /// required callback token. The collector owns one transaction across the
     /// entire callback; every accepted operation remains unpublished until the
     /// existing callback completion co-publishes it with effective writes.
+    /// A rejected staging operation restores the prior collector so a callback
+    /// may catch it and continue. A later final publication failure is terminal
+    /// because the shared runtime contract consumes the prepared proof.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn stage_required_callback_membership(
         &mut self,
@@ -3058,9 +3061,21 @@ impl SemanticExecutionPlayer {
                         return Err(AuthoringFailure::from(error));
                     }
                 };
-                self.session
+                // Once the prepared transaction enters the shared publication
+                // contract it cannot be recovered: lowering may have consumed
+                // its proof before reporting a runtime failure. Treat that
+                // final combined-commit failure as an exact callback failure,
+                // rather than leaving a retryable token whose collector has
+                // already been consumed.
+                if let Err(error) = self
+                    .session
                     .commit_prepared_required_callback_transaction(batch, prepared, order_root)
-                    .map_err(AuthoringFailure::from)?;
+                {
+                    self.callback_membership_transaction = None;
+                    self.pending_callback_phase = None;
+                    let _ = self.session.fail_required_callback_phase(token);
+                    return Err(AuthoringFailure::from(error));
+                }
             } else {
                 self.session
                     .commit_required_callback_phase(batch)
@@ -4863,6 +4878,85 @@ mod tests {
                 .unwrap(),
             vec![callback_target.node_id()]
         );
+    }
+
+    #[test]
+    fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_unchanged() {
+        let mut scene = noon::Scene::new();
+        let callback_target = scene.circle(1.0).unwrap();
+        let removed = scene.circle(0.25).unwrap();
+        scene.add(&callback_target).unwrap();
+        scene.add(&removed).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(callback_target.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            31,
+        )
+        .unwrap();
+
+        let phase: serde_json::Value =
+            serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+        let token = player.pending_callback_phase.unwrap().0;
+        let before_context = player.session.publication_context();
+        let before_frame = player.session.frame().clone();
+        player
+            .stage_required_callback_membership(
+                token,
+                &crate::canonical_authoring_scene::SceneMembershipBatch::callback_existing(
+                    crate::canonical_authoring_scene::SceneMembershipBatchKind::Remove,
+                    [removed.clone()],
+                ),
+            )
+            .unwrap();
+
+        let target_row = phase["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| {
+                row["node"]["slot"].as_u64() == Some(u64::from(callback_target.node_id().slot()))
+            })
+            .unwrap();
+        let mut unknown = target_row["node"].clone();
+        unknown["slot"] = serde_json::json!(u32::MAX);
+        let error = player
+            .commit_callback_phase_json(
+                &serde_json::json!({
+                    "token": phase["token"].clone(),
+                    "writes": [{
+                        "kind": "transform",
+                        "object": unknown,
+                        "transform": target_row["transform"].clone(),
+                    }],
+                })
+                .to_string(),
+            )
+            .unwrap_err();
+        assert_eq!(error.category, "unclassified");
+        assert!(player.pending_callback_phase.is_none());
+        assert!(player.callback_membership_transaction.is_none());
+        assert_eq!(player.session.publication_context(), before_context);
+        assert_eq!(player.session.frame(), &before_frame);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap(),
+            vec![callback_target.node_id(), removed.node_id()]
+        );
+        assert!(player
+            .commit_callback_phase_json(
+                &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
+            )
+            .is_err());
     }
 
     #[test]
