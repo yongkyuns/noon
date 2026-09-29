@@ -397,31 +397,45 @@ impl SemanticStore {
     {
         let mut handles = Vec::new();
         handles.try_reserve_exact(inputs.len())?;
+        // The callback may replace the final current owner of a font or vector
+        // dependency with one of these fresh text handles. Keep reclamation
+        // deferred while their dependency closure is made visible, so the
+        // nested semantic transaction cannot retire that shared dependency in
+        // the gap before this scope finishes publication.
+        self.begin_semantic_resource_reclamation_defer();
+        let mut newly_interned_fonts = Vec::new();
+        for (_, (face, data)) in &fonts {
+            let was_present = self.font_resources.get_for_face(face).is_some();
+            let handle = self
+                .font_resources
+                .intern_face(face, data.clone())
+                .expect("font batch preflighted");
+            if !was_present {
+                newly_interned_fonts.push(handle);
+            }
+        }
         for (resource, _) in inputs {
-            handles.push(
-                self.text_resources
-                    .insert(resource)
-                    .expect("text batch preflighted"),
-            );
+            let handle = self
+                .text_resources
+                .insert(resource)
+                .expect("text batch preflighted");
+            self.register_semantic_text_resource_dependencies(handle);
+            handles.push(handle);
         }
 
         let result = publish(self, &handles);
         if result.is_err() {
             for handle in handles {
+                self.unregister_semantic_text_resource_dependencies(handle);
                 self.text_resources
                     .remove(handle.id)
                     .expect("fresh unpublished text is removable");
             }
-        } else {
-            for (_, (face, data)) in fonts {
-                self.font_resources
-                    .intern_face(&face, data)
-                    .expect("font batch preflighted");
-            }
-            for handle in handles {
-                self.register_semantic_text_resource_dependencies(handle);
+            for handle in newly_interned_fonts {
+                self.font_resources.remove(handle);
             }
         }
+        self.end_semantic_resource_reclamation_defer();
         result
     }
 
@@ -714,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn inert_text_resource_keeps_shared_font_and_vector_dependencies_live() {
+    fn replacement_text_keeps_shared_font_and_vector_dependencies_live() {
         let mut store = SemanticStore::new();
         let geometry = store
             .insert_geometry_path(
@@ -748,29 +762,29 @@ mod tests {
                 Ok::<_, Error>(result)
             })
             .unwrap();
-        let inert = Cell::new(None);
+        let replacement = Cell::new(None);
         store
-            .with_derived_text_resources(vec![first], &fonts, |_, handles| {
-                inert.set(Some(handles[0]));
-                Ok::<_, Error>(())
+            .with_derived_text_resources(vec![first], &fonts, |store, handles| {
+                let mut replace = SemanticMutationTransaction::new();
+                replace.replace_content(owner.get().unwrap(), handles[0]);
+                let result = replace.apply(store).map_err(Error::from)?;
+                replacement.set(Some(handles[0]));
+                Ok::<_, Error>(result)
             })
             .unwrap();
-        let second = inert.get().unwrap();
-
-        let owner = owner.get().unwrap();
-        let mut replace = SemanticMutationTransaction::new();
-        replace.replace_content(owner, crate::StoredGeometry::Circle { radius: 1.0 });
-        replace.apply(&mut store).unwrap();
+        let second = replacement.get().unwrap();
 
         assert!(store.text_resources().get(second).is_some());
         assert!(store.geometry_resources().get(geometry).is_some());
         assert_eq!(store.font_resources().len(), 1);
 
-        let mut attach_inert = SemanticMutationTransaction::new();
-        attach_inert.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
-            second,
-        )));
-        assert!(attach_inert.apply(&mut store).is_ok());
+        assert_eq!(
+            store
+                .semantic_object_state_checked(owner.get().unwrap())
+                .unwrap()
+                .content,
+            crate::SemanticObjectContent::Text(second)
+        );
     }
 
     fn identity(label: &str) -> crate::TextCompilationIdentity {
