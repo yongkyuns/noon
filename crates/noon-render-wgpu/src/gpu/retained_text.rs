@@ -664,6 +664,7 @@ enum OutlineResidencyKey {
 struct GlyphOutlineCache {
     scale_context: ScaleContext,
     faces: HashMap<FontResourceHandle, SwashFace>,
+    face_entry_counts: HashMap<FontResourceHandle, usize>,
     outlines: HashMap<OutlineKey, CachedOutline>,
     stroked: HashMap<StrokedOutlineKey, CachedOutline>,
     limits: GlyphOutlineCacheLimits,
@@ -686,6 +687,7 @@ impl GlyphOutlineCache {
         Self {
             scale_context: ScaleContext::new(),
             faces: HashMap::new(),
+            face_entry_counts: HashMap::new(),
             outlines: HashMap::new(),
             stroked: HashMap::new(),
             limits,
@@ -769,6 +771,10 @@ impl GlyphOutlineCache {
         let retained_bytes = vector_path_retained_bytes(path.as_ref());
         if self.limits.max_entries == 0 || retained_bytes > self.limits.max_retained_bytes {
             self.rejected_admissions = self.rejected_admissions.saturating_add(1);
+            self.remove_unreferenced_face(match key {
+                OutlineResidencyKey::Outline(key) => key.font,
+                OutlineResidencyKey::Stroked(key) => key.outline.font,
+            });
             return;
         }
         let access = self.next_access();
@@ -777,15 +783,20 @@ impl GlyphOutlineCache {
             retained_bytes,
             last_used: access,
         };
-        let previous = match key {
-            OutlineResidencyKey::Outline(key) => self.outlines.insert(key, entry),
-            OutlineResidencyKey::Stroked(key) => self.stroked.insert(key, entry),
+        let (font, previous) = match key {
+            OutlineResidencyKey::Outline(key) => (key.font, self.outlines.insert(key, entry)),
+            OutlineResidencyKey::Stroked(key) => {
+                (key.outline.font, self.stroked.insert(key, entry))
+            }
         };
         if let Some(previous) = previous {
             self.retained_bytes = self.retained_bytes.saturating_sub(previous.retained_bytes);
+        } else {
+            *self.face_entry_counts.entry(font).or_default() += 1;
         }
         self.retained_bytes = self.retained_bytes.saturating_add(retained_bytes);
         self.enforce_limits();
+        self.remove_unreferenced_face(font);
     }
 
     fn enforce_limits(&mut self) {
@@ -795,13 +806,31 @@ impl GlyphOutlineCache {
             let Some(oldest) = self.oldest_entry() else {
                 break;
             };
-            let removed = match oldest {
-                OutlineResidencyKey::Outline(key) => self.outlines.remove(&key),
-                OutlineResidencyKey::Stroked(key) => self.stroked.remove(&key),
-            }
-            .expect("selected glyph outline cache entry must still exist");
+            let (font, removed) = match oldest {
+                OutlineResidencyKey::Outline(key) => (key.font, self.outlines.remove(&key)),
+                OutlineResidencyKey::Stroked(key) => (key.outline.font, self.stroked.remove(&key)),
+            };
+            let removed = removed.expect("selected glyph outline cache entry must still exist");
             self.retained_bytes = self.retained_bytes.saturating_sub(removed.retained_bytes);
             self.evictions = self.evictions.saturating_add(1);
+            self.release_face_entry(font);
+        }
+    }
+
+    fn release_face_entry(&mut self, font: FontResourceHandle) {
+        let Some(count) = self.face_entry_counts.get_mut(&font) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.face_entry_counts.remove(&font);
+            self.faces.remove(&font);
+        }
+    }
+
+    fn remove_unreferenced_face(&mut self, font: FontResourceHandle) {
+        if !self.face_entry_counts.contains_key(&font) {
+            self.faces.remove(&font);
         }
     }
 
@@ -4541,6 +4570,64 @@ mod tests {
         assert!(!cache.outlines.contains_key(&first));
         assert!(cache.stroked.contains_key(&stroked_key(first, 11)));
         assert!(cache.outlines.contains_key(&second));
+    }
+
+    #[test]
+    fn outline_face_metadata_tracks_live_entries_under_churn() {
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(2, usize::MAX));
+        let font = |id| FontResourceHandle {
+            arena: 7,
+            id: FontResourceId::new(id),
+            version: 0,
+        };
+        let make_key = |font, glyph| OutlineKey {
+            font,
+            glyph_id: GlyphId::try_from(glyph).unwrap(),
+            size_bits: 24.0_f32.to_bits(),
+            variation_fingerprint: 0,
+        };
+
+        let shared_font = font(1);
+        let outline = make_key(shared_font, 1);
+        cache.admit_outline(outline, test_path(1.0, 2));
+        cache.admit_stroked(stroked_key(outline, 11), test_path(2.0, 2));
+        assert_eq!(cache.face_entry_counts.get(&shared_font), Some(&2));
+
+        cache.admit_outline(make_key(font(2), 2), test_path(3.0, 2));
+        assert_eq!(cache.total_entries(), 2);
+        assert_eq!(cache.face_entry_counts.get(&shared_font), Some(&1));
+        assert_eq!(cache.face_entry_counts.get(&font(2)), Some(&1));
+
+        cache.admit_outline(make_key(font(3), 3), test_path(4.0, 2));
+        assert_eq!(cache.total_entries(), 2);
+        assert!(!cache.face_entry_counts.contains_key(&shared_font));
+        assert!(!cache.face_entry_counts.contains_key(&font(2)));
+        assert_eq!(cache.face_entry_counts.get(&font(3)), Some(&1));
+
+        for id in 4..100 {
+            cache.admit_outline(make_key(font(id), id), test_path(id as f32, 2));
+            assert!(cache.face_entry_counts.len() <= cache.total_entries());
+            assert!(cache.face_entry_counts.len() <= 2);
+        }
+        assert_eq!(cache.face_entry_counts.len(), 2);
+        assert_eq!(cache.face_entry_counts.get(&font(98)), Some(&1));
+        assert_eq!(cache.face_entry_counts.get(&font(99)), Some(&1));
+    }
+
+    #[test]
+    fn evicting_a_fonts_final_outline_releases_its_cached_face() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(1, usize::MAX));
+
+        cache.outline(&artifact.fonts, run, glyph.glyph_id).unwrap();
+        assert_eq!(cache.stats().outline_entries, 1);
+        assert_eq!(cache.stats().font_faces, 1);
+
+        cache.set_limits(GlyphOutlineCacheLimits::new(0, usize::MAX));
+        assert_eq!(cache.stats().outline_entries, 0);
+        assert_eq!(cache.stats().font_faces, 0);
     }
 
     #[test]
