@@ -96,6 +96,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.store
     }
 
+    /// Consume this unpublished proof after an existing-handle planner has read
+    /// it, then re-preflight the combined transaction under the same exclusive
+    /// store borrow. This is intentionally not `Clone`: provisional names and
+    /// transaction provenance remain in their original allocation domain.
+    pub(crate) fn with_existing_plan(
+        self,
+        plan: SemanticMutationTransaction,
+    ) -> Result<Self, SemanticMutationTransactionError> {
+        debug_assert!(plan.mutations.iter().all(|mutation| {
+            !matches!(
+                mutation,
+                SemanticMutation::AddNode { .. } | SemanticMutation::AddAnimation { .. }
+            ) && mutation
+                .node_references()
+                .into_iter()
+                .all(|node| node.existing().is_some())
+        }));
+        let Self {
+            store,
+            mut transaction,
+            ..
+        } = self;
+        transaction.mutations.extend(plan.mutations);
+        Self::new(transaction, store)
+    }
+
     /// Allocator-derived identity for fallible execution preparation under this
     /// exclusive borrow. Pending identities are not published handles and must not
     /// escape preparation; commit verifies and returns the same allocator result.
@@ -429,6 +455,69 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
     }
 
+    /// Query one staged direct family edge without materializing that family's
+    /// complete order.  Local structural planners use these adjacency reads for
+    /// large scene roots.
+    pub fn family_contains_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
+        Ok(self
+            .preflight
+            .family_edges
+            .contains(&catalog, family.into(), member.into()))
+    }
+
+    /// First member in final staged order, without cloning an unrelated root.
+    pub fn family_first_member_existing(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
+        self.preflight
+            .family_edges
+            .first_member(&catalog, family.into())
+            .map(existing_read_node)
+            .transpose()
+    }
+
+    /// Next member in final staged order, without cloning an unrelated root.
+    pub fn family_next_member_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
+        self.preflight
+            .family_edges
+            .next_member(&catalog, family.into(), member.into())
+            .map(existing_read_node)
+            .transpose()
+    }
+
+    /// Previous member in final staged order, without cloning an unrelated root.
+    pub fn family_previous_member_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        let catalog = TransactionNodeCatalog::new(&self.transaction, self.store);
+        self.preflight
+            .family_edges
+            .previous_member(&catalog, family.into(), member.into())
+            .map(existing_read_node)
+            .transpose()
+    }
+
     /// Read final foreground declarations without inspecting display membership.
     /// Structural deletion removes soft references in the staged view as well
     /// as at commit; abandoned preparation leaves the published list untouched.
@@ -535,6 +624,43 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<(), SemanticTransactionReadError> {
         if !token.belongs_to(self.transaction.id) {
             return Err(SemanticTransactionReadError::PendingNodeFromDifferentTransaction(token));
+        }
+        Ok(())
+    }
+
+    fn validate_existing_family(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<(), SemanticTransactionReadError> {
+        if self.preflight.removed_existing.contains(&family) {
+            return Err(SemanticTransactionReadError::RemovedExistingNode(family));
+        }
+        let node = self
+            .store
+            .node(family)
+            .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticTransactionReadError::NotFamily(family.into()));
+        }
+        Ok(())
+    }
+
+    fn validate_existing_authoring_node(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<(), SemanticTransactionReadError> {
+        if self.preflight.removed_existing.contains(&node) {
+            return Err(SemanticTransactionReadError::RemovedExistingNode(node));
+        }
+        let existing = self
+            .store
+            .node(node)
+            .ok_or(SemanticTransactionReadError::UnknownExistingNode(node))?;
+        let authoring = matches!(existing.kind(), SemanticNodeKind::Family(_))
+            || matches!(existing.kind(), SemanticNodeKind::AuthoringObject)
+                && existing.semantic_object_state().is_some();
+        if !authoring {
+            return Err(SemanticTransactionReadError::NotObject(node.into()));
         }
         Ok(())
     }
@@ -990,6 +1116,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             },
             store,
         )
+    }
+}
+
+fn existing_read_node(
+    node: SemanticTransactionNodeRef,
+) -> Result<SemanticNodeId, SemanticTransactionReadError> {
+    match node {
+        SemanticTransactionNodeRef::Existing(node) => Ok(node),
+        SemanticTransactionNodeRef::Pending(token) => {
+            Err(SemanticTransactionReadError::UnknownPendingNode(token))
+        }
     }
 }
 

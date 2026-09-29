@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
-    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef,
+    PreparedSemanticMutationTransaction, SemanticMutationTransaction, SemanticNode, SemanticNodeId,
+    SemanticNodeKind, SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef,
 };
 
 mod foreground;
@@ -27,6 +27,222 @@ pub enum SemanticSceneMembershipRequest<'a> {
     },
 }
 
+#[derive(Debug)]
+pub enum PreparedSemanticMembershipError {
+    Operation(SemanticSceneOperationError),
+    Transaction(crate::SemanticMutationTransactionError),
+}
+
+impl std::fmt::Display for PreparedSemanticMembershipError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation(error) => error.fmt(f),
+            Self::Transaction(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for PreparedSemanticMembershipError {}
+
+#[derive(Clone, Copy)]
+struct MembershipTarget {
+    family: bool,
+    scene_owned: bool,
+}
+
+/// Local relationship reads for the shared membership planner. Prepared reads
+/// retain only changed family-edge adjacency; they never materialize a root.
+trait MembershipView {
+    fn target(&self, id: SemanticNodeId) -> Result<MembershipTarget, SemanticSceneOperationError>;
+    fn contains(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticSceneOperationError>;
+    fn first(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError>;
+    fn next(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError>;
+    fn previous(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError>;
+    fn parents(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError>;
+    fn foreground(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError>;
+}
+
+struct StoreMembershipView<'a>(&'a SemanticStore);
+impl MembershipView for StoreMembershipView<'_> {
+    fn target(&self, id: SemanticNodeId) -> Result<MembershipTarget, SemanticSceneOperationError> {
+        let node = target_node_checked(self.0, id)?;
+        Ok(MembershipTarget {
+            family: matches!(node.kind(), SemanticNodeKind::Family(_)),
+            scene_owned: node.is_scene_owned(),
+        })
+    }
+    fn contains(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<bool, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, f)?.contains_member(m))
+    }
+    fn first(
+        &self,
+        f: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, f)?.first_member())
+    }
+    fn next(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, f)?.next_member(m))
+    }
+    fn previous(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, f)?.previous_member(m))
+    }
+    fn parents(
+        &self,
+        n: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, n)?.parents().to_vec())
+    }
+    fn foreground(
+        &self,
+        f: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(target_node_checked(self.0, f)?
+            .foreground_members()
+            .to_vec())
+    }
+}
+
+struct PreparedMembershipView<'a, 'store> {
+    prepared: &'a PreparedSemanticMutationTransaction<'store>,
+    root: SemanticNodeId,
+}
+impl MembershipView for PreparedMembershipView<'_, '_> {
+    fn target(&self, id: SemanticNodeId) -> Result<MembershipTarget, SemanticSceneOperationError> {
+        if self.prepared.node_is_removed(id) {
+            return Err(SemanticSceneOperationError::UnknownNode(id));
+        }
+        StoreMembershipView(self.prepared.store()).target(id)
+    }
+    fn contains(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<bool, SemanticSceneOperationError> {
+        self.prepared
+            .family_contains_existing(f, m)
+            .map_err(prepared_read_error)
+    }
+    fn first(
+        &self,
+        f: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        self.prepared
+            .family_first_member_existing(f)
+            .map_err(prepared_read_error)
+    }
+    fn next(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        self.prepared
+            .family_next_member_existing(f, m)
+            .map_err(prepared_read_error)
+    }
+    fn previous(
+        &self,
+        f: SemanticNodeId,
+        m: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        self.prepared
+            .family_previous_member_existing(f, m)
+            .map_err(prepared_read_error)
+    }
+    fn parents(
+        &self,
+        n: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
+        let mut parents = StoreMembershipView(self.prepared.store()).parents(n)?;
+        let published = parents.contains(&self.root);
+        let staged = self.contains(self.root, n)?;
+        if staged && !published {
+            parents.push(self.root)
+        } else if published && !staged {
+            parents.retain(|p| *p != self.root)
+        };
+        Ok(parents)
+    }
+    fn foreground(
+        &self,
+        f: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
+        self.prepared
+            .foreground_members(f)
+            .map_err(prepared_read_error)?
+            .into_iter()
+            .map(|n| {
+                n.existing().ok_or_else(|| {
+                    SemanticSceneOperationError::InvalidPendingAdmission(match n {
+                        SemanticTransactionNodeRef::Pending(t) => t,
+                        SemanticTransactionNodeRef::Existing(_) => unreachable!(),
+                    })
+                })
+            })
+            .collect()
+    }
+}
+
+fn prepared_read_error(error: crate::SemanticTransactionReadError) -> SemanticSceneOperationError {
+    match error {
+        crate::SemanticTransactionReadError::UnknownExistingNode(id)
+        | crate::SemanticTransactionReadError::RemovedExistingNode(id) => {
+            SemanticSceneOperationError::UnknownNode(id)
+        }
+        crate::SemanticTransactionReadError::NotFamily(SemanticTransactionNodeRef::Existing(
+            id,
+        )) => SemanticSceneOperationError::NotSemanticFamily(id),
+        crate::SemanticTransactionReadError::Existing(error) => error,
+        crate::SemanticTransactionReadError::PendingNodeFromDifferentTransaction(t)
+        | crate::SemanticTransactionReadError::UnknownPendingNode(t)
+        | crate::SemanticTransactionReadError::RemovedPendingNode(t)
+        | crate::SemanticTransactionReadError::NotFamily(SemanticTransactionNodeRef::Pending(t)) => {
+            SemanticSceneOperationError::InvalidPendingAdmission(t)
+        }
+        crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Existing(
+            id,
+        ))
+        | crate::SemanticTransactionReadError::NotAnimation(
+            SemanticTransactionNodeRef::Existing(id),
+        ) => SemanticSceneOperationError::NotSemanticAuthoringNode(id),
+        crate::SemanticTransactionReadError::NotObject(SemanticTransactionNodeRef::Pending(t))
+        | crate::SemanticTransactionReadError::NotAnimation(SemanticTransactionNodeRef::Pending(
+            t,
+        )) => SemanticSceneOperationError::InvalidPendingAdmission(t),
+    }
+}
+
 /// Return whether `target` is reachable below one explicit semantic scene root.
 ///
 /// Membership is derived from the authoritative family edges by walking only the
@@ -48,7 +264,7 @@ pub fn semantic_scene_root_contains(
         if !visited.insert(node) {
             continue;
         }
-        for &parent in target_node_checked(store, node)?.parents() {
+        for parent in view.parents(node)? {
             if parent == scene_root {
                 return Ok(true);
             }
@@ -68,118 +284,156 @@ pub fn plan_semantic_scene_membership(
     scene_root: SemanticNodeId,
     request: SemanticSceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
-    let root = store
-        .node(scene_root)
-        .ok_or(SemanticSceneOperationError::UnknownNode(scene_root))?;
-    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+    plan_membership_in_view(&StoreMembershipView(store), scene_root, request)
+}
+
+/// Plan one existing-handle membership operation through a prepared transaction.
+/// The prepared view reads only affected family-edge adjacency and is intended for
+/// ordered callback staging before one final semantic publication.
+pub fn plan_prepared_semantic_scene_membership(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    scene_root: SemanticNodeId,
+    request: SemanticSceneMembershipRequest<'_>,
+) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
+    plan_membership_in_view(
+        &PreparedMembershipView {
+            prepared,
+            root: scene_root,
+        },
+        scene_root,
+        request,
+    )
+}
+
+/// Extend one prepared transaction with an ordered existing-handle membership
+/// operation. Failure drops the unpublished proof and publishes nothing.
+pub fn stage_prepared_semantic_scene_membership<'a>(
+    prepared: PreparedSemanticMutationTransaction<'a>,
+    scene_root: SemanticNodeId,
+    request: SemanticSceneMembershipRequest<'_>,
+) -> Result<PreparedSemanticMutationTransaction<'a>, PreparedSemanticMembershipError> {
+    let plan = plan_prepared_semantic_scene_membership(&prepared, scene_root, request)
+        .map_err(PreparedSemanticMembershipError::Operation)?;
+    prepared
+        .with_existing_plan(plan)
+        .map_err(PreparedSemanticMembershipError::Transaction)
+}
+
+fn plan_membership_in_view<V: MembershipView>(
+    view: &V,
+    scene_root: SemanticNodeId,
+    request: SemanticSceneMembershipRequest<'_>,
+) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
+    if !view.target(scene_root)?.family {
         return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
     }
+    let foreground = view.foreground(scene_root)?;
     match request {
         SemanticSceneMembershipRequest::Clear => {
             let mut transaction = SemanticMutationTransaction::new();
-            let mut member = root.first_member();
+            let mut member = view.first(scene_root)?;
             while let Some(current) = member {
-                member = root.next_member(current);
+                member = view.next(scene_root, current)?;
                 transaction.remove_member(scene_root, current);
             }
-            if !root.foreground_members().is_empty() {
+            if !foreground.is_empty() {
                 transaction.set_foreground_members(scene_root, [] as [SemanticNodeId; 0]);
             }
             Ok(transaction)
         }
         SemanticSceneMembershipRequest::Add(ids) => {
-            let explicit = validated_distinct_nodes(store, ids)?;
+            let explicit = validated_distinct_nodes(view, ids)?;
             if explicit.is_empty() {
                 return Ok(SemanticMutationTransaction::new());
-            }
-            let ordered = foreground::add_order(&explicit, root.foreground_members());
-            plan_add_members(store, scene_root, &ordered)
+            };
+            let ordered = foreground::add_order(&explicit, &foreground);
+            plan_add_members(view, scene_root, &ordered)
         }
         SemanticSceneMembershipRequest::AddForeground(ids) => {
-            let explicit = validated_distinct_nodes(store, ids)?;
+            let explicit = validated_distinct_nodes(view, ids)?;
             if explicit.is_empty() {
                 return Ok(SemanticMutationTransaction::new());
-            }
-            let members = foreground::add_order(root.foreground_members(), &explicit);
-            let mut transaction = plan_add_members(store, scene_root, &members)?;
-            if members != root.foreground_members() {
-                transaction.set_foreground_members(scene_root, members);
-            }
-            Ok(transaction)
+            };
+            let members = foreground::add_order(&foreground, &explicit);
+            let mut tx = plan_add_members(view, scene_root, &members)?;
+            if members != foreground {
+                tx.set_foreground_members(scene_root, members)
+            };
+            Ok(tx)
         }
         SemanticSceneMembershipRequest::RemoveForeground(ids) => {
-            let mut transaction = SemanticMutationTransaction::new();
-            stage_semantic_foreground_removal(store, scene_root, ids, &mut transaction)?;
-            Ok(transaction)
+            let mut tx = SemanticMutationTransaction::new();
+            foreground::stage_removal(view, scene_root, ids, &mut tx)?;
+            Ok(tx)
         }
         SemanticSceneMembershipRequest::BringToBack(ids) => {
-            let explicit = validated_distinct_nodes(store, ids)?;
-            let remove_set = downward_target_closure(store, &explicit)?;
-            let mut transaction = plan_explicit_root_projection(
-                store,
+            let explicit = validated_distinct_nodes(view, ids)?;
+            let remove = downward_target_closure(view, &explicit)?;
+            let mut tx = plan_explicit_root_projection(
+                view,
                 scene_root,
-                &remove_set,
+                &remove,
                 None,
                 &explicit,
                 ExplicitPlacement::Head,
             )?;
-            stage_semantic_foreground_removal(store, scene_root, &explicit, &mut transaction)?;
-            Ok(transaction)
+            foreground::stage_removal(view, scene_root, &explicit, &mut tx)?;
+            Ok(tx)
         }
         SemanticSceneMembershipRequest::Remove(ids) => {
-            let explicit = validated_distinct_nodes(store, ids)?;
-            let remove_set = explicit.iter().copied().collect();
-            let mut transaction = plan_explicit_root_projection(
-                store,
+            let explicit = validated_distinct_nodes(view, ids)?;
+            let remove = explicit.iter().copied().collect();
+            let mut tx = plan_explicit_root_projection(
+                view,
                 scene_root,
-                &remove_set,
+                &remove,
                 None,
                 &[],
                 ExplicitPlacement::Tail,
             )?;
-            stage_semantic_foreground_removal(store, scene_root, &explicit, &mut transaction)?;
-            Ok(transaction)
+            foreground::stage_removal(view, scene_root, &explicit, &mut tx)?;
+            Ok(tx)
         }
         SemanticSceneMembershipRequest::Replace { old, new } => {
-            target_node_checked(store, old)?;
-            target_node_checked(store, new)?;
+            view.target(old)?;
+            view.target(new)?;
             if old == new {
                 return Ok(SemanticMutationTransaction::new());
-            }
-            let occurrences = projected_root_path_count(store, scene_root, old)?;
+            };
+            let occurrences = projected_root_path_count(view, scene_root, old)?;
             if occurrences == 0 {
                 return Err(SemanticSceneOperationError::MissingMembershipTarget(old));
-            }
+            };
             if occurrences != 1 {
                 return Err(SemanticSceneOperationError::AmbiguousMembershipTarget(old));
-            }
-            let mut remove_set = downward_target_closure(store, &[new])?;
-            remove_set.insert(old);
-            let mut transaction = plan_explicit_root_projection(
-                store,
+            };
+            let mut remove = downward_target_closure(view, &[new])?;
+            remove.insert(old);
+            let mut tx = plan_explicit_root_projection(
+                view,
                 scene_root,
-                &remove_set,
+                &remove,
                 Some((old, new)),
                 &[],
                 ExplicitPlacement::Tail,
             )?;
-            let members = foreground::replace_members(store, scene_root, old, new)?;
-            if members != root.foreground_members() {
-                transaction.set_foreground_members(scene_root, members);
-            }
-            Ok(transaction)
+            let members = foreground::replace_members(view, scene_root, old, new)?;
+            if members != foreground {
+                tx.set_foreground_members(scene_root, members)
+            };
+            Ok(tx)
         }
     }
 }
 
-fn plan_add_members(
-    store: &SemanticStore,
+fn plan_add_members<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     explicit: &[SemanticNodeId],
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
-    let remove_set = downward_target_closure(store, explicit)?;
+    let remove_set = downward_target_closure(view, explicit)?;
     plan_explicit_root_projection(
-        store,
+        view,
         scene_root,
         &remove_set,
         None,
@@ -188,8 +442,8 @@ fn plan_add_members(
     )
 }
 
-fn projected_root_path_count(
-    store: &SemanticStore,
+fn projected_root_path_count<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<usize, SemanticSceneOperationError> {
@@ -242,7 +496,8 @@ pub fn stage_semantic_scene_admission(
         .iter()
         .filter_map(|id| id.existing())
         .collect::<Vec<_>>();
-    validated_distinct_nodes(store, &existing)?;
+    let view = StoreMembershipView(store);
+    validated_distinct_nodes(&view, &existing)?;
     let mut pending = HashSet::new();
     for &id in admitted {
         if let SemanticTransactionNodeRef::Pending(token) = id {
@@ -289,9 +544,9 @@ pub fn stage_semantic_scene_admission(
         .iter()
         .filter_map(|id| id.existing())
         .collect::<Vec<_>>();
-    let removal = downward_target_closure(store, &existing)?;
+    let removal = downward_target_closure(&view, &existing)?;
     stage_explicit_root_projection(
-        store,
+        &view,
         scene_root,
         &removal,
         None,
@@ -330,26 +585,27 @@ pub fn stage_semantic_scene_lifecycle_membership(
     if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
         return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
     }
-    let removed = validated_distinct_nodes(store, removed)?;
-    let added = validated_distinct_nodes(store, added)?;
+    let view = StoreMembershipView(store);
+    let removed = validated_distinct_nodes(&view, removed)?;
+    let added = validated_distinct_nodes(&view, added)?;
     if removed.is_empty() && added.is_empty() {
         return Ok(());
     }
     let members = if root.foreground_members().is_empty() || removed.is_empty() {
         root.foreground_members().to_vec()
     } else {
-        let removal = downward_target_closure(store, &removed)?;
-        foreground::project_members(store, scene_root, &removal, None)?
+        let removal = downward_target_closure(&view, &removed)?;
+        foreground::project_members(&view, scene_root, &removal, None)?
     };
     let explicit = if added.is_empty() {
         Vec::new()
     } else {
         foreground::add_order(&added, &members)
     };
-    let mut remove_set = downward_target_closure(store, &explicit)?;
+    let mut remove_set = downward_target_closure(&view, &explicit)?;
     remove_set.extend(removed);
     stage_explicit_root_projection(
-        store,
+        &view,
         scene_root,
         &remove_set,
         None,
@@ -363,8 +619,8 @@ pub fn stage_semantic_scene_lifecycle_membership(
     Ok(())
 }
 
-fn plan_explicit_root_projection(
-    store: &SemanticStore,
+fn plan_explicit_root_projection<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     remove_set: &HashSet<SemanticNodeId>,
     replacement: Option<(SemanticNodeId, SemanticNodeId)>,
@@ -373,7 +629,7 @@ fn plan_explicit_root_projection(
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
     let mut transaction = SemanticMutationTransaction::new();
     stage_explicit_root_projection(
-        store,
+        view,
         scene_root,
         remove_set,
         replacement,
@@ -384,8 +640,8 @@ fn plan_explicit_root_projection(
     Ok(transaction)
 }
 
-fn stage_explicit_root_projection(
-    store: &SemanticStore,
+fn stage_explicit_root_projection<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     remove_set: &HashSet<SemanticNodeId>,
     replacement: Option<(SemanticNodeId, SemanticNodeId)>,
@@ -393,12 +649,11 @@ fn stage_explicit_root_projection(
     placement: ExplicitPlacement,
     transaction: &mut SemanticMutationTransaction,
 ) -> Result<(), SemanticSceneOperationError> {
-    let (affected, affected_roots) = affected_explicit_root_closure(store, scene_root, remove_set)?;
-    let root_node = target_node_checked(store, scene_root)?;
+    let (affected, affected_roots) = affected_explicit_root_closure(view, scene_root, remove_set)?;
     let mut run_heads = Vec::new();
     for &root in &affected_roots {
-        if root_node
-            .previous_member(root)
+        if view
+            .previous(scene_root, root)?
             .is_none_or(|previous| !affected_roots.contains(&previous))
         {
             run_heads.push(root);
@@ -411,14 +666,17 @@ fn stage_explicit_root_projection(
     for run_head in run_heads {
         let mut before = Some(run_head);
         while before.is_some_and(|candidate| affected_roots.contains(&candidate)) {
-            before = before.and_then(|candidate| root_node.next_member(candidate));
+            before = match before {
+                Some(candidate) => view.next(scene_root, candidate)?,
+                None => None,
+            };
         }
         let mut root = Some(run_head);
         while let Some(current) = root.filter(|root| affected_roots.contains(root)) {
             let mut promoted = HashSet::new();
             let mut replacements = Vec::new();
             collect_root_replacements(
-                store,
+                view,
                 current,
                 current,
                 remove_set,
@@ -436,7 +694,7 @@ fn stage_explicit_root_projection(
                 }
             }
             plans.push((current, replacements, before));
-            root = root_node.next_member(current);
+            root = view.next(scene_root, current)?;
         }
     }
 
@@ -446,24 +704,26 @@ fn stage_explicit_root_projection(
             .map(|(root, replacements, _)| (*root, replacements.first().copied()))
             .collect::<HashMap<_, _>>();
         first_projected_root_after_restructure(
-            root_node,
+            view,
+            scene_root,
             &affected_roots,
             &first_replacement_by_root,
-        )
+        )?
     } else {
         None
     };
-    let mut retained_roots: HashSet<_> = explicit
-        .iter()
-        .copied()
-        .filter(|member| root_node.contains_member(*member))
-        .collect();
+    let mut retained_roots = HashSet::new();
+    for &member in explicit {
+        if view.contains(scene_root, member)? {
+            retained_roots.insert(member);
+        }
+    }
     // If the replacement target is already a direct root, keep that edge and
     // move it into the source slot instead of staging remove+add for the same
     // family edge. Semantic transactions deliberately reject duplicate edge
     // mutations, and a visible target already has the identity we need.
     if let Some((_, replacement)) = replacement {
-        if root_node.contains_member(replacement) {
+        if view.contains(scene_root, replacement)? {
             retained_roots.insert(replacement);
         }
     }
@@ -487,7 +747,9 @@ fn stage_explicit_root_projection(
     for (_, replacements, before) in &plans {
         let mut anchor = *before;
         for replacement in replacements.iter().rev() {
-            transaction.reorder_member(scene_root, *replacement, anchor);
+            if reorder_needed(view, scene_root, *replacement, anchor)? {
+                transaction.reorder_member(scene_root, *replacement, anchor);
+            }
             anchor = Some(*replacement);
         }
     }
@@ -496,32 +758,44 @@ fn stage_explicit_root_projection(
         ExplicitPlacement::Head => head_anchor,
     };
     for member in explicit.iter().rev() {
-        transaction.reorder_member(scene_root, *member, anchor);
+        if reorder_needed(view, scene_root, *member, anchor)? {
+            transaction.reorder_member(scene_root, *member, anchor);
+        }
         anchor = Some(*member);
     }
     Ok(())
 }
 
-fn first_projected_root_after_restructure(
-    root: &SemanticNode,
-    affected_roots: &HashSet<SemanticNodeId>,
-    first_replacement_by_root: &HashMap<SemanticNodeId, Option<SemanticNodeId>>,
-) -> Option<SemanticNodeId> {
-    let mut current = root.first_member();
-    while let Some(member) = current {
-        if !affected_roots.contains(&member) {
-            return Some(member);
-        }
-        if let Some(Some(first)) = first_replacement_by_root.get(&member) {
-            return Some(*first);
-        }
-        current = root.next_member(member);
-    }
-    None
+fn reorder_needed<V: MembershipView>(
+    view: &V,
+    family: SemanticNodeId,
+    member: SemanticNodeId,
+    before: Option<SemanticNodeId>,
+) -> Result<bool, SemanticSceneOperationError> {
+    Ok(view.next(family, member)? != before)
 }
 
-fn affected_explicit_root_closure(
-    store: &SemanticStore,
+fn first_projected_root_after_restructure<V: MembershipView>(
+    view: &V,
+    scene_root: SemanticNodeId,
+    affected_roots: &HashSet<SemanticNodeId>,
+    first_replacement_by_root: &HashMap<SemanticNodeId, Option<SemanticNodeId>>,
+) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+    let mut current = view.first(scene_root)?;
+    while let Some(member) = current {
+        if !affected_roots.contains(&member) {
+            return Ok(Some(member));
+        }
+        if let Some(Some(first)) = first_replacement_by_root.get(&member) {
+            return Ok(Some(*first));
+        }
+        current = view.next(scene_root, member)?;
+    }
+    Ok(None)
+}
+
+fn affected_explicit_root_closure<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     remove_set: &HashSet<SemanticNodeId>,
 ) -> Result<(HashSet<SemanticNodeId>, HashSet<SemanticNodeId>), SemanticSceneOperationError> {
@@ -532,7 +806,7 @@ fn affected_explicit_root_closure(
         if !affected.insert(node) {
             continue;
         }
-        for &parent in target_node_checked(store, node)?.parents() {
+        for parent in view.parents(node)? {
             if parent == scene_root {
                 roots.insert(node);
             } else {
@@ -543,13 +817,13 @@ fn affected_explicit_root_closure(
     Ok((affected, roots))
 }
 
-fn validated_distinct_nodes(
-    store: &SemanticStore,
+fn validated_distinct_nodes<V: MembershipView>(
+    view: &V,
     ids: &[SemanticNodeId],
 ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
     let mut seen = HashSet::with_capacity(ids.len());
     for &id in ids {
-        target_node_checked(store, id)?;
+        view.target(id)?;
         if !seen.insert(id) {
             return Err(SemanticSceneOperationError::DuplicateMembershipTarget(id));
         }
@@ -571,15 +845,15 @@ enum ProjectionBoundary<'a> {
 }
 
 impl ProjectionBoundary<'_> {
-    fn contains(
+    fn contains<V: MembershipView>(
         self,
-        store: &SemanticStore,
+        view: &V,
         current: SemanticNodeId,
     ) -> Result<bool, SemanticSceneOperationError> {
         Ok(match self {
             Self::Declarations(roots) => roots.contains(&current),
-            Self::SceneRoots => target_node_checked(store, current)?.is_scene_owned(),
-            Self::Family(root) => target_node_checked(store, root)?.contains_member(current),
+            Self::SceneRoots => view.target(current)?.scene_owned,
+            Self::Family(root) => view.contains(root, current)?,
         })
     }
 }
@@ -602,7 +876,7 @@ impl SemanticStore {
             return Ok(());
         }
 
-        let remove_set = downward_target_closure(self, &explicit)?;
+        let remove_set = downward_target_closure(&StoreMembershipView(self), &explicit)?;
         let plans = plan_scene_restructure(self, &remove_set)?;
 
         let mut writes = 0;
@@ -682,8 +956,8 @@ fn validated_unique_nodes(
     Ok(unique)
 }
 
-fn downward_target_closure(
-    store: &SemanticStore,
+fn downward_target_closure<V: MembershipView>(
+    view: &V,
     roots: &[SemanticNodeId],
 ) -> Result<HashSet<SemanticNodeId>, SemanticSceneOperationError> {
     let mut closure = HashSet::new();
@@ -692,9 +966,12 @@ fn downward_target_closure(
         if !closure.insert(id) {
             continue;
         }
-        let node = target_node_checked(store, id)?;
-        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-            stack.extend(node.members());
+        if view.target(id)?.family {
+            let mut member = view.first(id)?;
+            while let Some(current) = member {
+                member = view.next(id, current)?;
+                stack.push(current);
+            }
         }
     }
     Ok(closure)
@@ -736,7 +1013,7 @@ fn plan_scene_restructure(
         let mut promoted = HashSet::new();
         let mut replacements = Vec::new();
         collect_root_replacements(
-            store,
+            &StoreMembershipView(store),
             root,
             root,
             remove_set,
@@ -774,8 +1051,8 @@ fn plan_scene_restructure(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn collect_root_replacements(
-    store: &SemanticStore,
+fn collect_root_replacements<V: MembershipView>(
+    view: &V,
     current: SemanticNodeId,
     current_root: SemanticNodeId,
     remove_set: &HashSet<SemanticNodeId>,
@@ -796,8 +1073,8 @@ fn collect_root_replacements(
         return Ok(());
     }
 
-    let node = target_node_checked(store, current)?;
-    if current != current_root && boundary.contains(store, current)? {
+    let target = view.target(current)?;
+    if current != current_root && boundary.contains(view, current)? {
         return Ok(());
     }
 
@@ -808,11 +1085,13 @@ fn collect_root_replacements(
         return Ok(());
     }
 
-    if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-        for member in node.members_iter() {
+    if target.family {
+        let mut member = view.first(current)?;
+        while let Some(next) = member {
+            member = view.next(current, next)?;
             collect_root_replacements(
-                store,
-                member,
+                view,
+                next,
                 current_root,
                 remove_set,
                 affected,
@@ -837,6 +1116,45 @@ mod tests {
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
         store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
+    }
+
+    #[test]
+    fn prepared_membership_stages_promoted_sibling_without_root_scan() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let child = object(&mut store, 1.0);
+        let sibling = object(&mut store, 2.0);
+        let family = store.insert_family();
+        store.add_semantic_family_member(family, child).unwrap();
+        store.add_semantic_family_member(family, sibling).unwrap();
+        let transaction = plan_semantic_scene_membership(
+            &store,
+            root,
+            SemanticSceneMembershipRequest::Add(&[family]),
+        )
+        .unwrap();
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Remove(&[child]),
+        )
+        .unwrap();
+        let prepared = stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Add(&[sibling]),
+        )
+        .unwrap();
+        prepared.commit();
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            vec![sibling]
+        );
+        assert_eq!(
+            store.semantic_family_members_checked(family).unwrap(),
+            vec![child, sibling]
+        );
     }
 
     #[test]

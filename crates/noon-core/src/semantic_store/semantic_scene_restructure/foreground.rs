@@ -25,36 +25,50 @@ pub fn stage_semantic_foreground_removal(
     removed: &[SemanticNodeId],
     transaction: &mut SemanticMutationTransaction,
 ) -> Result<(), SemanticSceneOperationError> {
-    let root = target_node_checked(store, scene_root)?;
-    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
+    stage_removal(
+        &StoreMembershipView(store),
+        scene_root,
+        removed,
+        transaction,
+    )
+}
+
+pub(super) fn stage_removal<V: MembershipView>(
+    view: &V,
+    scene_root: SemanticNodeId,
+    removed: &[SemanticNodeId],
+    transaction: &mut SemanticMutationTransaction,
+) -> Result<(), SemanticSceneOperationError> {
+    if !view.target(scene_root)?.family {
         return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
     }
-    let removed = validated_distinct_nodes(store, removed)?;
-    if root.foreground_members().is_empty() || removed.is_empty() {
+    let removed = validated_distinct_nodes(view, removed)?;
+    let previous = view.foreground(scene_root)?;
+    if previous.is_empty() || removed.is_empty() {
         return Ok(());
     }
-    let removal = downward_target_closure(store, &removed)?;
-    let members = project_members(store, scene_root, &removal, None)?;
-    if members != root.foreground_members() {
+    let removal = downward_target_closure(view, &removed)?;
+    let members = project_members(view, scene_root, &removal, None)?;
+    if members != previous {
         transaction.set_foreground_members(scene_root, members);
     }
     Ok(())
 }
 
-pub(super) fn replace_members(
-    store: &SemanticStore,
+pub(super) fn replace_members<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     old: SemanticNodeId,
     new: SemanticNodeId,
 ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
-    let previous = target_node_checked(store, scene_root)?.foreground_members();
+    let previous = view.foreground(scene_root)?;
     if previous.is_empty() {
         return Ok(Vec::new());
     }
-    let (affected, _) = affected_explicit_root_closure(store, scene_root, &HashSet::from([old]))?;
+    let (affected, _) = affected_explicit_root_closure(view, scene_root, &HashSet::from([old]))?;
     let replaces_foreground = previous.iter().any(|id| affected.contains(id));
-    let mut removal = downward_target_closure(store, &[old])?;
-    let target_members = downward_target_closure(store, &[new])?;
+    let mut removal = downward_target_closure(view, &[old])?;
+    let target_members = downward_target_closure(view, &[new])?;
     let replacement = if replaces_foreground {
         // The target takes the replaced foreground slot. Retire independently
         // declared source descendants too; their preserved family handles must
@@ -68,17 +82,17 @@ pub(super) fn replace_members(
         removal.retain(|id| !target_members.contains(id));
         None
     };
-    project_members(store, scene_root, &removal, replacement)
+    project_members(view, scene_root, &removal, replacement)
 }
 
-pub(super) fn project_members(
-    store: &SemanticStore,
+pub(super) fn project_members<V: MembershipView>(
+    view: &V,
     scene_root: SemanticNodeId,
     removal: &HashSet<SemanticNodeId>,
     replacement: Option<(SemanticNodeId, SemanticNodeId)>,
 ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
-    let previous = target_node_checked(store, scene_root)?.foreground_members();
-    let (affected, _) = affected_explicit_root_closure(store, scene_root, removal)?;
+    let previous = view.foreground(scene_root)?;
+    let (affected, _) = affected_explicit_root_closure(view, scene_root, removal)?;
     let roots = previous.iter().copied().collect::<HashSet<_>>();
     let mut members = Vec::new();
     let mut unique = HashSet::new();
@@ -86,7 +100,7 @@ pub(super) fn project_members(
         let mut promoted = HashSet::new();
         let mut projected = Vec::new();
         collect_root_replacements(
-            store,
+            view,
             root,
             root,
             removal,
