@@ -11,6 +11,9 @@ pub enum SemanticTransactionReadError {
     PendingNodeFromDifferentTransaction(SemanticLocalNodeToken),
     UnknownPendingNode(SemanticLocalNodeToken),
     RemovedPendingNode(SemanticLocalNodeToken),
+    /// Existing-handle planners cannot traverse an order link that leads to a
+    /// transaction-local node. They must reject rather than truncate it.
+    PendingMembershipAdjacency(SemanticLocalNodeToken),
     RemovedExistingNode(SemanticNodeId),
     UnknownExistingNode(SemanticNodeId),
     NotObject(SemanticTransactionNodeRef),
@@ -172,11 +175,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => None,
         });
-        Ok((
-            preflight,
-            next_revision,
-            tokens.zip(store.preview_node_allocations()).collect(),
-        ))
+        let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
+        Ok((preflight, next_revision, planned_nodes))
     }
 
     /// Allocator-derived identity for fallible execution preparation under this
@@ -534,10 +534,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         family: SemanticNodeId,
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
-        Ok(self
-            .preflight
+        self.preflight
             .family_edges
-            .first_existing(self.store, family))
+            .first_existing(self.store, family)
     }
 
     /// Next member in final staged order, without cloning an unrelated root.
@@ -548,10 +547,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
         self.validate_existing_authoring_node(member)?;
-        Ok(self
-            .preflight
+        self.preflight
             .family_edges
-            .next_existing(self.store, family, member))
+            .next_existing(self.store, family, member)
     }
 
     /// Previous member in final staged order, without cloning an unrelated root.
@@ -562,10 +560,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_family(family)?;
         self.validate_existing_authoring_node(member)?;
-        Ok(self
-            .preflight
+        self.preflight
             .family_edges
-            .previous_existing(self.store, family, member))
+            .previous_existing(self.store, family, member)
     }
 
     pub(crate) fn staged_parent_additions_existing(
@@ -573,11 +570,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         member: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticTransactionReadError> {
         self.validate_existing_authoring_node(member)?;
-        self.preflight
-            .family_edges
-            .added_parents_existing(member)
-            .map(Ok)
-            .collect()
+        self.preflight.family_edges.added_parents_existing(member)
     }
 
     /// Read final foreground declarations without inspecting display membership.

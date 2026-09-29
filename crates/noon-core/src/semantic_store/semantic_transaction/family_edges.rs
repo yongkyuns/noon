@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     SemanticMutationTransactionError, SemanticSceneOperationError, SemanticStoreError,
-    SemanticTransactionNodeRef, TransactionNodeCatalog,
+    SemanticTransactionNodeRef, SemanticTransactionReadError, TransactionNodeCatalog,
 };
 
 #[derive(Debug, Default)]
@@ -257,7 +257,7 @@ impl FamilyEdgePreflight {
         &self,
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         self.order.first_existing(store, family)
     }
     pub(super) fn next_existing(
@@ -265,7 +265,7 @@ impl FamilyEdgePreflight {
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
         member: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         self.order.next_existing(store, family, member)
     }
     pub(super) fn previous_existing(
@@ -273,25 +273,26 @@ impl FamilyEdgePreflight {
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
         member: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         self.order.previous_existing(store, family, member)
     }
     pub(super) fn added_parents_existing(
         &self,
         member: crate::SemanticNodeId,
-    ) -> impl Iterator<Item = crate::SemanticNodeId> + '_ {
-        self.added_parents
-            .get(&member.into())
-            .into_iter()
-            .flatten()
-            .filter_map(move |family| {
-                let family = family.existing()?;
-                self.overrides
-                    .get(&(family.into(), member.into()))
-                    .copied()
-                    .filter(|present| *present)
-                    .map(|_| family)
-            })
+    ) -> Result<Vec<crate::SemanticNodeId>, SemanticTransactionReadError> {
+        let mut parents = Vec::new();
+        for family in self.added_parents.get(&member.into()).into_iter().flatten() {
+            if !self
+                .overrides
+                .get(&(*family, member.into()))
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            parents.push(existing_member(*family)?);
+        }
+        Ok(parents)
     }
 
     fn reaches(
@@ -346,10 +347,10 @@ impl FamilyOrderOverlay {
         &self,
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         match self.first.get(&family.into()) {
-            Some(member) => member.and_then(|member| member.existing()),
-            None => store.node(family).and_then(|node| node.first_member()),
+            Some(member) => existing_member_option(*member),
+            None => Ok(store.node(family).and_then(|node| node.first_member())),
         }
     }
     fn next_existing(
@@ -357,10 +358,10 @@ impl FamilyOrderOverlay {
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
         member: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         match self.links.get(&(family.into(), member.into())) {
-            Some(link) => link.next.and_then(|node| node.existing()),
-            None => store.node(family).and_then(|node| node.next_member(member)),
+            Some(link) => existing_member_option(link.next),
+            None => Ok(store.node(family).and_then(|node| node.next_member(member))),
         }
     }
     fn previous_existing(
@@ -368,12 +369,12 @@ impl FamilyOrderOverlay {
         store: &crate::SemanticStore,
         family: crate::SemanticNodeId,
         member: crate::SemanticNodeId,
-    ) -> Option<crate::SemanticNodeId> {
+    ) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
         match self.links.get(&(family.into(), member.into())) {
-            Some(link) => link.previous.and_then(|node| node.existing()),
-            None => store
+            Some(link) => existing_member_option(link.previous),
+            None => Ok(store
                 .node(family)
-                .and_then(|node| node.previous_member(member)),
+                .and_then(|node| node.previous_member(member))),
         }
     }
     fn last(
@@ -487,4 +488,21 @@ impl FamilyOrderOverlay {
                 next: catalog.next_member(family, member),
             })
     }
+}
+
+fn existing_member(
+    node: SemanticTransactionNodeRef,
+) -> Result<crate::SemanticNodeId, SemanticTransactionReadError> {
+    match node {
+        SemanticTransactionNodeRef::Existing(node) => Ok(node),
+        SemanticTransactionNodeRef::Pending(token) => Err(
+            SemanticTransactionReadError::PendingMembershipAdjacency(token),
+        ),
+    }
+}
+
+fn existing_member_option(
+    node: Option<SemanticTransactionNodeRef>,
+) -> Result<Option<crate::SemanticNodeId>, SemanticTransactionReadError> {
+    node.map(existing_member).transpose()
 }

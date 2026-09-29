@@ -272,6 +272,7 @@ fn prepared_read_error(error: crate::SemanticTransactionReadError) -> SemanticSc
         crate::SemanticTransactionReadError::PendingNodeFromDifferentTransaction(t)
         | crate::SemanticTransactionReadError::UnknownPendingNode(t)
         | crate::SemanticTransactionReadError::RemovedPendingNode(t)
+        | crate::SemanticTransactionReadError::PendingMembershipAdjacency(t)
         | crate::SemanticTransactionReadError::NotFamily(SemanticTransactionNodeRef::Pending(t)) => {
             SemanticSceneOperationError::InvalidPendingAdmission(t)
         }
@@ -796,9 +797,7 @@ fn stage_explicit_root_projection<V: MembershipView>(
     for (_, replacements, before) in &plans {
         let mut anchor = *before;
         for replacement in replacements.iter().rev() {
-            if reorder_needed(view, scene_root, *replacement, anchor)? {
-                transaction.reorder_member(scene_root, *replacement, anchor);
-            }
+            transaction.reorder_member(scene_root, *replacement, anchor);
             anchor = Some(*replacement);
         }
     }
@@ -807,21 +806,10 @@ fn stage_explicit_root_projection<V: MembershipView>(
         ExplicitPlacement::Head => head_anchor,
     };
     for member in explicit.iter().rev() {
-        if reorder_needed(view, scene_root, *member, anchor)? {
-            transaction.reorder_member(scene_root, *member, anchor);
-        }
+        transaction.reorder_member(scene_root, *member, anchor);
         anchor = Some(*member);
     }
     Ok(())
-}
-
-fn reorder_needed<V: MembershipView>(
-    view: &V,
-    family: SemanticNodeId,
-    member: SemanticNodeId,
-    before: Option<SemanticNodeId>,
-) -> Result<bool, SemanticSceneOperationError> {
-    Ok(view.next(family, member)? != before)
 }
 
 fn first_projected_root_after_restructure<V: MembershipView>(
@@ -1160,7 +1148,8 @@ fn collect_root_replacements<V: MembershipView>(
 mod tests {
     use super::*;
     use crate::{
-        SemanticMutationStats, SemanticNodeResidency, SemanticObjectState, StoredGeometry,
+        SemanticMutationStats, SemanticNodeCreation, SemanticNodeResidency, SemanticObjectState,
+        StoredGeometry,
     };
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -1269,6 +1258,46 @@ mod tests {
         };
 
         assert_eq!(view.parents(nested).unwrap(), vec![outer, root]);
+    }
+
+    #[test]
+    fn prepared_existing_membership_rejects_pending_order_neighbor_without_losing_proof() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let a = object(&mut store, 1.0);
+        let b = object(&mut store, 2.0);
+        store.add_semantic_family_member(root, a).unwrap();
+        store.add_semantic_family_member(root, b).unwrap();
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Circle { radius: 3.0 }),
+        ));
+        transaction.add_member(root, pending);
+        transaction.reorder_member_ref(root, pending, Some(b.into()));
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let pending_id = prepared.planned_node_id(pending).unwrap();
+
+        let error = match stage_prepared_semantic_scene_membership(
+            prepared,
+            root,
+            SemanticSceneMembershipRequest::Clear,
+        ) {
+            Ok(_) => panic!("existing-handle planner accepted a pending order neighbor"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.kind(),
+            PreparedSemanticMembershipErrorKind::Operation(
+                SemanticSceneOperationError::InvalidPendingAdmission(token)
+            ) if *token == pending
+        ));
+
+        error.into_prepared().commit();
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            vec![a, pending_id, b]
+        );
     }
 
     fn ordered_root_store() -> (
