@@ -852,8 +852,18 @@ function stopForSourceEdit() {
   const priorRun = sceneRunPromise;
   const client = authoringClient;
   const continuation = activeSourceContinuation;
-  const cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
-  if (continuation === null) {
+  let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
+  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
+    // A completed source run can keep its renderer, canvas and warm VM. The
+    // existing semantic transition replaces the execution endpoint atomically.
+    // Active/stuck source continuations still use bounded cancellation below.
+    const retainedPlayer = player;
+    canvas.style.visibility = "hidden";
+    stopMetricsPolling();
+    cancellation = retainedPlayer.pause().catch(() => {
+      discardEarlyContinuationRuntime(retainedPlayer);
+    });
+  } else if (continuation === null) {
     discardEarlyContinuationRuntime(player);
   } else {
     // Suppress old frames immediately, but let cooperative cancellation reach
@@ -962,6 +972,8 @@ async function runScene() {
               discardEarlyContinuationRuntime(attachedPlayer);
               throw new Error("Python semantic continuation was superseded during startup");
             }
+            adoptRuntimeCanvas(attachedPlayer);
+            startMetricsPolling();
             updatePlaybackControls({
               supported: false,
               player: attachedPlayer,
@@ -1087,6 +1099,8 @@ async function runScene() {
       status.dataset.executionMode = player.mode;
       const report = await player.metrics();
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-metrics");
+      adoptRuntimeCanvas(player);
+      startMetricsPolling();
 
       const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
       const phase = setPlaybackRuntimeStatus(
