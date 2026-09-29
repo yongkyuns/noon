@@ -1641,7 +1641,7 @@ impl SemanticExecutionPlayer {
         let transaction = collector
             .take()
             .map(|existing| existing.transaction)
-            .unwrap_or_else(SemanticMutationTransaction::new);
+            .unwrap_or_default();
         if stages == MAX_CALLBACK_MEMBERSHIP_STAGES {
             self.callback_membership_transaction = Some(CallbackMembershipCollector {
                 token,

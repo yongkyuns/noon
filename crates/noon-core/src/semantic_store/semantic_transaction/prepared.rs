@@ -61,6 +61,12 @@ pub struct PreparedSemanticMutationTransaction<'a> {
     planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
 }
 
+struct PreparedTransactionParts {
+    preflight: SemanticTransactionPreflight,
+    next_revision: Option<SceneRevision>,
+    planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
+}
+
 impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub(super) fn new(
         transaction: SemanticMutationTransaction,
@@ -79,11 +85,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticMutationTransactionError,
         ),
     > {
-        let (preflight, next_revision, planned_nodes) =
-            match Self::preflight_parts(&transaction, store) {
-                Ok(parts) => parts,
-                Err(error) => return Err((transaction, error)),
-            };
+        let PreparedTransactionParts {
+            preflight,
+            next_revision,
+            planned_nodes,
+        } = match Self::preflight_parts(&transaction, store) {
+            Ok(parts) => parts,
+            Err(error) => return Err((transaction, error)),
+        };
         Ok(Self {
             store,
             transaction,
@@ -117,7 +126,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub(crate) fn with_existing_plan(
         self,
         plan: SemanticMutationTransaction,
-    ) -> Result<Self, (Self, SemanticMutationTransactionError)> {
+    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
         debug_assert!(plan.mutations.iter().all(|mutation| {
             !matches!(
                 mutation,
@@ -142,24 +151,27 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let original_repeated_membership = transaction.allow_repeated_membership_mutations;
         transaction.allow_repeated_membership_mutations = true;
         transaction.mutations.extend(plan.mutations);
-        let (candidate_preflight, candidate_next_revision, candidate_planned_nodes) =
-            match Self::preflight_parts(&transaction, store) {
-                Ok(parts) => parts,
-                Err(error) => {
-                    transaction.mutations.truncate(original_len);
-                    transaction.allow_repeated_membership_mutations = original_repeated_membership;
-                    return Err((
-                        Self {
-                            store,
-                            transaction,
-                            preflight,
-                            next_revision,
-                            planned_nodes,
-                        },
-                        error,
-                    ));
-                }
-            };
+        let PreparedTransactionParts {
+            preflight: candidate_preflight,
+            next_revision: candidate_next_revision,
+            planned_nodes: candidate_planned_nodes,
+        } = match Self::preflight_parts(&transaction, store) {
+            Ok(parts) => parts,
+            Err(error) => {
+                transaction.mutations.truncate(original_len);
+                transaction.allow_repeated_membership_mutations = original_repeated_membership;
+                return Err((
+                    Box::new(Self {
+                        store,
+                        transaction,
+                        preflight,
+                        next_revision,
+                        planned_nodes,
+                    }),
+                    error,
+                ));
+            }
+        };
         Ok(Self {
             store,
             transaction,
@@ -172,14 +184,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     fn preflight_parts(
         transaction: &SemanticMutationTransaction,
         store: &SemanticStore,
-    ) -> Result<
-        (
-            SemanticTransactionPreflight,
-            Option<SceneRevision>,
-            HashMap<SemanticLocalNodeToken, SemanticNodeId>,
-        ),
-        SemanticMutationTransactionError,
-    > {
+    ) -> Result<PreparedTransactionParts, SemanticMutationTransactionError> {
         let preflight = transaction.preflight(store)?;
         let next_revision = if preflight.changed.iter().any(|changed| *changed) {
             Some(
@@ -205,7 +210,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             _ => None,
         });
         let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
-        Ok((preflight, next_revision, planned_nodes))
+        Ok(PreparedTransactionParts {
+            preflight,
+            next_revision,
+            planned_nodes,
+        })
     }
 
     /// Allocator-derived identity for fallible execution preparation under this

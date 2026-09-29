@@ -31,7 +31,7 @@ pub enum SemanticSceneMembershipRequest<'a> {
 /// transaction. Callers that handle an operation failure can continue staging
 /// later callback operations or commit the work already prepared.
 pub struct PreparedSemanticMembershipError<'a> {
-    prepared: PreparedSemanticMutationTransaction<'a>,
+    prepared: Box<PreparedSemanticMutationTransaction<'a>>,
     kind: PreparedSemanticMembershipErrorKind,
 }
 
@@ -51,12 +51,12 @@ impl<'a> PreparedSemanticMembershipError<'a> {
         PreparedSemanticMutationTransaction<'a>,
         PreparedSemanticMembershipErrorKind,
     ) {
-        (self.prepared, self.kind)
+        (*self.prepared, self.kind)
     }
 
     /// Recover the prior prepared transaction after a caught staging error.
     pub fn into_prepared(self) -> PreparedSemanticMutationTransaction<'a> {
-        self.prepared
+        *self.prepared
     }
 
     /// The operation or transaction preflight error that rejected this stage.
@@ -368,7 +368,7 @@ pub fn stage_prepared_semantic_scene_membership<'a>(
         Ok(plan) => plan,
         Err(kind) => {
             return Err(PreparedSemanticMembershipError {
-                prepared,
+                prepared: Box::new(prepared),
                 kind: PreparedSemanticMembershipErrorKind::Operation(kind),
             });
         }
