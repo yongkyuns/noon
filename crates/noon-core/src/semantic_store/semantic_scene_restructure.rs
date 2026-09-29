@@ -42,6 +42,18 @@ pub enum PreparedSemanticMembershipErrorKind {
 }
 
 impl<'a> PreparedSemanticMembershipError<'a> {
+    /// Recover both the still-valid prior transaction and the reason that the
+    /// additional membership operation was rejected. This lets a callback
+    /// boundary report the typed failure without discarding its prepared proof.
+    pub fn into_parts(
+        self,
+    ) -> (
+        PreparedSemanticMutationTransaction<'a>,
+        PreparedSemanticMembershipErrorKind,
+    ) {
+        (self.prepared, self.kind)
+    }
+
     /// Recover the prior prepared transaction after a caught staging error.
     pub fn into_prepared(self) -> PreparedSemanticMutationTransaction<'a> {
         self.prepared

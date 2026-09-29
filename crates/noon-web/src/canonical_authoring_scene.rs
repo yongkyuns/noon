@@ -29,7 +29,10 @@ mod wait_bootstrap_tests;
 
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
-use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
+use noon_core::{
+    HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticSceneMembershipRequest, SemanticStore, SemanticVec3,
+};
 
 #[derive(Clone)]
 enum OwnedSceneMembershipMember {
@@ -61,6 +64,89 @@ struct SceneMembershipBatch {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
+    /// Validate only existing typed handles for one required callback's scene
+    /// membership edit. The callback boundary cannot create Python bindings or
+    /// infer identity from a numeric node slot: every target stays attached to
+    /// its original semantic store until this closure stages the shared core
+    /// request.
+    fn with_existing_callback_membership<R>(
+        &self,
+        store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+        apply: impl FnOnce(SemanticSceneMembershipRequest<'_>) -> Result<R, AuthoringFailure>,
+    ) -> Result<R, AuthoringFailure> {
+        if !self.bindings.is_empty() {
+            return Err("callback membership does not accept wrapper binding reservations".into());
+        }
+        let mut ids = Vec::with_capacity(self.members.len());
+        let mut seen = BTreeSet::new();
+        for member in &self.members {
+            let id = match member {
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: Some(_),
+                    ..
+                } => {
+                    return Err(
+                        "callback membership accepts existing handles without wrapper binding IDs"
+                            .into(),
+                    );
+                }
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                } => {
+                    if !std::rc::Rc::ptr_eq(store, handle.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    handle.validate().map_err(AuthoringFailure::from)?;
+                    handle.node_id()
+                }
+                OwnedSceneMembershipMember::Family(family) => {
+                    if !std::rc::Rc::ptr_eq(store, family.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    family.validate().map_err(AuthoringFailure::from)?;
+                    family.node_id()
+                }
+            };
+            if !seen.insert(id) {
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "membership.duplicate_target",
+                    "callback membership batch contains a duplicate target",
+                ));
+            }
+            ids.push(id);
+        }
+        let request = match self.kind {
+            SceneMembershipBatchKind::Add => SemanticSceneMembershipRequest::Add(&ids),
+            SceneMembershipBatchKind::Remove => SemanticSceneMembershipRequest::Remove(&ids),
+            SceneMembershipBatchKind::Clear => {
+                if !ids.is_empty() {
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.clear_members",
+                        "Clear membership batch must not contain members",
+                    ));
+                }
+                SemanticSceneMembershipRequest::Clear
+            }
+            _ => {
+                return Err(AuthoringFailure::new(
+                    "unsupported_operation",
+                    "callback.membership_operation",
+                    "required callbacks currently support add, remove, and clear membership",
+                ));
+            }
+        };
+        apply(request)
+    }
+
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -3114,6 +3200,17 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
+        /// Keep typed member handles intact until the player has established the
+        /// exact callback/store provenance. No membership JSON or recreated
+        /// node handle crosses this Rust-to-Rust boundary.
+        pub(crate) fn with_existing_callback_membership<R>(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+            apply: impl FnOnce(SemanticSceneMembershipRequest<'_>) -> Result<R, AuthoringFailure>,
+        ) -> Result<R, AuthoringFailure> {
+            self.inner.with_existing_callback_membership(store, apply)
+        }
+
         pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
             if self.inner.kind != SceneMembershipBatchKind::Add {
                 return Err("copy references require an add batch".into());
@@ -8167,6 +8264,67 @@ mod tests {
             scene.integration_store().borrow().scene_revision(),
             revision
         );
+    }
+
+    #[test]
+    fn callback_membership_batch_keeps_original_handle_provenance() {
+        let mut local_scene = noon::Scene::new();
+        let local = local_scene.circle(0.25).unwrap();
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.circle(0.25).unwrap();
+        assert_eq!(local.node_id(), foreign.node_id());
+        let foreign_batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: foreign,
+            }],
+            bindings: Vec::new(),
+        };
+        let error = foreign_batch
+            .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.category, "foreign_handle");
+        assert_eq!(error.code, "authoring.foreign_store");
+
+        let duplicate_batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Remove,
+            members: vec![
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: local.clone(),
+                },
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: local.clone(),
+                },
+            ],
+            bindings: Vec::new(),
+        };
+        let error = duplicate_batch
+            .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "membership.duplicate_target");
+
+        let stale = local_scene.circle(0.5).unwrap();
+        let mut removal = SemanticMutationTransaction::new();
+        removal.remove_node(stale.node_id());
+        removal
+            .apply(&mut local_scene.integration_store().borrow_mut())
+            .unwrap();
+        let stale_batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: stale,
+            }],
+            bindings: Vec::new(),
+        };
+        let error = stale_batch
+            .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.category, "authoring.semantic");
     }
 
     #[test]

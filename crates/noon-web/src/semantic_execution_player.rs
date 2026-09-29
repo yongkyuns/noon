@@ -27,14 +27,15 @@ use noon::integration::{
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
 use noon::ExecutionSession;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::{
+    stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
+    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
+    SemanticSceneMembershipRequest, Vec2,
+};
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
     Transform2D,
-};
-#[cfg(any(target_arch = "wasm32", test))]
-use noon_core::{
-    NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
-    Vec2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1579,6 +1580,72 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    /// Stage one existing-handle root-membership operation beside an exact
+    /// required callback token. The supplied effective batch remains the one
+    /// runtime write authority; membership only extends its prepared semantic
+    /// transaction before the shared callback publication commits both once.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn commit_required_callback_membership(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        request: SemanticSceneMembershipRequest<'_>,
+    ) -> Result<(), AuthoringFailure> {
+        let token = batch.token();
+        let (_, time) = self
+            .pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback membership does not match the player pending phase")?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("callback membership requires a live semantic store")?;
+        let root = self
+            .semantic_root
+            .ok_or("callback membership requires one semantic scene root")?;
+        let mut store = semantics.borrow_mut();
+        let prepared = SemanticMutationTransaction::new()
+            .prepare(&mut store)
+            .map_err(AuthoringFailure::from)?;
+        let prepared = match stage_prepared_semantic_scene_membership(prepared, root, request) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let (prepared, cause) = error.into_parts();
+                drop(prepared);
+                return Err(match cause {
+                    noon_core::PreparedSemanticMembershipErrorKind::Operation(error) => {
+                        AuthoringFailure::from(error)
+                    }
+                    noon_core::PreparedSemanticMembershipErrorKind::Transaction(error) => {
+                        AuthoringFailure::from(error)
+                    }
+                });
+            }
+        };
+        self.session
+            .commit_prepared_required_callback_transaction(batch, prepared)
+            .map_err(AuthoringFailure::from)?;
+        self.clock.seek(time).map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    /// Prove that a typed callback request still belongs to this exact player
+    /// before the WASM membership batch reads any of its handles. The returned
+    /// `Rc` is the canonical store already retained by this player; it does not
+    /// create a scene or transfer ownership.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn callback_membership_store(
+        &self,
+        token: CallbackPhaseToken,
+    ) -> Result<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>, AuthoringFailure> {
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback membership does not match the player pending phase")?;
+        self.semantics
+            .clone()
+            .ok_or("callback membership requires a live semantic store")
+    }
+
     /// Route callback declarations through the same shared semantic publication
     /// as native authoring. The browser host owns no callback schedule mirror.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3098,6 +3165,32 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
+    /// Commit one existing-handle root membership edit for the exact pending
+    /// callback phase. The callback token is decoded only at this host boundary;
+    /// member handles remain typed in Rust and stage through the shared prepared
+    /// semantic transaction before one callback publication.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = commitRequiredCallbackMembership)]
+    pub fn commit_required_callback_membership_wasm(
+        &mut self,
+        token_json: &str,
+        batch: crate::WasmSceneMembershipBatch,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        let store = self
+            .callback_membership_store(token)
+            .map_err(crate::authoring_error::js_error)?;
+        batch
+            .with_existing_callback_membership(&store, |request| {
+                self.commit_required_callback_membership(
+                    EffectivePropertyBatch::new(token, []),
+                    request,
+                )
+            })
+            .map_err(crate::authoring_error::js_error)
+    }
+
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = failCallbackPhaseJson))]
     pub fn fail_callback_phase_json_wasm(
@@ -4333,6 +4426,101 @@ mod tests {
             1.0
         );
         assert_eq!(publication["observation"]["committed"]["dirty"], "all");
+    }
+
+    #[test]
+    fn required_callback_membership_publishes_one_existing_handle_edit() {
+        let mut scene = noon::Scene::new();
+        let callback_target = scene.circle(1.0).unwrap();
+        let removed = scene.circle(0.25).unwrap();
+        scene.add(&callback_target).unwrap();
+        scene.add(&removed).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(callback_target.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            31,
+        )
+        .unwrap();
+
+        player.initial_callback_phase_json().unwrap().unwrap();
+        let token = player.pending_callback_phase.unwrap().0;
+        let before = player.session.publication_context();
+        player
+            .commit_required_callback_membership(
+                EffectivePropertyBatch::new(token, []),
+                SemanticSceneMembershipRequest::Remove(&[removed.node_id()]),
+            )
+            .unwrap();
+
+        assert!(player.pending_callback_phase.is_none());
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap(),
+            vec![callback_target.node_id()]
+        );
+        let after = player.session.publication_context();
+        assert_eq!(
+            after.scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn rejected_callback_membership_keeps_the_pending_phase_retryable() {
+        let mut scene = noon::Scene::new();
+        let callback_target = scene.circle(1.0).unwrap();
+        let member = scene.circle(0.25).unwrap();
+        scene.add(&callback_target).unwrap();
+        scene.add(&member).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(callback_target.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            31,
+        )
+        .unwrap();
+
+        player.initial_callback_phase_json().unwrap().unwrap();
+        let token = player.pending_callback_phase.unwrap().0;
+        let before = player.session.publication_context();
+        let error = player
+            .commit_required_callback_membership(
+                EffectivePropertyBatch::new(token, []),
+                SemanticSceneMembershipRequest::Remove(&[member.node_id(), member.node_id()]),
+            )
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "membership.duplicate_target");
+        assert_eq!(player.pending_callback_phase.unwrap().0, token);
+        assert_eq!(player.session.publication_context(), before);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap(),
+            vec![callback_target.node_id(), member.node_id()]
+        );
     }
 
     #[test]
