@@ -63,6 +63,14 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
         let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let family = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
         let revision = scene.revision();
+        let old_path = first
+            .state()
+            .unwrap()
+            .content
+            .geometry()
+            .unwrap()
+            .resource_handle()
+            .unwrap();
         let resources = scene
             .integration_store()
             .borrow()
@@ -84,8 +92,26 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
                 .borrow()
                 .geometry_resources()
                 .len(),
-            resources + 2
+            resources + 1
         );
+        // Both unique leaves receive a path; the superseded first path retires.
+        // Aliasing first through the nested family must not retain another copy.
+        {
+            let store = scene.integration_store();
+            let store = store.borrow();
+            assert!(store.geometry_resources().get(old_path).is_none());
+            for leaf in [&first, &second] {
+                let path = leaf
+                    .state()
+                    .unwrap()
+                    .content
+                    .geometry()
+                    .unwrap()
+                    .resource_handle()
+                    .unwrap();
+                assert!(store.geometry_resources().get(path).is_some());
+            }
+        }
         assert_eq!(unrelated.state().unwrap(), before_unrelated);
         let revision = scene.revision();
         if live_mode {
