@@ -279,52 +279,51 @@ fn hidpi_changes_logical_units_not_scene_position_and_invalidates_old_binding() 
 fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() {
     for scale in [1.0, 2.0] {
         let mut f = Fixture::new();
-        f.app.pointer_scale_changed(SIZE, scale).unwrap();
+        let size = PhysicalSize::new((640.0 * scale) as u32, (360.0 * scale) as u32);
+        f.app.pointer_scale_changed(size, scale).unwrap();
         let sample = |f: &mut Fixture, x, y| {
-            model_presentation(&mut f.app, SIZE, scale);
+            model_presentation(&mut f.app, size, scale);
             f.app
-                .dispatch_pointer_position(PhysicalPosition::new(x, y), SIZE, scale)
+                .dispatch_pointer_position(PhysicalPosition::new(x * scale, y * scale), size, scale)
                 .unwrap();
         };
         let edge = |f: &mut Fixture, state| {
-            model_presentation(&mut f.app, SIZE, scale);
+            model_presentation(&mut f.app, size, scale);
             f.app
-                .dispatch_pointer_button(MouseButton::Left, state, SIZE, scale)
+                .dispatch_pointer_button(MouseButton::Left, state, size, scale)
                 .unwrap();
         };
 
-        // Match the direct fixture's 248/640,171/360 press and +8 CSS-pixel
-        // move. Native uses an 800x400 backing, so the same normalized samples
-        // are x=310 then 320 at y=190; DPR changes logical CSS units only.
-        sample(&mut f, 310.0, 190.0);
+        // Match both CSS and physical backing sizes of the direct fixture.
+        // The same press and eight-CSS-pixel move must reach the same scene
+        // positions, independent of the device scale used by the native host.
+        let assert_position = |f: &Fixture, x: f32| {
+            let ReactiveValue::Vec2(position) = f.value(f.position) else {
+                panic!("pointer position must be a Vec2");
+            };
+            assert!((position.x - x).abs() < 1e-6);
+            assert!((position.y - 0.2).abs() < 1e-6);
+        };
+        sample(&mut f, 248.0, 171.0);
         assert_eq!(
             f.value(f.viewport),
-            &ReactiveValue::Vec2(Vec2::new((800.0 / scale) as f32, (400.0 / scale) as f32))
+            &ReactiveValue::Vec2(Vec2::new(640.0, 360.0))
         );
-        assert_eq!(
-            f.value(f.position),
-            &ReactiveValue::Vec2(Vec2::new(-1.8, 0.2))
-        );
+        assert_position(&f, -1.6);
         edge(&mut f, ElementState::Pressed);
-        sample(&mut f, 320.0, 190.0);
-        assert_eq!(
-            f.value(f.position),
-            &ReactiveValue::Vec2(Vec2::new(-1.6, 0.2))
-        );
+        sample(&mut f, 256.0, 171.0);
+        assert_position(&f, -64.0 / 45.0);
         edge(&mut f, ElementState::Released);
         assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
         assert_eq!(f.value(f.down), &ReactiveValue::Scalar(1.0));
         assert_eq!(f.value(f.up), &ReactiveValue::Scalar(1.0));
         assert_eq!(f.app.session().frame().time, 0.0);
         assert_eq!(f.app.next_input_sequence, 4);
-        assert_eq!(
-            f.app.pointer.surface,
-            Some(Vec2::new((320.0 / scale) as f32, (190.0 / scale) as f32))
-        );
+        assert_eq!(f.app.pointer.surface, Some(Vec2::new(256.0, 171.0)));
 
-        sample(&mut f, 310.0, 190.0);
+        sample(&mut f, 248.0, 171.0);
         edge(&mut f, ElementState::Pressed);
-        sample(&mut f, 320.0, 190.0);
+        sample(&mut f, 256.0, 171.0);
         f.app.pointer_left().unwrap();
         assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
         assert_eq!(
