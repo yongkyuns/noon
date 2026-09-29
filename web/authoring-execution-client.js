@@ -209,7 +209,6 @@ export class AuthoringExecutionClient {
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -323,7 +322,6 @@ export class AuthoringExecutionClient {
         this.#rendererBackend = ready.render.backend;
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
-        this.#resizeCurrentCanvas();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -401,11 +399,19 @@ export class AuthoringExecutionClient {
     }
     const transition = rebuild();
     this.#transition = transition;
+    let completed = false;
     try {
-      return await transition;
+      const result = await transition;
+      completed = true;
+      return result;
     } finally {
       if (this.#transition === transition) {
+        if (completed) this.#retirePointerInput();
         this.#transition = null;
+        // ResizeObserver may have delivered while the transition was awaiting
+        // its final state query. Apply the latest layout before fresh input is
+        // attached; no later resize event is guaranteed for that same size.
+        if (completed) this.#resizeCurrentCanvas();
       }
     }
   }

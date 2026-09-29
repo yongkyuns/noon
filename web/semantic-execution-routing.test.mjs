@@ -541,6 +541,28 @@ test("native input submitted during a scene transition is rejected rather than q
   assert.equal(replacement.attachments.at(-1).controlPort.peer.messages.some(message => message.type === "native_event"), false);
 });
 
+test("a layout change during the final transition query is applied before readiness", async t => {
+  const canvas = new FakeCanvas();
+  const { client, render } = await startInputClient(t, canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "resized-replacement" }, { authoringClient: replacement },
+  );
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  canvas.clientWidth = 960;
+  canvas.clientHeight = 540;
+  FakeResizeObserver.instances.at(-1).deliver();
+  assert.equal(request(render, "resize").width, 640, "transition still owns resize admission");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  await switching;
+  assert.equal(request(render, "resize").width, 960);
+  assert.equal(request(render, "resize").height, 540);
+});
+
 test("semantic replacement registers its pointer view before becoming interactive", async t => {
   const dom = pointerCanvas(t);
   const { client, render } = await startInputClient(t, dom.canvas);
