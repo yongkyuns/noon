@@ -154,7 +154,8 @@ pub(crate) fn apply_effective_property_to_row(
 ) {
     let (property, value) = match write {
         EffectivePropertyWrite::Presence { presence, .. } => {
-            (Property::Presence, EvaluatedValue::Bool(presence))
+            *row.presence = presence;
+            return;
         }
         EffectivePropertyWrite::Transform { transform, .. } => {
             release_render_transform(row.render_geometry, row.render_transform, *row.transform);

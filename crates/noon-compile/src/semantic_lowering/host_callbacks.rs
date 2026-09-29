@@ -124,6 +124,7 @@ pub struct SemanticHostCallbackPlan {
     events: BTreeSet<SemanticHostCallbackEvent>,
     activations: BTreeSet<SemanticHostCallbackEvent>,
     targets: HashMap<SemanticNodeId, (usize, Vec<usize>)>,
+    host_revision_targets: HashSet<SemanticNodeId>,
     native_updaters: BTreeMap<usize, Vec<SemanticNativeUpdater>>,
     next_index: usize,
 }
@@ -170,6 +171,15 @@ impl SemanticHostCallbackPlan {
             .into_iter()
             .flat_map(|(order, _)| self.native_updaters.get(order))
             .flat_map(|updaters| updaters.iter().copied())
+    }
+
+    /// Preserve a host barrier where an unchanged native declaration could
+    /// become observable after a preceding host writes its target.
+    pub fn has_native_binding_between(&self, start: (usize, u64), end: (usize, u64)) -> bool {
+        self.native_updaters
+            .range(start.0..=end.0)
+            .flat_map(|(_, updaters)| updaters)
+            .any(|native| native.sort_key() > start && native.sort_key() < end)
     }
 
     pub fn ordered_relevant_updates(
@@ -278,6 +288,7 @@ impl SemanticHostCallbackPlan {
     }
 
     fn insert(&mut self, target: SemanticNodeId, activation: SemanticUpdaterRegistration) {
+        self.host_revision_targets.insert(target);
         let (order, indices) = self.targets.get_mut(&target).expect("indexed target");
         let index = self.next_index;
         self.next_index += 1;
@@ -383,7 +394,7 @@ impl SemanticHostCallbackPlan {
         }
         let mut targets = Vec::with_capacity(changed.len());
         for target in changed {
-            if !self.targets.contains_key(&target) {
+            if !self.host_revision_targets.contains(&target) {
                 return Err(Error::UpdaterTargetNotIndexed { target });
             }
             targets.push((
@@ -669,8 +680,9 @@ mod tests {
         assert_eq!(revised.targets.len(), 1);
         assert_eq!(revised.targets[0].0, first);
         assert_eq!(revised.targets[0].1.len(), 2);
+        prepared.commit();
         let mut updated = original.clone();
-        updated.apply_revision(revised);
+        updated.apply_revision(revised, &store);
         let mut ordered = updated.occurrences().copied().collect::<Vec<_>>();
         ordered.sort_by_key(|item| item.order());
         assert_eq!(
@@ -684,8 +696,7 @@ mod tests {
                 (second, HostCallbackId::new(8))
             ]
         );
-        drop(prepared);
-        assert_eq!(store.scene_revision(), before);
+        assert_ne!(store.scene_revision(), before);
         assert_eq!(original.occurrences().len(), 2);
     }
     #[test]
@@ -714,6 +725,7 @@ mod tests {
             2,
             "preflight owns only the changed target's history"
         );
+        prepared.commit();
         plan.apply_revision(revision, &store);
         assert_eq!(plan.occurrence(unrelated_index), unrelated);
         assert_eq!(plan.next_activation_after(Some(2.0)), Some(100.0));

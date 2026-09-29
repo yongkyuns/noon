@@ -1313,13 +1313,26 @@ impl ExecutionSession {
                 }
                 Some(SemanticOrderedUpdater::Native(_)) => break,
                 Some(SemanticOrderedUpdater::Host(index)) => {
+                    // Only fuse hosts when the compiler index proves that no
+                    // unchanged native declaration lies between them. A host
+                    // write can make that declaration observable even if it
+                    // was not part of the initial dirty binding set.
+                    let key = self.ordered_update_key(SemanticOrderedUpdater::Host(index));
+                    if !invocations.is_empty()
+                        && self
+                            .callback_schedule
+                            .plan
+                            .has_native_binding_between(last_host_key, key)
+                    {
+                        break;
+                    }
                     let occurrence = self.callback_schedule.plan.occurrence(index);
                     invocations.push(RequiredCallbackInvocation {
                         occurrence_index: index,
                         callback_id: occurrence.callback_id(),
                         target: occurrence.target(),
                     });
-                    last_host_key = self.ordered_update_key(SemanticOrderedUpdater::Host(index));
+                    last_host_key = key;
                     cursor += 1;
                 }
                 None => break,
@@ -1368,6 +1381,9 @@ impl ExecutionSession {
                     .with_region(pending.region),
             ));
         }
+        if pending.completed {
+            return Err(ExecutionSessionCallbackError::IncompleteRegion);
+        }
         if batch.region != pending.region {
             return Err(ExecutionSessionCallbackError::StaleRegion {
                 expected: pending.region,
@@ -1377,10 +1393,17 @@ impl ExecutionSession {
         let mut overlay = pending.overlay.clone();
         for &write in &batch.writes {
             if overlay.object(write.object()).is_none() {
-                let CallbackReadValue::Object(object) = self.required_callback_read(
-                    pending.token,
-                    CallbackReadRequest::Object(write.object()),
-                )?
+                let CallbackReadValue::Object(object) = self
+                    .required_callback_read(
+                        pending.token,
+                        CallbackReadRequest::Object(write.object()),
+                    )
+                    .map_err(|error| match error {
+                        ExecutionSessionCallbackReadError::UnknownObject(object) => {
+                            ExecutionSessionCallbackError::UnknownObject(object)
+                        }
+                        other => ExecutionSessionCallbackError::Read(other),
+                    })?
                 else {
                     unreachable!("object request returns object properties")
                 };
@@ -1554,7 +1577,7 @@ impl ExecutionSession {
         &mut self,
         batch: EffectivePropertyBatch,
     ) -> Result<&FrameState, ExecutionSessionCallbackError> {
-        self.require_completed_callback_regions()?;
+        let batch = self.complete_callback_batch_for_commit(batch)?;
         let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
         let pending = self
             .pending_callback
@@ -1613,15 +1636,41 @@ impl ExecutionSession {
         Ok((effective, receipt_domains))
     }
 
-    fn require_completed_callback_regions(&self) -> Result<(), ExecutionSessionCallbackError> {
+    fn complete_callback_batch_for_commit(
+        &mut self,
+        batch: EffectivePropertyBatch,
+    ) -> Result<EffectivePropertyBatch, ExecutionSessionCallbackError> {
         let pending = self
             .pending_callback
             .as_ref()
             .ok_or(ExecutionSessionCallbackError::NoPendingPhase)?;
-        if !pending.ordered_updates.is_empty() && !pending.completed {
+        if pending.ordered_updates.is_empty() || pending.completed {
+            return Ok(batch);
+        }
+        if batch.token != pending.token {
+            return Err(ExecutionSessionCallbackError::StaleToken {
+                expected: pending.token,
+                actual: batch.token,
+            });
+        }
+        if batch.region != pending.region {
+            return Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: pending.region,
+                actual: batch.region,
+            });
+        }
+        if pending.ordered_updates[pending.next_update..]
+            .iter()
+            .any(|update| matches!(update, SemanticOrderedUpdater::Host(_)))
+        {
             return Err(ExecutionSessionCallbackError::IncompleteRegion);
         }
-        Ok(())
+        match self.submit_required_callback_region(batch)? {
+            CallbackRegionAdvance::Complete(batch) => Ok(batch),
+            CallbackRegionAdvance::HostRequired { .. } => {
+                unreachable!("no later host update was present")
+            }
+        }
     }
 
     pub(super) fn reconcile_callback_membership(
@@ -1704,7 +1753,7 @@ impl ExecutionSession {
         prepared: noon_core::PreparedSemanticMutationTransaction<'_>,
         order_root: Option<SemanticNodeId>,
     ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionCallbackError> {
-        self.require_completed_callback_regions()?;
+        let batch = self.complete_callback_batch_for_commit(batch)?;
         let token = batch.token;
         let (effective, domains) = self.prepare_callback_writes(batch)?;
         let (result, completion) = self
@@ -1775,6 +1824,39 @@ mod tests {
     use noon_runtime::TimelineWakeState;
 
     use super::*;
+
+    #[test]
+    fn contiguous_host_declarations_share_one_region_without_native_between() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut first = SemanticMutationTransaction::new();
+        first.add_updater(object, HostCallbackId::new(1), 1.0, None);
+        first.apply(&mut store).unwrap();
+        let mut second = SemanticMutationTransaction::new();
+        second.add_updater(object, HostCallbackId::new(2), 1.0, None);
+        second.apply(&mut store).unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } = session.advance_to_callback_barrier(1.0).unwrap()
+        else {
+            panic!("contiguous host callbacks require one region")
+        };
+        assert_eq!(overlay.region(), 0);
+        assert_eq!(
+            invocations
+                .iter()
+                .map(|invocation| invocation.callback_id())
+                .collect::<Vec<_>>(),
+            vec![HostCallbackId::new(1), HostCallbackId::new(2)]
+        );
+    }
 
     #[test]
     fn native_host_native_host_regions_share_one_unpublished_overlay_and_reject_stale_replies() {

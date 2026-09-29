@@ -855,6 +855,54 @@ mod tests {
     }
 
     #[test]
+    fn host_write_reveals_unchanged_native_binding_before_later_host() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.5).unwrap();
+        let middle = scene.circle(0.5).unwrap();
+        let last = scene.circle(0.5).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&middle).unwrap();
+        scene.add(&last).unwrap();
+        let middle_id = middle.node_id();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let first_seen = Rc::clone(&seen);
+        let last_seen = Rc::clone(&seen);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                first_seen.borrow_mut().push(1);
+                let mut style = context.read_object(middle_id)?.style;
+                style.stroke_width = 3.0;
+                context.set_style(middle_id, style)
+            })
+            .unwrap();
+        callbacks
+            .insert(SET_OPACITY, move |context| {
+                last_seen.borrow_mut().push(2);
+                assert_eq!(context.read_object(middle_id)?.style.stroke_width, 1.0);
+                Ok::<(), ExecutionSessionCallbackError>(())
+            })
+            .unwrap();
+        {
+            let mut store = scene.integration_store().borrow_mut();
+            let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+            callbacks
+                .add_updater(&mut store, first.node_id(), SET_Y, 1.0, None)
+                .unwrap();
+            store
+                .bind_semantic_signal(width, middle_id, SemanticObjectProperty::StrokeWidth)
+                .unwrap();
+            callbacks
+                .add_updater(&mut store, last.node_id(), SET_OPACITY, 1.0, None)
+                .unwrap();
+        }
+        let mut session = scene.execution_session().unwrap();
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert_eq!(&*seen.borrow(), &[1, 2]);
+        assert_eq!(session.frame().objects[1].style.stroke_width, 1.0);
+    }
+
+    #[test]
     fn effective_pivot_rotation_reuses_the_shared_affine_operation() {
         let transform = Transform2D {
             translation: Vec2::new(2.0, -1.0),

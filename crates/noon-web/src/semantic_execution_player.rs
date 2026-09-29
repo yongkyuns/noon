@@ -3606,11 +3606,29 @@ impl SemanticExecutionPlayer {
             .pending_callback_phase
             .filter(|(pending, _)| *pending == token)
             .ok_or("callback batch does not match the player pending phase")?;
-        let batch = match self
-            .session
-            .submit_required_callback_region(batch)
-            .map_err(AuthoringFailure::from)?
-        {
+        let advance = match self.session.submit_required_callback_region(batch) {
+            Ok(advance) => advance,
+            Err(error) => {
+                // A collector may own provisional identities whose combined
+                // publication cannot be retried after an invalid effective
+                // write. Stale region replies, however, leave it intact.
+                #[cfg(any(target_arch = "wasm32", test))]
+                if self.callback_membership_transaction.is_some()
+                    && matches!(
+                        error,
+                        noon::ExecutionSessionCallbackError::UnknownObject(_)
+                            | noon::ExecutionSessionCallbackError::InvalidEffectiveWrite(_)
+                            | noon::ExecutionSessionCallbackError::Commit(_)
+                    )
+                {
+                    self.callback_membership_transaction = None;
+                    self.pending_callback_phase = None;
+                    let _ = self.session.fail_required_callback_phase(token);
+                }
+                return Err(AuthoringFailure::from(error));
+            }
+        };
+        let batch = match advance {
             noon::integration::CallbackRegionAdvance::HostRequired {
                 invocations,
                 overlay,
