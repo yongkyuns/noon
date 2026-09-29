@@ -840,7 +840,7 @@ mod tests {
                 |_, _| Ok::<_, Error>(vec![composed]),
                 |store, handles| {
                     let mut transaction = SemanticMutationTransaction::new();
-                    let mut state = SemanticObjectState::new(handles[1]);
+                    let mut state = SemanticObjectState::new(handles[0]);
                     if reject {
                         state.style.object_opacity = f64::NAN;
                     }
@@ -893,10 +893,10 @@ mod tests {
                     |store, handles| {
                         let mut transaction = SemanticMutationTransaction::new();
                         if let Some(existing) = owner.get() {
-                            transaction.replace_content(existing, handles[1]);
+                            transaction.replace_content(existing, handles[0]);
                         } else {
                             let token = transaction.create_node(SemanticNodeCreation::object(
-                                SemanticObjectState::new(handles[1]),
+                                SemanticObjectState::new(handles[0]),
                             ));
                             let result = transaction.apply(store).map_err(Error::from)?;
                             owner.set(result.resolve(token));
@@ -950,7 +950,7 @@ mod tests {
                 |store, handles| {
                     let mut transaction = SemanticMutationTransaction::new();
                     transaction.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
-                        handles[1],
+                        handles[0],
                     )));
                     transaction.apply(store).map_err(Error::from)
                 },
