@@ -9,6 +9,9 @@ test("authoring startup exposes readiness and first semantic Scene context times
   assert.match(source, /authoringMilestones\.authoringWorkerReadyAtMs\s*=\s*performance\.now\(\)/);
   assert.match(source, /authoringMilestones\.firstSceneContextCreatedAtMs\s*\?\?=\s*performance\.now\(\)/);
   assert.match(source, /resourcesReadyAtMs:\s*resourcesReadyAt/);
+  assert.match(source, /noonWebInitReadyAtMs:\s*resourceDurations\.noonWebInitReadyAtMs/);
+  assert.match(source, /pyodideInitReadyAtMs:\s*resourceDurations\.pyodideInitReadyAtMs/);
+  assert.match(source, /compatibilityBundleReadyAtMs:\s*resourceDurations\.compatibilityBundleReadyAtMs/);
   assert.match(source, /importsReadyAtMs:\s*importsReadyAt/);
   assert.match(source, /metrics\[`\$\{key\}ReadyAtMs`\]\s*=\s*performance\.now\(\)/);
 });
