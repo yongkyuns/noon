@@ -27,6 +27,23 @@ pub async fn create_direct_analytic_profile_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct-WASM real-GPU qualification for a local change in a sparse 100k scene.
+#[wasm_bindgen(js_name = createDirectRetainedLocalityRenderer)]
+pub async fn create_direct_retained_locality_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
+    let animation = noon::example_scenes::retained_locality::target_animation(
+        &scene,
+        &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
+    )
+    .map_err(js_error)?;
+    let session = scene
+        .execution_session_with_animation_root(&animation)
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Filled path interpolation uses the shared native renderer qualification scene.
 #[wasm_bindgen(js_name = createDirectFilledPathTransformRenderer)]
 pub async fn create_direct_filled_path_transform_renderer(

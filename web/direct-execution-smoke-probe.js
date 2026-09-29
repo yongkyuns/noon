@@ -6,6 +6,7 @@ const {
   createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
+  createDirectRetainedLocalityRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
@@ -100,6 +101,46 @@ async function presentDirectFrame(renderer) {
     await sleep(10);
   }
   throw new Error("direct affine callback renderer could not acquire a frame");
+}
+
+async function directRetainedLocalityProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectRetainedLocalityRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    if (!renderer.render()) {
+      throw new Error("100k direct locality scene did not present its initial frame");
+    }
+    const initialBytesUploaded = renderer.lastBytesUploaded();
+    const objectCount = renderer.objectCount();
+    renderer.seekDirect(0.5);
+    if (!renderer.render()) {
+      throw new Error("100k direct locality edit did not present its published frame");
+    }
+    const updateBytesUploaded = renderer.lastBytesUploaded();
+    const metrics = {
+      backend: renderer.rendererBackend(),
+      objectCount,
+      initialBytesUploaded,
+      updateBytesUploaded,
+      drawCalls: renderer.lastDrawCalls(),
+    };
+    if (metrics.backend !== expectedBackend) {
+      throw new Error(`100k locality renderer selected ${metrics.backend}; expected ${expectedBackend}`);
+    }
+    if (metrics.objectCount !== 100000) {
+      throw new Error(`100k locality renderer exposed ${metrics.objectCount} objects`);
+    }
+    if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
+      throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
+    }
+    if (metrics.updateBytesUploaded <= 0 || metrics.updateBytesUploaded * 1000 >= metrics.initialBytesUploaded) {
+      throw new Error(`single-target update uploaded non-local bytes: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+  }
 }
 
 async function settleDirectPublication(renderer, wallTimeMs) {
@@ -2613,6 +2654,7 @@ async function start() {
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
+  metrics.retainedLocality = await directRetainedLocalityProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;
