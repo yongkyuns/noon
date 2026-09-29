@@ -144,9 +144,10 @@ impl ExecutionSession {
     /// scene. Same-session seeks and surface recovery preserve the adjustment;
     /// a newly created/replaced session starts at identity. Clones preserve the
     /// numerical adjustment but have a fresh runtime identity and no old receipts.
-    /// Restart adapters must call this or install a new session, not reset a host
-    /// camera alone. This operation can recover from an unrepresentable composed
-    /// view as long as the authored/effective camera itself remains valid.
+    /// Explicit reset adapters must call this instead of resetting a host camera
+    /// alone; same-session playback restart preserves the adjustment. This operation
+    /// can recover from an unrepresentable composed view as long as the
+    /// authored/effective camera itself remains valid.
     pub fn reset_inspection_view(&mut self) -> Result<bool, InspectionNavigationError> {
         self.ensure_direct_input_ingress_available()
             .map_err(InspectionNavigationError::Input)?;

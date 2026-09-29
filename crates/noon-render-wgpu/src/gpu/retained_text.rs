@@ -5345,6 +5345,153 @@ mod tests {
     }
 
     #[test]
+    fn inverse_metrics_restore_glyph_geometry_after_shape_only_indicate_updates() {
+        let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+        let baseline_metrics = TextDeviceMetrics::uniform(50.25)
+            .unwrap()
+            .with_world_origin_pixels(Vec2::new(358.0, 201.0))
+            .unwrap();
+        let zoomed_metrics = TextDeviceMetrics::uniform(100.5)
+            .unwrap()
+            .with_world_origin_pixels(Vec2::new(358.0, 202.0))
+            .unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+
+        let glyph_geometry = |quads: &[GlyphQuadInstance]| {
+            quads
+                .iter()
+                .map(|quad| (quad.origin, quad.axis_x, quad.axis_y, quad.color))
+                .collect::<Vec<_>>()
+        };
+        let render_membership = |prepared: &PreparedRetainedGpuFrame<'_>| {
+            prepared
+                .render_items
+                .iter()
+                .map(|item| match item {
+                    RetainedRenderItem::Geometry { object_id, .. } => (*object_id, None),
+                    RetainedRenderItem::Glyph {
+                        object_id,
+                        text_item_index,
+                    } => {
+                        let PreparedTextItem::GlyphBatch { plane, .. } =
+                            &prepared.text.items[*text_item_index]
+                        else {
+                            unreachable!("retained glyph item must address a glyph batch")
+                        };
+                        (*object_id, Some(*plane))
+                    }
+                    RetainedRenderItem::Image { object_id, .. } => (*object_id, None),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let (baseline_mask, baseline_color, baseline_membership, baseline_generation) = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    baseline_metrics,
+                )
+                .unwrap();
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+            assert!(upload.text.bytes_uploaded > 0);
+            (
+                glyph_geometry(prepared.text.mask_quads),
+                glyph_geometry(prepared.text.color_quads),
+                render_membership(&prepared),
+                prepared.text_generation,
+            )
+        };
+
+        let zoomed_generation = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    zoomed_metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+            assert!(prepared.text_generation > baseline_generation);
+            assert!(
+                renderer
+                    .upload_retained(&device, &queue, &prepared, &mut text_state)
+                    .text
+                    .bytes_uploaded
+                    > 0
+            );
+            prepared.text_generation
+        };
+
+        // An Indicate changes only its circle's presentation properties. At a fixed
+        // inspection metric it must neither repack text nor re-upload glyph instances.
+        for (scale, opacity) in [(1.2, 0.8), (1.0, 1.0)] {
+            frame.objects[0].transform = Transform2D {
+                scale: Vec2::new(scale, scale),
+                ..Transform2D::IDENTITY
+            };
+            frame.objects[0].style.opacity = opacity;
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    zoomed_metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.text_generation, zoomed_generation);
+            assert_eq!(
+                renderer
+                    .upload_retained(&device, &queue, &prepared, &mut text_state)
+                    .text
+                    .bytes_uploaded,
+                0
+            );
+        }
+
+        let restored = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &fonts,
+                &geometries,
+                baseline_metrics,
+            )
+            .unwrap();
+        assert!(restored.text_generation > zoomed_generation);
+        assert!(
+            renderer
+                .upload_retained(&device, &queue, &restored, &mut text_state)
+                .text
+                .bytes_uploaded
+                > 0
+        );
+        assert_eq!(glyph_geometry(restored.text.mask_quads), baseline_mask);
+        assert_eq!(glyph_geometry(restored.text.color_quads), baseline_color);
+        assert_eq!(render_membership(&restored), baseline_membership);
+    }
+
+    #[test]
     fn retained_order_never_merges_geometry_across_glyphs() {
         let object = ObjectId::new(7);
         let mut output = Vec::new();
