@@ -13,7 +13,7 @@ test("authoring startup exposes readiness and first semantic Scene context times
   assert.match(source, /pyodideInitReadyAtMs:\s*resourceDurations\.pyodideInitReadyAtMs/);
   assert.match(source, /compatibilityBundleReadyAtMs:\s*resourceDurations\.compatibilityBundleReadyAtMs/);
   assert.match(source, /importsReadyAtMs:\s*importsReadyAt/);
-  assert.match(source, /metrics\[`\$\{key\}ReadyAtMs`\]\s*=\s*performance\.now\(\)/);
+  assert.match(source, /metrics\[`\$\{key\.replace\(\/Ms\$\/,[^)]*\)\}ReadyAtMs`\]\s*=\s*performance\.now\(\)/);
 });
 
 test("Python authoring worker keeps request validation helper", () => {

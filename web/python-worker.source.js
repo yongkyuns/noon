@@ -421,7 +421,7 @@ function measureStartupTask(metrics, key, task) {
   }
   return Promise.resolve(result).then((value) => {
     metrics[key] = performance.now() - startedAt;
-    metrics[`${key}ReadyAtMs`] = performance.now();
+    metrics[`${key.replace(/Ms$/, "")}ReadyAtMs`] = performance.now();
     return value;
   });
 }
