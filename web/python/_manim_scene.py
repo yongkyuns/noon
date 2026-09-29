@@ -575,13 +575,20 @@ def _stage_callback_membership(
             raise
 
         def finalize() -> None:
+            resolved = [
+                (member, callback.resolve_provisional(provisional_handle), reservation, local_key)
+                for member, provisional_handle, reservation, local_key in provisional_bindings
+            ]
+            bindings = engine_call(_context(scene).beginMembershipBatch, "add")
+            for _, handle, reservation, _ in resolved:
+                engine_call(bindings.reserveMobjectBinding, str(reservation.object.id), handle)
+            callback.associate_published(bindings)
             registry = _membership_registry(scene)
             for member, handle, provisional_handle in entries:
                 if provisional_handle is None:
                     member._bind(scene, member._object)
                     registry[_semantic_wrapper_key(member)] = member
-            for member, provisional_handle, reservation, local_key in provisional_bindings:
-                handle = callback.resolve_provisional(provisional_handle)
+            for member, handle, reservation, local_key in resolved:
                 _semantic_handles._attach_shared_handle(member, handle)
                 _commit_typed_binding(member, scene, reservation, handle)
                 member._canonical_live_target_context = _context(scene)
@@ -1179,6 +1186,18 @@ class _ContinuationCallbackPlayer:
             token_json,
             object,
             operation="callback.provisional_geometry",
+        )
+
+    def associatePublishedCallbackMobjects(self, context: object, batch: object) -> None:
+        if context is not self._context:
+            raise RuntimeError("continuation callback bindings belong to another context")
+        from js import noonAssociateSemanticContinuationCallbackMobjects
+        engine_call(
+            noonAssociateSemanticContinuationCallbackMobjects,
+            context,
+            self._token_json,
+            batch,
+            operation="callback.membership_binding",
         )
 
 

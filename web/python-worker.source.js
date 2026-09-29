@@ -151,6 +151,9 @@ async function initializePyodide() {
     continuationCallbackProvisionalCenter(context, tokenJson, object);
   self.noonResolveSemanticContinuationProvisionalMobject = (context, tokenJson, object) =>
     resolveContinuationCallbackProvisionalMobject(context, tokenJson, object);
+  self.noonAssociateSemanticContinuationCallbackMobjects = (context, tokenJson, batch) =>
+    committedContinuationCallbackPlayer(context, tokenJson)
+      .associatePublishedCallbackMobjects(context, batch);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -622,17 +625,22 @@ function continuationCallbackProvisionalCenter(context, tokenJson, object) {
   return callback.player.callbackProvisionalCenter(tokenJson, object);
 }
 
-function resolveContinuationCallbackProvisionalMobject(context, tokenJson, object) {
+function committedContinuationCallbackPlayer(context, tokenJson) {
   const continuation = activeAuthoringRun?.continuation;
-  if (!continuation || continuation.context !== context || continuation.terminal) {
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
     throw new Error("semantic continuation has no completed callback player");
   }
   const completed = continuation.committedCallbackPlayer;
   const player = completed?.tokenJson === tokenJson ? completed.player : null;
-  if (player === null || player === undefined ||
-      typeof player.resolveCallbackProvisionalMobject !== "function") {
+  if (player === null || player === undefined) {
     throw new Error("semantic continuation callback has no committed provisional geometry collector");
   }
+  return player;
+}
+
+function resolveContinuationCallbackProvisionalMobject(context, tokenJson, object) {
+  const player = committedContinuationCallbackPlayer(context, tokenJson);
   return player.resolveCallbackProvisionalMobject(tokenJson, object);
 }
 
@@ -746,7 +754,9 @@ function requestContinuationCallbackCommit(continuation, phase) {
     continuation.callbackCommit = { tokenJson, resolve, reject };
     const pending = continuation.pending;
     continuation.pending = null;
-    pending.resolve(continuationEvent("callback_committed", { phase }));
+    pending.resolve(continuationEvent("callback_committed", {
+      phase: { token: phase.token, region: phase.region ?? 0 },
+    }));
   });
 }
 

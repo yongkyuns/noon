@@ -667,6 +667,14 @@ class _CanonicalCallbackContext:
             operation="callback.provisional_geometry",
         )
 
+    def associate_published(self, batch: object) -> None:
+        engine_call(
+            self._callback_player.associatePublishedCallbackMobjects,
+            self._authoring_context,
+            batch,
+            operation="callback.membership_binding",
+        )
+
     def membership_root_keys(self) -> list[str] | None:
         if self._callback_player is None:
             return None

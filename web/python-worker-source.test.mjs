@@ -208,7 +208,7 @@ test("source wrapper acknowledgement holds the committed player before next phas
       acknowledgeContinuationCallback, resolveContinuationCallbackProvisionalMobject,
       completeContinuation, failContinuation };
   `)({ continuation });
-  const phase = { token: { sequence: 1 } };
+  const phase = { token: { sequence: 1 }, objects: [{ expensive: "read view" }] };
   const token = JSON.stringify(phase.token);
   const player = { resolveCallbackProvisionalMobject: () => "published handle" };
   const firstEvent = api.awaitContinuationEvent(continuation);
@@ -219,7 +219,9 @@ test("source wrapper acknowledgement holds the committed player before next phas
   let acknowledged = false;
   const commit = api.requestContinuationCallbackCommit(continuation, phase);
   commit.then(() => { acknowledged = true; });
-  assert.equal(JSON.parse(await publicationEvent).kind, "callback_committed");
+  assert.deepEqual(JSON.parse(await publicationEvent), {
+    kind: "callback_committed", phase: { token: phase.token, region: 0 },
+  });
   assert.equal(acknowledged, false);
   await assert.rejects(api.requestContinuationCallback(continuation, phase, player), /suspended source|not acknowledged/);
   assert.throws(() => api.completeContinuation(continuation, 1), /stale/);
