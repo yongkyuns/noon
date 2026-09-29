@@ -169,7 +169,7 @@ try {
   const context = await browser.newContext(profile);
   await runtimeCache.install(context);
   // Temporary CI-only GPU diagnosis for the WebKit inverse-zoom failure.
-  function traceTextWrites() {
+  function traceTextWrites(probe) {
     const queue = globalThis.GPUQueue?.prototype;
     if (!queue) return;
     const state = globalThis.__noonTextGpu = { buffers: [], textures: [] };
@@ -187,6 +187,24 @@ try {
       const texture = createTexture.call(this, traced ? { ...desc, usage: desc.usage | GPUTextureUsage.COPY_SRC } : desc);
       if (traced) state.textures.push({ device: this, texture });
       return texture;
+    };
+    const writeTexture = queue.writeTexture;
+    queue.writeTexture = function(destination, data, layout, size) {
+      if (/glyph mask atlas/.test(destination.texture.label)) {
+        if (probe === "pad256") {
+          const height = size.height;
+          const row = Math.ceil(layout.bytesPerRow / 256) * 256;
+          const source = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength);
+          const padded = new Uint8Array(row * height);
+          for (let y = 0; y < height; y++) padded.set(source.subarray((layout.offset ?? 0) + y * layout.bytesPerRow,
+            (layout.offset ?? 0) + y * layout.bytesPerRow + size.width), y * row);
+          return writeTexture.call(this, destination, padded, { ...layout, offset: 0, bytesPerRow: row }, size);
+        }
+        const result = writeTexture.apply(this, arguments);
+        if (probe === "submit") this.submit([]);
+        return result;
+      }
+      return writeTexture.apply(this, arguments);
     };
     const original = queue.writeBuffer;
     const last = new WeakMap();
@@ -207,10 +225,12 @@ try {
       return result;
     };
   }
-  await context.addInitScript(traceTextWrites);
+  const uploadProbe = process.env.NOON_GPU_UPLOAD_PROBE;
+  report.uploadProbe = uploadProbe;
+  await context.addInitScript(traceTextWrites, uploadProbe);
   await context.route("**/authoring-render-worker.js*", async route => {
     const response = await route.fetch();
-    await route.fulfill({ response, body: `(${traceTextWrites.toString()})();\n${await response.text()}` });
+    await route.fulfill({ response, body: `(${traceTextWrites.toString()})(${JSON.stringify(uploadProbe) ?? "undefined"});\n${await response.text()}` });
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30000);

@@ -9,6 +9,10 @@ permissions:
   actions: read
 jobs:
   webkit:
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [pad256, submit]
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -26,10 +30,11 @@ jobs:
           NOON_PLAYGROUND_BROWSER: webkit
           NOON_PLAYGROUND_PROFILE: mobile-dpr2
           NOON_INSPECTION_GPU_READBACK: '1'
+          NOON_GPU_UPLOAD_PROBE: ${{ matrix.probe }}
           NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/inspection-gpu
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: inspection-gpu-diagnosis
+          name: inspection-gpu-diagnosis-${{ matrix.probe }}
           path: browser-smoke-artifacts/inspection-gpu
           retention-days: 3
