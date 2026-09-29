@@ -34,7 +34,7 @@ fn fixture() -> (
     store.add_semantic_family_member(root, unrelated).unwrap();
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();
-    session.set_translation_drag_targets([target]);
+    session.set_translation_drag_targets([target]).unwrap();
     session.take_frame_changes();
     (store, target, unrelated, session)
 }
@@ -95,6 +95,7 @@ fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
     .unwrap();
     assert!(session.translation_drag_active());
     assert!(session.wake_state().is_quiescent());
+    let before_move = session.publication_context();
 
     submit(
         &mut session,
@@ -106,6 +107,17 @@ fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
     assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
     assert_eq!(translation(&session, unrelated), Vec2::new(10.0, 0.0));
     assert_eq!(session.take_frame_changes().object_indices().len(), 1);
+    let after_move = session.publication_context();
+    assert_eq!(after_move.scene_revision(), before_move.scene_revision());
+    assert_eq!(
+        after_move.execution_revision(),
+        before_move.execution_revision()
+    );
+    assert_eq!(
+        after_move.frame_epoch(),
+        before_move.frame_epoch().checked_next().unwrap(),
+        "the native occurrence and drag write share one frame publication"
+    );
     assert!(session.wake_state().is_quiescent());
 
     let receipt = submit(
@@ -161,10 +173,12 @@ fn stale_release_is_rejected_without_losing_the_lease_or_authored_value() {
         NativePointerInputKind::Move(position(2.0)),
     )
     .unwrap();
+    let after_move = session.publication_context();
     assert!(matches!(
         session.submit_translation_drag_input(&mut store, &stale, release),
         Err(TranslationDragError::Input(_))
     ));
+    assert_eq!(session.publication_context(), after_move);
     assert!(session.translation_drag_active());
     assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
     assert_eq!(
@@ -197,6 +211,7 @@ fn cancellation_discards_the_effective_lease_without_authoring_a_value() {
         NativePointerInputKind::Move(position(4.0)),
     )
     .unwrap();
+    let before_cancel = session.publication_context();
     submit(
         &mut session,
         &mut store,
@@ -205,6 +220,19 @@ fn cancellation_discards_the_effective_lease_without_authoring_a_value() {
     )
     .unwrap();
     assert!(!session.translation_drag_active());
+    let after_cancel = session.publication_context();
+    assert_eq!(
+        after_cancel.scene_revision(),
+        before_cancel.scene_revision()
+    );
+    assert_eq!(
+        after_cancel.execution_revision(),
+        before_cancel.execution_revision()
+    );
+    assert_eq!(
+        after_cancel.frame_epoch(),
+        before_cancel.frame_epoch().checked_next().unwrap()
+    );
     assert_eq!(translation(&session, target), Vec2::ZERO);
     assert_eq!(
         store
@@ -239,7 +267,7 @@ fn active_drag_rejects_source_edits_until_cancelled() {
         session.apply_semantic_transaction(&mut store, transaction),
         Err(ExecutionSessionPublicationError::TranslationDragActive)
     );
-    session.cancel_translation_drag();
+    session.cancel_translation_drag().unwrap();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(
         target,
@@ -266,7 +294,7 @@ fn translation_signal_driver_rejects_press_without_acknowledging_it() {
         .unwrap();
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();
-    session.set_translation_drag_targets([target]);
+    session.set_translation_drag_targets([target]).unwrap();
     let (token, press) = input(
         &session,
         1,

@@ -1,6 +1,6 @@
 //! Native, session-owned translation dragging over the existing pointer ingress.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use noon_core::{
     NativePointerId, NativePointerInput, NativePointerInputKind, SemanticMutationTransaction,
@@ -27,7 +27,7 @@ struct ActiveDrag {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct TranslationDragState {
-    targets: BTreeSet<SemanticNodeId>,
+    targets: Arc<BTreeSet<SemanticNodeId>>,
     active: Option<ActiveDrag>,
 }
 
@@ -45,6 +45,7 @@ pub enum TranslationDragError {
     DriverConflict,
     RetiredTarget,
     StaleUndo,
+    CancelFailed,
     Semantic(String),
 }
 impl std::fmt::Display for TranslationDragError {
@@ -60,6 +61,7 @@ impl std::fmt::Display for TranslationDragError {
             Self::StaleUndo => {
                 f.write_str("translation drag undo no longer matches the live scene")
             }
+            Self::CancelFailed => f.write_str("translation drag cancellation could not publish"),
             Self::Semantic(error) => f.write_str(error),
         }
     }
@@ -116,42 +118,54 @@ impl ExecutionSession {
     pub fn set_translation_drag_targets(
         &mut self,
         targets: impl IntoIterator<Item = SemanticNodeId>,
-    ) {
-        self.translation_drag.targets = targets.into_iter().collect();
-        self.cancel_translation_drag();
+    ) -> Result<(), TranslationDragError> {
+        self.cancel_translation_drag()?;
+        self.translation_drag.targets = Arc::new(targets.into_iter().collect());
+        Ok(())
     }
 
     pub fn translation_drag_active(&self) -> bool {
         self.translation_drag.active.is_some()
     }
 
-    pub fn cancel_translation_drag(&mut self) {
-        if let Some(active) = self.translation_drag.active.take() {
-            self.runtime
+    pub fn cancel_translation_drag(&mut self) -> Result<(), TranslationDragError> {
+        if let Some(active) = self.translation_drag.active {
+            let held = self
+                .runtime
                 .suspend_translation_drag(active.object)
-                .expect("active drag retains a live runtime lease");
+                .ok_or(TranslationDragError::CancelFailed)?;
             let effective = self
                 .prepared_drag_batch(
                     active.object,
                     self.runtime
                         .translation_drag_base(active.object)
-                        .expect("active drag retains a compiled object"),
+                        .ok_or(TranslationDragError::CancelFailed)?,
                 )
-                .expect("compiled drag base is a valid effective translation");
+                .map_err(|_| TranslationDragError::CancelFailed)?;
             // Cancellation without a pointer occurrence still needs to restore
             // the base frame; use the existing prepared input evaluation rather
             // than mutating the live row directly.
             let time = self.frame().time;
-            let frame = self
+            let frame = match self.runtime.prepare_advance_to(time) {
+                Ok(frame) => frame,
+                Err(_) => {
+                    self.runtime.restore_translation_drag(active.object, held);
+                    return Err(TranslationDragError::CancelFailed);
+                }
+            };
+            if self
                 .runtime
-                .prepare_advance_to(time)
-                .expect("current authored time always prepares a drag restoration");
-            self.runtime
                 .commit_prepared_frame(frame, effective)
-                .expect("suspended drag restoration was prepared against this frame");
+                .is_err()
+            {
+                self.runtime.restore_translation_drag(active.object, held);
+                return Err(TranslationDragError::CancelFailed);
+            }
             self.runtime
                 .clear_translation_drag_effective_driver(active.object);
+            self.translation_drag.active = None;
         }
+        Ok(())
     }
 
     /// The drag entry uses the same typed, ordered pointer ingress as ordinary
@@ -170,7 +184,7 @@ impl ExecutionSession {
             NativePointerInputKind::Press { button: 0, .. }
         ) && self.translation_drag.active.is_none()
         {
-            let targets = self.translation_drag.targets.clone();
+            let targets = Arc::clone(&self.translation_drag.targets);
             match self
                 .pick_native_pointer_fill(token, input, |node| targets.contains(&node))?
                 .outcome()
@@ -308,10 +322,13 @@ impl ExecutionSession {
         input: NativePointerInput,
         active: ActiveDrag,
     ) -> Result<TranslationDragReceipt, TranslationDragError> {
+        let translation = input.position().map_or(active.translation, |position| {
+            active.effective_before + (position.scene() - active.press_scene)
+        });
         let after = SemanticVec3::new(
-            f64::from(active.translation.x),
-            f64::from(active.translation.y),
-            0.0,
+            f64::from(translation.x),
+            f64::from(translation.y),
+            active.authored_before.z,
         );
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_property(active.node, SemanticObjectProperty::Translation, after);
@@ -363,6 +380,9 @@ impl ExecutionSession {
         node: SemanticNodeId,
         value: SemanticVec3,
     ) -> Result<(), TranslationDragError> {
+        if self.translation_drag.active.is_some() {
+            return Err(TranslationDragError::DriverConflict);
+        }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_property(node, SemanticObjectProperty::Translation, value);
         // The scoped lease deliberately blocks ordinary source edits.  Release
