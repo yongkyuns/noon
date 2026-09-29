@@ -511,7 +511,7 @@ function requestContinuationCallback(continuation, phase, player) {
 }
 
 function stageContinuationCallbackMembership(context, tokenJson, batch) {
-  const callback = continuationCallbackRequest(context, tokenJson);
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
   if (callback.player === null || callback.player === undefined ||
       typeof callback.player.stageCallbackMembership !== "function") {
     throw new Error("semantic continuation callback has no pinned membership collector");
@@ -520,7 +520,7 @@ function stageContinuationCallbackMembership(context, tokenJson, batch) {
 }
 
 function continuationMembershipRootKeys(context, tokenJson) {
-  const callback = continuationCallbackRequest(context, tokenJson);
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
   if (callback.player === null || callback.player === undefined ||
       typeof callback.player.callbackMembershipRootKeys !== "function") {
     throw new Error("semantic continuation callback has no pinned membership collector");
