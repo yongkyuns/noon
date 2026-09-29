@@ -573,7 +573,9 @@ fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
     let (mut p, circle, presented) = drag_player();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
 
-    let mut unrelated = wire("release", 1, 1, 400.0);
+    assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
+    let _unpresented_motion = delta(&mut p);
+    let mut unrelated = wire("release", 1, 1, 450.0);
     unrelated["button"] = 1.into();
     assert!(p
         .submit_browser_pointer_input_json(
