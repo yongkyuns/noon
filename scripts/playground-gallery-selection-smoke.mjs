@@ -346,7 +346,8 @@ try {
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
     const dragCanvas = page.locator("#scene");
-    await layoutReplayViewport(dragCanvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
+    await layoutReplayViewport(dragCanvas, captureSize);
+    report.nativeDragViewport = await replayViewport(dragCanvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
     await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
     await page.evaluate(() => window.__noonExampleGallery.run());
     await waitForAuthoring(page);
@@ -403,27 +404,26 @@ try {
     await waitForPresentation(page, preReleaseFrames);
     const released = await waitForNativeChange(nativeBaseline, "released touch drag");
     captures.nativeDragReleased = released;
-    const releasedFrames = await presentedFrames(page);
     await sendSample("pointermove", 0.9, 0.6, 0);
-    await page.waitForTimeout(100);
+    await assertSettled(page, "released touch hover");
     assert.equal(changedPixels(released, await dragCanvas.screenshot()), 0, "released touch continued translating the rectangle");
-    assert.equal(await presentedFrames(page), releasedFrames, "released touch left native input work active");
 
     const beforeCancelFrames = await presentedFrames(page);
     await sendSample("pointerdown", 0.82, 0.5, 1, 0);
     await sendSample("pointermove", 0.76, 0.5, 1);
+    await waitForPresentation(page, beforeCancelFrames);
+    const cancelTransient = await waitForNativeChange(released, "second touch drag before cancellation");
+    captures.nativeDragCancelTransient = cancelTransient;
     await sendSample("pointercancel", 0.76, 0.5, 0);
     await assertNoNativeInputError("touch cancellation");
-    await waitForPresentation(page, beforeCancelFrames);
-    const cancelled = await dragCanvas.screenshot();
-    assert.ok(changedPixels(released, cancelled) > 500, "touch cancel sample did not retain its admitted drag translation");
-    const afterCancel = await presentedFrames(page);
-    await sendSample("pointermove", 0.58, 0.5, 1);
-    await page.waitForTimeout(100);
-    assert.equal(changedPixels(cancelled, await dragCanvas.screenshot()), 0, "cancelled touch continued translating the rectangle");
-    assert.equal(await presentedFrames(page), afterCancel, "cancelled touch left native input work active");
+    const cancelled = await waitForExactPixels(dragCanvas, released, "touch cancellation rollback");
+    captures.nativeDragCancelled = cancelled;
     await assertSettled(page, "cancelled native drag");
+    await sendSample("pointermove", 0.58, 0.5, 1);
+    await assertSettled(page, "cancelled touch continuation");
+    assert.equal(changedPixels(cancelled, await dragCanvas.screenshot()), 0, "cancelled touch continued translating the rectangle");
 
+    await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "none", "important"));
     await page.locator("#replace-scene").click();
     await waitForAuthoring(page);
     await page.waitForFunction(duration => {
@@ -440,7 +440,8 @@ try {
       deviceScaleFactor: profile.deviceScaleFactor,
       pointerSamples: samples,
       releasedDragChangedPixels: changedPixels(nativeBaseline, released),
-      cancelledDragChangedPixels: changedPixels(released, cancelled),
+      cancelledDragTransientPixels: changedPixels(released, cancelTransient),
+      cancelledDragRestoresReleasedPixels: changedPixels(released, cancelled) === 0,
       runRestoresExactBaseline: true,
     };
     assert.deepEqual(errors, [], "Rust/browser input path reported an error during native drag");
