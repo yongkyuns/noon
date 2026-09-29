@@ -293,6 +293,17 @@ impl SourceReconciler {
             }
         }
 
+        if let Some(execution) = scene.running_execution_mut() {
+            let expected = execution.publication_context().scene_revision();
+            if expected != candidate.base_revision {
+                return Err(SourceReconciliationError::LivePublication(
+                    ExecutionSessionPublicationError::StaleSceneRevision {
+                        expected,
+                        actual: candidate.base_revision,
+                    },
+                ));
+            }
+        }
         let mut transaction = SemanticMutationTransaction::new();
         let mut references = Vec::with_capacity(candidate.declarations.len());
         let (stale, mut changed, order_changed) = {
@@ -387,7 +398,11 @@ impl SourceReconciler {
         {
             return Err(SourceReconciliationError::ActiveInteraction);
         }
-        let result =
+        // A source generation with identical declarations has nothing to
+        // publish. Preserve a running segment, callback barrier, and effective
+        // drivers without asking the authored-mutation lane to acquire them.
+        // Scope, revision, generation, and declaration validation still apply.
+        let impacts = if changed {
             scene
                 .apply_semantic_transaction(transaction)
                 .map_err(|error| match error {
@@ -395,8 +410,12 @@ impl SourceReconciler {
                         SourceReconciliationError::LivePublication(error)
                     }
                     other => SourceReconciliationError::Authoring(other),
-                })?;
-        let impacts = result.impacts().len();
+                })?
+                .impacts()
+                .len()
+        } else {
+            0
+        };
         let nodes = {
             let store = scene.integration_store().borrow();
             candidate
@@ -680,6 +699,82 @@ mod tests {
         );
         let valid = candidate(&scene, 2, [("only", 2.0)]);
         reconciler.reconcile(&mut scene, &valid).unwrap();
+    }
+
+    #[test]
+    fn unchanged_source_preserves_an_active_segment_without_publication() {
+        use noon_core::AnimationOptions;
+        let mut scene = Scene::new();
+        let mut reconciler = SourceReconciler::new();
+        let initial = candidate(&scene, 1, [("moving", 0.0)]);
+        let first = reconciler.reconcile(&mut scene, &initial).unwrap();
+        let node = first.node_for(&key("moving")).unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let animation = {
+            let mut store = store.borrow_mut();
+            let endpoint = store.insert_semantic_object(state(2.0));
+            store
+                .insert_semantic_transform_animation(node, endpoint, AnimationOptions::new())
+                .unwrap()
+        };
+        let mut execution = scene.execution_session().unwrap();
+        let segment = execution
+            .activate_animation_segment(
+                &store.borrow(),
+                animation,
+                AnimationOptions::new().run_time(1.0),
+            )
+            .unwrap();
+        execution.advance_segment_to(segment, 0.5).unwrap();
+        scene.install_execution(execution);
+        let publication = scene.owned_execution().publication_context();
+        let runtime = scene.owned_execution().runtime_identity();
+        let transform = scene.owned_execution().frame().objects[0].transform;
+        assert_eq!(transform.translation.x, 1.0);
+
+        let unchanged = candidate(&scene, 2, [("moving", 0.0)]);
+        let result = reconciler.reconcile(&mut scene, &unchanged).unwrap();
+        assert_eq!(result.mutation_impacts(), 0);
+        assert_eq!(result.node_for(&key("moving")), Some(node));
+        assert_eq!(scene.owned_execution().runtime_identity(), runtime);
+        assert_eq!(scene.owned_execution().publication_context(), publication);
+        assert_eq!(
+            scene.owned_execution().frame().objects[0].transform,
+            transform
+        );
+        assert_eq!(scene.owned_execution().frame().time, 0.5);
+        assert_eq!(
+            reconciler.accepted_generation(),
+            Some(SourceGeneration::new(2))
+        );
+
+        let changed = candidate(&scene, 3, [("moving", 4.0)]);
+        assert!(matches!(
+            reconciler.reconcile(&mut scene, &changed),
+            Err(SourceReconciliationError::LivePublication(
+                ExecutionSessionPublicationError::SegmentCompletionPending
+            ))
+        ));
+        assert_eq!(scene.owned_execution().publication_context(), publication);
+        assert_eq!(
+            reconciler.accepted_generation(),
+            Some(SourceGeneration::new(2))
+        );
+        scene
+            .owned_execution_mut()
+            .advance_segment_to(segment, 1.0)
+            .unwrap();
+        scene
+            .owned_execution_mut()
+            .complete_segment(&mut store.borrow_mut(), segment)
+            .unwrap();
+        assert_eq!(
+            scene.owned_execution().frame().objects[0]
+                .transform
+                .translation
+                .x,
+            2.0
+        );
     }
 
     #[test]
