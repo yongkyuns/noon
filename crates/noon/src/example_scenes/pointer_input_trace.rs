@@ -94,6 +94,20 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
+        let mut fixture = Self::signals_only();
+        fixture
+            .store
+            .bind_semantic_signal(
+                fixture.down,
+                fixture.target,
+                SemanticObjectProperty::RotationZ,
+            )
+            .unwrap();
+        fixture
+    }
+
+    /// Input/replay qualification without a property-driven execution domain.
+    pub fn signals_only() -> Self {
         let mut store = SemanticStore::new();
         let root = store.insert_family();
         let target =
@@ -136,9 +150,6 @@ impl Fixture {
             SemanticNativeInputSource::State(NativeStateSource::ViewportSize),
             SemanticSignalValue::Vec3(SemanticVec3::ZERO),
         );
-        store
-            .bind_semantic_signal(down, target, SemanticObjectProperty::RotationZ)
-            .unwrap();
         Self {
             store,
             root,

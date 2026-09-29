@@ -17,7 +17,10 @@ pub(super) struct PointerFixture {
 }
 
 pub(super) fn pointer_fixture() -> PointerFixture {
-    let fixture = shared_trace::Fixture::new();
+    pointer_fixture_from(shared_trace::Fixture::new())
+}
+
+fn pointer_fixture_from(fixture: shared_trace::Fixture) -> PointerFixture {
     let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
     let mut player = SemanticExecutionPlayer::from_session(session, 1.0, 1).unwrap();
     player.pause();
@@ -416,7 +419,7 @@ fn sequence_exhaustion_precedes_source_configuration() {
 
 #[test]
 fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution() {
-    let mut f = pointer_fixture();
+    let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player
         .session
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
@@ -444,7 +447,7 @@ fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution()
 
 #[test]
 fn browser_no_op_source_setup_does_not_poison_replay() {
-    let mut f = pointer_fixture();
+    let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player
         .session
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
@@ -465,7 +468,7 @@ fn browser_no_op_source_setup_does_not_poison_replay() {
 
 #[test]
 fn sealed_browser_input_does_not_acknowledge_and_can_retry_after_explicit_discard() {
-    let mut f = pointer_fixture();
+    let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player
         .submit_test_frame_json(&browser_pointer_json(
             "move",

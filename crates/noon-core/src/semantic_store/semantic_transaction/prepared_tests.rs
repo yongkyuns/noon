@@ -317,7 +317,7 @@ fn rejected_pending_extension_never_reuses_an_escaped_local_token() {
     };
     assert!(matches!(
         error,
-        SemanticMutationTransactionError::InvalidNodeObjectState { .. }
+        SemanticMutationTransactionError::PendingNonFinitePropertyValue { .. }
     ));
 
     let escaped = rejected.expect("the rejected extension exposed one local token");

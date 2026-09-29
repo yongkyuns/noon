@@ -1841,10 +1841,11 @@ impl SemanticExecutionPlayer {
                         || collector.admitted_provisionals.contains(local)
                 })
             {
-                return Err(
-                    "callback provisional geometry token is unknown, stale, or already admitted"
-                        .into(),
-                );
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "callback.membership",
+                    "callback provisional geometry token is unknown, stale, or already admitted",
+                ));
             }
             let current = transaction
                 .take()
