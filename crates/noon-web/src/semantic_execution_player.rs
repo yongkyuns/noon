@@ -2213,74 +2213,6 @@ impl SemanticExecutionPlayer {
         Ok((translation.x, translation.y))
     }
 
-    /// Admit one collector-created object to the scene root using the shared
-    /// pending-node membership planner. The caller still publishes only through
-    /// the callback's final transaction; this adds no queue or wrapper mirror.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn stage_required_callback_provisional_add(
-        &mut self,
-        expected_token: CallbackPhaseToken,
-        local: noon_core::SemanticLocalNodeToken,
-    ) -> Result<(), AuthoringFailure> {
-        let token = self
-            .pending_callback_phase
-            .map(|(token, _)| token)
-            .ok_or("callback provisional geometry has no player pending phase")?;
-        if token != expected_token {
-            return Err("callback provisional geometry token is stale".into());
-        }
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("callback provisional geometry requires a live semantic store")?;
-        let root = self
-            .semantic_root
-            .ok_or("callback provisional geometry requires one semantic scene root")?;
-        let Some(mut collector) = self.callback_membership_transaction.take() else {
-            return Err("callback provisional geometry is unknown".into());
-        };
-        if collector.token != token || !collector.provisional_objects.contains(&local) {
-            self.callback_membership_transaction = Some(collector);
-            return Err("callback provisional geometry token is unknown or stale".into());
-        }
-        if collector.stages == MAX_CALLBACK_MEMBERSHIP_STAGES {
-            self.callback_membership_transaction = Some(collector);
-            return Err("callback membership staging exceeded its bounded operation limit".into());
-        }
-        let transaction = std::mem::take(&mut collector.transaction);
-        let mut store = semantics.borrow_mut();
-        let prepared = match transaction.prepare_recoverable(&mut store) {
-            Ok(prepared) => prepared,
-            Err((transaction, error)) => {
-                collector.transaction = transaction;
-                self.callback_membership_transaction = Some(collector);
-                return Err(AuthoringFailure::from(error));
-            }
-        };
-        match noon_core::stage_prepared_semantic_scene_admission(prepared, root, &[local.into()]) {
-            Ok(prepared) => {
-                collector.transaction = prepared.into_transaction();
-                collector.admitted_provisionals.push(local);
-                collector.stages += 1;
-                self.callback_membership_transaction = Some(collector);
-                Ok(())
-            }
-            Err(error) => {
-                let (prepared, cause) = error.into_parts();
-                collector.transaction = prepared.into_transaction();
-                self.callback_membership_transaction = Some(collector);
-                Err(match cause {
-                    noon_core::PreparedSemanticMembershipErrorKind::Operation(error) => {
-                        AuthoringFailure::from(error)
-                    }
-                    noon_core::PreparedSemanticMembershipErrorKind::Transaction(error) => {
-                        AuthoringFailure::from(error)
-                    }
-                })
-            }
-        }
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     fn take_committed_callback_provisional(
         &mut self,
@@ -4051,26 +3983,6 @@ impl SemanticExecutionPlayer {
         })
     }
 
-    /// Stage ordinary Scene.add for one phase-bound provisional object using
-    /// the same pending-node admission planner as native semantic creation.
-    #[cfg(target_arch = "wasm32")]
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackProvisionalAdd)]
-    pub fn stage_callback_provisional_add_wasm(
-        &mut self,
-        token_json: &str,
-        object: &WasmCallbackProvisionalMobject,
-    ) -> Result<(), wasm_bindgen::JsValue> {
-        let token =
-            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
-        if object.callback_token != token {
-            return Err(crate::authoring_error::js_error(
-                "callback provisional geometry token is stale",
-            ));
-        }
-        self.stage_required_callback_provisional_add(token, object.local)
-            .map_err(crate::authoring_error::js_error)
-    }
-
     /// Apply one authored translation while the object still has only a
     /// callback-local name. This is typed construction staging, not an
     /// execution-frame property write.
@@ -5556,10 +5468,24 @@ mod tests {
             .message
             .contains("scoped resource admission"));
         player
-            .stage_required_callback_provisional_add(token, local)
+            .stage_required_callback_mixed_addition(
+                token,
+                &crate::canonical_authoring_scene::SceneMembershipBatch::callback_existing(
+                    crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                    [],
+                ),
+                &[local],
+            )
             .unwrap();
         let duplicate = player
-            .stage_required_callback_provisional_add(token, local)
+            .stage_required_callback_mixed_addition(
+                token,
+                &crate::canonical_authoring_scene::SceneMembershipBatch::callback_existing(
+                    crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                    [],
+                ),
+                &[local],
+            )
             .unwrap_err();
         assert_eq!(duplicate.category, "invalid_input");
 
@@ -5616,16 +5542,14 @@ mod tests {
             )
             .unwrap();
         player
-            .stage_required_callback_membership(
+            .stage_required_callback_mixed_addition(
                 token,
                 &crate::canonical_authoring_scene::SceneMembershipBatch::callback_existing(
                     crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
                     [existing.clone()],
                 ),
+                &[local],
             )
-            .unwrap();
-        player
-            .stage_required_callback_provisional_add(token, local)
             .unwrap();
         assert_eq!(
             player.callback_membership_root_keys(token).unwrap(),
@@ -6543,7 +6467,14 @@ mod callback_provisional_stage_limit_regression {
         );
 
         player
-            .stage_required_callback_provisional_add(token, local)
+            .stage_required_callback_mixed_addition(
+                token,
+                &crate::canonical_authoring_scene::SceneMembershipBatch::callback_existing(
+                    crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                    [],
+                ),
+                &[local],
+            )
             .unwrap_err();
         // The final operation is rejected too: creation plus 127 updates has
         // exhausted the collector budget without changing its retained prefix.

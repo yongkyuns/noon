@@ -684,9 +684,6 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             self.staged.append((token, "analytic", options))
             return "provisional"
 
-        def stageCallbackProvisionalAdd(self, token, provisional) -> None:
-            self.staged.append((token, "add", provisional))
-
         def stageCallbackProvisionalShift(self, token, provisional, x, y) -> None:
             self.staged.append((token, "shift", provisional, x, y))
 
@@ -731,26 +728,6 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
         self.assertEqual(context.membership_root_keys(), ["1:2", "3:4"])
         context.finalize_membership()
         self.assertEqual(finalized, ["first", "second"])
-
-    def test_provisional_geometry_resolves_only_after_callback_completion(self) -> None:
-        context = self.context()
-        provisional = context.stage_analytic_geometry("circle-options")
-        resolved = []
-        context.stage_provisional_add(
-            provisional, lambda: resolved.append(context.resolve_provisional(provisional))
-        )
-        self.assertEqual(resolved, [])
-        self.assertEqual(
-            context._callback_player.staged,
-            [
-                ('{"generation":9}', "analytic", "circle-options"),
-                ('{"generation":9}', "add", "provisional"),
-            ],
-        )
-        context.finalize_membership()
-        self.assertEqual(resolved, ["durable"])
-        self.assertEqual(context._callback_player.staged[-1], ('{"generation":9}', "resolve", "provisional"))
-        self.assertEqual(context._membership_finalizers, [])
 
     def test_provisional_property_operations_stay_separate_from_effective_rows(self) -> None:
         context = self.context()

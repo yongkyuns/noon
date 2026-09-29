@@ -138,8 +138,6 @@ async function initializePyodide() {
     continuationMembershipRootKeys(context, tokenJson);
   self.noonStageSemanticContinuationAnalyticGeometry = (context, tokenJson, options) =>
     stageContinuationCallbackAnalyticGeometry(context, tokenJson, options);
-  self.noonStageSemanticContinuationProvisionalAdd = (context, tokenJson, object) =>
-    stageContinuationCallbackProvisionalAdd(context, tokenJson, object);
   self.noonStageSemanticContinuationProvisionalShift = (context, tokenJson, object, x, y) =>
     stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y);
   self.noonStageSemanticContinuationProvisionalFill = (
@@ -585,15 +583,6 @@ function stageContinuationCallbackAnalyticGeometry(context, tokenJson, options) 
     throw new Error("semantic continuation callback has no pinned provisional geometry collector");
   }
   return callback.player.stageCallbackAnalyticGeometry(tokenJson, options);
-}
-
-function stageContinuationCallbackProvisionalAdd(context, tokenJson, object) {
-  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
-  if (callback.player === null || callback.player === undefined ||
-      typeof callback.player.stageCallbackProvisionalAdd !== "function") {
-    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
-  }
-  callback.player.stageCallbackProvisionalAdd(tokenJson, object);
 }
 
 function stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y) {

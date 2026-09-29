@@ -203,11 +203,17 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         )
         self.assertEqual((center.x, center.y), (2.5, 0.5))
         center.free()
+        batch = fixture.context.beginMembershipBatch("add")
         engine_call(
-            fixture.player.stageCallbackProvisionalAdd,
-            token,
+            batch.appendCallbackProvisional,
             provisional,
             operation="callback.provisional_membership",
+        )
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            token,
+            batch,
+            operation="callback.membership",
         )
         self.assertEqual(list(fixture.context.rootMembershipKeys()), before)
         fixture.commit()

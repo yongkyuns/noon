@@ -525,7 +525,6 @@ def _stage_callback_membership(
         seen: set[str] = set()
         entries: list[tuple[_base.Mobject, object | None, object | None]] = []
         provisional_bindings: list[tuple[_base.Mobject, object, object, str]] = []
-        next_object_id = scene._next_object_id
         for member, provisional_handle, owner in provisional:
             if not isinstance(member, _base.Mobject):
                 raise NotImplementedError(
@@ -535,10 +534,9 @@ def _stage_callback_membership(
                 if owner is not callback:
                     raise RuntimeError("callback provisional Mobject belongs to another callback phase")
                 identity = callback.provisional_membership_key(provisional_handle)
-                reservation = _reserve_typed_binding(
-                    member, scene, provisional_handle, None, object_id=next_object_id
+                reservation = callback.reserve_provisional_binding(
+                    scene, member, provisional_handle
                 )
-                next_object_id += 1
                 provisional_bindings.append((member, provisional_handle, reservation, identity))
                 entries.append((member, None, provisional_handle))
             else:
@@ -1121,18 +1119,6 @@ class _ContinuationCallbackPlayer:
             token_json,
             options,
             operation="callback.provisional_geometry",
-        )
-
-    def stageCallbackProvisionalAdd(self, token_json: str, object: object) -> None:
-        if token_json != self._token_json:
-            raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonStageSemanticContinuationProvisionalAdd
-        engine_call(
-            noonStageSemanticContinuationProvisionalAdd,
-            self._context,
-            token_json,
-            object,
-            operation="callback.provisional_membership",
         )
 
     def stageCallbackProvisionalShift(

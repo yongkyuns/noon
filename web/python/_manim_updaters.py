@@ -554,6 +554,7 @@ class _CanonicalCallbackContext:
         # one typed semantic transaction and is the sole publication authority.
         self._membership_finalizers: list[Callable[[], None]] = []
         self._membership_wrappers: dict[str, object] = {}
+        self._next_provisional_binding_id: int | None = None
 
     def stage_membership(self, batch: object, finalize: Callable[[], None]) -> None:
         if self._callback_player is None:
@@ -633,19 +634,19 @@ class _CanonicalCallbackContext:
         )
         return _base.Vec2(float(point.x), float(point.y))
 
-    def stage_provisional_add(self, provisional: object, finalize: Callable[[], None]) -> None:
-        """Stage Scene.add for one phase-local object without binding it early."""
-        if self._callback_player is None:
-            raise NotImplementedError(
-                "callback provisional construction requires the pinned semantic execution player"
-            )
-        engine_call(
-            self._callback_player.stageCallbackProvisionalAdd,
-            json.dumps(self.token, separators=(",", ":")),
-            provisional,
-            operation="callback.provisional_membership",
-        )
-        self._membership_finalizers.append(finalize)
+    def reserve_provisional_binding(self, scene: _base.Scene, mobject: _base.Mobject, provisional: object):
+        """Reserve a callback-local derived wrapper ID without assigning a node ID.
+
+        Several separate Scene.add calls can be staged before Rust publishes any
+        binding. This counter prevents their delayed Python wrappers from
+        selecting the same derived object ID.
+        """
+        if self._next_provisional_binding_id is None:
+            self._next_provisional_binding_id = scene._next_object_id
+        object_id = self._next_provisional_binding_id
+        self._next_provisional_binding_id += 1
+        from _manim_scene import _reserve_typed_binding
+        return _reserve_typed_binding(mobject, scene, provisional, None, object_id=object_id)
 
     @staticmethod
     def provisional_membership_key(provisional: object) -> str:
