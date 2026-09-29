@@ -6,11 +6,12 @@ use crate::{
     FrameRowState, RuntimeIdentity, SceneInstance,
 };
 use noon_compile::{
-    lower_indicate_channels_with_bindings, EffectiveAnimationProperties, LoweredAffineChannel,
+    lower_indicate_channels_with_bindings, CompiledChannelKey, EffectiveAnimationProperties,
+    LoweredAffineChannel,
 };
 use noon_core::{
-    ObjectId, PublicationContext, RateFunction, SemanticClickIndicate, SemanticVec3, Style,
-    Transform2D,
+    ObjectId, Property, PublicationContext, RateFunction, SemanticClickIndicate, SemanticVec3,
+    Style, Transform2D,
 };
 use std::collections::BTreeMap;
 
@@ -72,6 +73,11 @@ impl SceneInstance {
             ),
         )
         .map_err(|error| format!("invalid click Indicate: {error:?}"))?;
+        if channels.is_empty()
+            || self.interaction_channel_conflict(object, index, &channels, self.frame.time)
+        {
+            return Ok(None);
+        }
         let mut endpoint = FrameRowState::from_frame(&self.frame, index);
         for channel in &channels {
             if !matches!(
@@ -128,9 +134,20 @@ impl SceneInstance {
             || !self
                 .frame_index_for_object(prepared.object)
                 .is_some_and(|index| {
+                    let row = &self.frame.objects[index];
                     self.object_slot_is_live(index)
-                        && self.frame.objects[index].transform == prepared.transform
-                        && self.frame.objects[index].style == prepared.style
+                        && prepared
+                            .channels
+                            .iter()
+                            .all(|channel| match channel.property {
+                                Property::Position => {
+                                    row.transform.translation == prepared.transform.translation
+                                }
+                                Property::Scale => row.transform.scale == prepared.transform.scale,
+                                Property::Fill => row.style.fill == prepared.style.fill,
+                                Property::Stroke => row.style.stroke == prepared.style.stroke,
+                                _ => false,
+                            })
                 })
         {
             return Err("foreign or stale prepared click animation".into());
@@ -158,7 +175,7 @@ impl SceneInstance {
         {
             return Err("interaction clock moved backwards".into());
         }
-        let mut writes = Vec::with_capacity(self.transient_animations.active.len() * 2);
+        let mut writes = Vec::with_capacity(self.transient_animations.active.len() * 4);
         let mut completed = Vec::new();
         let mut stale = Vec::new();
         for (&object, driver) in &self.transient_animations.active {
@@ -171,7 +188,12 @@ impl SceneInstance {
             };
             if driver.publication.scene_revision() != self.publication.scene_revision()
                 || driver.publication.execution_revision() != self.publication.execution_revision()
-                || driver.authored_time != self.frame.time
+                || self.interaction_channel_conflict(
+                    object,
+                    index,
+                    &driver.channels,
+                    driver.authored_time,
+                )
             {
                 stale.push(index);
                 completed.push(object);
@@ -197,14 +219,30 @@ impl SceneInstance {
             } else {
                 completed.push(object);
             }
-            writes.push(EffectivePropertyWrite::Transform {
-                object,
-                transform: row.transform,
-            });
-            writes.push(EffectivePropertyWrite::Style {
-                object,
-                style: row.style,
-            });
+            // The lowering omits unchanged channels (including own-center
+            // translation). Restore only the channels this effect animates;
+            // unrelated input/host writes made since preparation stay intact.
+            for channel in &driver.channels {
+                writes.push(match channel.property {
+                    noon_core::Property::Position => EffectivePropertyWrite::Translation {
+                        object,
+                        translation: row.transform.translation,
+                    },
+                    noon_core::Property::Scale => EffectivePropertyWrite::Scale {
+                        object,
+                        scale: row.transform.scale,
+                    },
+                    noon_core::Property::Fill => EffectivePropertyWrite::Fill {
+                        object,
+                        fill: row.style.fill,
+                    },
+                    noon_core::Property::Stroke => EffectivePropertyWrite::Stroke {
+                        object,
+                        stroke: row.style.stroke,
+                    },
+                    _ => unreachable!("prepared supported interaction channel"),
+                });
+            }
         }
         let next_epoch = if stale.is_empty() {
             None
@@ -248,7 +286,41 @@ impl SceneInstance {
         Ok(())
     }
 
+    /// Authored/native drivers retain precedence over an input effect. Disjoint
+    /// timeline channels keep running. A newly active conflicting channel cancels
+    /// the effect on its next interaction tick instead of restoring its old value.
+    fn interaction_channel_conflict(
+        &self,
+        object: ObjectId,
+        index: usize,
+        channels: &[LoweredAffineChannel],
+        since: f64,
+    ) -> bool {
+        if self.effective_driver_rows.contains(&index)
+            || !self.active_family_animation_indices.is_empty()
+            || (since != self.frame.time && !self.compiled.family_animations().is_empty())
+        {
+            // Compact family display domains may transform member coordinates;
+            // until their ownership is indexed per member, defer during that domain.
+            return true;
+        }
+        [Property::Transform, Property::Morph, Property::Presence]
+            .into_iter()
+            .chain(channels.iter().map(|channel| channel.property))
+            .any(|property| {
+                self.timeline_scheduler
+                    .channel_changed_since(CompiledChannelKey::new(index as u32, property), since)
+                    || self
+                        .reactive
+                        .as_ref()
+                        .is_some_and(|reactive| reactive.owns_property(object, property))
+            })
+    }
+
     pub(crate) fn clear_transient_animations(&mut self) {
         self.transient_animations = TransientAnimations::default();
     }
 }
+
+#[cfg(test)]
+mod tests;

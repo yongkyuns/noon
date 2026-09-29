@@ -109,10 +109,22 @@ impl ExecutionSession {
         let Some(position) = input.position() else {
             return Ok(result);
         };
+        (result.outcome, result.spatial_stats, result.precise_tests) =
+            self.pick_effective_fill(position.scene(), &mut eligible);
+        Ok(result)
+    }
+
+    /// Shared candidate-local query for admitted input and stationary hover.
+    pub(super) fn pick_effective_fill(
+        &mut self,
+        point: Vec2,
+        mut eligible: impl FnMut(SemanticNodeId) -> bool,
+    ) -> (PointerFillOutcome, SpatialQueryStats, usize) {
         self.sync_spatial_index();
-        let candidates = self.spatial_index.hit_test(position.scene());
-        result.spatial_stats = candidates.stats();
-        result.outcome = PointerFillOutcome::Miss;
+        let candidates = self.spatial_index.hit_test(point);
+        let spatial_stats = candidates.stats();
+        let mut outcome = PointerFillOutcome::Miss;
+        let mut precise_tests = 0;
         for &slot in candidates.slots() {
             let Some(object) = self.slots.object_for_slot(slot) else {
                 continue;
@@ -136,15 +148,15 @@ impl ExecutionSession {
             {
                 continue;
             }
-            result.precise_tests += 1;
-            match analytic_fill_contains(frame, index, position.scene()) {
+            precise_tests += 1;
+            match analytic_fill_contains(frame, index, point) {
                 Ok(false) => continue,
-                Ok(true) => result.outcome = PointerFillOutcome::Hit(target),
-                Err(reason) => result.outcome = PointerFillOutcome::Unsupported { target, reason },
+                Ok(true) => outcome = PointerFillOutcome::Hit(target),
+                Err(reason) => outcome = PointerFillOutcome::Unsupported { target, reason },
             }
             break;
         }
-        Ok(result)
+        (outcome, spatial_stats, precise_tests)
     }
 }
 

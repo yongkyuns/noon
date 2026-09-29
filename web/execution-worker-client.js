@@ -27,6 +27,14 @@ export const MAX_IN_FLIGHT_NATIVE_INPUTS = 64;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "execution worker client was terminated during an asynchronous operation";
 
+// Local lifecycle cancellation, never a remote callback/runtime error. Input
+// callers still receive rejection; DOM collectors can retire without an alert.
+export class ExecutionTransitionCancelled extends Error {
+  constructor() {
+    super("execution engine transitioning to semantic");
+  }
+}
+
 function workerCrashError(event, fallback) {
   const location =
     event.filename && `${event.filename}:${event.lineno ?? 0}:${event.colno ?? 0}`;
@@ -417,7 +425,7 @@ export class ExecutionWorkerClient {
       throw error;
     }
 
-    const reconnectError = new Error("execution engine transitioning to semantic");
+    const reconnectError = new ExecutionTransitionCancelled();
     this.#candidateEngineWorker = null;
     this.#engineWorker = candidate;
     this.#attachCurrentWorkerEvents(candidate, ENGINE_CHANNEL, "engine");

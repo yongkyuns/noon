@@ -1,4 +1,4 @@
-import { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
+import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
 import { attachBrowserPointerInput } from "./browser-pointer-input.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
@@ -209,7 +209,6 @@ export class AuthoringExecutionClient {
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -323,7 +322,6 @@ export class AuthoringExecutionClient {
         this.#rendererBackend = ready.render.backend;
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
-        this.#resizeCurrentCanvas();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -360,9 +358,7 @@ export class AuthoringExecutionClient {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
-    this.#pointerAbortController?.abort();
-    this.#pointerAbortController = null;
-    this.#pointerCollector = null;
+    this.#retirePointerInput();
     this.#pointerViewport = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
@@ -403,11 +399,19 @@ export class AuthoringExecutionClient {
     }
     const transition = rebuild();
     this.#transition = transition;
+    let completed = false;
     try {
-      return await transition;
+      const result = await transition;
+      completed = true;
+      return result;
     } finally {
       if (this.#transition === transition) {
+        if (completed) this.#retirePointerInput();
         this.#transition = null;
+        // ResizeObserver may have delivered while the transition was awaiting
+        // its final state query. Apply the latest layout before fresh input is
+        // attached; no later resize event is guaranteed for that same size.
+        if (completed) this.#resizeCurrentCanvas();
       }
     }
   }
@@ -489,10 +493,14 @@ export class AuthoringExecutionClient {
     this.#pointerViewRevision += 1;
   }
 
-  #attachPointerInput() {
+  #retirePointerInput() {
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
     this.#pointerCollector = null;
+  }
+
+  #attachPointerInput() {
+    this.#retirePointerInput();
     // Headless contract tests intentionally use a minimal canvas double. Pointer
     // collection is a DOM capability, not a startup requirement.
     if (typeof this.#canvas.addEventListener !== "function" ||
@@ -517,6 +525,10 @@ export class AuthoringExecutionClient {
     const fault = async (error, preceding = previousDelivery) => {
       if (signal.aborted) return;
       controller.abort();
+      // A successful owner replacement intentionally rejects pending input.
+      // Keep genuine failures visible, including a failed candidate attachment
+      // that leaves the previous owner and its collector usable.
+      if (error instanceof ExecutionTransitionCancelled) return;
       report(error);
       await preceding.catch(() => {});
       if (lastInput === null || this.#pointerAbortController !== controller || this.#player !== player ||

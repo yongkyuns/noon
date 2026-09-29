@@ -21,6 +21,8 @@ const repoRoot = path.resolve(scriptDir, "..");
 const port = positiveInteger(process.env.NOON_COLD_START_PORT ?? "4182", "port");
 const baseUrl = `http://127.0.0.1:${port}`;
 const backend = process.env.NOON_COLD_START_BACKEND ?? "webgpu";
+const profile = process.env.NOON_COLD_START_PROFILE ?? "desktop";
+assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const examples = parseExamples(
   process.env.NOON_COLD_START_EXAMPLES ??
@@ -55,7 +57,13 @@ try {
       args: browserArgs(backend),
     });
     try {
-      const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+      const page = await browser.newPage(profile === "mobile-class"
+        ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
+        : { viewport: { width: 1200, height: 900 } });
+      if (profile === "mobile-class") {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      }
       const failures = [];
       const workers = [];
       const workerHandles = [];
@@ -156,6 +164,37 @@ try {
         draws: Number(document.querySelector("#metric-draws")?.value),
         uploadBytes: Number(document.querySelector("#metric-upload")?.value),
       }));
+      // The source edit travels through the normal debounce/authoring/reconcile
+      // path. Completion is an explicit endpoint, not a claim about first pixels.
+      await waitForCompletedRun(page);
+      const beforeGeneration = await page.evaluate(() =>
+        window.__noonExampleGallery.generationDiagnostics.runGeneration);
+      const workersBeforeEdit = workerHandles.length;
+      const editStarted = monotonicNow();
+      await page.evaluate(() => {
+        const source = document.querySelector("#python-scene-source");
+        source.value = `${source.value.trimEnd()}\n# C6 warm source rerun\n`;
+        source.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await waitForCompletedRun(page, beforeGeneration);
+      const editCompleted = monotonicNow();
+      const warmMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      assert.equal(workerHandles.length, workersBeforeEdit, `warm source edit must reuse durable workers: ${JSON.stringify(workers)}`);
+      assert.ok(warmMetrics?.metrics?.objectCount > 0, "warm rerun must retain rendered content");
+      assert.ok(warmMetrics.metrics.presentedFrames > 0, "warm rerun must present a frame");
+      assert.equal(await page.locator("#scene").evaluate(node => getComputedStyle(node).visibility),
+        "visible", "warm rerun must restore the canvas after its source edit");
+      if (failures.length > 0) throw new Error(failures.join("\n"));
+      const warmRerun = {
+        editToCompletedRunMs: editCompleted - editStarted,
+        durableWorkersBefore: workersBeforeEdit,
+        durableWorkersAfter: workerHandles.length,
+        metrics: {
+          objectCount: warmMetrics.metrics.objectCount,
+          drawCalls: warmMetrics.metrics.drawCalls,
+          uploadBytes: warmMetrics.metrics.uploadBytes,
+        },
+      };
       const report = {
         label: example.label,
         exampleId: example.id,
@@ -168,6 +207,7 @@ try {
         authoringStartup,
         resourceFootprint,
         workers: workerSummary,
+        warmRerun,
         status,
         metrics,
       };
@@ -181,7 +221,8 @@ try {
           `Noon WASM ${formatBytes(resourceFootprint.noonWasm.packageBytes)} × ` +
           `${resourceFootprint.noonWasm.observedOwnerCount} observed owners = ` +
           `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint, ` +
-          `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)})`,
+          `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)}), ` +
+          `warm edit→completed run ${format(warmRerun.editToCompletedRunMs)} ms`,
       );
     } finally {
       await browser.close();
@@ -189,7 +230,7 @@ try {
   }
 
   const artifact = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     benchmark: "Noon public playground preloaded cold-start topology",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
@@ -208,12 +249,14 @@ try {
     },
     configuration: {
       backend,
+      profile,
+      cpuThrottlingRate: profile === "mobile-class" ? 4 : 1,
       examples,
       freshBrowserProcessPerCase: true,
       automaticPreload: true,
     },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable; it is not a first-present timestamp. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -221,6 +264,17 @@ try {
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
 } finally {
   server.kill("SIGTERM");
+}
+
+async function waitForCompletedRun(page, previousGeneration = -1) {
+  await page.waitForFunction((previous) => {
+    const patch = document.querySelector("#patch-status");
+    if (patch?.dataset.state === "error") return true;
+    return window.__noonExampleGallery?.runInFlight === false &&
+      patch?.dataset.state === "applied" && Number(patch.dataset.runGeneration) > previous;
+  }, previousGeneration, { timeout: 240_000 });
+  const patch = await page.locator("#patch-status").evaluate((node) => ({ state: node.dataset.state, text: node.value }));
+  assert.equal(patch.state, "applied", `source run failed: ${patch.text}`);
 }
 
 async function waitForServer() {

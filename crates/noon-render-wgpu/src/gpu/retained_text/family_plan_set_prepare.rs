@@ -264,12 +264,7 @@ impl RetainedFramePreparer {
 
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
-        rebuild_mixed_order(
-            &mut self.render_items,
-            &self.sources,
-            &self.snapshot_text_items,
-            &geometry,
-        );
+        rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
             if let Some(projected) = project_mixed_visibility_cached(
@@ -288,11 +283,7 @@ impl RetainedFramePreparer {
             .incremental_stats
             .mixed_order_rebuilds
             .saturating_add(1);
-        let glyph_batches = self
-            .render_items
-            .iter()
-            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-            .count();
+        let glyph_batches = self.snapshot_text_object_slots.iter().map(Vec::len).sum();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             image_objects: self.images.objects.len(),
@@ -316,6 +307,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,
@@ -517,11 +509,44 @@ impl RetainedFramePreparer {
                 .text
                 .prepare_with_changes(device, frame.retained, changes, texts, fonts, metrics)
                 .map_err(RetainedPrepareError::from)?;
+            if prepared_text.layout_rebuilt {
+                // A new atlas/packing generation may relocate or shrink every
+                // glyph arena. Its ranges cannot be copied as local deltas into
+                // the previous family snapshot. Rebuild the matching family
+                // baseline and request a full upload for this generation.
+                let active = self
+                    .family_plan_active_signature
+                    .iter()
+                    .map(|(index, _)| *index)
+                    .collect();
+                return self.prepare_family_plan_set_with_changes_inner(
+                    device,
+                    frame,
+                    plans,
+                    &FrameChanges::all(),
+                    texts,
+                    fonts,
+                    geometries,
+                    metrics,
+                    visible_object_indices,
+                    Some(&active),
+                );
+            }
+            self.snapshot_text_stats = prepared_text.stats;
+            for &index in changes.object_indices() {
+                if let Some(slots) = prepared_text.object_glyph_slots.get(index) {
+                    self.snapshot_prepare_stats.glyph_batches =
+                        self.snapshot_prepare_stats.glyph_batches
+                            - self.snapshot_text_object_slots[index].len()
+                            + slots.len();
+                }
+            }
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
                 &mut self.snapshot_text_items,
-                &self.text_item_ranges,
+                &mut self.snapshot_text_object_slots,
+                prepared_text.object_glyph_slots,
                 prepared_text.items,
                 prepared_text.mask_quads,
                 prepared_text.color_quads,
@@ -659,6 +684,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: Some(partial_upload_base_generation),

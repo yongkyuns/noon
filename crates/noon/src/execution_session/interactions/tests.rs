@@ -282,3 +282,55 @@ fn click_indicate_preparation_rejects_foreign_runtime_and_retired_targets() {
     assert!(session.runtime.start_transient_animation(prepared).is_err());
     assert!(!session.interactions_active());
 }
+
+#[test]
+fn click_action_runs_while_an_unrelated_source_segment_is_pending() {
+    let (mut store, root, target, moving, _) = fixture(0);
+    let mut endpoint = store.semantic_object_state_checked(moving).unwrap().clone();
+    endpoint.transform.translation.x = 7.0;
+    let endpoint = store.insert_semantic_object(endpoint);
+    let animation = store
+        .insert_semantic_transform_animation(moving, endpoint, AnimationOptions::new())
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    let segment = session
+        .activate_animation_segment(
+            &store,
+            animation,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(noon_core::RateFunction::Linear),
+        )
+        .unwrap();
+    click(&mut session, 1, 0.0);
+    assert!(session.interactions_active());
+    session.advance_interactions(0.0).unwrap();
+    session.advance_to(0.2).unwrap();
+    session.advance_interactions(0.2).unwrap();
+    assert!(!session.segment_state(segment).is_complete());
+    let effect = session.execution_object_id(target).unwrap();
+    let moving = session.execution_object_id(moving).unwrap();
+    assert_eq!(
+        session
+            .runtime
+            .effective_object(effect)
+            .unwrap()
+            .transform
+            .scale,
+        Vec2::new(1.2, 1.2)
+    );
+    assert!(
+        (session
+            .runtime
+            .effective_object(moving)
+            .unwrap()
+            .transform
+            .translation
+            .x
+            - 5.4)
+            .abs()
+            < 1e-5
+    );
+    assert_eq!(session.frame().time, 0.2);
+}

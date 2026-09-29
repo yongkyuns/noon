@@ -87,9 +87,25 @@ async function snapshot(page) {
       playhead: document.querySelector("#metric-time")?.value ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       hasExecution: window.__noonExampleGallery?.executionMode != null,
+      playing: status?.dataset.playbackPlaying === "true",
+      canvasHidden: getComputedStyle(document.querySelector("canvas")).visibility === "hidden",
       traceback: document.querySelector("#python-traceback")?.textContent ?? "",
     };
   });
+}
+
+async function assertStoppedPreview(page, observed) {
+  assert.equal(observed.playing, false, "invalid edits must pause the previous execution");
+  if (!observed.hasExecution) return;
+  assert.equal(observed.canvasHidden, true, "a retained renderer must not display stale source");
+  // Allow any already submitted frame to finish, then prove that retaining the
+  // worker does not keep the old animation presenting in the background.
+  await page.waitForTimeout(100);
+  const frames = () => page.evaluate(async () =>
+    (await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames);
+  const before = await frames();
+  await page.waitForTimeout(250);
+  assert.equal(await frames(), before, "paused source must settle with no further presentations");
 }
 
 async function waitForInitialScene(page) {
@@ -252,7 +268,7 @@ try {
     diagnostics.snapshots.baseline.objectCount,
     "syntax failure must retain the last successful object-count diagnostic",
   );
-  assert.equal(diagnostics.snapshots.syntaxError.hasExecution, false, "invalid edits must not keep the old animation running");
+  await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
   assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
@@ -287,7 +303,7 @@ try {
     "2",
     "authoring failure must retain the last successful object-count diagnostic",
   );
-  assert.equal(diagnostics.snapshots.runtimeError.hasExecution, false);
+  await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
   assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 

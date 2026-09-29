@@ -308,7 +308,8 @@ mod tests {
             preparer.prepare_incremental(&frame, &noon_runtime::FrameChanges::objects(vec![]));
         let glyph = RetainedRenderItem::Glyph {
             object_id: ObjectId::new(2),
-            text_item_index: 0,
+            object_index: 0,
+            run_index: 0,
         };
         let items = [glyph];
         let mut rest = items.iter().peekable();
