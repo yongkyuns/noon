@@ -305,15 +305,16 @@ fn rejected_pending_extension_never_reuses_an_escaped_local_token() {
     )));
     let prepared = transaction.prepare(&mut store).unwrap();
     let mut rejected = None;
-    let (prepared, error) = prepared
-        .with_pending_object_update(|transaction| {
-            let local = transaction.create_node(SemanticNodeCreation::object(
-                SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 }),
-            ));
-            rejected = Some(local);
-            transaction.set_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
-        })
-        .unwrap_err();
+    let result = prepared.with_pending_object_update(|transaction| {
+        let local = transaction.create_node(SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 }),
+        ));
+        rejected = Some(local);
+        transaction.set_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+    });
+    let Err((prepared, error)) = result else {
+        panic!("non-finite pending update must fail preflight");
+    };
     assert!(matches!(
         error,
         SemanticMutationTransactionError::InvalidNodeObjectState { .. }
@@ -339,48 +340,46 @@ fn pending_property_coalescing_restores_the_prior_prefix_after_a_late_failure() 
         StoredGeometry::Circle { radius: 1.0 },
     )));
     let prepared = transaction.prepare(&mut store).unwrap();
-    let prepared = prepared
-        .with_pending_object_update(|transaction| {
-            transaction
-                .replace_pending_object_property(
-                    local,
-                    SemanticObjectProperty::Translation,
-                    SemanticVec3::new(1.0, 2.0, 0.0),
-                )
-                .replace_pending_object_style(
-                    local,
-                    SemanticStyle {
-                        fill_opacity: 0.25,
-                        ..SemanticStyle::default()
-                    },
-                );
-        })
-        .unwrap();
-    let (prepared, error) = prepared
-        .with_pending_object_update(|transaction| {
-            transaction
-                .replace_pending_object_property(
-                    local,
-                    SemanticObjectProperty::Translation,
-                    SemanticVec3::new(9.0, 9.0, 0.0),
-                )
-                .replace_pending_object_style(
-                    local,
-                    SemanticStyle {
-                        fill_opacity: 0.75,
-                        ..SemanticStyle::default()
-                    },
-                )
-                .replace_pending_object_property(
-                    local,
-                    SemanticObjectProperty::RotationZ,
-                    f64::NAN,
-                );
-        })
-        .unwrap_err();
+    let prepared = match prepared.with_pending_object_update(|transaction| {
+        transaction
+            .replace_pending_object_property(
+                local,
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(1.0, 2.0, 0.0),
+            )
+            .replace_pending_object_style(
+                local,
+                SemanticStyle {
+                    fill_opacity: 0.25,
+                    ..SemanticStyle::default()
+                },
+            );
+    }) {
+        Ok(prepared) => prepared,
+        Err(_) => panic!("finite pending update must remain valid"),
+    };
+    let result = prepared.with_pending_object_update(|transaction| {
+        transaction
+            .replace_pending_object_property(
+                local,
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(9.0, 9.0, 0.0),
+            )
+            .replace_pending_object_style(
+                local,
+                SemanticStyle {
+                    fill_opacity: 0.75,
+                    ..SemanticStyle::default()
+                },
+            )
+            .replace_pending_object_property(local, SemanticObjectProperty::RotationZ, f64::NAN);
+    });
+    let Err((prepared, error)) = result else {
+        panic!("non-finite pending update must fail preflight");
+    };
     assert!(matches!(
         error,
-        SemanticMutationTransactionError::InvalidNodeObjectState { .. }
+        SemanticMutationTransactionError::PendingNonFinitePropertyValue { .. }
     ));
     let state = prepared.proposed_object_state(local).unwrap();
     assert_eq!(
