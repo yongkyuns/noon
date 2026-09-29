@@ -598,14 +598,14 @@ Native translation dragging is session policy over the same typed pointer ingres
 program.set_translation_drag_targets([&circle])?;
 let token = program.configure_native_pointer_input(pointer, view_revision)?;
 let press = NativePointerInput::new(1, token.pointer(), token.context(), modifiers, press_kind);
-program.submit_translation_drag_input(&token, press)?;
+program.submit_native_pointer_input(&token, press)?;
 ```
 
-Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition; stale or failed releases retain the lease without acknowledging the occurrence.
+Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition. Acquisition also checks the shared persistent-publication barriers before taking a lease; an unfinished animation segment must complete first. Stale or failed releases retain the lease without acknowledging the occurrence. The receipt-returning `submit_translation_drag_input` entry exposes the single release undo action to editor hosts.
 
-The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable typed-ingress round trip.
+The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable scene using the ordinary native host.
 
-Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired.
+Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired. Captured moves and primary release may use the last acknowledged displayed mapping while local motion awaits presentation; runtime, source, view and camera must still match. A fresh press and ordinary picking retain exact current-presentation admission. Configured unrecorded drag input rejects replay explicitly; Run recreates the authored scene.
 
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 
