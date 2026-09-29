@@ -193,9 +193,21 @@ try {
       }
       return texture;
     };
+    const busyBuffers = new WeakMap();
     const writeTexture = queue.writeTexture;
     queue.writeTexture = function(destination, data, layout, size) {
       if (/glyph mask atlas/.test(destination.texture.label)) {
+        if (probe === "busy") {
+          const owner = state.textures.find(item => item.texture === destination.texture).device;
+          let scratch = busyBuffers.get(owner);
+          if (!scratch) {
+            scratch = owner.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST });
+            busyBuffers.set(owner, scratch);
+          }
+          const encoder = owner.createCommandEncoder();
+          encoder.clearBuffer(scratch);
+          this.submit([encoder.finish()]);
+        }
         if (probe === "pad256") {
           const height = size.height;
           const row = Math.ceil(layout.bytesPerRow / 256) * 256;
