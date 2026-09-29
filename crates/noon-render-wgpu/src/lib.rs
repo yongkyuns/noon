@@ -2242,7 +2242,7 @@ fn range_usize_u32(range: &Range<u32>) -> Range<usize> {
     range.start as usize..range.end as usize
 }
 
-fn allocate_replacement_range(
+pub(crate) fn allocate_replacement_range(
     old: Range<u32>,
     required_len: usize,
     free_ranges: &mut Vec<Range<u32>>,
@@ -2278,7 +2278,7 @@ fn allocate_replacement_range(
     start..start + required
 }
 
-fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
+pub(crate) fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
     if range.is_empty() {
         return;
     }

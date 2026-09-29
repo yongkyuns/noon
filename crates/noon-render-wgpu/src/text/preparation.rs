@@ -182,7 +182,11 @@ struct PreparedTextObjectState {
     transform: Transform2D,
     reveal: f32,
     morph: f32,
-    item_range: Range<usize>,
+    /// Stable arena ownership for this object's atlas-backed instances.  The
+    /// ranges may contain spare capacity; only `GlyphBatch` ranges are drawn.
+    mask_range: Range<u32>,
+    color_range: Range<u32>,
+    empty_glyphs: usize,
     phase_fingerprint: u64,
 }
 
@@ -194,6 +198,10 @@ pub struct PreparedRetainedTextFrame<'a> {
     pub mask_quads: &'a [GlyphQuadInstance],
     pub color_quads: &'a [GlyphQuadInstance],
     pub items: &'a [PreparedTextItem],
+    /// Active atlas batch slots for each semantic object. Slots remain stable
+    /// across object-local repacking; callers must not infer ownership from the
+    /// packed item vector's contiguous order.
+    pub object_glyph_slots: &'a [Vec<usize>],
     pub stats: RetainedTextPrepareStats,
 }
 
@@ -255,6 +263,10 @@ pub struct RetainedTextQuadPreparer {
     color_quads: Vec<GlyphQuadInstance>,
     items: Vec<PreparedTextItem>,
     object_states: Vec<Option<PreparedTextObjectState>>,
+    object_glyph_slots: Vec<Vec<usize>>,
+    free_glyph_slots: Vec<usize>,
+    mask_free_ranges: Vec<Range<u32>>,
+    color_free_ranges: Vec<Range<u32>>,
     stats: RetainedTextPrepareStats,
     incremental_stats: RetainedTextIncrementalStats,
     last_metrics: Option<TextDeviceMetrics>,
@@ -280,6 +292,10 @@ impl RetainedTextQuadPreparer {
             color_quads: Vec::new(),
             items: Vec::new(),
             object_states: Vec::new(),
+            object_glyph_slots: Vec::new(),
+            free_glyph_slots: Vec::new(),
+            mask_free_ranges: Vec::new(),
+            color_free_ranges: Vec::new(),
             stats: RetainedTextPrepareStats::default(),
             incremental_stats: RetainedTextIncrementalStats::default(),
             last_metrics: None,
@@ -343,8 +359,9 @@ impl RetainedTextQuadPreparer {
     /// Prepare retained text while preserving runtime dirty-state locality.
     ///
     /// Empty change sets reuse the prepared arrays. Non-empty compatible change sets
-    /// update only the changed text objects' stable quad ranges. Anything that can
-    /// change raster identity or prepared structure falls back before mutation.
+    /// update only changed text objects, including changed glyph batch topology.
+    /// Metric/content/structural changes or exhausted atlas residency rebuild the
+    /// text generation explicitly and report layout_rebuilt to GPU consumers.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_with_changes<'a>(
         &'a mut self,
@@ -364,9 +381,13 @@ impl RetainedTextQuadPreparer {
         }
 
         if self.can_update_objects(frame, changes, texts, metrics)? {
-            if let Some(updated) =
-                self.update_objects(device, frame, changes, texts, fonts, metrics)?
-            {
+            let result = self.update_objects(device, frame, changes, texts, fonts, metrics);
+            if result.is_err() {
+                // A failed multi-object update must never be reused as a coherent
+                // generation by a subsequent empty change set.
+                self.prepared_once = false;
+            }
+            if let Some(updated) = result? {
                 self.incremental_stats.object_update_frames = self
                     .incremental_stats
                     .object_update_frames
@@ -377,10 +398,8 @@ impl RetainedTextQuadPreparer {
                     .saturating_add(updated as u64);
                 return Ok(self.prepared_frame(frame.time, false));
             }
-            // A subpixel raster can become empty/nonempty, split a batch, or
-            // exhaust the current atlas generation. Old masks are not a valid
-            // substitute. Repack the current text frame and report that change
-            // to the mixed renderer so it replaces all affected GPU ranges.
+            // Atlas exhaustion still requires a new resource generation. Batch
+            // topology changes alone reuse object-local ranges and slots.
         }
 
         if self.prepared_once && !changes.is_all() && !changes.is_empty() {
@@ -398,6 +417,7 @@ impl RetainedTextQuadPreparer {
             mask_quads: &self.mask_quads,
             color_quads: &self.color_quads,
             items: &self.items,
+            object_glyph_slots: &self.object_glyph_slots,
             stats: self.stats,
         }
     }
@@ -514,7 +534,8 @@ impl RetainedTextQuadPreparer {
             };
             let object_opacity = object.style.opacity * object.appearance;
 
-            for item in &self.items[state.item_range.clone()] {
+            for &slot in &self.object_glyph_slots[index] {
+                let item = &self.items[slot];
                 let PreparedTextItem::GlyphBatch {
                     run_index,
                     plane,
@@ -622,83 +643,74 @@ impl RetainedTextQuadPreparer {
             };
         }
 
-        let replacement_items = self.items[item_start..].to_vec();
-        let old_indices = (state.item_range.start..state.item_range.end)
-            .filter(|&index| matches!(self.items[index], PreparedTextItem::GlyphBatch { .. }))
-            .collect::<Vec<_>>();
-        let compatible = old_indices.len() == replacement_items.len()
-            && old_indices
-                .iter()
-                .zip(replacement_items.iter())
-                .all(|(&old_index, replacement)| {
-                    let PreparedTextItem::GlyphBatch {
-                        run_index: old_run,
-                        plane: old_plane,
-                        instance_range: old_range,
-                        ..
-                    } = &self.items[old_index]
-                    else {
-                        return false;
-                    };
-                    let PreparedTextItem::GlyphBatch {
-                        run_index: new_run,
-                        plane: new_plane,
-                        instance_range: new_range,
-                        ..
-                    } = replacement
-                    else {
-                        return false;
-                    };
-                    old_run == new_run
-                        && old_plane == new_plane
-                        && old_range.len() == new_range.len()
-                });
-
-        if compatible {
-            for (&old_index, replacement) in old_indices.iter().zip(replacement_items.iter()) {
-                let PreparedTextItem::GlyphBatch {
-                    plane,
-                    page,
-                    instance_range: new_range,
-                    ..
-                } = replacement
-                else {
-                    unreachable!()
-                };
-                let PreparedTextItem::GlyphBatch {
-                    page: old_page,
-                    instance_range: old_range,
-                    ..
-                } = &mut self.items[old_index]
-                else {
-                    unreachable!()
-                };
-                let source = match plane {
-                    GlyphAtlasPlane::Mask => {
-                        self.mask_quads[new_range.start as usize..new_range.end as usize].to_vec()
-                    }
-                    GlyphAtlasPlane::Color => {
-                        self.color_quads[new_range.start as usize..new_range.end as usize].to_vec()
-                    }
-                };
-                let target = match plane {
-                    GlyphAtlasPlane::Mask => {
-                        &mut self.mask_quads[old_range.start as usize..old_range.end as usize]
-                    }
-                    GlyphAtlasPlane::Color => {
-                        &mut self.color_quads[old_range.start as usize..old_range.end as usize]
-                    }
-                };
-                target.copy_from_slice(&source);
-                *old_page = *page;
-            }
-        }
-
+        let mut replacement_items = self.items[item_start..].to_vec();
+        let mask_quads = self.mask_quads[mask_start..].to_vec();
+        let color_quads = self.color_quads[color_start..].to_vec();
+        let empty_glyphs = self.stats.empty_glyphs - saved_stats.empty_glyphs;
         self.items.truncate(original_item_len);
         self.mask_quads.truncate(mask_start);
         self.color_quads.truncate(color_start);
         self.stats = saved_stats;
-        Ok(compatible)
+
+        let mask_range = replace_quad_range(
+            &mut self.mask_quads,
+            &mut self.mask_free_ranges,
+            state.mask_range.clone(),
+            &mask_quads,
+        );
+        let color_range = replace_quad_range(
+            &mut self.color_quads,
+            &mut self.color_free_ranges,
+            state.color_range.clone(),
+            &color_quads,
+        );
+        let slots = &mut self.object_glyph_slots[object_index as usize];
+        while slots.len() > replacement_items.len() {
+            let slot = slots.pop().expect("excess glyph slot");
+            if let PreparedTextItem::GlyphBatch { instance_range, .. } = &mut self.items[slot] {
+                *instance_range = 0..0;
+            }
+            self.free_glyph_slots.push(slot);
+        }
+        for (position, item) in replacement_items.iter_mut().enumerate() {
+            let PreparedTextItem::GlyphBatch {
+                plane,
+                instance_range,
+                ..
+            } = item
+            else {
+                unreachable!("glyph-only replacement");
+            };
+            let (source_start, target_start) = match plane {
+                GlyphAtlasPlane::Mask => (mask_start as u32, mask_range.start),
+                GlyphAtlasPlane::Color => (color_start as u32, color_range.start),
+            };
+            *instance_range = (instance_range.start - source_start + target_start)
+                ..(instance_range.end - source_start + target_start);
+            let slot = if let Some(&slot) = slots.get(position) {
+                slot
+            } else if let Some(slot) = self.free_glyph_slots.pop() {
+                slots.push(slot);
+                slot
+            } else {
+                let slot = self.items.len();
+                self.items.push(item.clone());
+                slots.push(slot);
+                slot
+            };
+            self.items[slot] = item.clone();
+        }
+        self.stats.mask_quads = self.stats.mask_quads - state.mask_range.len() + mask_quads.len();
+        self.stats.color_quads =
+            self.stats.color_quads - state.color_range.len() + color_quads.len();
+        self.stats.empty_glyphs = self.stats.empty_glyphs - state.empty_glyphs + empty_glyphs;
+        let stored = self.object_states[object_index as usize]
+            .as_mut()
+            .expect("live text object");
+        stored.mask_range = mask_range;
+        stored.color_range = color_range;
+        stored.empty_glyphs = empty_glyphs;
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -724,6 +736,12 @@ impl RetainedTextQuadPreparer {
         self.items.clear();
         self.object_states.clear();
         self.object_states.resize_with(frame.objects.len(), || None);
+        self.object_glyph_slots.clear();
+        self.object_glyph_slots
+            .resize_with(frame.objects.len(), Vec::new);
+        self.free_glyph_slots.clear();
+        self.mask_free_ranges.clear();
+        self.color_free_ranges.clear();
         self.stats = RetainedTextPrepareStats::default();
 
         for (object_slot, object) in frame.objects.iter().enumerate() {
@@ -742,6 +760,7 @@ impl RetainedTextQuadPreparer {
             let reveal = frame.reveal(object_slot);
             let morph = frame.morph(object_slot);
             let item_start = self.items.len();
+            let empty_start = self.stats.empty_glyphs;
 
             for render_item in resource.render_items.iter().copied() {
                 match render_item {
@@ -785,15 +804,21 @@ impl RetainedTextQuadPreparer {
                 }
             }
 
+            let item_range = item_start..self.items.len();
+            let (mask_range, color_range, glyph_item_slots) =
+                text_object_packing(&self.items, item_range.clone());
             self.object_states[object_slot] = Some(PreparedTextObjectState {
                 id: object.id,
                 text: text_handle,
                 transform: object.transform,
                 reveal,
                 morph,
-                item_range: item_start..self.items.len(),
+                mask_range,
+                color_range,
+                empty_glyphs: self.stats.empty_glyphs - empty_start,
                 phase_fingerprint: object_phase_fingerprint(resource, object.transform, metrics)?,
             });
+            self.object_glyph_slots[object_slot] = glyph_item_slots;
         }
 
         self.last_metrics = Some(metrics);
@@ -957,6 +982,49 @@ impl Default for RetainedTextQuadPreparer {
     fn default() -> Self {
         Self::with_default_atlas()
     }
+}
+
+fn replace_quad_range(
+    arena: &mut Vec<GlyphQuadInstance>,
+    free: &mut Vec<Range<u32>>,
+    old: Range<u32>,
+    quads: &[GlyphQuadInstance],
+) -> Range<u32> {
+    let range = crate::allocate_replacement_range(old, quads.len(), free, arena.len());
+    if let Some(&first) = quads.first() {
+        arena.resize(arena.len().max(range.end as usize), first);
+        arena[range.start as usize..range.end as usize].copy_from_slice(quads);
+    }
+    range
+}
+
+fn text_object_packing(
+    items: &[PreparedTextItem],
+    item_range: Range<usize>,
+) -> (Range<u32>, Range<u32>, Vec<usize>) {
+    let mut mask: Option<Range<u32>> = None;
+    let mut color: Option<Range<u32>> = None;
+    let mut glyph_slots = Vec::new();
+    for index in item_range {
+        let PreparedTextItem::GlyphBatch {
+            plane,
+            instance_range,
+            ..
+        } = &items[index]
+        else {
+            continue;
+        };
+        glyph_slots.push(index);
+        let target = match plane {
+            GlyphAtlasPlane::Mask => &mut mask,
+            GlyphAtlasPlane::Color => &mut color,
+        };
+        *target = Some(match target.take() {
+            Some(range) => range.start.min(instance_range.start)..range.end.max(instance_range.end),
+            None => instance_range.clone(),
+        });
+    }
+    (mask.unwrap_or(0..0), color.unwrap_or(0..0), glyph_slots)
 }
 
 fn atlas_texture_bytes(extent: u32, mask_pages: usize, color_pages: usize) -> u64 {

@@ -637,9 +637,14 @@ impl TextGlyphGpuRenderer {
         prepared: &PreparedRetainedTextFrame<'_>,
         sample_count: u32,
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
-        let mut stats = TextGpuDrawStats::default();
-        for item in prepared.items {
-            stats += self.draw_item(pass, item, sample_count)?;
+        let mut stats = TextGpuDrawStats {
+            deferred_items: prepared.stats.vector_items + prepared.stats.outline_runs,
+            ..TextGpuDrawStats::default()
+        };
+        for slots in prepared.object_glyph_slots {
+            for &slot in slots {
+                stats += self.draw_item(pass, &prepared.items[slot], sample_count)?;
+            }
         }
         Ok(stats)
     }
@@ -868,6 +873,9 @@ mod tests {
         })
     }
 
+    static TEST_GLYPH_SLOTS: std::sync::LazyLock<Vec<Vec<usize>>> =
+        std::sync::LazyLock::new(|| vec![vec![0]]);
+
     fn prepared_mask_frame<'a>(
         quads: &'a [GlyphQuadInstance],
         items: &'a [PreparedTextItem],
@@ -878,6 +886,11 @@ mod tests {
             mask_quads: quads,
             color_quads: &[],
             items,
+            object_glyph_slots: if items.is_empty() {
+                &[]
+            } else {
+                &TEST_GLYPH_SLOTS
+            },
             stats: Default::default(),
         }
     }

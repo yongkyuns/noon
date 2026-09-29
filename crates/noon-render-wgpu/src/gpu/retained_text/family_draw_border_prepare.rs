@@ -139,21 +139,12 @@ impl RetainedFramePreparer {
 
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
-        rebuild_mixed_order(
-            &mut self.render_items,
-            &self.sources,
-            &self.snapshot_text_items,
-            &geometry,
-        );
+        rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
             .saturating_add(1);
-        let glyph_batches = self
-            .render_items
-            .iter()
-            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-            .count();
+        let glyph_batches = self.snapshot_text_object_slots.iter().map(Vec::len).sum();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             image_objects: self.images.objects.len(),
@@ -178,6 +169,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,

@@ -61,7 +61,8 @@ pub enum RetainedRenderItem {
     },
     Glyph {
         object_id: ObjectId,
-        text_item_index: usize,
+        object_index: u32,
+        run_index: u32,
     },
 }
 
@@ -126,6 +127,7 @@ pub struct PreparedRetainedTextSnapshot<'a> {
     pub mask_quads: &'a [GlyphQuadInstance],
     pub color_quads: &'a [GlyphQuadInstance],
     pub items: &'a [PreparedTextItem],
+    pub object_glyph_slots: &'a [Vec<usize>],
     pub stats: RetainedTextPrepareStats,
     pub atlas: &'a GpuGlyphAtlas,
     /// The text generation whose GPU contents a partial update assumes are resident.
@@ -136,6 +138,15 @@ pub struct PreparedRetainedTextSnapshot<'a> {
 }
 
 impl PreparedRetainedTextSnapshot<'_> {
+    fn glyph_batches(
+        &self,
+        object_index: u32,
+        run_index: u32,
+    ) -> impl Iterator<Item = &PreparedTextItem> {
+        self.object_glyph_slots.get(object_index as usize).into_iter().flatten()
+            .filter_map(move |&slot| self.items.get(slot))
+            .filter(move |item| matches!(item, PreparedTextItem::GlyphBatch { run_index: run, instance_range, .. } if *run == run_index && !instance_range.is_empty()))
+    }
     fn as_prepared_frame(&self) -> PreparedRetainedTextFrame<'_> {
         PreparedRetainedTextFrame {
             time: self.time,
@@ -143,6 +154,7 @@ impl PreparedRetainedTextSnapshot<'_> {
             mask_quads: self.mask_quads,
             color_quads: self.color_quads,
             items: self.items,
+            object_glyph_slots: self.object_glyph_slots,
             stats: self.stats,
         }
     }
@@ -371,7 +383,7 @@ impl PreparedRetainedGpuFrame<'_> {
             .render_items
             .get(range.clone())
             .ok_or(RetainedPreparedObjectOutcome::Absent)?;
-        let glyph_item_count = items
+        let glyph_run_count = items
             .iter()
             .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
             .count();
@@ -382,7 +394,8 @@ impl PreparedRetainedGpuFrame<'_> {
         let glyph_ranges = observed_glyph_ranges(&self.text, items);
         let geometry_item_count = items
             .len()
-            .saturating_sub(glyph_item_count + image_item_count);
+            .saturating_sub(glyph_run_count + image_item_count);
+        let glyph_item_count = glyph_ranges.len();
         let geometry = self
             .source_geometry_slots
             .and_then(|slots| slots.get(frame_index))
@@ -470,35 +483,38 @@ fn observed_glyph_ranges(
 ) -> Vec<RetainedPreparedGlyphRange> {
     items
         .iter()
-        .filter_map(|item| {
-            let RetainedRenderItem::Glyph {
-                text_item_index, ..
-            } = item
-            else {
-                return None;
-            };
+        .filter_map(|item| match item {
+            RetainedRenderItem::Glyph {
+                object_index,
+                run_index,
+                ..
+            } => Some((*object_index, *run_index)),
+            _ => None,
+        })
+        .flat_map(|(object, run)| text.glyph_batches(object, run))
+        .map(|item| {
             let PreparedTextItem::GlyphBatch {
                 plane,
                 page,
                 instance_range,
                 ..
-            } = text.items.get(*text_item_index)?
+            } = item
             else {
-                return None;
+                unreachable!()
             };
-            let dirty_ranges = match plane {
-                crate::text::atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
-                crate::text::atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
+            let dirty = match plane {
+                GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
+                GlyphAtlasPlane::Color => text.dirty_color_ranges,
             };
-            Some(RetainedPreparedGlyphRange {
+            RetainedPreparedGlyphRange {
                 plane: match plane {
-                    crate::text::atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
-                    crate::text::atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
+                    GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
+                    GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
                 },
                 page: *page,
                 instance_range: instance_range.clone(),
-                instance_dirty: sorted_ranges_overlap(dirty_ranges, instance_range),
-            })
+                instance_dirty: sorted_ranges_overlap(dirty, instance_range),
+            }
         })
         .collect()
 }
@@ -974,8 +990,8 @@ pub struct RetainedFramePreparer {
     snapshot_mask_quads: Vec<GlyphQuadInstance>,
     snapshot_color_quads: Vec<GlyphQuadInstance>,
     snapshot_text_items: Vec<PreparedTextItem>,
+    snapshot_text_object_slots: Vec<Vec<usize>>,
     snapshot_text_stats: RetainedTextPrepareStats,
-    text_item_ranges: Vec<std::ops::Range<usize>>,
     fast_text_only: Vec<bool>,
     dirty_mask_ranges: Vec<std::ops::Range<u32>>,
     dirty_color_ranges: Vec<std::ops::Range<u32>>,
@@ -1033,8 +1049,8 @@ impl Default for RetainedFramePreparer {
             snapshot_mask_quads: Vec::new(),
             snapshot_color_quads: Vec::new(),
             snapshot_text_items: Vec::new(),
+            snapshot_text_object_slots: Vec::new(),
             snapshot_text_stats: RetainedTextPrepareStats::default(),
-            text_item_ranges: Vec::new(),
             fast_text_only: Vec::new(),
             dirty_mask_ranges: Vec::new(),
             dirty_color_ranges: Vec::new(),
@@ -1658,6 +1674,7 @@ impl RetainedFramePreparer {
                 mask_quads: &self.snapshot_mask_quads,
                 color_quads: &self.snapshot_color_quads,
                 items: &self.snapshot_text_items,
+                object_glyph_slots: &self.snapshot_text_object_slots,
                 stats: self.snapshot_text_stats,
                 atlas: self.text.atlas(),
                 partial_upload_base_generation: None,
@@ -1708,12 +1725,7 @@ impl RetainedFramePreparer {
             self.geometry.prepare(&self.scratch)
         };
         self.render_items.clear();
-        rebuild_mixed_order(
-            &mut self.render_items,
-            &self.sources,
-            &self.snapshot_text_items,
-            &geometry,
-        );
+        rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
         reorder_mixed_items(&mut self.render_items, frame, &self.painter_order_indices);
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
@@ -1733,11 +1745,7 @@ impl RetainedFramePreparer {
             .incremental_stats
             .mixed_order_rebuilds
             .saturating_add(1);
-        let glyph_batches = self
-            .render_items
-            .iter()
-            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-            .count();
+        let glyph_batches = self.snapshot_text_object_slots.iter().map(Vec::len).sum();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             image_objects: self.images.objects.len(),
@@ -1757,6 +1765,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,
@@ -1850,7 +1859,7 @@ impl RetainedFramePreparer {
             self.snapshot_text_items.clear();
             self.snapshot_text_items.extend_from_slice(prepared.items);
             self.snapshot_text_stats = prepared.stats;
-            self.text_item_ranges = text_item_ranges(prepared.items, frame.objects.len());
+            self.snapshot_text_object_slots = prepared.object_glyph_slots.to_vec();
         }
         self.dirty_mask_ranges.clear();
         self.dirty_color_ranges.clear();
@@ -1964,6 +1973,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,
@@ -2069,6 +2079,7 @@ impl RetainedFramePreparer {
                 .text
                 .prepare_with_changes(device, frame, changes, texts, fonts, metrics)?;
             text_layout_rebuilt = prepared_text.layout_rebuilt;
+            self.snapshot_text_stats = prepared_text.stats;
             if text_layout_rebuilt {
                 // Glyph count/page topology can change during subpixel motion.
                 // Replacing text packing does not invalidate geometry residency.
@@ -2082,7 +2093,7 @@ impl RetainedFramePreparer {
                 self.snapshot_text_items
                     .extend_from_slice(prepared_text.items);
                 self.snapshot_text_stats = prepared_text.stats;
-                self.text_item_ranges = text_item_ranges(prepared_text.items, frame.objects.len());
+                self.snapshot_text_object_slots = prepared_text.object_glyph_slots.to_vec();
                 self.dirty_mask_ranges.clear();
                 self.dirty_color_ranges.clear();
                 self.incremental_stats.text_snapshot_copies = self
@@ -2090,11 +2101,20 @@ impl RetainedFramePreparer {
                     .text_snapshot_copies
                     .saturating_add(1);
             } else {
+                for &index in changes.object_indices() {
+                    if let Some(slots) = prepared_text.object_glyph_slots.get(index) {
+                        self.snapshot_prepare_stats.glyph_batches =
+                            self.snapshot_prepare_stats.glyph_batches
+                                - self.snapshot_text_object_slots[index].len()
+                                + slots.len();
+                    }
+                }
                 copy_local_text_snapshot_updates(
                     &mut self.snapshot_mask_quads,
                     &mut self.snapshot_color_quads,
                     &mut self.snapshot_text_items,
-                    &self.text_item_ranges,
+                    &mut self.snapshot_text_object_slots,
+                    prepared_text.object_glyph_slots,
                     prepared_text.items,
                     prepared_text.mask_quads,
                     prepared_text.color_quads,
@@ -2109,7 +2129,7 @@ impl RetainedFramePreparer {
         }
         let text_instances_dirty =
             !self.dirty_mask_ranges.is_empty() || !self.dirty_color_ranges.is_empty();
-        if text_instances_dirty || text_layout_rebuilt {
+        if includes_text || text_instances_dirty || text_layout_rebuilt {
             self.text_generation = self
                 .text_generation
                 .checked_add(1)
@@ -2148,20 +2168,12 @@ impl RetainedFramePreparer {
         };
         if geometry.stats.full_rebuilds > 0 || text_layout_rebuilt {
             self.render_items.clear();
-            rebuild_mixed_order(
-                &mut self.render_items,
-                &self.sources,
-                &self.snapshot_text_items,
-                &geometry,
-            );
+            rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
             reorder_mixed_items(&mut self.render_items, frame, &self.painter_order_indices);
             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
             self.visible_projection_ready = false;
-            self.snapshot_prepare_stats.glyph_batches = self
-                .render_items
-                .iter()
-                .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-                .count();
+            self.snapshot_prepare_stats.glyph_batches =
+                self.snapshot_text_object_slots.iter().map(Vec::len).sum();
             self.snapshot_prepare_stats.vector_items = self.snapshot_text_stats.vector_items;
             self.snapshot_prepare_stats.outline_runs = self.snapshot_text_stats.outline_runs;
             self.incremental_stats.mixed_order_rebuilds = self
@@ -2201,6 +2213,7 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: (text_instances_dirty && !text_layout_rebuilt)
@@ -2754,30 +2767,13 @@ fn apply_image_draw_eligibility(
         .saturating_add(preparation.changes.len() as u64);
 }
 
-fn text_item_ranges(
-    items: &[PreparedTextItem],
-    object_count: usize,
-) -> Vec<std::ops::Range<usize>> {
-    let mut ranges = vec![0..0; object_count];
-    for (item_index, item) in items.iter().enumerate() {
-        let object_index = item.object_index() as usize;
-        let Some(range) = ranges.get_mut(object_index) else {
-            continue;
-        };
-        if range.start == range.end {
-            range.start = item_index;
-        }
-        range.end = item_index + 1;
-    }
-    ranges
-}
-
 #[allow(clippy::too_many_arguments)]
 fn copy_local_text_snapshot_updates(
-    mask_destination: &mut [GlyphQuadInstance],
-    color_destination: &mut [GlyphQuadInstance],
-    item_destination: &mut [PreparedTextItem],
-    item_ranges: &[std::ops::Range<usize>],
+    mask_destination: &mut Vec<GlyphQuadInstance>,
+    color_destination: &mut Vec<GlyphQuadInstance>,
+    item_destination: &mut Vec<PreparedTextItem>,
+    object_slots: &mut [Vec<usize>],
+    source_slots: &[Vec<usize>],
     items: &[PreparedTextItem],
     mask_source: &[GlyphQuadInstance],
     color_source: &[GlyphQuadInstance],
@@ -2787,12 +2783,18 @@ fn copy_local_text_snapshot_updates(
 ) {
     dirty_mask_ranges.clear();
     dirty_color_ranges.clear();
+    // Only new arena tails and changed live slots are copied. Vacant historical
+    // slots are never submitted; their owning object slot lists are authoritative.
+    mask_destination.extend_from_slice(&mask_source[mask_destination.len()..]);
+    color_destination.extend_from_slice(&color_source[color_destination.len()..]);
+    item_destination.extend_from_slice(&items[item_destination.len()..]);
     for &object_index in changes.object_indices() {
-        let Some(item_range) = item_ranges.get(object_index) else {
+        let Some(slots) = source_slots.get(object_index) else {
             continue;
         };
-        for item_index in item_range.clone() {
-            let item = &items[item_index];
+        object_slots[object_index].clone_from(slots);
+        for &slot in slots {
+            let item = &items[slot];
             let PreparedTextItem::GlyphBatch {
                 plane,
                 instance_range,
@@ -2801,34 +2803,41 @@ fn copy_local_text_snapshot_updates(
             else {
                 continue;
             };
-            item_destination[item_index] = item.clone();
-            let start = instance_range.start as usize;
-            let end = instance_range.end as usize;
+            item_destination[slot] = item.clone();
+            let range = instance_range.start as usize..instance_range.end as usize;
             match plane {
-                crate::text::atlas::GlyphAtlasPlane::Mask => {
-                    mask_destination[start..end].copy_from_slice(&mask_source[start..end]);
-                    push_coalesced_range(dirty_mask_ranges, instance_range.clone());
+                GlyphAtlasPlane::Mask => {
+                    mask_destination[range.clone()].copy_from_slice(&mask_source[range]);
+                    dirty_mask_ranges.push(instance_range.clone());
                 }
-                crate::text::atlas::GlyphAtlasPlane::Color => {
-                    color_destination[start..end].copy_from_slice(&color_source[start..end]);
-                    push_coalesced_range(dirty_color_ranges, instance_range.clone());
+                GlyphAtlasPlane::Color => {
+                    color_destination[range.clone()].copy_from_slice(&color_source[range]);
+                    dirty_color_ranges.push(instance_range.clone());
                 }
             }
         }
     }
+    // Reused allocations need not follow painter order. GPU range queries require
+    // a sorted, non-overlapping union, including when a replacement moves earlier.
+    normalize_dirty_ranges(dirty_mask_ranges);
+    normalize_dirty_ranges(dirty_color_ranges);
 }
 
-fn push_coalesced_range(ranges: &mut Vec<std::ops::Range<u32>>, range: std::ops::Range<u32>) {
-    if range.start == range.end {
-        return;
-    }
-    if let Some(previous) = ranges.last_mut() {
-        if range.start <= previous.end {
-            previous.end = previous.end.max(range.end);
-            return;
+fn normalize_dirty_ranges(ranges: &mut Vec<std::ops::Range<u32>>) {
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut write = 0;
+    for read in 0..ranges.len() {
+        if ranges[read].is_empty() {
+            continue;
+        }
+        if write > 0 && ranges[write - 1].end >= ranges[read].start {
+            ranges[write - 1].end = ranges[write - 1].end.max(ranges[read].end);
+        } else {
+            ranges[write] = ranges[read].clone();
+            write += 1;
         }
     }
-    ranges.push(range);
+    ranges.truncate(write);
 }
 
 fn changes_include_text(frame: &FrameState, changes: &FrameChanges) -> bool {
@@ -2875,7 +2884,6 @@ fn resolve_geometry_ref(
 fn rebuild_mixed_order(
     output: &mut Vec<RetainedRenderItem>,
     sources: &[SourceItem],
-    text_items: &[PreparedTextItem],
     geometry: &PreparedFrame<'_>,
 ) {
     let mut circle_indices = HashMap::new();
@@ -2895,21 +2903,6 @@ fn rebuild_mixed_order(
         path_indices.insert(id, index);
     }
 
-    let mut glyph_items: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
-    for (item_index, item) in text_items.iter().enumerate() {
-        if let PreparedTextItem::GlyphBatch {
-            object_index,
-            run_index,
-            ..
-        } = item
-        {
-            glyph_items
-                .entry((*object_index, *run_index))
-                .or_default()
-                .push(item_index);
-        }
-    }
-
     for source in sources {
         match source {
             SourceItem::FastGlyphRun {
@@ -2917,14 +2910,13 @@ fn rebuild_mixed_order(
                 object_index,
                 run_index,
             } => {
-                if let Some(items) = glyph_items.get(&(*object_index, *run_index)) {
-                    for &text_item_index in items {
-                        output.push(RetainedRenderItem::Glyph {
-                            object_id: *object_id,
-                            text_item_index,
-                        });
-                    }
-                }
+                // Stable run membership survives empty glyphs and changes in
+                // atlas batch count. Batch slots are resolved only when drawn.
+                output.push(RetainedRenderItem::Glyph {
+                    object_id: *object_id,
+                    object_index: *object_index,
+                    run_index: *run_index,
+                });
             }
             SourceItem::Geometry {
                 object_id,
@@ -3800,22 +3792,22 @@ impl GpuRenderer {
                     }
                 }
                 RetainedRenderItem::Glyph {
-                    text_item_index, ..
+                    object_index,
+                    run_index,
+                    ..
                 } => {
                     binding = None;
-                    stats.text += match text_camera_index {
-                        Some(index) => text_state.glyphs.draw_item_with_inset_camera(
-                            pass,
-                            &prepared.text.items[*text_item_index],
-                            sample_count,
-                            index,
-                        )?,
-                        None => text_state.glyphs.draw_item(
-                            pass,
-                            &prepared.text.items[*text_item_index],
-                            sample_count,
-                        )?,
-                    };
+                    for item in prepared.text.glyph_batches(*object_index, *run_index) {
+                        stats.text += match text_camera_index {
+                            Some(index) => text_state.glyphs.draw_item_with_inset_camera(
+                                pass,
+                                item,
+                                sample_count,
+                                index,
+                            )?,
+                            None => text_state.glyphs.draw_item(pass, item, sample_count)?,
+                        };
+                    }
                 }
             }
         }
@@ -4041,12 +4033,13 @@ mod tests {
         }];
         let mut dirty_mask = Vec::new();
         let mut dirty_color = Vec::new();
-        let item_ranges = std::iter::once(0..1).collect::<Vec<_>>();
+        let mut object_slots = vec![vec![0]];
         copy_local_text_snapshot_updates(
             &mut destination_quads,
-            &mut [],
+            &mut Vec::new(),
             &mut destination_items,
-            &item_ranges,
+            &mut object_slots,
+            &[vec![0]],
             &source_items,
             &[source_quad],
             &[],
@@ -4226,7 +4219,7 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_glyph_topology_matches_fresh_packing_without_rebuilding_geometry() {
+    fn subpixel_glyph_topology_stays_local_and_reuses_storage() {
         use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
         // Obtain the repository-bundled face through the existing Typst provider,
@@ -4273,11 +4266,14 @@ mod tests {
         retained.set_painter_order(&[0, 1, 2]);
         let mut topology_changes = 0;
         let mut previous_count = None;
-        for step in 0..=64 {
+        let mut warmed_storage = None;
+        let mut following_slots = None;
+        let mut following_quads = None;
+        for step in 0..=128 {
             frame.time = step as f64 / 60.0;
             frame.objects[1].transform.translation = Vec2::new(
                 -6.1 + (step % 8) as f32 / (67.5 * 8.0),
-                2.3 + (step / 8) as f32 / (67.5 * 8.0),
+                2.3 + ((step % 64) / 8) as f32 / (67.5 * 8.0),
             );
             frame.objects[1].style.opacity = 0.825;
             let changes = if step == 0 {
@@ -4321,31 +4317,96 @@ mod tests {
                 actual.text.stats, expected.text.stats,
                 "text stats at step {step}"
             );
+            // Compare submitted glyphs rather than arena holes: an empty glyph
+            // can now release its local allocation without repacking its neighbors.
+            let active_quads = |text: &PreparedRetainedTextSnapshot<'_>| {
+                text.object_glyph_slots
+                    .iter()
+                    .flatten()
+                    .flat_map(|&slot| {
+                        let PreparedTextItem::GlyphBatch {
+                            plane,
+                            instance_range,
+                            ..
+                        } = &text.items[slot]
+                        else {
+                            unreachable!()
+                        };
+                        let quads = match plane {
+                            GlyphAtlasPlane::Mask => text.mask_quads,
+                            GlyphAtlasPlane::Color => text.color_quads,
+                        };
+                        quads[instance_range.start as usize..instance_range.end as usize]
+                            .iter()
+                            .map(|q| (q.origin, q.axis_x, q.axis_y, q.color))
+                    })
+                    .collect::<Vec<_>>()
+            };
             assert_eq!(
-                actual.text.mask_quads.len(),
-                expected.text.mask_quads.len(),
-                "glyph count at step {step}"
+                active_quads(&actual.text),
+                active_quads(&expected.text),
+                "current glyphs at step {step}"
             );
-            for (actual, expected) in actual.text.mask_quads.iter().zip(expected.text.mask_quads) {
-                assert_eq!(
-                    actual.origin, expected.origin,
-                    "glyph origin at step {step}"
-                );
-                assert_eq!(actual.axis_x, expected.axis_x, "glyph width at step {step}");
-                assert_eq!(
-                    actual.axis_y, expected.axis_y,
-                    "glyph height at step {step}"
-                );
-                assert_eq!(actual.color, expected.color);
-            }
-            if previous_count.is_some_and(|count| count != actual.text.mask_quads.len()) {
+            if previous_count.is_some_and(|count| count != actual.text.stats.mask_quads) {
                 topology_changes += 1;
-                assert_eq!(
-                    actual.text.partial_upload_base_generation, None,
-                    "changed packing cannot update old GPU ranges partially"
+                assert!(
+                    actual.text.partial_upload_base_generation.is_some(),
+                    "topology change must remain a local update"
                 );
             }
-            previous_count = Some(actual.text.mask_quads.len());
+            previous_count = Some(actual.text.stats.mask_quads);
+            let fixed_slots = actual.text.object_glyph_slots[2].clone();
+            let fixed_quads = fixed_slots
+                .iter()
+                .flat_map(|&slot| {
+                    let PreparedTextItem::GlyphBatch {
+                        plane,
+                        instance_range,
+                        ..
+                    } = &actual.text.items[slot]
+                    else {
+                        unreachable!()
+                    };
+                    let (quads, dirty) = match plane {
+                        GlyphAtlasPlane::Mask => {
+                            (actual.text.mask_quads, actual.text.dirty_mask_ranges)
+                        }
+                        GlyphAtlasPlane::Color => {
+                            (actual.text.color_quads, actual.text.dirty_color_ranges)
+                        }
+                    };
+                    if step > 0 {
+                        assert!(!sorted_ranges_overlap(dirty, instance_range));
+                    }
+                    quads[instance_range.start as usize..instance_range.end as usize]
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                following_slots.get_or_insert_with(|| fixed_slots.clone()),
+                &fixed_slots
+            );
+            assert_eq!(
+                following_quads.get_or_insert_with(|| fixed_quads.clone()),
+                &fixed_quads
+            );
+            let storage = (
+                actual.text.mask_quads.len(),
+                actual.text.color_quads.len(),
+                actual.text.items.len(),
+            );
+            if step == 64 {
+                warmed_storage = Some(storage);
+            }
+            if step > 64 {
+                assert_eq!(
+                    Some(storage),
+                    warmed_storage,
+                    "warmed phase churn must reuse allocations"
+                );
+            }
+
             if step > 0 {
                 assert_eq!(actual.geometry_stats().full_rebuilds, 0);
                 assert_eq!(actual.geometry_stats().geometry_cache_misses, 0);
@@ -4356,7 +4417,9 @@ mod tests {
             topology_changes > 0,
             "fixture must cross empty/nonempty glyph phases"
         );
-        assert!(retained.text.incremental_stats().phase_fallbacks > 0);
+        assert_eq!(retained.text.incremental_stats().phase_fallbacks, 0);
+        assert_eq!(retained.incremental_stats().mixed_order_rebuilds, 1);
+        assert_eq!(retained.incremental_stats().text_snapshot_copies, 1);
         assert_eq!(retained.incremental_stats().scratch_rebuilds, 1);
     }
 
@@ -4690,23 +4753,23 @@ mod tests {
             assert!(prepared.render_items
                 [observed.render_item_start.unwrap()..observed.render_item_end.unwrap()]
                 .iter()
-                .filter_map(|item| {
-                    let RetainedRenderItem::Glyph {
-                        text_item_index, ..
-                    } = item
-                    else {
-                        return None;
-                    };
-                    let PreparedTextItem::GlyphBatch {
+                .filter_map(|item| match item {
+                    RetainedRenderItem::Glyph {
+                        object_index,
+                        run_index,
+                        ..
+                    } => Some((*object_index, *run_index)),
+                    _ => None,
+                })
+                .flat_map(|(object, run)| prepared.text.glyph_batches(object, run))
+                .filter_map(|item| match item {
+                    PreparedTextItem::GlyphBatch {
                         plane,
                         page,
                         instance_range,
                         ..
-                    } = &prepared.text.items[*text_item_index]
-                    else {
-                        return None;
-                    };
-                    Some((plane, page, instance_range))
+                    } => Some((plane, page, instance_range)),
+                    _ => None,
                 })
                 .any(|(plane, page, instance_range)| {
                     let plane = match plane {
@@ -4963,6 +5026,7 @@ mod tests {
                 mask_quads: &[],
                 color_quads: &[],
                 items: &[],
+                object_glyph_slots: &[],
                 stats: RetainedTextPrepareStats::default(),
                 atlas: text_preparer.atlas(),
                 partial_upload_base_generation: None,
@@ -5368,15 +5432,9 @@ mod tests {
                     RetainedRenderItem::Geometry { object_id, .. } => (*object_id, None),
                     RetainedRenderItem::Glyph {
                         object_id,
-                        text_item_index,
-                    } => {
-                        let PreparedTextItem::GlyphBatch { plane, .. } =
-                            &prepared.text.items[*text_item_index]
-                        else {
-                            unreachable!("retained glyph item must address a glyph batch")
-                        };
-                        (*object_id, Some(*plane))
-                    }
+                        object_index,
+                        run_index,
+                    } => (*object_id, Some((*object_index, *run_index))),
                     RetainedRenderItem::Image { object_id, .. } => (*object_id, None),
                 })
                 .collect::<Vec<_>>()
@@ -5488,7 +5546,8 @@ mod tests {
         push_geometry_item(&mut output, object, RenderPrimitive::Circle, 0);
         output.push(RetainedRenderItem::Glyph {
             object_id: object,
-            text_item_index: 3,
+            object_index: 3,
+            run_index: 0,
         });
         push_geometry_item(&mut output, object, RenderPrimitive::Circle, 1);
         assert_eq!(output.len(), 3);

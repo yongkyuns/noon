@@ -68,6 +68,7 @@ fn prepared_mask_frame<'a>(
         mask_quads: quads,
         color_quads: &[],
         items,
+        object_glyph_slots: &[],
         stats: Default::default(),
     }
 }
