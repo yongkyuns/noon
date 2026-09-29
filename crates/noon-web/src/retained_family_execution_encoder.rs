@@ -50,6 +50,152 @@ struct StagedPlanMappings {
     next_published_plan_count: usize,
 }
 
+/// Borrow the live arena during preparation. Reservations and generation changes
+/// stay in a small overlay until all fallible resource capture has succeeded.
+struct StagedRenderGeometryResources<'a> {
+    installed: &'a HashMap<crate::TransportSlotId, u64>,
+    generations: &'a [u32],
+    free: &'a [u32],
+    slot_changes: HashMap<crate::TransportSlotId, Option<u64>>,
+    generation_changes: HashMap<u32, u32>,
+    newly_free: Vec<u32>,
+    reserved_free: usize,
+    next: u32,
+}
+
+struct RenderGeometryChanges {
+    slot_changes: HashMap<crate::TransportSlotId, Option<u64>>,
+    generation_changes: HashMap<u32, u32>,
+    newly_free: Vec<u32>,
+    reserved_free: usize,
+    next: u32,
+}
+
+impl<'a> StagedRenderGeometryResources<'a> {
+    fn new(encoder: &'a RetainedFamilyExecutionDeltaEncoder) -> Self {
+        Self {
+            installed: &encoder.render_geometry_resources,
+            generations: &encoder.render_geometry_generations,
+            free: &encoder.free_render_geometry_resources,
+            slot_changes: HashMap::new(),
+            generation_changes: HashMap::new(),
+            newly_free: Vec::new(),
+            reserved_free: 0,
+            next: encoder.next_render_geometry_resource,
+        }
+    }
+
+    fn resource(&self, slot: &crate::TransportSlotId) -> Option<u64> {
+        self.slot_changes
+            .get(slot)
+            .copied()
+            .unwrap_or_else(|| self.installed.get(slot).copied())
+    }
+
+    fn generation(&self, index: u32) -> u32 {
+        self.generation_changes
+            .get(&index)
+            .copied()
+            .or_else(|| self.generations.get(index as usize).copied())
+            .unwrap_or(0)
+    }
+
+    fn retire(
+        &mut self,
+        slot: crate::TransportSlotId,
+    ) -> Result<Option<(u32, u32)>, RetainedResourceTransportError> {
+        let Some(id) = self.resource(&slot) else {
+            return Ok(None);
+        };
+        let (index, generation) = crate::retained_resource_transport::render_geometry_parts(id);
+        let next = generation.checked_add(1).ok_or_else(|| {
+            RetainedResourceTransportError::Encode(
+                "retained render geometry generation exhausted".into(),
+            )
+        })?;
+        self.slot_changes.insert(slot, None);
+        self.generation_changes.insert(index, next);
+        self.newly_free.push(index);
+        Ok(Some((index, next)))
+    }
+
+    fn publish(
+        &mut self,
+        slot: crate::TransportSlotId,
+    ) -> Result<u64, RetainedResourceTransportError> {
+        let (index, generation) = if let Some(id) = self.resource(&slot) {
+            let (index, generation) = crate::retained_resource_transport::render_geometry_parts(id);
+            let next = generation.checked_add(1).ok_or_else(|| {
+                RetainedResourceTransportError::Encode(
+                    "retained render geometry generation exhausted".into(),
+                )
+            })?;
+            self.generation_changes.insert(index, next);
+            (index, next)
+        } else {
+            let index = if let Some(index) = self.newly_free.pop() {
+                index
+            } else if self.reserved_free < self.free.len() {
+                let index = self.free[self.free.len() - 1 - self.reserved_free];
+                self.reserved_free += 1;
+                index
+            } else {
+                let index = self.next;
+                self.next = self.next.checked_add(1).ok_or_else(|| {
+                    RetainedResourceTransportError::Encode(
+                        "retained render geometry resource index exhausted".into(),
+                    )
+                })?;
+                index
+            };
+            (index, self.generation(index))
+        };
+        let id = crate::retained_resource_transport::render_geometry_id(index, generation);
+        self.slot_changes.insert(slot, Some(id));
+        Ok(id)
+    }
+
+    fn finish(self) -> RenderGeometryChanges {
+        RenderGeometryChanges {
+            slot_changes: self.slot_changes,
+            generation_changes: self.generation_changes,
+            newly_free: self.newly_free,
+            reserved_free: self.reserved_free,
+            next: self.next,
+        }
+    }
+}
+
+impl RenderGeometryChanges {
+    fn commit(self, encoder: &mut RetainedFamilyExecutionDeltaEncoder) {
+        for (slot, resource) in self.slot_changes {
+            if let Some(resource) = resource {
+                encoder.render_geometry_resources.insert(slot, resource);
+            } else {
+                encoder.render_geometry_resources.remove(&slot);
+            }
+        }
+        encoder
+            .render_geometry_generations
+            .resize(self.next as usize, 0);
+        for (index, generation) in self.generation_changes {
+            encoder.render_geometry_generations[index as usize] = generation;
+        }
+        encoder
+            .free_render_geometry_resources
+            .truncate(encoder.free_render_geometry_resources.len() - self.reserved_free);
+        encoder
+            .free_render_geometry_resources
+            .extend(self.newly_free);
+        encoder.next_render_geometry_resource = self.next;
+    }
+
+    #[cfg(test)]
+    fn touched_slots(&self) -> usize {
+        self.slot_changes.len()
+    }
+}
+
 impl RetainedFamilyExecutionDeltaEncoder {
     pub(crate) const fn session(&self) -> u32 {
         self.retained.session()
@@ -95,8 +241,6 @@ impl RetainedFamilyExecutionDeltaEncoder {
         fonts: &(impl FontResourceLookup + ?Sized),
         images: &(impl noon_core::RasterImageResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
-        let staged_roots = self.resource_roots.stage(&envelope.retained);
-        let retirements = self.resource_roots.retirements(&staged_roots);
         let new_images = envelope
             .retained
             .objects
@@ -121,10 +265,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
 
         // The retained encoder emits a changed immutable geometry inline. Convert
         // only those changes into generation-qualified reusable arena slots.
-        let mut staged_slot_resources = self.render_geometry_resources.clone();
-        let mut next_render_geometry_resource = self.next_render_geometry_resource;
-        let mut generations = self.render_geometry_generations.clone();
-        let mut free = self.free_render_geometry_resources.clone();
+        let mut staged = StagedRenderGeometryResources::new(self);
         let mut updates = std::collections::BTreeMap::<u32, (u32, Option<Arc<GeometryRef>>)>::new();
         let mut preparations = Vec::<RenderGeometryPreparation>::new();
         for slot in envelope.retained.removed_slots.iter().chain(
@@ -135,17 +276,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 .filter(|object| object.render_transform.is_none())
                 .map(|object| &object.slot),
         ) {
-            if let Some(id) = staged_slot_resources.remove(slot) {
-                let (index, generation) =
-                    crate::retained_resource_transport::render_geometry_parts(id);
-                let next = generation.checked_add(1).ok_or_else(|| {
-                    RetainedResourceTransportError::Encode(
-                        "retained render geometry generation exhausted".into(),
-                    )
-                })?;
-                generations[index as usize] = next;
-                free.push(index);
-                updates.insert(index, (next, None));
+            if let Some((index, generation)) = staged.retire(*slot)? {
+                updates.insert(index, (generation, None));
             }
         }
         for object in &mut envelope.retained.objects {
@@ -154,36 +286,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             }
 
             if let Some(geometry) = object.render_geometry.take() {
-                let resource = if let Some(id) = staged_slot_resources.get(&object.slot).copied() {
-                    let (index, generation) =
-                        crate::retained_resource_transport::render_geometry_parts(id);
-                    let next = generation.checked_add(1).ok_or_else(|| {
-                        RetainedResourceTransportError::Encode(
-                            "retained render geometry generation exhausted".into(),
-                        )
-                    })?;
-                    generations[index as usize] = next;
-                    crate::retained_resource_transport::render_geometry_id(index, next)
-                } else {
-                    let index = if let Some(index) = free.pop() {
-                        index
-                    } else {
-                        let index = next_render_geometry_resource;
-                        next_render_geometry_resource = next_render_geometry_resource
-                            .checked_add(1)
-                            .ok_or_else(|| {
-                                RetainedResourceTransportError::Encode(
-                                    "retained render geometry resource index exhausted".into(),
-                                )
-                            })?;
-                        generations.push(0);
-                        index
-                    };
-                    crate::retained_resource_transport::render_geometry_id(
-                        index,
-                        generations[index as usize],
-                    )
-                };
+                let resource = staged.publish(object.slot)?;
                 let (index, generation) =
                     crate::retained_resource_transport::render_geometry_parts(resource);
                 preparations.push(RenderGeometryPreparation {
@@ -194,21 +297,20 @@ impl RetainedFamilyExecutionDeltaEncoder {
                         .expect("render geometry publication has a render transform"),
                 });
                 updates.insert(index, (generation, Some(Arc::new(geometry))));
-                staged_slot_resources.insert(object.slot, resource);
                 object.render_geometry_resource = Some(resource);
             } else if object.render_geometry_resource.is_none() {
-                if let Some(&resource) = staged_slot_resources.get(&object.slot) {
+                if let Some(resource) = staged.resource(&object.slot) {
                     object.render_geometry_resource = Some(resource);
                 }
             }
         }
+        let pending_render = staged.finish();
+        let staged_roots = self.resource_roots.stage(&envelope.retained);
+        let retirements = self.resource_roots.retirements(&staged_roots);
         if new_texts.is_empty() && new_images.is_empty() && updates.is_empty() {
             envelope.resource_retirements = retirements;
             self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
-            self.render_geometry_resources = staged_slot_resources;
-            self.next_render_geometry_resource = next_render_geometry_resource;
-            self.render_geometry_generations = generations;
-            self.free_render_geometry_resources = free;
+            pending_render.commit(self);
             return Ok(());
         }
 
@@ -239,10 +341,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         envelope.resource_additions = Some(additions);
         envelope.resource_retirements = retirements;
         self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
-        self.render_geometry_resources = staged_slot_resources;
-        self.next_render_geometry_resource = next_render_geometry_resource;
-        self.render_geometry_generations = generations;
-        self.free_render_geometry_resources = free;
+        pending_render.commit(self);
         Ok(())
     }
 
@@ -807,6 +906,99 @@ mod tests {
             0
         );
         assert_eq!(encoder.free_render_geometry_resources, vec![0]);
+
+        // A failed unrelated resource capture must leave the retired slot
+        // available for the next successfully published geometry.
+        let missing_text = noon_core::TextResourceHandle {
+            arena: 99,
+            id: noon_core::TextResourceId::new(999),
+            version: 1,
+        };
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::new(100.0, 0.0))
+                .line_to(noon_core::Vec2::new(101.0, 1.0)),
+        )));
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        frame.objects[1].content = ObjectContentRef::Text(missing_text);
+        let mut failed = encoder
+            .encode_incremental(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                &FrameChanges::objects(vec![0, 1]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut retry = failed.clone();
+        let previous_inventory = encoder.resources.clone();
+        assert!(encoder
+            .attach_resource_additions(
+                &mut failed,
+                [missing_text],
+                &texts,
+                &geometries,
+                &fonts,
+                &images,
+            )
+            .is_err());
+        assert_eq!(encoder.resources, previous_inventory);
+        assert_eq!(encoder.free_render_geometry_resources, vec![0]);
+        assert!(encoder.render_geometry_resources.is_empty());
+        assert_eq!(encoder.render_geometry_generations, vec![64]);
+
+        retry.retained.objects[1].content = crate::TransportObjectContent::Geometry {
+            geometry: GeometryRef::circle(2.0),
+        };
+        encoder
+            .attach_resource_additions(&mut retry, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+        assert_eq!(
+            retry.retained.objects[0].render_geometry_resource,
+            Some(crate::retained_resource_transport::render_geometry_id(
+                0, 64
+            ))
+        );
+        assert_eq!(encoder.next_render_geometry_resource, 1);
+        assert!(encoder.free_render_geometry_resources.is_empty());
+    }
+
+    #[test]
+    fn one_change_stages_one_entry_with_a_hundred_thousand_live_render_slots() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
+        for index in 0..100_000 {
+            encoder.render_geometry_resources.insert(
+                crate::TransportSlotId {
+                    slot: index,
+                    generation: 0,
+                },
+                crate::retained_resource_transport::render_geometry_id(index, 0),
+            );
+        }
+        encoder.render_geometry_generations = vec![0; 100_000];
+        encoder.next_render_geometry_resource = 100_000;
+
+        let slot = crate::TransportSlotId {
+            slot: 42,
+            generation: 0,
+        };
+        let mut staged = StagedRenderGeometryResources::new(&encoder);
+        assert_eq!(
+            staged.publish(slot).unwrap(),
+            crate::retained_resource_transport::render_geometry_id(42, 1)
+        );
+        let changes = staged.finish();
+        assert_eq!(changes.touched_slots(), 1);
+        assert_eq!(changes.generation_changes.len(), 1);
+        assert_eq!(changes.reserved_free, 0);
+        assert!(changes.newly_free.is_empty());
+        changes.commit(&mut encoder);
+        assert_eq!(encoder.render_geometry_resources.len(), 100_000);
+        assert_eq!(encoder.render_geometry_generations[42], 1);
+        assert_eq!(encoder.next_render_geometry_resource, 100_000);
     }
 
     #[test]

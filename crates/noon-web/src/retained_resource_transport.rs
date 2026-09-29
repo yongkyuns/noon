@@ -236,7 +236,7 @@ pub struct RetainedResourceBundle {
     render_geometry_resources: Option<TransportRenderGeometryResources>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RetainedResourceInventory {
     images: HashSet<TransportImageResourceHandle>,
     texts: HashMap<(u64, u64), TransportTextResourceHandle>,
@@ -463,6 +463,7 @@ impl RetainedResourceBundle {
         self.texts.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn set_render_geometries(
         &mut self,
         session: u32,

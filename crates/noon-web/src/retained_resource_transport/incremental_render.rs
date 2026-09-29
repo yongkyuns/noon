@@ -94,6 +94,7 @@ impl InstalledRetainedResources {
         };
 
         let mut updates = Vec::with_capacity(resources.updates.len());
+        let mut expected_len = self.render_geometries.len();
         for update in resources.updates {
             let index = update.slot as usize;
             let valid = match self.render_geometries.get(index) {
@@ -104,18 +105,14 @@ impl InstalledRetainedResources {
                     previous.generation == update.generation && update.geometry.is_some()
                 }
                 None => {
-                    index
-                        == self.render_geometries.len()
-                            + updates
-                                .iter()
-                                .filter(|(slot, _)| *slot as usize >= self.render_geometries.len())
-                                .count()
-                        && update.generation == 0
-                        && update.geometry.is_some()
+                    index == expected_len && update.generation == 0 && update.geometry.is_some()
                 }
             };
             if !valid {
                 return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
+            }
+            if index == expected_len {
+                expected_len += 1;
             }
             updates.push((
                 update.slot,
@@ -124,16 +121,6 @@ impl InstalledRetainedResources {
                     geometry: update.geometry.map(Arc::new),
                 },
             ));
-        }
-        for (index, preparation) in resources.preparations.iter().enumerate() {
-            if !updates
-                .iter()
-                .any(|(slot, update)| *slot == preparation.resource && update.geometry.is_some())
-            {
-                return Err(RetainedResourceTransportError::InvalidRenderPreparation(
-                    index,
-                ));
-            }
         }
         Ok(PreparedRetainedResourceAdditionsWithRender {
             ordinary,
@@ -213,6 +200,7 @@ fn validate_render_geometry_resources(
     resources: &super::TransportRenderGeometryResources,
 ) -> Result<(), RetainedResourceTransportError> {
     let mut seen = HashSet::new();
+    let mut live_updates = HashSet::new();
     for (index, update) in resources.updates.iter().enumerate() {
         if !seen.insert(update.slot)
             || update.geometry.as_ref().is_some_and(|geometry| {
@@ -221,14 +209,12 @@ fn validate_render_geometry_resources(
         {
             return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
         }
+        if update.geometry.is_some() {
+            live_updates.insert(update.slot);
+        }
     }
     for (index, preparation) in resources.preparations.iter().enumerate() {
-        if !preparation.is_finite()
-            || !resources
-                .updates
-                .iter()
-                .any(|update| update.slot == preparation.resource && update.geometry.is_some())
-        {
+        if !preparation.is_finite() || !live_updates.contains(&preparation.resource) {
             return Err(RetainedResourceTransportError::InvalidRenderPreparation(
                 index,
             ));

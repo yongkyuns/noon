@@ -3,22 +3,26 @@
 use std::collections::HashMap;
 
 use crate::{
-    RetainedExecutionDeltaEnvelope, RetainedResourceRetirements, TransportImageResourceHandle,
-    TransportObjectContent, TransportSlotId, TransportTextResourceHandle,
+    RetainedExecutionDeltaEnvelope, RetainedResourceRetirements, RetainedTransportObjectState,
+    TransportImageResourceHandle, TransportObjectContent, TransportSlotId,
+    TransportTextResourceHandle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceRoot {
     Image(TransportImageResourceHandle),
     Text(TransportTextResourceHandle),
+    RenderGeometry(u64),
 }
 
 impl ResourceRoot {
-    fn from_content(content: &TransportObjectContent) -> Option<Self> {
-        match content {
+    fn from_object(object: &RetainedTransportObjectState) -> Option<Self> {
+        match &object.content {
             TransportObjectContent::Image { image, .. } => Some(Self::Image(*image)),
             TransportObjectContent::Text { text } => Some(Self::Text(*text)),
-            TransportObjectContent::Geometry { .. } => None,
+            TransportObjectContent::Geometry { .. } => {
+                object.render_geometry_resource.map(Self::RenderGeometry)
+            }
         }
     }
 }
@@ -40,7 +44,7 @@ impl ResourceResidency {
         if delta.snapshot {
             let mut snapshot = Self::default();
             for object in &delta.objects {
-                if let Some(root) = ResourceRoot::from_content(&object.content) {
+                if let Some(root) = ResourceRoot::from_object(object) {
                     snapshot.slots.insert(object.slot, root);
                     *snapshot.references.entry(root).or_default() += 1;
                 }
@@ -56,7 +60,17 @@ impl ResourceResidency {
             updates.insert(*slot, None);
         }
         for object in &delta.objects {
-            updates.insert(object.slot, ResourceRoot::from_content(&object.content));
+            let next = ResourceRoot::from_object(object).or_else(|| {
+                // The retained wire can omit unchanged inline geometry. Preserve
+                // its installed root until a new geometry or transform clears it.
+                (matches!(&object.content, TransportObjectContent::Geometry { .. })
+                    && object.render_transform.is_some()
+                    && object.render_geometry.is_none())
+                .then(|| self.slots.get(&object.slot).copied())
+                .flatten()
+                .filter(|root| matches!(root, ResourceRoot::RenderGeometry(_)))
+            });
+            updates.insert(object.slot, next);
         }
         let mut deltas = HashMap::new();
         for (&slot, &next) in &updates {
@@ -106,6 +120,7 @@ impl ResourceResidency {
             match root {
                 ResourceRoot::Image(image) => retired.images.push(image),
                 ResourceRoot::Text(text) => retired.texts.push(text),
+                ResourceRoot::RenderGeometry(_) => {}
             }
         };
         if staged.snapshot.is_some() {

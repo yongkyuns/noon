@@ -1,4 +1,5 @@
 use crate::retained_resource_transport::residency::{ResourceResidency, ResourceRoot};
+use crate::retained_resource_transport::{render_geometry_id, RenderGeometrySlot};
 use std::collections::HashMap;
 
 use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
@@ -196,6 +197,10 @@ impl InstalledRetainedExecutionMirror {
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let additions = self.resources.prepare_additions_with_render(bundle)?;
+        self.validate_render_geometry_replacements(
+            &delta.retained,
+            additions.render_geometry_updates(),
+        )?;
         let image_handles = additions.image_handle_remap();
         self.wire.extend_installed_image_handles(&image_handles);
         let text_handles = additions.text_handle_remap();
@@ -306,6 +311,33 @@ impl InstalledRetainedExecutionMirror {
                 > 0
             {
                 return Err(RetainedResourceTransportError::RetiredLiveText(*text).into());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_render_geometry_replacements(
+        &self,
+        delta: &RetainedExecutionDeltaEnvelope,
+        updates: &[(u32, RenderGeometrySlot)],
+    ) -> Result<(), InstalledExecutionError> {
+        let staged_roots = self.resource_roots.stage(delta);
+        for (slot, _) in updates {
+            let Some(previous) = self.resources.render_geometries().get(*slot as usize) else {
+                continue;
+            };
+            if previous.geometry.is_some() {
+                let old_id = render_geometry_id(*slot, previous.generation);
+                if self
+                    .resource_roots
+                    .references_after(&staged_roots, ResourceRoot::RenderGeometry(old_id))
+                    > 0
+                {
+                    return Err(
+                        RetainedExecutionTransportError::InvalidRenderGeometryResource(old_id)
+                            .into(),
+                    );
+                }
             }
         }
         Ok(())
@@ -837,6 +869,76 @@ mod tests {
         mirror.apply_family(reused).unwrap();
         assert_eq!(mirror.resources().render_geometries().len(), 2);
         assert!(mirror.resources().render_geometries()[0].geometry.is_some());
+    }
+
+    #[test]
+    fn shared_render_handle_cannot_be_retired_until_every_row_moves() {
+        let mut engine = geometry_engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
+                .unwrap();
+        let initial_json = engine.initial_delta_json().unwrap();
+        mirror.apply_json(&initial_json).unwrap();
+        let initial: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial_json).unwrap();
+
+        let mut shared = initial.clone();
+        shared.retained.snapshot = false;
+        shared.retained.sequence += 1;
+        for object in &mut shared.retained.objects {
+            object.render_geometry_resource = Some(0);
+            object.render_geometry = None;
+            object.render_transform = Some(Transform2D::IDENTITY);
+        }
+        shared.family_states.clear();
+        shared.family_plans.clear();
+        shared.resource_additions = Some(render_bundle(vec![(0, 0, Some(render_path(0.0)))]));
+        mirror.apply_family(shared.clone()).unwrap();
+        let old_frame = mirror.frame().unwrap().clone();
+        assert!(std::sync::Arc::ptr_eq(
+            old_frame.render_geometries[0].as_ref().unwrap(),
+            old_frame.render_geometries[1].as_ref().unwrap(),
+        ));
+
+        let next = crate::retained_resource_transport::render_geometry_id(0, 1);
+        let mut one_row = shared.clone();
+        one_row.retained.sequence += 1;
+        one_row.retained.objects.truncate(1);
+        one_row.retained.objects[0].render_geometry_resource = Some(next);
+        one_row.resource_additions = Some(render_bundle(vec![(0, 1, Some(render_path(2.0)))]));
+        assert!(mirror.apply_family(one_row.clone()).is_err());
+        assert_eq!(mirror.frame().unwrap(), &old_frame);
+        assert_eq!(mirror.resources().render_geometries()[0].generation, 0);
+
+        let mut one_retirement = one_row.clone();
+        one_retirement.retained.objects[0].render_geometry_resource = None;
+        one_retirement.retained.objects[0].render_transform = None;
+        one_retirement.resource_additions = Some(render_bundle(vec![(0, 1, None)]));
+        assert!(mirror.apply_family(one_retirement).is_err());
+        assert_eq!(mirror.frame().unwrap(), &old_frame);
+
+        let mut old_handle_retry = one_row.clone();
+        old_handle_retry.retained.objects[0].render_geometry_resource = Some(0);
+        old_handle_retry.resource_additions = None;
+        mirror.apply_family(old_handle_retry).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &old_frame);
+
+        let mut both_rows = shared;
+        both_rows.retained.sequence += 2;
+        for object in &mut both_rows.retained.objects {
+            object.render_geometry_resource = Some(next);
+        }
+        both_rows.resource_additions = Some(render_bundle(vec![(0, 1, Some(render_path(2.0)))]));
+        mirror.apply_family(both_rows).unwrap();
+        assert_eq!(mirror.resources().render_geometries()[0].generation, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            mirror.frame().unwrap().render_geometries[0]
+                .as_ref()
+                .unwrap(),
+            mirror.frame().unwrap().render_geometries[1]
+                .as_ref()
+                .unwrap(),
+        ));
     }
 
     #[test]

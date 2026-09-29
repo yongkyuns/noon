@@ -89,9 +89,30 @@ pub struct RetainedTransportObjectState {
     pub render_geometry: Option<GeometryRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_transform: Option<Transform2D>,
-    /// Index into the immutable geometry table installed with this session's bundle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Generation-qualified arena reference, encoded as a decimal string so JS
+    /// metadata parsing cannot round a high generation before Rust receives it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "render_geometry_id_json"
+    )]
     pub render_geometry_resource: Option<u64>,
+}
+
+mod render_geometry_id_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(id: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        id.map(|id| id.to_string()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|id| id.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2066,6 +2087,22 @@ mod tests {
             Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(0))
         ));
         assert!(mirror.frame().is_none());
+    }
+
+    #[test]
+    fn high_generation_render_resource_survives_json_metadata_roundtrip() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut delta = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let id = crate::retained_resource_transport::render_geometry_id(7, 2_200_000);
+        assert!(id > (1_u64 << 53));
+        delta.objects[0].render_geometry_resource = Some(id);
+        let json = serde_json::to_string(&delta).unwrap();
+        assert!(json.contains(&format!("\"render_geometry_resource\":\"{id}\"")));
+        let reparsed: RetainedExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(reparsed.objects[0].render_geometry_resource, Some(id));
     }
 }
 
