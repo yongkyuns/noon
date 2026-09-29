@@ -1184,16 +1184,22 @@ def _canonical_provisional_context(
     """Return one exact callback-local construction capability.
 
     The marker has no semantic slot or generation. It is accepted only while
-    the owning callback context is active, so ordinary callback rows retain
+    the owning callback phase is active, so ordinary callback rows retain
     their batched effective-write path.
     """
     context = getattr(mobject, "_callback_provisional_context", None)
     provisional = getattr(mobject, "_callback_provisional_handle", None)
+    active = _ACTIVE_CANONICAL_CONTEXT.get()
     if (not isinstance(context, _CanonicalCallbackContext)
+            or not isinstance(active, _CanonicalCallbackContext)
             or provisional is None
-            or _ACTIVE_CANONICAL_CONTEXT.get() is not context):
+            or active._scene is not context._scene
+            or active._authoring_context is not context._authoring_context
+            or active.token != context.token):
         return None
-    return context, provisional
+    # A later host region reads the same transaction-local object through its
+    # current region view. The constructor's Python context is not authority.
+    return active, provisional
 
 
 def active_callback_membership_context(scene: _base.Scene) -> _CanonicalCallbackContext | None:

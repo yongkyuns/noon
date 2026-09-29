@@ -707,6 +707,28 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             callback_player=self.Player(),
         )
 
+    def test_provisional_reads_use_the_current_region_of_the_exact_phase(self) -> None:
+        original = self.context()
+        active = self.context()
+        active._authoring_context = original._authoring_context
+        active.region = 1
+        wrapper = SimpleNamespace(
+            _callback_provisional_context=original,
+            _callback_provisional_handle="provisional",
+        )
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(active)
+        try:
+            self.assertEqual(updaters._canonical_get_center(wrapper), updaters._base.Vec2(2.5, -1.0))
+            self.assertEqual(original._callback_player.staged, [])
+            self.assertEqual(active._callback_player.staged[0][1], "center")
+            active.token = {"generation": 10}
+            self.assertIsNone(updaters._canonical_provisional_context(wrapper))
+            active.token = original.token
+            active._authoring_context = object()
+            self.assertIsNone(updaters._canonical_provisional_context(wrapper))
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+
     def test_caught_callback_exception_discards_delayed_membership_finalizers(self) -> None:
         context = self.context()
         finalized = []
