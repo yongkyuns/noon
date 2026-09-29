@@ -2654,6 +2654,32 @@ impl CanonicalAuthoringScene {
         Ok(new_bindings)
     }
 
+    /// Associate callback-created language identities after the exact leased
+    /// player has committed its required callback phase.
+    ///
+    /// This is derived wrapper bookkeeping only. The batch may reserve bindings
+    /// for already-published direct-root objects, but cannot replay membership,
+    /// mutate semantic state, or advance either revision. The context remains
+    /// transferred while the rightful player performs this acknowledgement.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn associate_published_callback_mobjects(
+        &mut self,
+        player: &crate::SemanticExecutionPlayer,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        self.validate_execution_player_return(player)
+            .map_err(|error| AuthoringFailure::from(error.to_string()))?;
+        if player.has_pending_callback_phase() {
+            return Err("published callback association cannot precede callback completion".into());
+        }
+        if player.scene_revision() != self.scene.revision() {
+            return Err(
+                "published callback association requires a coherent execution revision".into(),
+            );
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
     /// Associate language identities with already-published membership, without
     /// replaying a semantic edit or changing the retained execution session.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2661,9 +2687,6 @@ impl CanonicalAuthoringScene {
         &mut self,
         batch: SceneMembershipBatch,
     ) -> Result<(), AuthoringFailure> {
-        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
-            return Err("published association accepts binding reservations only".into());
-        }
         let player = self
             .player_ownership
             .local()
@@ -2673,6 +2696,20 @@ impl CanonicalAuthoringScene {
         }
         if player.scene_revision() != self.scene.revision() {
             return Err("published association requires a coherent execution revision".into());
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
+    /// Validate and atomically install derived bindings for already-published
+    /// direct-root Mobjects. Both local completed-segment and leased callback
+    /// acknowledgement paths share this proof.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_published_binding_reservations(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
+            return Err("published association accepts add binding reservations only".into());
         }
         let new_bindings = self.validate_membership_bindings(&batch)?;
         for (_, handle) in &batch.bindings {

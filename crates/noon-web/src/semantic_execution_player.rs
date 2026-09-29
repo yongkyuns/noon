@@ -2663,6 +2663,13 @@ impl SemanticExecutionPlayer {
         matches!(self.live_segment, Some(LiveSegmentReceipt::Pending(_)))
     }
 
+    /// Callback wrapper finalizers may associate their resolved handles only
+    /// after the session-owned callback phase has committed.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_pending_callback_phase(&self) -> bool {
+        self.pending_callback_phase.is_some()
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn reject_required_callback_segment(&self) -> Result<(), String> {
         if self.session.has_required_callbacks() {
@@ -4058,6 +4065,27 @@ impl SemanticExecutionPlayer {
             .callback_provisional_center(token, object.local)
             .map_err(crate::authoring_error::js_error)?;
         Ok(WasmCallbackProvisionalPoint { x, y })
+    }
+
+    /// Associate delayed Python wrapper bindings with callback-published
+    /// Mobjects through the still-leased canonical context. This consumes only
+    /// inert add binding reservations and never replays semantic membership.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = associatePublishedCallbackMobjects)]
+    pub fn associate_published_callback_mobjects_wasm(
+        &self,
+        context: &mut crate::CanonicalAuthoringSceneContext,
+        batch: crate::WasmSceneMembershipBatch,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        context
+            .inner
+            .associate_published_callback_mobjects(
+                self,
+                batch
+                    .into_inner()
+                    .map_err(crate::authoring_error::js_error)?,
+            )
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Redeem a callback-local name only after that exact callback committed.
