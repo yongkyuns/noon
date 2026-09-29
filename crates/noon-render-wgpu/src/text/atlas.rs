@@ -78,6 +78,7 @@ pub enum GlyphAtlasError {
     InvalidExtent,
     InvalidPageCount,
     DimensionOverflow,
+    StagingMapping(String),
     ImageTooLarge {
         width: u32,
         height: u32,
@@ -99,6 +100,9 @@ impl std::fmt::Display for GlyphAtlasError {
             Self::InvalidExtent => write!(formatter, "glyph atlas extent is too small"),
             Self::InvalidPageCount => write!(formatter, "glyph atlas page count must be positive"),
             Self::DimensionOverflow => write!(formatter, "glyph atlas dimensions overflow"),
+            Self::StagingMapping(error) => {
+                write!(formatter, "glyph staging buffer mapping failed: {error}")
+            }
             Self::ImageTooLarge {
                 width,
                 height,
@@ -561,10 +565,11 @@ impl GpuGlyphAtlas {
             image.placement.height,
             bytes_per_pixel,
         )?;
-        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
-        let extent = self.extent;
-        self.ensure_page(device, plane, allocation.page)?;
-        let bytes_per_row = allocation.outer_size[0]
+        let outer_size = [
+            image.placement.width + gutter_twice,
+            image.placement.height + gutter_twice,
+        ];
+        let bytes_per_row = outer_size[0]
             .checked_mul(bytes_per_pixel as u32)
             .ok_or(GlyphAtlasError::DimensionOverflow)?;
         let transfer_row = bytes_per_row
@@ -573,8 +578,8 @@ impl GpuGlyphAtlas {
                 value / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
             })
             .ok_or(GlyphAtlasError::DimensionOverflow)?;
-        let rows = usize::try_from(allocation.outer_size[1])
-            .map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let rows =
+            usize::try_from(outer_size[1]).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
         let source_row =
             usize::try_from(bytes_per_row).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
         let transfer_row_usize =
@@ -595,7 +600,7 @@ impl GpuGlyphAtlas {
             let mut mapped = buffer
                 .slice(..)
                 .get_mapped_range_mut()
-                .expect("new glyph staging buffer is mapped at creation");
+                .map_err(|error| GlyphAtlasError::StagingMapping(error.to_string()))?;
             for (row, source) in upload.chunks_exact(source_row).enumerate() {
                 let destination = row * transfer_row_usize;
                 mapped
@@ -604,6 +609,10 @@ impl GpuGlyphAtlas {
             }
         }
         buffer.unmap();
+        // Finish fallible staging before changing placement or evicting a resident page.
+        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
+        let extent = self.extent;
+        self.ensure_page(device, plane, allocation.page)?;
         self.pending_uploads
             .get_mut()
             .expect("atlas upload mutex is not poisoned")
