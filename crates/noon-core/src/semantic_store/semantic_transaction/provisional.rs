@@ -21,6 +21,29 @@ pub struct SemanticLocalNodeToken {
     ordinal: u32,
 }
 
+/// A transaction-scoped name for one immutable resource payload that has not
+/// entered a store arena. It is valid only while the owning transaction remains
+/// unpublished; materialization replaces it with the store-owned resource handle
+/// inside the final resource/publication scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticLocalResourceToken {
+    transaction: u32,
+    ordinal: u32,
+}
+
+impl SemanticLocalResourceToken {
+    pub(super) const fn new(transaction: u32, ordinal: u32) -> Self {
+        Self {
+            transaction,
+            ordinal,
+        }
+    }
+
+    pub(super) const fn belongs_to(self, transaction: u32) -> bool {
+        self.transaction == transaction
+    }
+}
+
 impl SemanticLocalNodeToken {
     pub(super) const fn new(transaction: u32, ordinal: u32) -> Self {
         Self {
@@ -332,7 +355,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                 if !matches!(
                     self.pending[&token],
                     PendingSemanticNode::Creation(
-                        SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Family { .. }
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                            | SemanticNodeCreation::Family { .. }
                     )
                 ) {
                     return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
@@ -361,7 +386,10 @@ impl<'a> TransactionNodeCatalog<'a> {
                 self.validate_pending(node, index)?;
                 if matches!(
                     self.pending[&token],
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Object { .. })
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
                 ) {
                     Ok(())
                 } else {
@@ -455,7 +483,10 @@ impl<'a> TransactionNodeCatalog<'a> {
                 self.validate_pending(node, index)?;
                 if matches!(
                     self.pending[&token],
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Object { .. })
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
                 ) {
                     Ok(())
                 } else {
@@ -533,7 +564,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                         state, ..
                     }) => (**state).clone(),
                     PendingSemanticNode::Creation(
-                        SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. },
+                        SemanticNodeCreation::PendingPathObject { .. }
+                        | SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Signal { .. },
                     )
                     | PendingSemanticNode::Animation(_) => {
                         return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
@@ -564,9 +597,21 @@ pub(super) fn replace_object_binding(
         .position(|binding| binding.property() == property);
     match (position, signal) {
         (Some(position), Some(signal)) => {
-            bindings[position] = SemanticSignalBinding::new(signal, property)
+            let order = bindings[position].authored_order();
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings[position] = binding;
         }
-        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (None, Some(signal)) => {
+            let order = bindings
+                .iter()
+                .map(|entry| entry.authored_order())
+                .max()
+                .map_or(0, |order| order + 1);
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings.push(binding);
+        }
         (Some(position), None) => {
             bindings.remove(position);
         }

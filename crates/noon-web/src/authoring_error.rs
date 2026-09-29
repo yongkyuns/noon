@@ -713,6 +713,7 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
             ),
             E::UnknownObject(_) => Self::new("stale_handle", "publication.unknown_object", message),
+            E::Geometry(cause) => Self::caused_by("publication.geometry", message, cause.into()),
             E::Semantic(cause) => Self::caused_by("publication.semantic", message, cause.into()),
             E::Lowering(cause) => Self::caused_by("publication.lowering", message, cause.into()),
             E::Runtime(cause) => Self::caused_by(

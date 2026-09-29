@@ -327,7 +327,7 @@ export async function attachSemanticEngine(
     let phaseToken = null;
     let rendererObservation = null;
     let phase = null;
-    if (phaseJson !== null && phaseJson !== undefined) {
+    while (phaseJson !== null && phaseJson !== undefined) {
       if (runRequiredCallbackPhase === null) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
         throw new Error("canonical execution requires a Python callback phase handler");
@@ -338,7 +338,7 @@ export async function attachSemanticEngine(
         if (phaseToken === undefined) {
           throw new Error("canonical callback phase is missing its token");
         }
-        onPhaseToken?.(phaseToken);
+        onPhaseToken?.(JSON.stringify({ token: phase.token, region: phase.region ?? 0 }));
       } catch (error) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve parse failure */ }
         throw new Error(`canonical callback phase view was not valid JSON: ${error}`);
@@ -351,9 +351,24 @@ export async function attachSemanticEngine(
           try { await discardRequiredCallbackPhase?.(phase); } catch { /* endpoint teardown owns termination */ }
           return { phaseToken, publication: null, interrupted: true };
         }
-        player.commitCallbackPhaseJson(batchJson);
-        await completeRequiredCallbackPhase?.(phase);
-        pendingPhaseJson = null;
+        const nextRegionJson = player.commitCallbackPhaseJson(batchJson);
+        if (nextRegionJson === null || nextRegionJson === undefined) {
+          await completeRequiredCallbackPhase?.(phase);
+          pendingPhaseJson = null;
+        }
+        const completedRegionJson = phaseJson;
+        phaseJson = nextRegionJson;
+        if ((phaseJson === null || phaseJson === undefined)
+          && observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
+          const target = callbackObservationTarget(phase);
+          rendererObservation = sendRendererObservationPublication(
+            player.drainRendererObservationPublicationJson(
+              completedRegionJson,
+              target.slot,
+              target.generation,
+            ),
+          );
+        }
       } catch (error) {
         if (!stopped && phaseGeneration === callbackGeneration && player !== null) {
           try { await discardRequiredCallbackPhase?.(phase); } catch { /* Rust phase failure wins */ }
@@ -362,16 +377,6 @@ export async function attachSemanticEngine(
           callbackFault = error instanceof Error ? error : new Error(String(error));
         }
         throw error;
-      }
-      if (observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
-        const target = callbackObservationTarget(phase);
-        rendererObservation = sendRendererObservationPublication(
-          player.drainRendererObservationPublicationJson(
-            phaseJson,
-            target.slot,
-            target.generation,
-          ),
-        );
       }
     }
     if (stopped || player === null) {

@@ -47,6 +47,20 @@ pub struct SemanticTransform2_5D {
     pub rotation_z: f64,
 }
 
+impl SemanticTransform2_5D {
+    /// Transform one local 2D point through the authored scale, rotation, and
+    /// translation without lowering it to renderer precision.
+    pub fn transform_xy(self, x: f64, y: f64) -> (f64, f64) {
+        let x = x * self.scale.x;
+        let y = y * self.scale.y;
+        let (sine, cosine) = self.rotation_z.sin_cos();
+        (
+            x * cosine - y * sine + self.translation.x,
+            x * sine + y * cosine + self.translation.y,
+        )
+    }
+}
+
 impl Default for SemanticTransform2_5D {
     fn default() -> Self {
         Self {

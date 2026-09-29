@@ -11,14 +11,7 @@ fn transform_layout_point(transform: SemanticTransform2_5D, point: Vec2) -> (f64
     transform_layout_xy(transform, f64::from(point.x), f64::from(point.y))
 }
 pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f64) -> (f64, f64) {
-    let x = x * transform.scale.x;
-    let y = y * transform.scale.y;
-    let sine = transform.rotation_z.sin();
-    let cosine = transform.rotation_z.cos();
-    (
-        x * cosine - y * sine + transform.translation.x,
-        x * sine + y * cosine + transform.translation.y,
-    )
+    transform.transform_xy(x, y)
 }
 
 /// Bounds of a retained text rectangle under the shared semantic transform.

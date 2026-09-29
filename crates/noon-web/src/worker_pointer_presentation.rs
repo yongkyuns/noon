@@ -202,6 +202,7 @@ mod admission {
 
         pub(crate) fn note_presented(
             &mut self,
+            session: &mut noon::ExecutionSession,
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
@@ -217,6 +218,18 @@ mod admission {
                     .is_some_and(|old| receipt.presentation <= old.presentation && receipt != old)
             {
                 return Ok(false);
+            }
+            // A delayed renderer receipt may still describe the held contact's
+            // visible mapping. Refresh hover only if that frame is current;
+            // observing an older frame must not retarget the current session.
+            if issued
+                .frame
+                .validate_presentation(session, issued.frame.view())
+                .is_ok()
+            {
+                session
+                    .refresh_pointer_hover(&issued.frame, issued.frame.view())
+                    .map_err(|error| error.to_string())?;
             }
             self.presented = Some(receipt);
             self.presented_frame = Some(PresentedFrame {

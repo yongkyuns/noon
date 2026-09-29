@@ -19,13 +19,17 @@ use crate::{
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
     SemanticTableLayout, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeDependency, SemanticTransformInterpolation,
-    SemanticUpdaterRegistration, StoredGeometry, TextPresentationBaseline,
+    SemanticUpdaterRegistration, StoredGeometry, TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
 mod inset_view;
+mod pending_resources;
 mod prepared;
-pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
+pub use prepared::{
+    PendingGeometryPublicationError, PendingResourceExtensionError,
+    PreparedSemanticMutationTransaction, SemanticTransactionReadError,
+};
 
 mod animation_addition;
 use animation_addition::{commit_add_animation, preflight_transaction_animation};
@@ -36,6 +40,7 @@ use family_edges::FamilyEdgePreflight;
 
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
+use node_addition::SemanticPendingPathObject;
 use node_addition::{commit_add_node, preflight_add_node};
 
 mod provisional;
@@ -46,7 +51,8 @@ use provisional::{
 };
 use provisional::{next_transaction_id, TransactionNodeCatalog};
 pub use provisional::{
-    SemanticLocalNodeToken, SemanticPendingNodeKind, SemanticTransactionNodeRef,
+    SemanticLocalNodeToken, SemanticLocalResourceToken, SemanticPendingNodeKind,
+    SemanticTransactionNodeRef,
 };
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
@@ -465,6 +471,10 @@ pub enum SemanticMutationImpact {
 pub struct SemanticMutationTransaction {
     id: u32,
     next_token: u32,
+    /// Raw immutable path payloads remain transaction-owned until the final
+    /// resource/publication scope materializes them. They never enter a store
+    /// arena merely because a callback constructed a provisional object.
+    pending_resources: Option<Box<pending_resources::PendingResourceDeclarations>>,
     mutations: Vec<SemanticMutation>,
     // Prepared existing-handle membership stages are composed in callback
     // order. Their preflight overlay already validates each transition, while
@@ -476,6 +486,9 @@ pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+    /// Final constructor fields for transaction-only retained paths. This is a
+    /// narrow creation overlay, never a durable object-state substitute.
+    staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject>,
     staged_object_order: Vec<SemanticTransactionNodeRef>,
     staged_updaters: HashMap<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>,
     family_edges: FamilyEdgePreflight,
@@ -493,6 +506,7 @@ impl Default for SemanticMutationTransaction {
         Self {
             id,
             next_token: 0,
+            pending_resources: None,
             mutations: Vec::new(),
             allow_repeated_membership_mutations: false,
         }
@@ -1671,7 +1685,11 @@ impl SemanticMutationTransaction {
             .iter()
             .filter(|(token, creation)| {
                 !removed_pending.contains(token)
-                    && matches!(creation, SemanticNodeCreation::Object { .. })
+                    && matches!(
+                        creation,
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
             })
             .count();
         let surviving_object_creations = u64::try_from(surviving_object_creations)
@@ -1691,6 +1709,8 @@ impl SemanticMutationTransaction {
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
         let mut staged_objects = HashMap::new();
+        let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
+            HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut staged_updaters =
@@ -1913,12 +1933,6 @@ impl SemanticMutationTransaction {
                             property: *property,
                         });
                     }
-                    let state = catalog.staged_object_state(
-                        &mut staged_objects,
-                        &mut staged_object_order,
-                        *object,
-                        index,
-                    )?;
                     if !value.is_finite() {
                         return Err(non_finite_property_error(index, *object, *property));
                     }
@@ -1929,6 +1943,22 @@ impl SemanticMutationTransaction {
                             index, *object, *property, expected, actual,
                         ));
                     }
+                    if let SemanticTransactionNodeRef::Pending(token) = object {
+                        if let Some(path) = staged_pending_paths.get_mut(token) {
+                            let did_change = path.property_value(*property) != *value;
+                            if did_change {
+                                path.apply_property(*property, value.clone());
+                            }
+                            changed.push(did_change);
+                            continue;
+                        }
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
                     let did_change = object_property_value(state, *property) != *value;
                     if did_change {
                         apply_object_property(state, *property, value.clone());
@@ -2092,6 +2122,14 @@ impl SemanticMutationTransaction {
                             node: *node,
                         });
                     }
+                    if let SemanticTransactionNodeRef::Pending(token) = node {
+                        if let Some(path) = staged_pending_paths.get_mut(token) {
+                            let did_change = path.z_index != *value;
+                            path.z_index = *value;
+                            changed.push(did_change);
+                            continue;
+                        }
+                    }
                     if let Some(previous) = catalog.family_z_index(*node) {
                         let previous = staged_family_z.entry(*node).or_insert(previous);
                         changed.push(*previous != *value);
@@ -2108,15 +2146,23 @@ impl SemanticMutationTransaction {
                     }
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
+                    if !style.is_finite() {
+                        return Err(invalid_style_error(index, *object));
+                    }
+                    if let SemanticTransactionNodeRef::Pending(token) = object {
+                        if let Some(path) = staged_pending_paths.get_mut(token) {
+                            let did_change = path.style != *style;
+                            path.style = style.clone();
+                            changed.push(did_change);
+                            continue;
+                        }
+                    }
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
                         *object,
                         index,
                     )?;
-                    if !style.is_finite() {
-                        return Err(invalid_style_error(index, *object));
-                    }
                     let did_change = state.style != *style;
                     if did_change {
                         state.style = style.clone();
@@ -2400,10 +2446,38 @@ impl SemanticMutationTransaction {
                         !removed_pending.contains(token),
                         index,
                     )?;
-                    if let SemanticNodeCreation::Object { state, .. } = creation {
-                        staged_objects
-                            .entry((*token).into())
-                            .or_insert_with(|| (**state).clone());
+                    match creation {
+                        SemanticNodeCreation::Object { state, .. } => {
+                            staged_objects
+                                .entry((*token).into())
+                                .or_insert_with(|| (**state).clone());
+                        }
+                        SemanticNodeCreation::PendingPathObject { state, .. } => {
+                            let resource = state.resource();
+                            // A canceled node has no final resource. Its payload
+                            // may already have been discarded by scoped materialization
+                            // before the transaction is preflighted again.
+                            if !removed_pending.contains(token)
+                                && (!resource.belongs_to(self.id)
+                                    || self.pending_geometry_path(resource).is_none())
+                            {
+                                return Err(
+                                    SemanticMutationTransactionError::UnknownPendingGeometryResource {
+                                        index,
+                                        resource,
+                                    },
+                                );
+                            }
+                            // Keep canceled declarations in this temporary
+                            // overlay until earlier ordered writes have been
+                            // validated. They are removed from the final
+                            // materialization set after the pass.
+                            staged_pending_paths
+                                .entry(*token)
+                                .or_insert_with(|| state.clone());
+                        }
+                        SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Signal { .. } => {}
                     }
                     changed.push(!removed_pending.contains(token));
                 }
@@ -2481,10 +2555,12 @@ impl SemanticMutationTransaction {
             }
         }
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
+        staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
             staged_family_z,
             changed,
             staged_objects,
+            staged_pending_paths,
             staged_object_order,
             staged_updaters,
             family_edges,
@@ -3002,6 +3078,7 @@ fn set_object_subscription(
     property: SemanticObjectProperty,
     signal: Option<SemanticNodeId>,
 ) {
+    let authored_order = store.next_authored_updater_order(object);
     store.unregister_semantic_references_for_owner(object);
     let bindings = store
         .node_mut(object)
@@ -3014,9 +3091,16 @@ fn set_object_subscription(
 
     match (position, signal) {
         (Some(position), Some(signal)) => {
-            bindings[position] = SemanticSignalBinding::new(signal, property);
+            let order = bindings[position].authored_order();
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings[position] = binding;
         }
-        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (None, Some(signal)) => {
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(authored_order);
+            bindings.push(binding);
+        }
         (Some(position), None) => {
             bindings.remove(position);
         }
@@ -3047,6 +3131,19 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    /// A transaction-local vector path contains a non-finite coordinate.
+    InvalidPendingGeometryPath,
+    /// A callback/resource batch exceeded its bounded pending path working set.
+    PendingGeometryLimitExceeded,
+    /// Transaction-local resource-token allocation cannot wrap and reuse an
+    /// escaped provisional reference.
+    LocalResourceTokenExhausted,
+    /// A staged content reference does not belong to this transaction or its
+    /// payload was not retained through the final materialization scope.
+    UnknownPendingGeometryResource {
+        index: usize,
+        resource: SemanticLocalResourceToken,
+    },
     DuplicateGraphDeclaration {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -3414,6 +3511,10 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPendingGeometryPath => formatter.write_str("pending geometry path contains non-finite coordinates"),
+            Self::PendingGeometryLimitExceeded => formatter.write_str("pending geometry working set exceeds the transaction limit"),
+            Self::LocalResourceTokenExhausted => formatter.write_str("transaction-local resource tokens exhausted"),
+            Self::UnknownPendingGeometryResource { index, resource } => write!(formatter, "semantic transaction mutation {index} names unknown pending geometry resource {resource:?}"),
             Self::InvalidTableLayout { index, scope } => write!(formatter, "semantic transaction mutation {index} has invalid Table layout for {scope:?}"),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,

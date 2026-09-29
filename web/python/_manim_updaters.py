@@ -11,7 +11,7 @@ import inspect
 import json
 import math
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import noon as _base
@@ -133,6 +133,7 @@ class _CanonicalCallbackSession:
     targets: dict[tuple[int, int], _base.Mobject]
     next_callback_id: int = 0
     pending_callback_context: "_CanonicalCallbackContext | None" = None
+    pending_region_contexts: list["_CanonicalCallbackContext"] = field(default_factory=list)
 
     def callback_id(self, callback: Callable[..., Any]) -> tuple[int, bool]:
         for existing, callback_id in self.callback_ids:
@@ -538,6 +539,7 @@ class _CanonicalCallbackContext:
         self.time = float(frame["time"])
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
+        self.region = int(frame.get("region", 0))
         self._authoring_context = authoring_context
         self._callback_player = callback_player
         self._scene = scene
@@ -569,14 +571,14 @@ class _CanonicalCallbackContext:
         )
         self._membership_finalizers.append(finalize)
 
-    def stage_analytic_geometry(self, options: object) -> object:
-        """Create one phase-local analytic object through the pinned player."""
+    def stage_provisional_geometry(self, options: object) -> object:
+        """Create one phase-local geometry object through the pinned player."""
         if self._callback_player is None:
             raise NotImplementedError(
                 "callback provisional construction requires the pinned semantic execution player"
             )
         return engine_call(
-            self._callback_player.stageCallbackAnalyticGeometry,
+            self._callback_player.stageCallbackProvisionalGeometry,
             json.dumps(self.token, separators=(",", ":")),
             options,
             operation="callback.provisional_geometry",
@@ -1034,7 +1036,7 @@ class _CanonicalCallbackContext:
                                      channel: new[channel]})
 
     def effective_batch(self) -> dict[str, Any]:
-        return {"token": self.token, "writes": self._writes}
+        return {"token": self.token, "region": self.region, "writes": self._writes}
 
 
 def callback_line_target(
@@ -1182,16 +1184,22 @@ def _canonical_provisional_context(
     """Return one exact callback-local construction capability.
 
     The marker has no semantic slot or generation. It is accepted only while
-    the owning callback context is active, so ordinary callback rows retain
+    the owning callback phase is active, so ordinary callback rows retain
     their batched effective-write path.
     """
     context = getattr(mobject, "_callback_provisional_context", None)
     provisional = getattr(mobject, "_callback_provisional_handle", None)
+    active = _ACTIVE_CANONICAL_CONTEXT.get()
     if (not isinstance(context, _CanonicalCallbackContext)
+            or not isinstance(active, _CanonicalCallbackContext)
             or provisional is None
-            or _ACTIVE_CANONICAL_CONTEXT.get() is not context):
+            or active._scene is not context._scene
+            or active._authoring_context is not context._authoring_context
+            or active.token != context.token):
         return None
-    return context, provisional
+    # A later host region reads the same transaction-local object through its
+    # current region view. The constructor's Python context is not authority.
+    return active, provisional
 
 
 def active_callback_membership_context(scene: _base.Scene) -> _CanonicalCallbackContext | None:
@@ -1474,10 +1482,21 @@ def _canonical_vmobject_set_opacity(
     return _base._semantic_operations()._set_opacity(self, opacity, family=family)
 
 
+def _carry_callback_region_state(
+    session: _CanonicalCallbackSession, context: _CanonicalCallbackContext
+) -> None:
+    if session.pending_region_contexts:
+        previous = session.pending_region_contexts[-1]
+        if previous.token == context.token:
+            context._next_provisional_binding_id = previous._next_provisional_binding_id
+            context._membership_wrappers = previous._membership_wrappers
+
+
 async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
     """Prepare bounded capture reads before executing this callback phase once."""
     session = _CANONICAL_SESSIONS[int(session_id)]
     context = _CanonicalCallbackContext(frame, session.context, scene=session.scene)
+    _carry_callback_region_state(session, context)
     from _manim_reactive import ValueTracker
 
     callbacks = [session.callbacks[int(item["callback_id"])] for item in frame.get("invocations", [])]
@@ -1507,10 +1526,13 @@ def run_canonical_callback_phase(
         callback_player=callback_player,
         scene=session.scene,
     )
+    if prepared_context is None:
+        _carry_callback_region_state(session, context)
     if prepared_context is not None:
         context._callback_player = callback_player
         context._scene = session.scene
-    if context.token != frame["token"] or context._authoring_context is not session.context:
+    if (context.token != frame["token"] or context.region != int(frame.get("region", 0))
+            or context._authoring_context is not session.context):
         raise RuntimeError("prepared canonical callback reads belong to a different phase")
     scene_key = id(session.scene)
     if scene_key in _ACTIVE_CONTEXTS:
@@ -1554,6 +1576,7 @@ def run_canonical_callback_phase(
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
     session.pending_callback_context = context
+    session.pending_region_contexts.append(context)
     return _json_phase(context.effective_batch())
 
 
@@ -1561,20 +1584,26 @@ def complete_canonical_callback_phase(session_id: int, frame: dict[str, Any]) ->
     """Commit Python-only wrapper bindings after the player published the phase."""
     session = _CANONICAL_SESSIONS[int(session_id)]
     context = session.pending_callback_context
-    if context is None or context.token != frame.get("token"):
+    if (context is None or context.token != frame.get("token")
+            or context.region != int(frame.get("region", 0))):
         raise RuntimeError("canonical callback completion does not match the pending phase")
     try:
-        context.finalize_membership()
+        for region in session.pending_region_contexts:
+            region.finalize_membership()
     finally:
+        session.pending_region_contexts.clear()
         session.pending_callback_context = None
 
 
 def discard_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> None:
     """Drop delayed wrapper work when the exact Rust callback phase aborts."""
     session = _CANONICAL_SESSIONS.get(int(session_id))
-    context = None if session is None else session.pending_callback_context
-    if context is not None and context.token == frame.get("token"):
-        context.discard_membership()
+    if session is not None and any(
+        region.token == frame.get("token") for region in session.pending_region_contexts
+    ):
+        for region in session.pending_region_contexts:
+            region.discard_membership()
+        session.pending_region_contexts.clear()
         session.pending_callback_context = None
 
 

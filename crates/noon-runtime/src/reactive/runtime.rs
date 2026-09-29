@@ -558,6 +558,19 @@ impl SceneInstance {
             apply_reactive_value_to_row(&mut row, target.property, value);
         }
     }
+
+    pub(crate) fn reactive_properties_for_object(&self, object_index: usize) -> Vec<Property> {
+        let Some(reactive) = self.reactive.as_ref() else {
+            return Vec::new();
+        };
+        reactive
+            .targets_by_object
+            .get(object_index)
+            .into_iter()
+            .flatten()
+            .map(|&index| reactive.targets[index].property)
+            .collect()
+    }
 }
 
 fn binding_key(object: ObjectId, property: Property) -> (u64, u8) {

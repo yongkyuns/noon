@@ -71,6 +71,7 @@ pub enum ExecutionSessionPublicationError {
     Lowering(SemanticPublicationLoweringError),
     Runtime(AuthoredPublicationError),
     NumericText(noon_core::NumericTextResourceError),
+    Geometry(noon_core::GeometryResourceError),
     ExecutionSlot(ExecutionSlotError),
 }
 
@@ -106,6 +107,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::Lowering(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
             Self::NumericText(error) => error.fmt(f),
+            Self::Geometry(error) => error.fmt(f),
             Self::ExecutionSlot(error) => error.fmt(f),
         }
     }
@@ -117,6 +119,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Lowering(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::NumericText(error) => Some(error),
+            Self::Geometry(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::RequiredCallbackPending
             | Self::ReplaySealed
@@ -417,6 +420,45 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
+        prepared
+            .with_pending_geometry_paths(|prepared| {
+                self.publish_materialized_semantic_transaction(
+                    prepared,
+                    execution_prefix,
+                    runtime,
+                    purpose,
+                    scalar,
+                    order_root,
+                )
+            })
+            .map_err(|error| match error {
+                noon_core::PendingGeometryPublicationError::Resource(error) => {
+                    ExecutionSessionPublicationError::Geometry(error)
+                }
+                noon_core::PendingGeometryPublicationError::Transaction(error) => {
+                    ExecutionSessionPublicationError::Semantic(error)
+                }
+                noon_core::PendingGeometryPublicationError::Publication(error) => error,
+            })
+    }
+
+    // No provisional resource declaration reaches lowering. The outer existing
+    // resource scope owns rollback through this complete publication boundary.
+    fn publish_materialized_semantic_transaction(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        runtime: PreparedRuntimePublication,
+        purpose: SemanticPublicationPurpose,
+        scalar: Option<PreparedScalarPublicationContract>,
+        order_root: Option<SemanticNodeId>,
+    ) -> Result<
+        (
+            SemanticMutationTransactionResult,
+            Option<super::callback::CallbackCompletion>,
+        ),
+        ExecutionSessionPublicationError,
+    > {
         let PreparedRuntimePublication { effective, frame } = runtime;
         debug_assert!(
             frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
@@ -622,6 +664,14 @@ impl ExecutionSession {
                 })?;
         }
 
+        let changed_native_bindings = prepared
+            .mutations()
+            .iter()
+            .filter_map(|mutation| match mutation {
+                noon_core::SemanticMutation::ChangeSubscription { object, .. } => object.existing(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let (result, store) = prepared.commit_with_store();
         let membership = self
             .reachability
@@ -687,8 +737,12 @@ impl ExecutionSession {
         }
         if let Some(revision) = revised_callbacks {
             self.callback_schedule
-                .apply_revision(revision, self.frame().time);
+                .apply_revision(revision, store, self.frame().time);
             self.last_callback_receipt = None;
+        }
+        if !changed_native_bindings.is_empty() {
+            self.callback_schedule
+                .refresh_native_bindings(store, changed_native_bindings);
         }
         self.publish_replay_membership(&exited, &entered);
         self.reconcile_callback_membership(&exited, false);

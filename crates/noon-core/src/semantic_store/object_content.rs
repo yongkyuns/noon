@@ -321,11 +321,16 @@ impl SemanticObjectProperty {
 pub struct SemanticSignalBinding {
     signal: SemanticNodeId,
     property: SemanticObjectProperty,
+    authored_order: u64,
 }
 
 impl SemanticSignalBinding {
     pub(crate) const fn new(signal: SemanticNodeId, property: SemanticObjectProperty) -> Self {
-        Self { signal, property }
+        Self {
+            signal,
+            property,
+            authored_order: 0,
+        }
     }
 
     pub const fn signal(self) -> SemanticNodeId {
@@ -334,6 +339,14 @@ impl SemanticSignalBinding {
 
     pub const fn property(self) -> SemanticObjectProperty {
         self.property
+    }
+
+    pub const fn authored_order(self) -> u64 {
+        self.authored_order
+    }
+
+    pub(crate) fn set_authored_order(&mut self, order: u64) {
+        self.authored_order = order;
     }
 }
 

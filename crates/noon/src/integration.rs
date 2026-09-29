@@ -33,11 +33,11 @@ pub use crate::execution_session::{
 };
 pub use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
-    CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
-    CallbackSequence, CallbackTermination, CallbackTerminationKind,
-    CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticObject,
-    EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
-    StaleViewportQuery, StructuralPublicationStats,
+    CallbackReadValue, CallbackRegionAdvance, CallbackRendererDirtyClassification,
+    CallbackRendererObservationOutcome, CallbackSequence, CallbackTermination,
+    CallbackTerminationKind, CommittedCallbackRendererObservation, EffectivePropertyBatch,
+    EffectiveSemanticObject, EffectiveSemanticPropertyWrite, ExecutionViewportQuery,
+    RequiredCallbackInvocation, StaleViewportQuery, StructuralPublicationStats,
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};

@@ -986,3 +986,38 @@ fn stationary_hover_tracks_presented_geometry_and_cancellation_without_input_rep
     assert_eq!((left.previous, left.current), (Some(target), None));
     assert_eq!(session.frame().time, 1.0);
 }
+
+#[test]
+fn presented_hover_observation_does_not_open_a_pending_callback_barrier() {
+    let (_, _, target, mut session) = fixture();
+    submit(
+        &mut session,
+        0,
+        NativePointerInputKind::Move(position(0.0, 100.0)),
+    );
+    let view = session
+        .inspection_pointer_view(1, Vec2::new(200.0, 200.0))
+        .unwrap();
+    let displayed = session.capture_pointer_frame(view).unwrap();
+    let before = session.publication_context();
+    let phase = session
+        .begin_required_callback_phase(0.5, [target])
+        .unwrap();
+    let token = phase.token();
+    assert_eq!(
+        session
+            .refresh_pointer_hover(&displayed, view)
+            .unwrap()
+            .unwrap()
+            .current,
+        Some(target)
+    );
+    assert_eq!(session.hovered_pointer_target(), Some(target));
+    assert_eq!(session.pending_callback_token(), Some(token));
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.last_native_event_sequence, Some(0));
+    assert!(session
+        .refresh_pointer_hover(&displayed, view)
+        .unwrap()
+        .is_none());
+}

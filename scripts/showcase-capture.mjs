@@ -257,14 +257,25 @@ async function captureSelection(context, entry, result) {
       await page.mouse.move(dragStart.x, dragStart.y);
       await page.mouse.down();
       await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 });
+      // Observe a published drag frame while the contact is held. Releasing
+      // immediately after synthetic move events can outrun a WebGPU frame and
+      // would make the test unable to distinguish delivery from persistence.
+      let moving;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const bytes = await canvas.screenshot();
+        if (!samePixels(before, bytes)) { moving = bytes; break; }
+        await page.waitForTimeout(50);
+      }
+      assert.ok(moving, "held pointer drag did not change the displayed image");
       await page.mouse.up();
+      await page.waitForTimeout(200);
       let dragged;
       for (let attempt = 0; attempt < 40; attempt++) {
         const bytes = await canvas.screenshot();
         if (!samePixels(before, bytes)) { dragged = bytes; break; }
         await page.waitForTimeout(50);
       }
-      assert.ok(dragged, "actual pointer drag did not change the displayed image");
+      assert.ok(dragged, "released pointer drag did not persist in the displayed image");
       const beforeImage = PNG.sync.read(before), draggedImage = PNG.sync.read(dragged);
       assert.equal(draggedImage.width, beforeImage.width);
       assert.equal(draggedImage.height, beforeImage.height);

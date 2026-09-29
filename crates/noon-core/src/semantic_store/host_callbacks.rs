@@ -28,6 +28,7 @@ pub struct SemanticUpdaterRegistration {
     callback: HostCallbackId,
     active_from: f64,
     inactive_from: Option<f64>,
+    authored_order: u64,
 }
 
 impl SemanticUpdaterRegistration {
@@ -40,6 +41,7 @@ impl SemanticUpdaterRegistration {
             callback,
             active_from,
             inactive_from,
+            authored_order: 0,
         };
         registration.validate()?;
         Ok(registration)
@@ -57,6 +59,14 @@ impl SemanticUpdaterRegistration {
         self.inactive_from
     }
 
+    pub const fn authored_order(self) -> u64 {
+        self.authored_order
+    }
+
+    pub(crate) fn set_authored_order(&mut self, order: u64) {
+        self.authored_order = order;
+    }
+
     pub fn is_active_at(self, time: f64) -> bool {
         time.is_finite()
             && time >= self.active_from
@@ -71,7 +81,8 @@ impl SemanticUpdaterRegistration {
         &mut self,
         inactive_from: f64,
     ) -> Result<(), SemanticUpdaterRegistrationError> {
-        let replacement = Self::new(self.callback, self.active_from, Some(inactive_from))?;
+        let mut replacement = Self::new(self.callback, self.active_from, Some(inactive_from))?;
+        replacement.authored_order = self.authored_order;
         *self = replacement;
         Ok(())
     }

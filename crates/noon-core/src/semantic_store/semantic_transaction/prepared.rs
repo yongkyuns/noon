@@ -17,6 +17,10 @@ pub enum SemanticTransactionReadError {
     /// Existing-handle planners cannot traverse an order link that leads to a
     /// transaction-local node. They must reject rather than truncate it.
     PendingMembershipAdjacency(SemanticLocalNodeToken),
+    /// The requested local object does not carry transaction-local path content.
+    NotPendingGeometry(SemanticTransactionNodeRef),
+    /// A pending path declaration lost its transaction-owned payload before read.
+    UnknownPendingGeometry(SemanticTransactionNodeRef),
     RemovedExistingNode(SemanticNodeId),
     UnknownExistingNode(SemanticNodeId),
     NotObject(SemanticTransactionNodeRef),
@@ -75,7 +79,42 @@ enum PreparedExtensionError<E> {
     Preflight(SemanticMutationTransactionError),
 }
 
+/// Failure while materializing transaction-owned path payloads inside the same
+/// scope as a final semantic/execution publication.
+#[derive(Debug)]
+pub enum PendingGeometryPublicationError<E> {
+    Resource(crate::GeometryResourceError),
+    Transaction(SemanticMutationTransactionError),
+    Publication(E),
+}
+
+impl<E> From<crate::GeometryResourceError> for PendingGeometryPublicationError<E> {
+    fn from(error: crate::GeometryResourceError) -> Self {
+        Self::Resource(error)
+    }
+}
+
+/// A recoverable extension failure that may have retained fresh transaction-local
+/// resource payloads. Recovery drops only the extension's payload suffix while
+/// preserving prior callback declarations and monotonic local token allocation.
+#[derive(Debug)]
+pub enum PendingResourceExtensionError<E> {
+    Extension(E),
+    Preflight(SemanticMutationTransactionError),
+}
+
 impl<'a> PreparedSemanticMutationTransaction<'a> {
+    fn pending_path_resource_tokens(
+        preflight: &SemanticTransactionPreflight,
+    ) -> Vec<SemanticLocalResourceToken> {
+        let mut seen = HashSet::with_capacity(preflight.staged_pending_paths.len());
+        preflight
+            .staged_pending_paths
+            .values()
+            .map(|state| state.resource())
+            .filter(|resource| seen.insert(*resource))
+            .collect()
+    }
     pub(super) fn new(
         transaction: SemanticMutationTransaction,
         store: &'a mut SemanticStore,
@@ -148,12 +187,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             planned_nodes,
         } = self;
         let original_len = transaction.mutations.len();
+        let original_resource_len = transaction.pending_resource_count();
         let original_repeated_membership = transaction.allow_repeated_membership_mutations;
         if let Some(allow_repeated_membership) = allow_repeated_membership {
             transaction.allow_repeated_membership_mutations = allow_repeated_membership;
         }
         if let Err(error) = extend(&mut transaction, store) {
             transaction.mutations.truncate(original_len);
+            transaction.truncate_pending_resources(original_resource_len);
             transaction.allow_repeated_membership_mutations = original_repeated_membership;
             return Err((
                 Box::new(Self {
@@ -174,6 +215,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             Ok(parts) => parts,
             Err(error) => {
                 transaction.mutations.truncate(original_len);
+                transaction.truncate_pending_resources(original_resource_len);
                 transaction.allow_repeated_membership_mutations = original_repeated_membership;
                 return Err((
                     Box::new(Self {
@@ -329,6 +371,98 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         })
     }
 
+    /// Extend this proof with transaction-owned resource content while keeping
+    /// a caught construction/preflight error recoverable. Fresh raw payloads are
+    /// truncated on error; their token allocation remains monotonic so an escaped
+    /// rejected token cannot name a later declaration.
+    pub fn with_pending_resource_object<T, E>(
+        self,
+        extend: impl FnOnce(&mut SemanticMutationTransaction) -> Result<T, E>,
+    ) -> Result<(Self, T), (Box<Self>, PendingResourceExtensionError<E>)> {
+        // This closure accepts the transaction's normal mutable vocabulary, so
+        // it may coalesce an earlier provisional write before returning an
+        // error. Preserve that exact prefix as well as the helper's resource
+        // suffix rollback.
+        let original_mutations = self.transaction.mutations.clone();
+        let mut value = None;
+        self.with_recoverable_extension(None, |transaction, _store| {
+            value = Some(extend(transaction)?);
+            Ok(())
+        })
+        .map(|prepared| {
+            (
+                prepared,
+                value.expect("successful resource extension returns its staged value"),
+            )
+        })
+        .map_err(|(mut prepared, error)| {
+            prepared.transaction.mutations = original_mutations;
+            let error = match error {
+                PreparedExtensionError::Extension(error) => {
+                    PendingResourceExtensionError::Extension(error)
+                }
+                PreparedExtensionError::Preflight(error) => {
+                    PendingResourceExtensionError::Preflight(error)
+                }
+            };
+            (prepared, error)
+        })
+    }
+
+    /// Materialize every live transaction-local path payload inside the existing
+    /// scoped geometry admission boundary, then invoke one final publication.
+    ///
+    /// This consuming seam is intentionally terminal: the callback/runtime
+    /// publication may consume lowering proof before reporting an error. Fresh
+    /// paths are removed by [`SemanticStore::with_geometry_paths`] on any
+    /// materialization, preflight, or publication failure; no durable resource
+    /// exists before this scope starts. Canceled pending nodes are excluded and
+    /// their raw payloads are simply dropped.
+    pub fn with_pending_geometry_paths<T, E>(
+        self,
+        publish: impl for<'scope> FnOnce(PreparedSemanticMutationTransaction<'scope>) -> Result<T, E>,
+    ) -> Result<T, PendingGeometryPublicationError<E>> {
+        let Self {
+            store,
+            mut transaction,
+            preflight,
+            next_revision,
+            planned_nodes,
+        } = self;
+        let tokens = Self::pending_path_resource_tokens(&preflight);
+        if tokens.is_empty() {
+            return publish(Self {
+                store,
+                transaction,
+                preflight,
+                next_revision,
+                planned_nodes,
+            })
+            .map_err(PendingGeometryPublicationError::Publication);
+        }
+        let payloads = transaction.take_pending_geometry_paths(&tokens);
+        debug_assert_eq!(payloads.len(), tokens.len());
+        let resource_tokens = payloads.iter().map(|(token, _)| *token).collect::<Vec<_>>();
+        let final_states = preflight.staged_pending_paths.clone();
+        store.with_geometry_paths(
+            payloads.into_iter().map(|(_, path)| path),
+            move |store, handles| {
+                let resources = resource_tokens
+                    .iter()
+                    .copied()
+                    .zip(handles.iter().copied())
+                    .collect::<HashMap<_, _>>();
+                transaction.materialize_pending_geometry_paths(&resources, &final_states);
+                let prepared =
+                    PreparedSemanticMutationTransaction::new_recoverable(transaction, store)
+                        .map_err(|(_, error)| {
+                            PendingGeometryPublicationError::Transaction(error)
+                        })?;
+                publish(prepared).map_err(PendingGeometryPublicationError::Publication)
+            },
+        )
+    }
+
     /// Re-preflight this still-unpublished batch with compiler-derived scalar tracks.
     ///
     /// This narrow consuming extension keeps animation declarations, object mutations,
@@ -478,15 +612,87 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .map_err(SemanticTransactionReadError::Existing),
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
                 Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
-                Some(SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotObject(object))
-                }
+                Some(
+                    SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Signal { .. },
+                ) => Err(SemanticTransactionReadError::NotObject(object)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotObject(object))
                 }
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
+    }
+
+    fn pending_path_state(
+        &self,
+        object: SemanticTransactionNodeRef,
+    ) -> Result<&super::node_addition::SemanticPendingPathObject, SemanticTransactionReadError>
+    {
+        let SemanticTransactionNodeRef::Pending(token) = object else {
+            return Err(SemanticTransactionReadError::NotPendingGeometry(object));
+        };
+        self.validate_read_token(token)?;
+        if self.preflight.removed_pending.contains(&token) {
+            return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+        }
+        self.preflight
+            .staged_pending_paths
+            .get(&token)
+            .ok_or(SemanticTransactionReadError::NotPendingGeometry(object))
+    }
+
+    /// Read the true staged transform for a transaction-only path constructor.
+    /// Unlike `object_state`, this does not fabricate durable content before
+    /// resource admission.
+    pub fn pending_path_transform(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::SemanticTransform2_5D, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.transform)
+    }
+
+    /// Read the true staged style for a transaction-only path constructor.
+    pub fn pending_path_style(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::SemanticStyle, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.style.clone())
+    }
+
+    /// Read the true staged painter priority for a transaction-only path constructor.
+    pub fn pending_path_z_index(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<f64, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.z_index)
+    }
+
+    /// Resolve the actual transaction-owned vector path for one pending object.
+    ///
+    /// This is intentionally separate from durable object-state getters: a
+    /// pending resource token is never a store handle. Callers that need path
+    /// data can read this real staged payload; ordinary lowered/runtime queries
+    /// remain unavailable until materialization.
+    pub fn pending_geometry_path(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<&crate::VectorPath, SemanticTransactionReadError> {
+        let object = object.into();
+        let state = self.pending_path_state(object)?;
+        self.transaction
+            .pending_geometry_path(state.resource())
+            .ok_or(SemanticTransactionReadError::UnknownPendingGeometry(object))
+    }
+
+    /// Return conservative local bounds from the real staged path payload.
+    /// Empty paths have no bounds, matching ordinary [`VectorPath`] semantics.
+    pub fn pending_geometry_local_bounds(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::Rect>, SemanticTransactionReadError> {
+        Ok(self.pending_geometry_path(object)?.conservative_bounds())
     }
 
     /// Read proposed object or family painter priority without committing it.
@@ -528,6 +734,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             {
                 return Ok(0.0);
             }
+            SemanticTransactionNodeRef::Pending(token)
+                if self.preflight.staged_pending_paths.contains_key(&token) =>
+            {
+                return self.pending_path_z_index(node);
+            }
             _ => {}
         }
         self.object_state(node).map(|state| state.z_index())
@@ -550,7 +761,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         for mutation in self.transaction.mutations() {
             let SemanticMutation::AddNode {
                 token: candidate,
-                creation: SemanticNodeCreation::Object { .. },
+                creation:
+                    SemanticNodeCreation::Object { .. } | SemanticNodeCreation::PendingPathObject { .. },
             } = mutation
             else {
                 continue;
@@ -634,9 +846,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotFamily(family))
-                }
+                Some(
+                    SemanticNodeCreation::Object { .. }
+                    | SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Signal { .. },
+                ) => Err(SemanticTransactionReadError::NotFamily(family)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
@@ -882,11 +1096,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub fn commit_with_store(self) -> (SemanticMutationTransactionResult, &'a mut SemanticStore) {
         let Self {
             store,
-            transaction,
+            mut transaction,
             preflight,
             next_revision,
             planned_nodes,
         } = self;
+        // A direct semantic commit has no later fallible lowering step, so it
+        // materializes live path payloads immediately before writing nodes. The
+        // combined semantic/runtime path instead uses `with_pending_geometry_paths`
+        // to retain the same admission scope across fallible lowering/publication.
+        let tokens = Self::pending_path_resource_tokens(&preflight);
+        if !tokens.is_empty() {
+            let payloads = transaction.take_pending_geometry_paths(&tokens);
+            let resources = payloads
+                .into_iter()
+                .map(|(token, path)| (token, store.insert_preflighted_geometry_path(path)))
+                .collect::<HashMap<_, _>>();
+            transaction
+                .materialize_pending_geometry_paths(&resources, &preflight.staged_pending_paths);
+        }
         let mut impacts = Vec::with_capacity(transaction.mutations.len());
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
         let mut pending_source_assignments = Vec::new();

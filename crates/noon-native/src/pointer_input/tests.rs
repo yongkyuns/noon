@@ -475,7 +475,9 @@ fn event_only_pointer_interest_includes_the_full_button_vocabulary() {
 
 /// A unit-test display acknowledgement. Actual window tests never use this helper.
 fn model_presentation(app: &mut NativeApp, size: PhysicalSize<u32>, scale: f64) {
-    app.pointer.presented = Some(app.capture_pointer_presentation(size, scale).unwrap());
+    let frame = app.capture_pointer_presentation(size, scale).unwrap();
+    app.execution.admit_presented_frame(&frame).unwrap();
+    app.pointer.presented = Some(frame);
     app.pointer.refresh_pending = false;
 }
 
@@ -726,4 +728,47 @@ fn binding_reset_that_changes_publication_cannot_retag_the_first_positional_inpu
         f.value(f.position),
         &ReactiveValue::Vec2(Vec2::new(-4.0, 2.0))
     );
+}
+
+#[test]
+fn hover_tracks_static_pointer_motion_and_presented_geometry_without_new_input() {
+    let mut f = Fixture::new();
+    f.move_to(400.0, 200.0);
+    f.present();
+    let target = f
+        .app
+        .session()
+        .hovered_pointer_target()
+        .expect("center hover");
+    let sequence = f.app.next_input_sequence;
+    let old_frame = f.app.pointer.presented.clone().unwrap();
+    let mut phase = f
+        .app
+        .static_session_mut()
+        .begin_required_callback_phase(0.0, [target])
+        .unwrap();
+    phase
+        .set_transform(
+            target,
+            noon_core::Transform2D {
+                translation: Vec2::new(4.0, 0.0),
+                ..noon_core::Transform2D::IDENTITY
+            },
+        )
+        .unwrap();
+    f.app
+        .static_session_mut()
+        .commit_required_callback_phase(phase.finish())
+        .unwrap();
+    assert!(f.app.execution.admit_presented_frame(&old_frame).is_err());
+    assert_eq!(f.app.session().hovered_pointer_target(), Some(target));
+    f.present();
+    assert_eq!(f.app.session().hovered_pointer_target(), None);
+    assert_eq!(f.app.next_input_sequence, sequence);
+    assert_eq!(f.app.session().frame().time, 0.0);
+    f.move_to(600.0, 200.0);
+    f.present();
+    assert_eq!(f.app.session().hovered_pointer_target(), Some(target));
+    f.app.pointer_focus_lost().unwrap();
+    assert_eq!(f.app.session().hovered_pointer_target(), None);
 }

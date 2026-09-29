@@ -5,11 +5,11 @@
 //! transient input to shared preparation and coherent publication.
 use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOptions};
 use noon_core::{
-    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Transform2D, Vec2, VectorPath,
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticLocalNodeToken,
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
+    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -365,6 +365,46 @@ impl ManimGeometryOptions {
                 crate::UnsupportedAuthoringOperation::ExternalGeometry,
             )),
         }
+    }
+
+    /// Stage a retained vector-path declaration in one unpublished semantic
+    /// transaction. The path payload remains transaction-owned until the
+    /// prepared transaction's final scoped resource publication; the returned
+    /// local node token is never a durable semantic identity.
+    pub fn stage_pending_path_object(
+        self,
+        transaction: &mut SemanticMutationTransaction,
+    ) -> Result<SemanticLocalNodeToken, AuthoringError> {
+        if !self.geometry.is_finite()
+            || !self.transform.translation.is_finite()
+            || !self.transform.scale.is_finite()
+            || !self.transform.rotation_z.is_finite()
+            || !self.style.is_finite()
+            || !self.z_index.is_finite()
+        {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        let Self {
+            geometry,
+            transform,
+            style,
+            z_index,
+            role,
+        } = self;
+        let GeometryRef::VectorPath(path) = geometry else {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PathQueryContent,
+            ));
+        };
+        let resource = transaction.stage_geometry_path(path)?;
+        // This transaction-only creation declaration is resolved by the shared
+        // prepared resource suffix. It cannot enter durable object content with
+        // a local token in place of a store-owned resource handle.
+        Ok(
+            transaction.create_node(SemanticNodeCreation::pending_path_object(
+                resource, transform, style, z_index, role,
+            )),
+        )
     }
 
     /// Materialize analytic geometry without admitting an arena resource.

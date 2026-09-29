@@ -16,6 +16,7 @@ use crate::{apply_evaluated_value, release_render_transform, EvaluatedValue, Fra
 /// responsibility; preparing a batch does not bypass publication/replay guards.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EffectivePropertyWrite<I = ObjectId> {
+    Presence { object: I, presence: bool },
     Transform { object: I, transform: Transform2D },
     Style { object: I, style: Style },
     Translation { object: I, translation: Vec2 },
@@ -30,7 +31,8 @@ pub enum EffectivePropertyWrite<I = ObjectId> {
 impl<I: Copy> EffectivePropertyWrite<I> {
     pub const fn object(self) -> I {
         match self {
-            Self::Transform { object, .. }
+            Self::Presence { object, .. }
+            | Self::Transform { object, .. }
             | Self::Style { object, .. }
             | Self::Translation { object, .. }
             | Self::Rotation { object, .. }
@@ -47,6 +49,9 @@ impl<I: Copy> EffectivePropertyWrite<I> {
     pub fn map_object<J>(self, map: impl FnOnce(I) -> J) -> EffectivePropertyWrite<J> {
         let object = map(self.object());
         match self {
+            Self::Presence { presence, .. } => {
+                EffectivePropertyWrite::Presence { object, presence }
+            }
             Self::Transform { transform, .. } => {
                 EffectivePropertyWrite::Transform { object, transform }
             }
@@ -76,6 +81,10 @@ impl EffectivePropertyWrite {
     /// to the execution plan or used to assign a whole effective row.
     pub(crate) fn as_execution_patch(self) -> ExecutionPatch {
         match self {
+            Self::Presence { object, .. } => ExecutionPatch::SetTransform {
+                object,
+                transform: Transform2D::IDENTITY,
+            },
             Self::Transform { object, transform } => {
                 ExecutionPatch::SetTransform { object, transform }
             }
@@ -144,6 +153,10 @@ pub(crate) fn apply_effective_property_to_row(
     write: EffectivePropertyWrite,
 ) {
     let (property, value) = match write {
+        EffectivePropertyWrite::Presence { presence, .. } => {
+            *row.presence = presence;
+            return;
+        }
         EffectivePropertyWrite::Transform { transform, .. } => {
             release_render_transform(row.render_geometry, row.render_transform, *row.transform);
             *row.transform = transform;

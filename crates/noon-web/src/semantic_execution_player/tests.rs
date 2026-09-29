@@ -3,8 +3,98 @@ use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
     AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-    StoredGeometry,
+    SemanticVec3, StoredGeometry, TrackTiming,
 };
+
+#[test]
+fn callback_json_regions_preserve_native_host_order_and_publish_once() {
+    let mut scene = noon::Scene::new();
+    let object = scene.circle(1.0).unwrap();
+    scene.add(&object).unwrap();
+    {
+        let mut store = scene.integration_store().borrow_mut();
+        let translation = store
+            .insert_semantic_input_signal(SemanticVec3::new(4.0, 1.0, 0.0))
+            .unwrap();
+        let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let mut track = SemanticMutationTransaction::new();
+        track.add_scalar_signal_track(
+            width,
+            1.0,
+            2.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        track.apply(&mut store).unwrap();
+        store
+            .bind_semantic_signal(
+                translation,
+                object.node_id(),
+                SemanticObjectProperty::Translation,
+            )
+            .unwrap();
+        let mut first = SemanticMutationTransaction::new();
+        first.add_updater(object.node_id(), HostCallbackId::new(7), 1.0, None);
+        first.apply(&mut store).unwrap();
+        store
+            .bind_semantic_signal(width, object.node_id(), SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        let mut second = SemanticMutationTransaction::new();
+        second.add_updater(object.node_id(), HostCallbackId::new(8), 1.0, None);
+        second.apply(&mut store).unwrap();
+    }
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        64,
+    )
+    .unwrap();
+    let publication = player.session.publication_context();
+    let first_json = player.advance_to_callback_phase(1.0).unwrap().unwrap();
+    let first: serde_json::Value = serde_json::from_str(&first_json).unwrap();
+    assert_eq!(first["region"], 0);
+    assert_eq!(first["invocations"][0]["callback_id"], "7");
+    assert_eq!(first["objects"][0]["transform"]["translation"]["x"], 4.0);
+    assert_eq!(first["objects"][0]["style"]["stroke_width"], 1.0);
+    let first_batch = serde_json::json!({
+        "token": first["token"], "region": first["region"],
+        "writes": [
+            {"kind":"translation", "object":first["objects"][0]["node"], "translation":{"x":4.0,"y":9.0}},
+            {"kind":"stroke_width", "object":first["objects"][0]["node"], "stroke_width":3.0}
+        ]
+    }).to_string();
+    let second_json = player
+        .commit_callback_phase_json(&first_batch)
+        .unwrap()
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second_json).unwrap();
+    assert_eq!(second["region"], 1);
+    assert_eq!(second["invocations"][0]["callback_id"], "8");
+    assert_eq!(second["objects"][0]["transform"]["translation"]["y"], 9.0);
+    assert_eq!(second["objects"][0]["style"]["stroke_width"], 2.0);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.commit_callback_phase_json(&first_batch).is_err());
+    let second_batch = serde_json::json!({
+        "token": second["token"], "region": second["region"],
+        "writes": [{"kind":"opacity", "object":second["objects"][0]["node"], "opacity":0.7}]
+    })
+    .to_string();
+    assert!(player
+        .commit_callback_phase_json(&second_batch)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.frame().objects[0].transform.translation,
+        noon_core::Vec2::new(4.0, 9.0)
+    );
+    assert_eq!(player.session.frame().objects[0].style.stroke_width, 2.0);
+    assert_eq!(player.session.frame().objects[0].style.opacity, 0.7);
+    assert_eq!(
+        player.session.publication_context().frame_epoch(),
+        publication.frame_epoch().checked_next().unwrap()
+    );
+}
 
 struct NumericRuleBackend;
 
@@ -989,7 +1079,7 @@ fn required_callback_membership_publishes_one_existing_handle_edit() {
 }
 
 #[test]
-fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
+fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     let mut scene = noon::Scene::new();
     let callback_target = scene.circle(1.0).unwrap();
     scene.add(&callback_target).unwrap();
@@ -1020,7 +1110,7 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
     options.set_translation(3.0, -2.0).unwrap();
     options.set_z_index(4.0).unwrap();
     let local = player
-        .stage_required_callback_analytic_geometry(token, options)
+        .stage_required_callback_provisional_geometry(token, options)
         .unwrap();
 
     assert_eq!(scene.integration_store().borrow().len(), before_nodes);
@@ -1053,14 +1143,25 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
             if color == noon_core::Color::rgba(0.2, 0.4, 0.8, 0.75)
     ));
     assert_eq!(styled.style.fill_opacity, 0.6);
-    assert!(player
-        .stage_required_callback_analytic_geometry(
+    let retained_path = player
+        .stage_required_callback_provisional_geometry(
             token,
-            noon::ManimGeometryOptions::path(noon_core::VectorPath::new()).unwrap(),
+            noon::ManimGeometryOptions::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-0.5, 0.0))
+                    .line_to(noon_core::Vec2::new(0.5, 0.0))
+                    .line_to(noon_core::Vec2::new(0.0, 0.6)),
+            )
+            .unwrap(),
         )
-        .unwrap_err()
-        .message
-        .contains("scoped resource admission"));
+        .unwrap();
+    player
+        .stage_required_callback_provisional_shift(token, retained_path, 1.5, 0.5)
+        .unwrap();
+    let center = player
+        .callback_provisional_center(token, retained_path)
+        .unwrap();
+    assert!((center.0 - 1.5).abs() < 1e-6 && (center.1 - 0.8).abs() < 1e-6);
     player
         .stage_required_callback_mixed_addition(
             token,
@@ -1069,6 +1170,17 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
                 [],
                 token,
                 local,
+            ),
+        )
+        .unwrap();
+    player
+        .stage_required_callback_mixed_addition(
+            token,
+            &crate::canonical_authoring_scene::SceneMembershipBatch::callback_with_provisional(
+                crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                [],
+                token,
+                retained_path,
             ),
         )
         .unwrap();
@@ -1090,7 +1202,27 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
             &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
         )
         .unwrap();
-    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 1);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 2);
+    let resolved_path = player
+        .take_committed_callback_provisional(token, retained_path)
+        .unwrap();
+    {
+        let store = scene.integration_store().borrow();
+        assert_eq!(store.geometry_resources().len(), 1);
+        let noon_core::SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) =
+            store
+                .semantic_object_state_checked(resolved_path)
+                .unwrap()
+                .content
+        else {
+            panic!("retained path must publish its resource");
+        };
+        assert!(store.geometry_resources().get(handle).is_some());
+        assert!(player
+            .session
+            .effective_semantic_object(&store, resolved_path)
+            .is_ok());
+    }
     let resolved = player
         .take_committed_callback_provisional(token, local)
         .unwrap();
@@ -1105,7 +1237,7 @@ fn callback_analytic_geometry_stays_phase_local_until_the_shared_commit() {
             .borrow()
             .semantic_family_members_checked(scene.root())
             .unwrap(),
-        vec![callback_target.node_id(), resolved]
+        vec![callback_target.node_id(), resolved, resolved_path]
     );
     assert!(player
         .callback_provisional_object_state(token, local)
@@ -1141,13 +1273,13 @@ fn callback_provisional_add_preserves_interleaved_source_order() {
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
     let token = player.pending_callback_phase.unwrap().0;
     let first = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.5).unwrap(),
         )
         .unwrap();
     let last = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.75).unwrap(),
         )
@@ -1236,7 +1368,7 @@ fn unadmitted_callback_provisional_is_canceled_before_the_final_publication() {
     let token = player.pending_callback_phase.unwrap().0;
     let before_nodes = scene.integration_store().borrow().len();
     let local = player
-        .stage_required_callback_analytic_geometry(
+        .stage_required_callback_provisional_geometry(
             token,
             noon::ManimGeometryOptions::circle(0.5).unwrap(),
         )
@@ -1520,6 +1652,28 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
             ),
         )
         .unwrap();
+    let retained_path = player
+        .stage_required_callback_provisional_geometry(
+            token,
+            noon::ManimGeometryOptions::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::ZERO)
+                    .line_to(noon_core::Vec2::ONE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    player
+        .stage_required_callback_mixed_addition(
+            token,
+            &crate::canonical_authoring_scene::SceneMembershipBatch::callback_with_provisional(
+                crate::canonical_authoring_scene::SceneMembershipBatchKind::Add,
+                [],
+                token,
+                retained_path,
+            ),
+        )
+        .unwrap();
 
     let target_row = phase["objects"]
         .as_array()
@@ -1550,6 +1704,14 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
     assert!(player.callback_membership_transaction.is_none());
     assert_eq!(player.session.publication_context(), before_context);
     assert_eq!(player.session.frame(), &before_frame);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        0
+    );
     assert_eq!(
         scene
             .integration_store()
@@ -2084,7 +2246,7 @@ mod callback_provisional_stage_limit_regression {
             serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
         let token = player.pending_callback_phase.unwrap().0;
         let local = player
-            .stage_required_callback_analytic_geometry(
+            .stage_required_callback_provisional_geometry(
                 token,
                 noon::ManimGeometryOptions::circle(0.5).unwrap(),
             )
@@ -2167,7 +2329,7 @@ mod callback_mixed_provisional_membership_regression {
             )
             .unwrap();
         let local = player
-            .stage_required_callback_analytic_geometry(
+            .stage_required_callback_provisional_geometry(
                 token,
                 noon::ManimGeometryOptions::circle(0.5).unwrap(),
             )

@@ -25,6 +25,10 @@ pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
 /// preserves its continuation barriers instead of exposing mutable session state.
 pub(crate) trait BrowserPointerTarget {
     fn session(&self) -> &ExecutionSession;
+    fn observe_pointer_frame(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), PointerFrameError>;
     fn configure_pointer(
         &mut self,
         pointer: NativePointerId,
@@ -170,6 +174,12 @@ impl BrowserPointerTarget for ExecutionSession {
     fn session(&self) -> &ExecutionSession {
         self
     }
+    fn observe_pointer_frame(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), PointerFrameError> {
+        self.refresh_pointer_hover(frame, frame.view()).map(|_| ())
+    }
     fn configure_pointer(
         &mut self,
         pointer: NativePointerId,
@@ -207,6 +217,12 @@ where
 {
     fn session(&self) -> &ExecutionSession {
         self.session()
+    }
+    fn observe_pointer_frame(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+    ) -> Result<(), PointerFrameError> {
+        self.refresh_pointer_hover(frame).map(|_| ())
     }
     fn configure_pointer(
         &mut self,
@@ -554,6 +570,17 @@ fn submit_pointer(
         .submit_pointer(&token, input)
         .map_err(|error| error.to_string())?;
     *next_sequence = next;
+    // Pointer-only changes need no redraw. If the input did not change the
+    // displayed publication, update hover against that same visible frame.
+    // Otherwise the next successful presentation observes the new geometry.
+    if let Some((frame, _)) = presented {
+        if frame
+            .validate_presentation(target.session(), frame.view())
+            .is_ok()
+        {
+            target.observe_pointer_frame(frame)?;
+        }
+    }
     if wire.cancellation().is_some() {
         binding.as_mut().expect("configured source").retired = true;
     }

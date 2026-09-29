@@ -124,10 +124,19 @@ fn rebind_preserves_existing_subscription_order() {
     let result = transaction.apply(&mut store).unwrap();
 
     assert_eq!(
-        store.semantic_object_signal_bindings(target).unwrap(),
-        &[
-            SemanticSignalBinding::new(replacement, SemanticObjectProperty::ObjectOpacity),
-            SemanticSignalBinding::new(second, SemanticObjectProperty::StrokeWidth),
+        store
+            .semantic_object_signal_bindings(target)
+            .unwrap()
+            .iter()
+            .map(|binding| (
+                binding.signal(),
+                binding.property(),
+                binding.authored_order()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (replacement, SemanticObjectProperty::ObjectOpacity, 0),
+            (second, SemanticObjectProperty::StrokeWidth, 1),
         ]
     );
     assert_eq!(store.last_mutation_stats().slots_written, 1);

@@ -388,7 +388,7 @@ def _attach_geometry_options(
             # handle. Scene.add stages it through the same callback collector;
             # the finalizer replaces this marker only after Rust commits.
             _initialize_shared_wrapper(self)
-            self._callback_provisional_handle = callback.stage_analytic_geometry(options)
+            self._callback_provisional_handle = callback.stage_provisional_geometry(options)
             self._callback_provisional_context = callback
             return
     handle, context = _consume_geometry_options(options, kind)

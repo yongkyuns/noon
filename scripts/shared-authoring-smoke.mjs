@@ -2383,7 +2383,8 @@ class SelectedAlignment(Scene):
     document.body.append(canvas);
     let execution = null;
     let registration = null;
-    let settled = false;
+    let executionReady = false;
+    let sourceError = null;
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2395,38 +2396,36 @@ class SelectedAlignment(Scene):
           authoringClient: harness.authoring,
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
+          pacing: "external_samples",
         });
+        executionReady = true;
       },
     });
-    authoredPromise.then(() => { settled = true; }, () => {});
-    for (let attempt = 0; attempt < 150; attempt += 1) {
-      if (execution !== null && registration !== null) break;
+    authoredPromise.catch(error => { sourceError = String(error); });
+    for (let attempt = 0; attempt < 1500; attempt += 1) {
+      if (executionReady || sourceError !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (execution === null || registration === null) {
-      throw new Error("composition source did not register its semantic continuation");
+    if (!executionReady || execution === null || registration === null) {
+      throw new Error(`composition source did not start its semantic continuation: ${JSON.stringify({
+        registered: registration !== null, executionCreated: execution !== null,
+        sourceError,
+      })}`);
     }
-    harness.compositionContinuation = { authoredPromise, execution, registration, get settled() { return settled; } };
+    harness.compositionContinuation = { authoredPromise, execution, registration };
     return { canvasId: canvas.id };
   }, compositionContinuationSource);
 
   async function observeCompositionDuring(start, end, label) {
     return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
       const continuation = window.sharedAuthoringSmoke.compositionContinuation;
-      let latest = null;
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        if (continuation.settled) break;
-        try {
-          latest = await continuation.execution.state();
-          if (latest.time > startTime && latest.time < endTime) return latest;
-          if (latest.time >= endTime) break;
-        } catch {
-          // The player may be transferred only at an exact endpoint. Keep
-          // observing while the source remains suspended on this segment.
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      const target = (startTime + endTime) / 2;
+      await continuation.execution.sampleToAuthoredTime(target);
+      const state = await continuation.execution.state();
+      if (state.time <= startTime || state.time >= endTime) {
+        throw new Error(`${phaseLabel} did not present its exact sample: ${JSON.stringify(state)}`);
       }
-      throw new Error(`${phaseLabel} did not reach its observable interval: ${JSON.stringify(latest)}`);
+      return state;
     }, { startTime: start, endTime: end, phaseLabel: label });
   }
 
@@ -2457,7 +2456,10 @@ class SelectedAlignment(Scene):
 
   const compositionContinuationResult = await page.evaluate(async () => {
     const continuation = window.sharedAuthoringSmoke.compositionContinuation;
-    const authored = await continuation.authoredPromise;
+    const [, authored] = await Promise.all([
+      continuation.execution.sampleToAuthoredTime(4),
+      continuation.authoredPromise,
+    ]);
     if (
       authored.semanticExecution.contextId !== continuation.registration.semanticExecution.contextId ||
       authored.semanticExecution.continuationGeneration !== continuation.registration.generation
@@ -2722,6 +2724,8 @@ class SelectedAlignment(Scene):
   for (const [fixture, objectCount] of [
     ["ordinary_callback_membership_atomic", 3],
     ["ordinary_callback_provisional_geometry", 4],
+    ["ordinary_callback_provisional_path", 2],
+    ["ordinary_mixed_updater_order", 3],
   ]) {
     const callbackSource = await readFile(
       path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",
