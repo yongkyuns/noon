@@ -1,0 +1,35 @@
+name: Temporary inspection GPU diagnosis
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/inspection-gpu-diagnosis.yml'
+      - 'scripts/playground-gallery-selection-smoke.mjs'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  webkit:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: 36500875261
+          github-token: ${{ github.token }}
+          path: web
+      - run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - run: npx playwright install webkit
+      - run: node scripts/playground-gallery-selection-smoke.mjs
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: mobile-dpr2
+          NOON_INSPECTION_GPU_READBACK: '1'
+          NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/inspection-gpu
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: inspection-gpu-diagnosis
+          path: browser-smoke-artifacts/inspection-gpu
+          retention-days: 3
