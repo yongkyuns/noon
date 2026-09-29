@@ -146,7 +146,7 @@ async function directNativeDragProof(expectedBackend) {
     assertCenter(initialFrame.objects[1], 2.5, 1, "unrelated object");
 
     dispatch("press", point(0, 0), 0);
-    await presentDirectFrame(renderer);
+    await settleDirectPublication(renderer, 0);
     dispatch("move", point(1, 0), null);
     await presentDirectFrame(renderer);
     const movedFrame = JSON.parse(renderer.debugSelectionFrameJson());
@@ -168,7 +168,7 @@ async function directNativeDragProof(expectedBackend) {
     assertCenter(releasedFrame.objects.find(object => object.id === targetId), 1, 0, "released target");
 
     dispatch("press", point(1, 0), 0);
-    await presentDirectFrame(renderer);
+    await settleDirectPublication(renderer, 0);
     dispatch("move", point(2, 0), null);
     await presentDirectFrame(renderer);
     assertCenter(
