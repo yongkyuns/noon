@@ -4219,6 +4219,46 @@ mod tests {
     }
 
     #[test]
+    fn cached_family_text_repacking_replaces_the_whole_snapshot_generation() {
+        let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+        let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
+        let mut retained = RetainedFramePreparer::new();
+        let active = std::collections::BTreeSet::new();
+        retained.set_painter_order(&[0, 1]);
+        for (step, reveal) in [1.0, 0.5, 1.0].into_iter().enumerate() {
+            frame.reveals[1] = reveal;
+            let planned = noon_runtime::RetainedPlannedFamilyFrame {
+                retained: &frame,
+                family_animations: &[None, None],
+                family_plan_indices: &[None, None],
+            };
+            let changes = if step == 0 {
+                FrameChanges::all()
+            } else {
+                FrameChanges::objects(vec![1])
+            };
+            let actual = retained
+                .prepare_active_family_plan_set_with_changes(
+                    &device,
+                    &planned,
+                    &[],
+                    &active,
+                    &changes,
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &noon_core::RasterImageResourceArena::new(),
+                    metrics,
+                )
+                .unwrap();
+            assert!(actual.text.partial_upload_base_generation.is_none());
+            assert_eq!(actual.text.mask_quads.is_empty(), reveal < 1.0);
+            assert_eq!(actual.text.stats.outline_runs > 0, reveal < 1.0);
+        }
+    }
+
+    #[test]
     fn subpixel_glyph_topology_stays_local_and_reuses_storage() {
         use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
