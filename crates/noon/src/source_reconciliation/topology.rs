@@ -267,7 +267,12 @@ pub(super) fn stage_candidate(
         changed = true;
         let desired_set: HashSet<_> = desired.iter().copied().collect();
         for member in &current {
-            if !desired_set.contains(&SemanticTransactionNodeRef::Existing(*member)) {
+            // Terminal node removal owns all of its old edges. Explicitly
+            // referencing that node in another edge mutation is forbidden by
+            // the shared transaction contract.
+            if matched.contains(member)
+                && !desired_set.contains(&SemanticTransactionNodeRef::Existing(*member))
+            {
                 transaction.remove_member(family, *member);
             }
         }
