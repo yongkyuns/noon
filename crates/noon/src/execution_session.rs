@@ -1424,20 +1424,7 @@ impl ExecutionSession {
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionAnimationError::RequiredCallbackPending);
-        }
-        if self.pending_segment_completion.is_some() {
-            return Err(ExecutionSessionAnimationError::SegmentCompletionPending);
-        }
-        if store.identity() != self.store_identity {
-            return Err(ExecutionSessionAnimationError::ForeignSemanticStore);
-        }
-        let expected = self.publication_context().scene_revision();
-        let actual = store.scene_revision();
-        if actual != expected {
-            return Err(ExecutionSessionAnimationError::StaleSceneRevision { expected, actual });
-        }
+        self.require_animation_declaration_context(store)?;
         let schedule = lower_semantic_animation_schedule(
             store,
             &self.execution_index,
@@ -3487,6 +3474,11 @@ impl ExecutionSession {
         }
         if self.pending_segment_completion.is_some() {
             return Err(ExecutionSessionAnimationError::SegmentCompletionPending);
+        }
+        if self.translation_drag_active() {
+            return Err(ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::TranslationDragActive,
+            ));
         }
         if store.identity() != self.store_identity {
             return Err(ExecutionSessionAnimationError::ForeignSemanticStore);

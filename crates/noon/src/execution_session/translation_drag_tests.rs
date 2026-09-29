@@ -630,3 +630,36 @@ fn drag_waits_for_pending_segment_before_acquiring_a_persistent_edit() {
     .unwrap();
     assert!(session.translation_drag_active());
 }
+
+#[test]
+fn active_drag_rejects_new_animation_without_installing_tracks() {
+    use noon_core::AnimationOptions;
+    let (mut store, target, _, mut session) = fixture();
+    let endpoint = store.insert_semantic_object(circle(3.0));
+    let animation = store
+        .insert_semantic_transform_animation(target, endpoint, AnimationOptions::new())
+        .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    let before = session.publication_context();
+    assert_eq!(
+        session.activate_animation_segment(&store, animation, AnimationOptions::new()),
+        Err(super::ExecutionSessionAnimationError::AuthoredPublication(
+            ExecutionSessionPublicationError::TranslationDragActive
+        ))
+    );
+    assert_eq!(session.publication_context(), before);
+    assert!(session.translation_drag_active());
+    session.cancel_translation_drag().unwrap();
+    session
+        .activate_animation_segment(&store, animation, AnimationOptions::new())
+        .unwrap();
+}
