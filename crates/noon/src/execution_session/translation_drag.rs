@@ -45,7 +45,6 @@ pub enum TranslationDragError {
     DriverConflict,
     RetiredTarget,
     StaleUndo,
-    CancelFailed,
     Semantic(String),
 }
 impl std::fmt::Display for TranslationDragError {
@@ -61,7 +60,6 @@ impl std::fmt::Display for TranslationDragError {
             Self::StaleUndo => {
                 f.write_str("translation drag undo no longer matches the live scene")
             }
-            Self::CancelFailed => f.write_str("translation drag cancellation could not publish"),
             Self::Semantic(error) => f.write_str(error),
         }
     }
@@ -130,32 +128,27 @@ impl ExecutionSession {
 
     pub fn cancel_translation_drag(&mut self) -> Result<(), TranslationDragError> {
         if let Some(active) = self.translation_drag.active {
+            self.ensure_direct_input_ingress_available()?;
             let base = self
                 .runtime
                 .translation_drag_base(active.object)
-                .ok_or(TranslationDragError::CancelFailed)?;
-            let effective = self
-                .prepared_drag_batch(active.object, base)
-                .map_err(|_| TranslationDragError::CancelFailed)?;
+                .ok_or(TranslationDragError::RetiredTarget)?;
+            let effective = self.prepared_drag_batch(active.object, base)?;
             // Cancellation without a pointer occurrence still needs to restore
             // the base frame; use the existing prepared input evaluation rather
             // than mutating the live row directly.
             let time = self.frame().time;
-            let frame = match self.runtime.prepare_advance_to(time) {
-                Ok(frame) => frame,
-                Err(_) => return Err(TranslationDragError::CancelFailed),
-            };
+            let frame = self
+                .runtime
+                .prepare_advance_to(time)
+                .map_err(ExecutionSessionInputError::Evaluation)?;
             let held = self
                 .runtime
                 .suspend_translation_drag(active.object)
-                .ok_or(TranslationDragError::CancelFailed)?;
-            if self
-                .runtime
-                .commit_prepared_frame(frame, effective)
-                .is_err()
-            {
+                .ok_or(TranslationDragError::RetiredTarget)?;
+            if let Err(error) = self.runtime.commit_prepared_frame(frame, effective) {
                 self.runtime.restore_translation_drag(active.object, held);
-                return Err(TranslationDragError::CancelFailed);
+                return Err(ExecutionSessionInputError::PreparedCommit(error).into());
             }
             self.runtime
                 .clear_translation_drag_effective_driver(active.object);
@@ -288,6 +281,7 @@ impl ExecutionSession {
                 }
             };
         if let Some(start) = start {
+            self.runtime.invalidate_replay_domain();
             self.runtime
                 .adopt_translation_drag(start.object, start.translation);
             self.translation_drag.active = Some(start);
@@ -381,18 +375,9 @@ impl ExecutionSession {
         }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_property(node, SemanticObjectProperty::Translation, value);
-        // The scoped lease deliberately blocks ordinary source edits.  Release
-        // is its one reconciliation, so temporarily remove only the session
-        // marker while retaining the runtime lease until publication succeeds.
-        let active = self.translation_drag.active.take();
-        let result = self
-            .apply_semantic_transaction(store, transaction)
+        self.apply_semantic_transaction(store, transaction)
             .map(|_| ())
-            .map_err(|error| TranslationDragError::Semantic(error.to_string()));
-        if result.is_err() {
-            self.translation_drag.active = active;
-        }
-        result
+            .map_err(|error| TranslationDragError::Semantic(error.to_string()))
     }
 
     fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {

@@ -360,3 +360,145 @@ fn undo_rejects_a_later_authored_revision() {
     );
     assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
 }
+
+#[test]
+fn release_uses_final_pointer_position_and_preserves_authored_z() {
+    let (mut store, target, _, mut session) = fixture();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(
+        target,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(0.0, 0.0, 0.25),
+    );
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(2.0)),
+    )
+    .unwrap();
+    let before = session.publication_context();
+    let receipt = submit(
+        &mut session,
+        &mut store,
+        3,
+        NativePointerInputKind::Release {
+            position: position(4.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(4.0, 0.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(4.0, 0.0, 0.25)
+    );
+    assert_eq!(
+        session.publication_context().frame_epoch(),
+        before.frame_epoch().checked_next().unwrap()
+    );
+    receipt
+        .undo
+        .unwrap()
+        .undo(&mut session, &mut store)
+        .unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation
+            .z,
+        0.25
+    );
+}
+
+#[test]
+fn active_drag_blocks_undo_mapping_changes_compaction_and_callback_cancellation() {
+    let (mut store, target, _, mut session) = fixture();
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    let undo = submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Release {
+            position: position(2.0),
+            button: 0,
+        },
+    )
+    .unwrap()
+    .undo
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        3,
+        NativePointerInputKind::Press {
+            position: position(2.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        4,
+        NativePointerInputKind::Move(position(3.0)),
+    )
+    .unwrap();
+    let before = session.publication_context();
+    assert_eq!(
+        undo.undo(&mut session, &mut store),
+        Err(TranslationDragError::DriverConflict)
+    );
+    assert!(session.configure_native_pointer_input(POINTER, 2).is_err());
+    assert_eq!(
+        session.reclaim_retired_object_slots(),
+        Err(super::ExecutionSessionMaintenanceError::InteractionActive)
+    );
+    let overlay = session
+        .begin_required_callback_phase(0.0, [target])
+        .unwrap();
+    assert_eq!(
+        session.cancel_translation_drag(),
+        Err(TranslationDragError::Input(
+            super::ExecutionSessionInputError::RequiredCallbackPending
+        ))
+    );
+    assert!(session.set_translation_drag_targets([]).is_err());
+    assert!(session.translation_drag_active());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    session.cancel_translation_drag().unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
+    assert!(!session.translation_drag_active());
+}

@@ -3406,22 +3406,20 @@ mod tests {
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
         let row = &phase["objects"][0];
-        let mut transform = row["transform"].clone();
-        transform["translation"]["y"] = serde_json::json!(1.0);
-        let mut style = row["style"].clone();
-        style["opacity"] = serde_json::json!(0.5);
+        let mut translation = row["transform"]["translation"].clone();
+        translation["y"] = serde_json::json!(1.0);
         serde_json::json!({
             "token": phase["token"].clone(),
             "writes": [
                 {
-                    "kind": "transform",
+                    "kind": "translation",
                     "object": row["node"].clone(),
-                    "transform": transform,
+                    "translation": translation,
                 },
                 {
-                    "kind": "style",
+                    "kind": "opacity",
                     "object": row["node"].clone(),
-                    "style": style,
+                    "opacity": 0.5,
                 },
             ],
         })

@@ -198,9 +198,7 @@ impl ExecutionSession {
         // one authored reconciliation or is explicitly cancelled.  This bounded
         // session policy rejects concurrent source edits rather than allowing a
         // later release to overwrite a newly authored value.
-        if purpose == SemanticPublicationPurpose::AuthoredMutation
-            && self.translation_drag.is_active()
-        {
+        if self.translation_drag.is_active() {
             return Err(ExecutionSessionPublicationError::TranslationDragActive);
         }
         Ok(())

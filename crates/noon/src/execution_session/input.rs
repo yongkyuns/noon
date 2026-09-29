@@ -294,6 +294,11 @@ impl ExecutionSession {
         view_revision: u64,
     ) -> Result<NativePointerInputToken, ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
+        if self.translation_drag_active() {
+            return Err(ExecutionSessionInputError::Interaction(
+                "cancel the active translation drag before replacing its pointer mapping".into(),
+            ));
+        }
         let generation = self
             .pointer_input
             .next_generation
