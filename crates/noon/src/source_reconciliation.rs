@@ -268,7 +268,7 @@ impl SourceReconciler {
         scene: &mut Scene,
         candidate: &SourceCandidate,
     ) -> Result<SourceReconciliationResult, SourceReconciliationError> {
-        if let Some(accepted) = self.accepted_generation {
+        if let Some(accepted) = self.accepted_generation.max(scene.source_generation) {
             if candidate.generation <= accepted {
                 return Err(SourceReconciliationError::StaleGeneration {
                     candidate: candidate.generation,
@@ -436,6 +436,7 @@ impl SourceReconciler {
             root,
         });
         self.accepted_generation = Some(candidate.generation);
+        scene.source_generation = Some(candidate.generation);
         Ok(SourceReconciliationResult {
             generation: candidate.generation,
             nodes,
@@ -624,6 +625,32 @@ mod tests {
             reconciler.reconcile(&mut scene, &stale),
             Err(SourceReconciliationError::StaleGeneration { .. })
         ));
+        assert_eq!(scene.revision(), revision);
+    }
+
+    #[test]
+    fn no_op_generation_rejects_older_results_from_another_reconciler() {
+        let mut scene = Scene::new();
+        let initial = candidate(&scene, 1, [("only", 1.0)]);
+        SourceReconciler::new()
+            .reconcile(&mut scene, &initial)
+            .unwrap();
+        let late = candidate(&scene, 2, [("only", 2.0)]);
+        let unchanged = candidate(&scene, 3, [("only", 1.0)]);
+        let revision = scene.revision();
+        assert_eq!(
+            SourceReconciler::new()
+                .reconcile(&mut scene, &unchanged)
+                .unwrap()
+                .mutation_impacts(),
+            0
+        );
+        assert_eq!(scene.revision(), revision);
+        assert!(
+            matches!(SourceReconciler::new().reconcile(&mut scene, &late),
+            Err(SourceReconciliationError::StaleGeneration { candidate, accepted })
+                if candidate == SourceGeneration::new(2) && accepted == SourceGeneration::new(3))
+        );
         assert_eq!(scene.revision(), revision);
     }
 
