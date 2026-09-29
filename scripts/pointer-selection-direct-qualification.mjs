@@ -25,15 +25,16 @@ try {
   for (const backend of ["webgpu", "webgl"]) {
     browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend), channel: "chromium" });
     for (const liveProgram of [false, true]) {
-      const mode = liveProgram ? "program" : "session", prefix = `${backend}-${mode}`;
-      const result = { backend, mode, status: "running", steps: [] };
+     for (const deviceScaleFactor of [1, 2]) {
+      const mode = liveProgram ? "program" : "session", prefix = `${backend}-${mode}-dpr${deviceScaleFactor}`;
+      const result = { backend, mode, deviceScaleFactor, status: "running", steps: [] };
       report.cases.push(result);
-      const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor });
       const errors = [];
       page.on("pageerror", error => errors.push(String(error)));
       page.setDefaultTimeout(60_000);
       const image = async name => {
-        const bytes = await page.locator("#scene").screenshot();
+        const bytes = await page.locator("#scene").screenshot({ scale: "css" });
         await writeFile(path.join(output, `${prefix}-${name}.png`), bytes);
         return PNG.sync.read(bytes);
       };
@@ -64,6 +65,11 @@ try {
           const { attachNativeInputs } = await import("./native-inputs.js");
           const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
           const canvas = document.querySelector("#scene"), errors = [];
+          // Keep the CSS view identical while allocating a DPR-sized backing
+          // store. The collector must map in CSS coordinates; Rust still owns
+          // scene-space conversion and the renderer owns physical pixels.
+          canvas.width = Math.round(640 * devicePixelRatio);
+          canvas.height = Math.round(360 * devicePixelRatio);
           const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), liveProgram);
           // Observe only calls that actually return from the Rust ABI. This is
           // test instrumentation, not an alternate collector or input consumer.
@@ -81,13 +87,19 @@ try {
         }, liveProgram);
         await settled();
         const before = await state(), baseline = await image("baseline");
+        const dimensions = await page.evaluate(() => {
+          const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
+          return { dpr: devicePixelRatio, css: [rect.width, rect.height], backing: [canvas.width, canvas.height] };
+        });
+        assert.deepEqual(dimensions, { dpr: deviceScaleFactor, css: [640, 360],
+          backing: [640 * deviceScaleFactor, 360 * deviceScaleFactor] });
         assert.equal(before.time, 0); assert.equal(before.objects, 3);
         assert.equal(await page.evaluate(() => direct.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
         // This public fixture is authored in Python in the worker qualification
         // and through the shared Rust builder here. Compare the whole image.
         const workerBaseline = PNG.sync.read(await readFile(path.join(root,
           `browser-smoke-artifacts/pointer-selection/${backend}-transferable-baseline.png`)));
-        assertExactPixels(baseline, workerBaseline, "Rust/Python fixture baseline");
+        if (deviceScaleFactor === 1) assertExactPixels(baseline, workerBaseline, "Rust/Python fixture baseline");
         await page.evaluate(() => { direct.renderer.setPointerFillSelection(4); direct.driver.wake(); });
         await settled();
         let prior = await state(); await click(SHAPES[0]); await changed(prior);
@@ -96,7 +108,47 @@ try {
         assert.deepEqual((await state()).frame, before.frame);
         const workerCircle = PNG.sync.read(await readFile(path.join(root,
           `browser-smoke-artifacts/pointer-selection/${backend}-transferable-circle.png`)));
-        assertExactPixels(selected, workerCircle, "Rust/Python selected image");
+        if (deviceScaleFactor === 1) assertExactPixels(selected, workerCircle, "Rust/Python selected image");
+        // Replay the same normalized trace at each DPR and inspect the actual
+        // successful Rust ABI admissions, including occurrence-local CSS view.
+        const tracePoint = shapeSurfaceCenter(SHAPES[0]);
+        await page.evaluate(({ x, y }) => {
+          const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
+          direct.admittedInputs.length = 0;
+          const event = (type, x, buttons) => new PointerEvent(type, { pointerId: 81,
+            pointerType: "mouse", isPrimary: true, clientX: rect.left + x,
+            clientY: rect.top + y, button: type === "pointermove" ? -1 : 0, buttons });
+          canvas.dispatchEvent(event("pointerdown", x, 1));
+          canvas.dispatchEvent(event("pointermove", x + 8, 1));
+          canvas.dispatchEvent(event("pointerup", x + 8, 0));
+        }, tracePoint);
+        await settled();
+        const trace = await page.evaluate(() => direct.admittedInputs.map(args => args.slice(0, 9)));
+        assert.deepEqual(trace.map(args => args[0]), ["press", "move", "release"]);
+        for (const args of trace) {
+          assert.equal(args[1], trace[0][1], "one normalized contact keeps its source");
+          assert.equal(args[2], 81, "pointer identity is occurrence-local");
+          assert.equal(args[3], trace[0][3], "one normalized contact keeps its view revision");
+          assert.equal(args[6], 640); assert.equal(args[7], 360);
+        }
+        assert.deepEqual(trace.map(args => args.slice(4, 6)), [
+          [tracePoint.x, tracePoint.y], [tracePoint.x + 8, tracePoint.y], [tracePoint.x + 8, tracePoint.y],
+        ]);
+        assert.deepEqual((await state()).frame, before.frame);
+        assert.equal((await state()).time, 0, "paused pointer trace must not advance authored time");
+        assertExactPixels(await image("normalized-trace"), selected, "normalized selection trace");
+        await page.evaluate(({ x, y }) => {
+          const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
+          direct.admittedInputs.length = 0;
+          canvas.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 82, pointerType: "mouse",
+            isPrimary: true, clientX: rect.left + x, clientY: rect.top + y, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 82, pointerType: "mouse", isPrimary: true }));
+        }, tracePoint);
+        await settled();
+        assert.deepEqual(await page.evaluate(() => direct.admittedInputs.map(args => args[0])), ["press", "cancel"]);
+        assert.deepEqual((await state()).frame, before.frame);
+        assert.equal((await state()).time, 0, "cancelled pointer trace must not advance authored time");
+        assertExactPixels(await image("normalized-cancel"), selected, "normalized cancellation trace");
         prior = await state(); await click(SHAPES[0]); await settled();
         assert.equal((await state()).stats.presentedFrames, prior.stats.presentedFrames);
         assertExactPixels(await image("repeat"), selected, "repeat selection");
@@ -238,12 +290,13 @@ try {
           assertExactPixels(await image("seek-clear"), baseline, "same-time seek clear");
         }
         result.status = "passed";
-        console.log(`[PASS] ${prefix}: direct typed selection, autonomous wake, cancellation, clear, and exact Python pixels`);
+        console.log(`[PASS] ${prefix}: direct typed selection, DPR ${deviceScaleFactor}, normalized trace, cancellation, clear, and exact Python pixels`);
       } catch (error) { result.status = "failed"; result.error = String(error.stack ?? error); throw error; }
       finally {
         await page.evaluate(() => { direct.detach(); direct.driver.stop(); direct.renderer.free(); }).catch(() => {});
         await page.close();
       }
+     }
     }
     await browser.close(); browser = null;
   }
