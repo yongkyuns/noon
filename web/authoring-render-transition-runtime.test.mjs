@@ -586,11 +586,69 @@ test("first presentation timestamp latches only after renderer reports a success
   const first = vm.runInContext("currentMetrics()", harness.context);
   assert.equal(first.presentedFrames, 1);
   assert.equal(first.firstPresentedAtMs, 142);
+  assert.equal(first.presentedSession, null);
+  assert.equal(first.firstPresentedSessionAtMs, null);
   assert.equal(first.performanceTimeOriginMs, 70_000);
 
   now = 250;
   vm.runInContext("needsPresent = true; tryPresent()", harness.context);
   assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), 142);
+});
+
+test("first successful present is attributed to the exact retained transport session", () => {
+  const harness = createWorkerHarness();
+  let now = 100;
+  harness.context.performance = { now: () => now, timeOrigin: 70_000 };
+  harness.context.shouldRender = false;
+  vm.runInContext(`
+    renderer = {
+      render: () => shouldRender,
+      rendererBackend: () => "webgl",
+      gpuGeneration: () => 1,
+      time: () => 0,
+      objectCount: () => 1,
+      lastDrawCalls: () => 1,
+      lastInstancesDrawn: () => 1,
+      lastBytesUploaded: () => 0,
+      lastGeometryCacheMisses: () => 0,
+      lastOutlineCacheMisses: () => 0,
+      preloadedGeometryCount: () => 0,
+      preloadBytesUploaded: () => 0,
+    };
+    mode = "retained";
+    needsPresent = true;
+    pendingPresentationPublication = { session: 7, sequence: 0 };
+  `, harness.context);
+
+  assert.equal(vm.runInContext("tryPresent()", harness.context), false);
+  assert.equal(vm.runInContext("currentMetrics().presentedSession", harness.context), null);
+  assert.equal(vm.runInContext("currentMetrics().firstPresentedSessionAtMs", harness.context), null);
+  harness.context.shouldRender = true;
+  assert.equal(vm.runInContext("tryPresent()", harness.context), true);
+  assert.deepEqual(
+    { session: vm.runInContext("currentMetrics().presentedSession", harness.context),
+      at: vm.runInContext("currentMetrics().firstPresentedSessionAtMs", harness.context) },
+    { session: 7, at: 100 },
+  );
+
+  now = 250;
+  vm.runInContext(`
+    needsPresent = true;
+    pendingPresentationPublication = { session: 8, sequence: 0 };
+    tryPresent();
+  `, harness.context);
+  const current = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(current.presentedSession, 8);
+  assert.equal(current.firstPresentedSessionAtMs, 250);
+
+  now = 300;
+  vm.runInContext(`
+    needsPresent = true;
+    pendingPresentationPublication = { session: 8, sequence: 1 };
+    tryPresent();
+  `, harness.context);
+  assert.equal(vm.runInContext("currentMetrics().firstPresentedSessionAtMs", harness.context), 250,
+    "later publications in the same session must not move its first-present timestamp");
 });
 
 test("renderer-ready timestamp records GPU renderer creation before a successful present", async () => {

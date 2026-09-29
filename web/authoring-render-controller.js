@@ -79,6 +79,8 @@ export function createAuthoringRenderController(host) {
   let scheduleTicket = 0;
   let presentedFrames = 0;
   let firstPresentedAtMs = null;
+  let presentedSession = null;
+  let firstPresentedSessionAtMs = null;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
@@ -694,6 +696,10 @@ export function createAuthoringRenderController(host) {
     pendingRendererObservationPublication = null;
     if (publication !== null) {
       lastPresentedPublication = publication;
+      if (presentedSession !== publication.session) {
+        presentedSession = publication.session;
+        firstPresentedSessionAtMs = performance.now();
+      }
     }
     try {
       acknowledgeRendererObservation(observationPublication, publication);
@@ -950,6 +956,8 @@ export function createAuthoringRenderController(host) {
       performanceTimeOriginMs: performance.timeOrigin,
       rendererReadyAtMs,
       firstPresentedAtMs,
+      presentedSession,
+      firstPresentedSessionAtMs,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),

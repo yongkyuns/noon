@@ -192,10 +192,15 @@ try {
       // The source edit travels through the normal debounce/authoring/reconcile
       // path. Completion is an explicit endpoint, not a claim about first pixels.
       await waitForCompletedRun(page);
+      const beforeEditMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      const previousPresentationSession = beforeEditMetrics?.metrics?.presentedSession;
+      assert.ok(Number.isSafeInteger(previousPresentationSession),
+        "warm edit baseline must identify the currently presented retained session");
       const beforeGeneration = await page.evaluate(() =>
         window.__noonExampleGallery.generationDiagnostics.runGeneration);
       const workersBeforeEdit = workerHandles.length;
       const editStarted = monotonicNow();
+      const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
       await page.evaluate(() => {
         const source = document.querySelector("#python-scene-source");
         source.value = `${source.value.trimEnd()}\n# C6 warm source rerun\n`;
@@ -203,7 +208,8 @@ try {
       });
       await waitForCompletedRun(page, beforeGeneration);
       const editCompleted = monotonicNow();
-      const warmMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      const warmPresentation = await waitForSessionFirstPresented(page, previousPresentationSession);
+      const warmMetrics = warmPresentation.response;
       assert.equal(workerHandles.length, workersBeforeEdit, `warm source edit must reuse durable workers: ${JSON.stringify(workers)}`);
       assert.ok(warmMetrics?.metrics?.objectCount > 0, "warm rerun must retain rendered content");
       assert.ok(warmMetrics.metrics.presentedFrames > 0, "warm rerun must present a frame");
@@ -212,9 +218,21 @@ try {
       if (failures.length > 0) throw new Error(failures.join("\n"));
       const warmRerun = {
         editToCompletedRunMs: editCompleted - editStarted,
-        firstPresentedAfterRun: {
-          measured: false,
-          reason: "renderer publications have no source-run identity to bind this frame to the edit",
+        firstPresentedAfterEdit: {
+          measured: true,
+          identity: "retained transport session from the reconciled semantic execution publication",
+          previousSession: previousPresentationSession,
+          presentedSession: warmPresentation.metrics.presentedSession,
+          firstPresentedAtWorkerMs: warmPresentation.metrics.firstPresentedSessionAtMs,
+          workerTimeOriginEpochMs: warmPresentation.metrics.performanceTimeOriginMs,
+          editStartedEpochMs,
+          editToFirstPresentedMs: warmPresentation.metrics.performanceTimeOriginMs +
+            warmPresentation.metrics.firstPresentedSessionAtMs - editStartedEpochMs,
+          hostObservedAfterEditMs: warmPresentation.observedAfterEditMs - editStartedEpochMs,
+          hostObservationLagMs: warmPresentation.observedAfterEditMs -
+            (warmPresentation.metrics.performanceTimeOriginMs +
+             warmPresentation.metrics.firstPresentedSessionAtMs),
+          milestone: "first successful renderer.render() for the new retained session; not physical scanout",
         },
         durableWorkersBefore: workersBeforeEdit,
         durableWorkersAfter: workerHandles.length,
@@ -312,7 +330,7 @@ try {
     },
     memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. rendererReady records successful retained renderer creation after GPU setup, separately from presentation. Their host observation and poll lag remain separate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. preloadStarted is the Python authoring worker creation event. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. A warm-run first-present value is explicitly unavailable because the current renderer publication has no source-run identity. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts. firstPresented records the renderer worker's first successful renderer.render() timestamp converted to epoch with that worker's performance.timeOrigin; it is a renderer-level present milestone, not physical display scanout. rendererReady records successful retained renderer creation after GPU setup, separately from presentation. Their host observation and poll lag remain separate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. preloadStarted is the Python authoring worker creation event. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -360,6 +378,26 @@ async function waitForFirstPresentedFrame(page, navigationStartEpochMs) {
     }
     throw new Error("timed out waiting for renderer first-present telemetry");
   }, navigationStartEpochMs);
+}
+
+async function waitForSessionFirstPresented(page, previousSession) {
+  const deadline = monotonicNow() + 15_000;
+  while (monotonicNow() < deadline) {
+    const response = await page.evaluate(() => window.__noonExampleGallery?.executionMetrics?.());
+    const metrics = response?.metrics;
+    if (Number.isSafeInteger(metrics?.presentedSession) &&
+        metrics.presentedSession !== previousSession &&
+        Number.isFinite(metrics.firstPresentedSessionAtMs) &&
+        Number.isFinite(metrics.performanceTimeOriginMs)) {
+      return {
+        response,
+        metrics,
+        observedAfterEditMs: await page.evaluate(() => performance.timeOrigin + performance.now()),
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for a presented retained session newer than ${previousSession}`);
 }
 
 async function waitForCompletedRun(page, previousGeneration = -1) {
