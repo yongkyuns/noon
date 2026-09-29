@@ -333,7 +333,7 @@ mod wasm {
                                 .preparations
                                 .iter()
                                 .map(|preparation| PathMeshPreload {
-                                    geometry: &addition.geometries[preparation.resource as usize],
+                                    geometry: addition.geometries[&preparation.resource],
                                     style: preparation.style,
                                     transform: preparation.transform,
                                 })
@@ -895,9 +895,12 @@ mod wasm {
         let requests = mirror
             .resources()
             .render_geometry_preparations()
-            .iter()
             .map(|preparation| PathMeshPreload {
-                geometry: resources[preparation.resource as usize].as_ref(),
+                geometry: resources[preparation.resource as usize]
+                    .geometry
+                    .as_ref()
+                    .expect("prepared render geometry is live")
+                    .as_ref(),
                 style: preparation.style,
                 transform: preparation.transform,
             })

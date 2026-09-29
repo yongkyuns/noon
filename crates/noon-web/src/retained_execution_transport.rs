@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 9;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -91,7 +91,7 @@ pub struct RetainedTransportObjectState {
     pub render_transform: Option<Transform2D>,
     /// Index into the immutable geometry table installed with this session's bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub render_geometry_resource: Option<u32>,
+    pub render_geometry_resource: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,7 +147,7 @@ pub enum RetainedExecutionTransportError {
     UnknownSlot(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
-    InvalidRenderGeometryResource(u32),
+    InvalidRenderGeometryResource(u64),
     AmbiguousRenderGeometry(TransportSlotId),
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
@@ -266,7 +266,7 @@ pub struct RetainedExecutionDeltaEncoder {
     initialized: bool,
     snapshot_orders: Vec<Option<u32>>,
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
-    render_geometry_indices: Option<HashMap<usize, u32>>,
+    render_geometry_indices: Option<HashMap<usize, u64>>,
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
 }
 
@@ -298,7 +298,7 @@ impl RetainedExecutionDeltaEncoder {
             .map(|(index, geometry)| {
                 (
                     Arc::as_ptr(geometry) as usize,
-                    u32::try_from(index).expect("compiled geometry table exceeds u32"),
+                    u64::try_from(index).expect("compiled geometry table exceeds u64"),
                 )
             })
             .collect();
@@ -615,7 +615,7 @@ pub struct RetainedExecutionFrameMirror {
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
     object_indices: HashMap<ObjectId, usize>,
-    render_geometries: Arc<[Arc<GeometryRef>]>,
+    render_geometries: Vec<crate::retained_resource_transport::RenderGeometrySlot>,
     resource_session: Option<u32>,
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
@@ -650,12 +650,12 @@ impl RetainedExecutionFrameMirror {
     }
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
-        geometries: Arc<[Arc<GeometryRef>]>,
+        geometries: &[crate::retained_resource_transport::RenderGeometrySlot],
         text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     ) -> Self {
         Self {
             resource_session: session,
-            render_geometries: geometries,
+            render_geometries: geometries.to_vec(),
             text_handles,
             ..Self::default()
         }
@@ -711,12 +711,16 @@ impl RetainedExecutionFrameMirror {
         session: u32,
     ) -> Result<Option<Arc<GeometryRef>>, RetainedExecutionTransportError> {
         match object.render_geometry_resource {
-            Some(index) if self.resource_session == Some(session) => self
-                .render_geometries
-                .get(index as usize)
-                .cloned()
-                .map(Some)
-                .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index)),
+            Some(index) if self.resource_session == Some(session) => {
+                let (slot, generation) =
+                    crate::retained_resource_transport::render_geometry_parts(index);
+                self.render_geometries
+                    .get(slot as usize)
+                    .filter(|entry| entry.generation == generation)
+                    .and_then(|entry| entry.geometry.clone())
+                    .map(Some)
+                    .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
+            }
             Some(index) => {
                 Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
             }
@@ -1235,7 +1239,7 @@ fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<Geom
 fn transport_object(
     frame: &FrameState,
     index: usize,
-    render_geometry_resource: Option<u32>,
+    render_geometry_resource: Option<u64>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -1360,7 +1364,7 @@ mod tests {
             )
         })
         .collect();
-        RetainedExecutionFrameMirror::with_installed_resources(None, Arc::from([]), handles)
+        RetainedExecutionFrameMirror::with_installed_resources(None, &[], handles)
     }
 
     fn test_mirror_with_render_geometries(
@@ -1369,7 +1373,15 @@ mod tests {
     ) -> RetainedExecutionFrameMirror {
         let mut mirror = test_mirror();
         mirror.resource_session = Some(session);
-        mirror.render_geometries = geometries;
+        mirror.render_geometries = geometries
+            .iter()
+            .map(
+                |geometry| crate::retained_resource_transport::RenderGeometrySlot {
+                    generation: 0,
+                    geometry: Some(geometry.clone()),
+                },
+            )
+            .collect();
         mirror
     }
 

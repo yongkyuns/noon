@@ -181,18 +181,25 @@ mod tests {
         let second_resource = second_row
             .render_geometry_resource
             .expect("second morph must reference its appended renderer resource");
-        assert_eq!(second_resource, first_resource + 1);
+        assert_eq!(
+            second_resource,
+            1_u64 << 32,
+            "the released slot is reused at a new generation"
+        );
         assert!(second_row.render_geometry.is_none());
     }
 
     #[test]
-    fn sequential_render_additions_preserve_the_installed_prefix() {
+    fn render_replacements_reuse_slots_and_preserve_unrelated_geometry() {
         let mut installed = empty_bundle().install().unwrap();
 
         let mut first_addition = empty_bundle();
-        first_addition.set_render_geometries(
+        first_addition.set_render_geometry_updates(
             92,
-            vec![retained_path(0.0)].into(),
+            vec![
+                (0, 0, Some(retained_path(0.0))),
+                (1, 0, Some(retained_path(10.0))),
+            ],
             vec![RenderGeometryPreparation {
                 resource: 0,
                 style: Style::default(),
@@ -202,35 +209,29 @@ mod tests {
         let first_prepared = installed
             .prepare_additions_with_render(first_addition)
             .unwrap();
-        assert_eq!(first_prepared.render_geometry_suffix().len(), 1);
+        assert_eq!(first_prepared.render_geometry_updates().len(), 2);
         installed.commit_additions_with_render(first_prepared);
-        let first_table = installed.render_geometries();
-        assert_eq!(first_table.len(), 1);
+        let unrelated = installed.render_geometries()[1].geometry.clone().unwrap();
 
-        let mut second_addition = empty_bundle();
-        second_addition.set_render_geometries(
-            92,
-            vec![retained_path(2.0)].into(),
-            vec![RenderGeometryPreparation {
-                resource: 0,
-                style: Style::default(),
-                transform: Transform2D::IDENTITY,
-            }],
-        );
-        let second_prepared = installed
-            .prepare_additions_with_render(second_addition)
-            .unwrap();
-        assert_eq!(second_prepared.render_geometry_suffix().len(), 1);
-        let combined = second_prepared.render_geometries().unwrap();
-        assert_eq!(combined.len(), 2);
-        assert!(Arc::ptr_eq(&first_table[0], &combined[0]));
-
-        installed.commit_additions_with_render(second_prepared);
-        let second_table = installed.render_geometries();
-        assert_eq!(second_table.len(), 2);
-        assert!(Arc::ptr_eq(&first_table[0], &second_table[0]));
-        assert_eq!(installed.render_geometry_preparations().len(), 2);
-        assert_eq!(installed.render_geometry_preparations()[0].resource, 0);
-        assert_eq!(installed.render_geometry_preparations()[1].resource, 1);
+        for generation in 1..=32 {
+            let mut addition = empty_bundle();
+            addition.set_render_geometry_updates(
+                92,
+                vec![(0, generation, Some(retained_path(generation as f32)))],
+                vec![RenderGeometryPreparation {
+                    resource: 0,
+                    style: Style::default(),
+                    transform: Transform2D::IDENTITY,
+                }],
+            );
+            let prepared = installed.prepare_additions_with_render(addition).unwrap();
+            installed.commit_additions_with_render(prepared);
+            assert_eq!(installed.render_geometries().len(), 2);
+            assert_eq!(installed.render_geometry_preparation_count(), 1);
+            assert!(Arc::ptr_eq(
+                installed.render_geometries()[1].geometry.as_ref().unwrap(),
+                &unrelated
+            ));
+        }
     }
 }

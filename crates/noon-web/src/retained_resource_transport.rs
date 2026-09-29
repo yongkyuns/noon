@@ -29,7 +29,29 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 8;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 9;
+
+/// A reusable arena slot qualified by its occupant generation.
+pub(crate) fn render_geometry_id(slot: u32, generation: u32) -> u64 {
+    (u64::from(generation) << 32) | u64::from(slot)
+}
+
+pub(crate) fn render_geometry_parts(id: u64) -> (u32, u32) {
+    (id as u32, (id >> 32) as u32)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RenderGeometrySlot {
+    pub(crate) generation: u32,
+    pub(crate) geometry: Option<Arc<GeometryRef>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct RenderGeometryUpdate {
+    slot: u32,
+    generation: u32,
+    geometry: Option<GeometryRef>,
+}
 
 /// Exact source resources whose final published row reference was released by
 /// this delta. Dependency resources are retired by the installed owner after it
@@ -63,7 +85,7 @@ impl RetainedResourceRetirements {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TransportRenderGeometryResources {
     session: u32,
-    geometries: Vec<GeometryRef>,
+    updates: Vec<RenderGeometryUpdate>,
     preparations: Vec<RenderGeometryPreparation>,
 }
 
@@ -97,6 +119,19 @@ impl RenderGeometryPreparation {
             && self.style.fill.is_none_or(finite_color)
             && self.style.stroke.is_none_or(finite_color)
     }
+}
+
+fn group_render_geometry_preparations(
+    preparations: Vec<RenderGeometryPreparation>,
+) -> BTreeMap<u32, Vec<RenderGeometryPreparation>> {
+    let mut grouped = BTreeMap::new();
+    for preparation in preparations {
+        grouped
+            .entry(preparation.resource)
+            .or_insert_with(Vec::new)
+            .push(preparation);
+    }
+    grouped
 }
 
 #[cfg(test)]
@@ -436,9 +471,34 @@ impl RetainedResourceBundle {
     ) {
         self.render_geometry_resources = Some(TransportRenderGeometryResources {
             session,
-            geometries: geometries
+            updates: geometries
                 .iter()
-                .map(|geometry| geometry.as_ref().clone())
+                .enumerate()
+                .map(|(slot, geometry)| RenderGeometryUpdate {
+                    slot: u32::try_from(slot).expect("render geometry index exceeds u32"),
+                    generation: 0,
+                    geometry: Some(geometry.as_ref().clone()),
+                })
+                .collect(),
+            preparations,
+        });
+    }
+
+    pub(crate) fn set_render_geometry_updates(
+        &mut self,
+        session: u32,
+        updates: Vec<(u32, u32, Option<Arc<GeometryRef>>)>,
+        preparations: Vec<RenderGeometryPreparation>,
+    ) {
+        self.render_geometry_resources = Some(TransportRenderGeometryResources {
+            session,
+            updates: updates
+                .into_iter()
+                .map(|(slot, generation, geometry)| RenderGeometryUpdate {
+                    slot,
+                    generation,
+                    geometry: geometry.map(|geometry| geometry.as_ref().clone()),
+                })
                 .collect(),
             preparations,
         });
@@ -473,13 +533,20 @@ impl RetainedResourceBundle {
     pub fn install(self) -> Result<InstalledRetainedResources, RetainedResourceTransportError> {
         self.validate_protocol()?;
         if let Some(resources) = &self.render_geometry_resources {
-            for (index, geometry) in resources.geometries.iter().enumerate() {
-                if !matches!(geometry, GeometryRef::VectorPath(_)) || !geometry.is_finite() {
+            for (index, update) in resources.updates.iter().enumerate() {
+                let Some(geometry) = &update.geometry else {
+                    return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
+                };
+                if update.slot as usize != index
+                    || update.generation != 0
+                    || !matches!(geometry, GeometryRef::VectorPath(_))
+                    || !geometry.is_finite()
+                {
                     return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
                 }
             }
             for (index, preparation) in resources.preparations.iter().enumerate() {
-                if preparation.resource as usize >= resources.geometries.len()
+                if preparation.resource as usize >= resources.updates.len()
                     || !preparation.is_finite()
                 {
                     return Err(RetainedResourceTransportError::InvalidRenderPreparation(
@@ -568,20 +635,26 @@ impl RetainedResourceBundle {
                 .render_geometry_resources
                 .as_ref()
                 .map(|resources| resources.session),
+            render_geometry_preparation_count: self
+                .render_geometry_resources
+                .as_ref()
+                .map_or(0, |resources| resources.preparations.len()),
             render_geometry_preparations: self
                 .render_geometry_resources
                 .as_ref()
-                .map(|resources| resources.preparations.clone())
+                .map(|resources| group_render_geometry_preparations(resources.preparations.clone()))
                 .unwrap_or_default(),
             render_geometries: self
                 .render_geometry_resources
                 .map(|resources| {
                     resources
-                        .geometries
+                        .updates
                         .into_iter()
-                        .map(Arc::new)
-                        .collect::<Vec<_>>()
-                        .into()
+                        .map(|update| RenderGeometrySlot {
+                            generation: update.generation,
+                            geometry: update.geometry.map(Arc::new),
+                        })
+                        .collect()
                 })
                 .unwrap_or_default(),
             additions: Vec::new(),
@@ -634,8 +707,9 @@ pub struct InstalledRetainedResources {
     geometry_handles: HashMap<TransportGeometryResourceHandle, GeometryResourceHandle>,
     geometry_transports: HashMap<GeometryResourceHandle, TransportGeometryResourceHandle>,
     render_geometry_session: Option<u32>,
-    render_geometries: Arc<[Arc<GeometryRef>]>,
-    render_geometry_preparations: Vec<RenderGeometryPreparation>,
+    render_geometries: Vec<RenderGeometrySlot>,
+    render_geometry_preparations: BTreeMap<u32, Vec<RenderGeometryPreparation>>,
+    render_geometry_preparation_count: usize,
     additions: Vec<InstalledRetainedResources>,
     free_addition_layers: Vec<usize>,
     free_addition_layer_set: HashSet<usize>,
@@ -655,16 +729,20 @@ impl InstalledRetainedResources {
         self.render_geometry_session
     }
 
-    pub(crate) fn render_geometries(&self) -> Arc<[Arc<GeometryRef>]> {
-        self.render_geometries.clone()
+    pub(crate) fn render_geometries(&self) -> &[RenderGeometrySlot] {
+        &self.render_geometries
     }
 
-    pub(crate) fn render_geometry_preparations(&self) -> &[RenderGeometryPreparation] {
-        &self.render_geometry_preparations
+    pub(crate) fn render_geometry_preparations(
+        &self,
+    ) -> impl Iterator<Item = &RenderGeometryPreparation> {
+        self.render_geometry_preparations
+            .values()
+            .flat_map(|preparations| preparations.iter())
     }
 
     pub fn render_geometry_preparation_count(&self) -> usize {
-        self.render_geometry_preparations().len()
+        self.render_geometry_preparation_count
     }
 
     pub fn texts(&self) -> &dyn TextResourceLookup {
@@ -867,8 +945,9 @@ impl InstalledRetainedResources {
                 .collect(),
             geometry_transports: HashMap::new(),
             render_geometry_session: None,
-            render_geometries: Arc::from([]),
-            render_geometry_preparations: Vec::new(),
+            render_geometries: Vec::new(),
+            render_geometry_preparations: BTreeMap::new(),
+            render_geometry_preparation_count: 0,
             additions: Vec::new(),
             free_addition_layers: Vec::new(),
             free_addition_layer_set: HashSet::new(),
@@ -2578,7 +2657,13 @@ mod tests {
             .install()
             .unwrap();
         assert_eq!(installed.render_geometry_session(), Some(17));
-        assert_eq!(installed.render_geometry_preparations(), preparations);
+        assert_eq!(
+            installed
+                .render_geometry_preparations()
+                .cloned()
+                .collect::<Vec<_>>(),
+            preparations
+        );
         assert_eq!(installed.render_geometry_preparation_count(), 2);
         for invalid in [
             RenderGeometryPreparation {
@@ -2617,10 +2702,13 @@ mod tests {
         }
         let first = installed.render_geometries();
         let again = installed.render_geometries();
-        assert_eq!(first[0], geometry);
-        assert!(Arc::ptr_eq(&first[0], &again[0]));
+        assert_eq!(first[0].geometry.as_ref(), Some(&geometry));
+        assert!(Arc::ptr_eq(
+            first[0].geometry.as_ref().unwrap(),
+            again[0].geometry.as_ref().unwrap()
+        ));
         assert!(
-            !Arc::ptr_eq(&first[0], &geometry),
+            !Arc::ptr_eq(first[0].geometry.as_ref().unwrap(), &geometry),
             "cross-worker decode owns its local resource allocation"
         );
     }
