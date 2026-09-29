@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
+import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
 
 import {
   classifyWorkerUrl,
@@ -31,6 +33,12 @@ assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${pro
 const preloadMode = process.env.NOON_COLD_START_PRELOAD ?? "on";
 assert.ok(["on", "off"].includes(preloadMode), `unknown preload mode: ${preloadMode}`);
 const preloadEnabled = preloadMode === "on";
+const preloadEditRaceMode = process.env.NOON_COLD_START_PRELOAD_EDIT_RACE ?? "off";
+assert.ok(["on", "off"].includes(preloadEditRaceMode),
+  `unknown preload edit race mode: ${preloadEditRaceMode}`);
+const preloadEditRaceEnabled = preloadEditRaceMode === "on";
+assert.ok(!preloadEditRaceEnabled || preloadEnabled,
+  "the preload edit race requires NOON_COLD_START_PRELOAD=on");
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const examples = parseExamples(
   process.env.NOON_COLD_START_EXAMPLES ??
@@ -134,6 +142,7 @@ try {
       let preloadStartedAtEpochMs = null;
       let paintGateAtEpochMs = null;
       let coldFirstEdit = null;
+      let preloadEditRace = null;
       if (!preloadEnabled) {
         paintGateAtEpochMs = await waitForInitialPaintGate(page);
         const deferredState = await page.evaluate(() => ({
@@ -170,6 +179,9 @@ try {
         };
       }
       if (preloadEnabled) {
+        if (preloadEditRaceEnabled) {
+          preloadEditRace = await runPreloadEditRace(page);
+        }
         await page.waitForFunction(
           () => document.querySelector("#status")?.dataset.liveAuthoring === "ready",
           null,
@@ -212,8 +224,10 @@ try {
       const workerSummary = summarizeWorkers(workers);
       assert.equal(
         workerSummary.byRole.authoring,
-        1,
-        "cold preload must retain exactly one Python authoring worker",
+        preloadEditRaceEnabled ? 2 : 1,
+        preloadEditRaceEnabled
+          ? "edit-race mode must report the retired preload worker and newest-source replacement"
+          : "cold preload must retain exactly one Python authoring worker",
       );
       const authoringWorkerEvent = workerSummary.workers.find(({ role }) => role === "authoring");
       assert.ok(authoringWorkerEvent, "first scene run must record Python worker creation");
@@ -228,12 +242,25 @@ try {
           entries: await page.evaluate(resourceTimingSnapshot),
         },
       ];
+      const unavailableResourceContexts = [];
       for (const handle of workerHandles) {
-        resourceContexts.push({
-          name: handle.name,
-          role: handle.role,
-          entries: await handle.worker.evaluate(resourceTimingSnapshot),
-        });
+        try {
+          resourceContexts.push({
+            name: handle.name,
+            role: handle.role,
+            entries: await handle.worker.evaluate(resourceTimingSnapshot),
+          });
+        } catch (error) {
+          if (!preloadEditRaceEnabled ||
+              !String(error).includes("Target page, context or browser has been closed")) {
+            throw error;
+          }
+          unavailableResourceContexts.push({
+            name: handle.name,
+            role: handle.role,
+            reason: `worker was retired during the opt-in source race: ${String(error)}`,
+          });
+        }
       }
       const resourceFootprint = summarizeResourceFootprint(resourceContexts, {
         noonWasmPackageBytes,
@@ -319,8 +346,10 @@ try {
         }) : null,
         authoringStartup,
         resourceFootprint,
+        unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
+        preloadEditRace,
         firstEditComparison: preloadEnabled ? {
           phase: "first edit after automatic preload completed",
           editToCompletedRunMs: warmRerun.editToCompletedRunMs,
@@ -348,7 +377,10 @@ try {
           `first worker-present ${format(firstPresented.navigationToFirstPresentedMs)} ms from navigation, ` +
           `renderer ready ${format(firstPresented.rendererReady.navigationToRendererReadyMs)} ms from navigation, ` +
           `first edit→completed run ${format(report.firstEditComparison.editToCompletedRunMs)} ms, ` +
-          `first edit→present ${format(report.firstEditComparison.editToFirstPresentedMs)} ms`,
+          `first edit→present ${format(report.firstEditComparison.editToFirstPresentedMs)} ms` +
+          (preloadEditRace === null
+            ? ""
+            : `, preload race newest edit→present ${format(preloadEditRace.newestEdit.editToFirstPresentedMs)} ms`),
       );
     } finally {
       try {
@@ -401,10 +433,11 @@ try {
       examples,
       freshBrowserProcessPerCase: true,
       automaticPreload: preloadEnabled,
+      preloadEditRace: preloadEditRaceEnabled,
     },
     memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
     note:
-    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared renderer frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
+    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared renderer frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -479,6 +512,167 @@ async function waitForInitialPaintGate(page) {
       resolve(performance.timeOrigin + performance.now());
     }));
   }));
+}
+
+async function runPreloadEditRace(page) {
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#status");
+    return status?.dataset.liveAuthoring === "preloading" &&
+      status?.dataset.authoringWarmup === "started" &&
+      window.__noonExampleGallery?.runInFlight === true;
+  }, null, { timeout: 240_000 });
+  const preloadStartedAtEpochMs = await readPerformanceMark(page, "noon-live-authoring-preload-start");
+  const beforeMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  const baselineSession = beforeMetrics?.metrics?.presentedSession ?? null;
+  const startingGeneration = await page.evaluate(() =>
+    window.__noonExampleGallery.generationDiagnostics.runGeneration);
+  const editReceipts = await page.evaluate(({ superseded, newest }) => {
+    const editor = document.querySelector("#python-scene-source");
+    const gallery = window.__noonExampleGallery;
+    const status = document.querySelector("#status");
+    const submit = (source) => {
+      editor.value = source;
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      return {
+        submittedAtEpochMs: performance.timeOrigin + performance.now(),
+        generation: gallery.generationDiagnostics.runGeneration,
+        liveAuthoring: status.dataset.liveAuthoring,
+        authoringWarmup: status.dataset.authoringWarmup,
+      };
+    };
+    const first = submit(superseded);
+    // Dispatch the newer full-source edit in the same page task: the ordinary
+    // 500 ms source debounce cannot start the obsolete source between edits.
+    const latest = submit(newest);
+    return {
+      first,
+      latest,
+      runInFlightAfterBoth: gallery.runInFlight,
+      source: editor.value,
+    };
+  }, { superseded: SUPERSEDED_SOURCE, newest: NEWEST_SOURCE });
+  assert.equal(editReceipts.first.liveAuthoring, "preloading",
+    "first source edit must land during automatic preload");
+  assert.equal(editReceipts.latest.liveAuthoring, "preloading",
+    "newest source edit must also land before the automatic preload reports ready");
+  assert.ok(editReceipts.first.generation > startingGeneration &&
+    editReceipts.latest.generation >= editReceipts.first.generation,
+  "source edits must invalidate the active run and retain the newest editor value");
+  assert.equal(editReceipts.source, NEWEST_SOURCE);
+  assert.equal(editReceipts.runInFlightAfterBoth, true);
+  const newestEditStartedEpochMs = editReceipts.latest.submittedAtEpochMs;
+  const newestInputGeneration = editReceipts.latest.generation;
+
+  const sampledSessions = new Map();
+  const obsoleteSourceSamples = [];
+  const deadline = monotonicNow() + 240_000;
+  let newestRunGeneration = null;
+  let newestSession = null;
+  let newestSessionMetrics = null;
+  let newestSessionObservedAtEpochMs = null;
+  while (monotonicNow() < deadline) {
+    const snapshot = await page.evaluate(async () => ({
+      diagnostics: window.__noonExampleGallery.generationDiagnostics,
+      runInFlight: window.__noonExampleGallery.runInFlight,
+      status: {
+        state: document.querySelector("#patch-status")?.dataset.state,
+        runGeneration: Number(document.querySelector("#patch-status")?.dataset.runGeneration),
+        text: document.querySelector("#patch-status")?.value,
+      },
+      source: document.querySelector("#python-scene-source")?.value,
+      metrics: await window.__noonExampleGallery.executionMetrics(),
+      observedAtEpochMs: performance.timeOrigin + performance.now(),
+    }));
+    assert.equal(snapshot.source, NEWEST_SOURCE, "newest source text must remain selected");
+    if (snapshot.status.state === "error") {
+      throw new Error(`preload edit race failed: ${snapshot.status.text}`);
+    }
+    const metrics = snapshot.metrics?.metrics;
+    if (Number.isSafeInteger(metrics?.presentedSession)) {
+      const session = metrics.presentedSession;
+      const prior = sampledSessions.get(session);
+      sampledSessions.set(session, {
+        session,
+        objectCount: metrics.objectCount,
+        firstPresentedSessionAtMs: metrics.firstPresentedSessionAtMs,
+        performanceTimeOriginMs: metrics.performanceTimeOriginMs,
+        firstObservedAtEpochMs: prior?.firstObservedAtEpochMs ?? snapshot.observedAtEpochMs,
+      });
+      if (session !== baselineSession && metrics.objectCount === 1) {
+        obsoleteSourceSamples.push(session);
+      }
+    }
+    if (snapshot.status.state === "applied" &&
+        Number.isSafeInteger(snapshot.status.runGeneration) &&
+        snapshot.status.runGeneration > newestInputGeneration) {
+      newestRunGeneration = snapshot.status.runGeneration;
+      assert.equal(snapshot.diagnostics.runGeneration, newestRunGeneration,
+        "latest accepted source must own the current run generation");
+      if (Number.isSafeInteger(metrics?.presentedSession) &&
+          metrics.presentedSession !== baselineSession &&
+          metrics.objectCount === 2 &&
+          Number.isFinite(metrics.firstPresentedSessionAtMs)) {
+        newestSession = metrics.presentedSession;
+        newestSessionMetrics = metrics;
+        newestSessionObservedAtEpochMs = snapshot.observedAtEpochMs;
+        break;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(Number.isSafeInteger(newestRunGeneration), "newest edited source run must complete");
+  assert.ok(Number.isSafeInteger(newestSession), "newest two-object source session must present");
+  assert.deepEqual(obsoleteSourceSamples, [],
+    "no sampled post-newest-edit retained session may show the one-object superseded scene");
+  const finalWarmupState = await page.evaluate(() => ({
+    liveAuthoring: document.querySelector("#status")?.dataset.liveAuthoring,
+    authoringWarmup: document.querySelector("#status")?.dataset.authoringWarmup,
+  }));
+  assert.equal(finalWarmupState.liveAuthoring, "ready");
+  assert.equal(newestSessionMetrics.objectCount, 2,
+    "newest source's distinct two-object content must own its rendered session");
+  const firstPresentedAtEpochMs = newestSessionMetrics.performanceTimeOriginMs +
+    newestSessionMetrics.firstPresentedSessionAtMs;
+  return {
+    measured: true,
+    preloadStartedAtEpochMs,
+    startingGeneration,
+    firstEdit: {
+      sha256: sha256(SUPERSEDED_SOURCE),
+      submittedAtEpochMs: editReceipts.first.submittedAtEpochMs,
+      invalidationGeneration: editReceipts.first.generation,
+      oneObjectScene: true,
+      supersededBeforeDebouncedRun: true,
+    },
+    newestEdit: {
+      sha256: sha256(NEWEST_SOURCE),
+      submittedAtEpochMs: newestEditStartedEpochMs,
+      runGeneration: newestRunGeneration,
+      renderedSession: newestSession,
+      renderedObjectCount: newestSessionMetrics.objectCount,
+      firstPresentedAtWorkerMs: newestSessionMetrics.firstPresentedSessionAtMs,
+      workerTimeOriginEpochMs: newestSessionMetrics.performanceTimeOriginMs,
+      firstPresentedAtEpochMs,
+      editToFirstPresentedMs: firstPresentedAtEpochMs - newestEditStartedEpochMs,
+      hostObservedAtEpochMs: newestSessionObservedAtEpochMs,
+    },
+    bothEditsBeforeWarmupReady: editReceipts.first.liveAuthoring === "preloading" &&
+      editReceipts.latest.liveAuthoring === "preloading",
+    controllerGenerations: {
+      beforeEdits: startingGeneration,
+      afterSupersededEdit: editReceipts.first.generation,
+      afterNewestEdit: editReceipts.latest.generation,
+      newestAcceptedRun: newestRunGeneration,
+    },
+    sampledSessionObservations: [...sampledSessions.values()],
+    sampledObsoleteSessionsAfterNewestEdit: obsoleteSourceSamples,
+    obsoletePublicationProof: "sampled metrics only; deterministic stale-run rejection is covered by playground-race-smoke",
+    warmupAfterNewestRun: finalWarmupState,
+  };
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 async function submitMeasuredSourceEdit(page, note) {
