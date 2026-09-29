@@ -509,6 +509,30 @@ impl RetainedFramePreparer {
                 .text
                 .prepare_with_changes(device, frame.retained, changes, texts, fonts, metrics)
                 .map_err(RetainedPrepareError::from)?;
+            if prepared_text.layout_rebuilt {
+                // A new atlas/packing generation may relocate or shrink every
+                // glyph arena. Its ranges cannot be copied as local deltas into
+                // the previous family snapshot. Rebuild the matching family
+                // baseline and request a full upload for this generation.
+                let active = self
+                    .family_plan_active_signature
+                    .iter()
+                    .map(|(index, _)| *index)
+                    .collect();
+                return self.prepare_family_plan_set_with_changes_inner(
+                    device,
+                    frame,
+                    plans,
+                    &FrameChanges::all(),
+                    texts,
+                    fonts,
+                    geometries,
+                    metrics,
+                    visible_object_indices,
+                    Some(&active),
+                );
+            }
+            self.snapshot_text_stats = prepared_text.stats;
             for &index in changes.object_indices() {
                 if let Some(slots) = prepared_text.object_glyph_slots.get(index) {
                     self.snapshot_prepare_stats.glyph_batches =
