@@ -141,8 +141,17 @@ class SceneFacadeTests(unittest.TestCase):
 
             scene = Scene()
             calls = []
+            class Batch:
+                def __init__(self): self.members = []
+                def appendMobject(self, wrapper_id, handle):
+                    assert wrapper_id == ""
+                    self.members.append(handle)
+            def begin(kind):
+                assert kind == "add"
+                return Batch()
             scene._canonical_authoring_context = SimpleNamespace(
-                setTranslationDragTargets=lambda handles: calls.append(list(handles)))
+                beginMembershipBatch=begin,
+                setTranslationDragTargets=lambda batch: calls.append(list(batch.members)))
             circle = identity_only_wrapper(Circle)
             circle._scene = scene
             circle._semantic_handle = object()

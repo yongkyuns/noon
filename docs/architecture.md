@@ -605,7 +605,7 @@ Press and move publish scoped effective Position. Release prepares its native oc
 
 The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable typed-ingress round trip.
 
-Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. The browser transports only those bound semantic handle generations and the existing normalized pointer records; it never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired.
+Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired.
 
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 

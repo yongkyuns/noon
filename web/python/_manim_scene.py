@@ -165,9 +165,22 @@ def _set_translation_drag_targets(
             raise ValueError("translation drag targets must be unique")
         seen.add(id(handle))
         handles.append(handle)
+    context = _context(scene)
+    batch = engine_call(
+        context.beginMembershipBatch,
+        "add",
+        operation="Scene.set_drag_targets",
+    )
+    for handle in handles:
+        engine_call(
+            batch.appendMobject,
+            "",
+            handle,
+            operation="Scene.set_drag_targets",
+        )
     engine_call(
-        _context(scene).setTranslationDragTargets,
-        handles,
+        context.setTranslationDragTargets,
+        batch,
         operation="Scene.set_drag_targets",
     )
     return scene

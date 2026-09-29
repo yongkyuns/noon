@@ -2642,15 +2642,6 @@ struct NativeStateInputWire {
     value: NativeInputValueWire,
 }
 
-/// Source-declared semantic identities for the session-owned drag policy.
-/// These are configured separately from browser pointer occurrences.
-#[cfg(any(target_arch = "wasm32", test))]
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TranslationDragTargetsWire {
-    targets: Vec<CallbackNodeWire>,
-}
-
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -3163,34 +3154,6 @@ impl SemanticExecutionPlayer {
             Some(value) => self.session.enable_pointer_fill_selection(value),
             None => self.session.disable_pointer_fill_selection(),
         }
-        .map_err(|error| error.to_string())
-    }
-
-    /// Configure source-declared semantic drag targets. The control payload
-    /// contains stable semantic handles, never a frontend pick result; pointer
-    /// occurrences continue through the one browser input ingress below.
-    #[cfg(any(target_arch = "wasm32", test))]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setTranslationDragTargetsJson))]
-    pub fn set_translation_drag_targets_json(&mut self, json: &str) -> Result<(), String> {
-        let request: TranslationDragTargetsWire = serde_json::from_str(json)
-            .map_err(|error| format!("invalid translation drag target JSON: {error}"))?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("translation drag targets require a live semantic store")?;
-        let targets = request
-            .targets
-            .into_iter()
-            .map(|node| noon::Mobject::from_node(std::rc::Rc::clone(&semantics), node.into()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .ok_or("translation drag targets require a semantic scene root")?,
-            &mut self.session,
-        )
-        .set_translation_drag_targets(targets.iter())
         .map_err(|error| error.to_string())
     }
 

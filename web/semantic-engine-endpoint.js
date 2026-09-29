@@ -495,13 +495,6 @@ export async function attachSemanticEngine(
         throw new TypeError("selection tolerance must be a finite nonnegative number or null");
       }
       player.setPointerFillSelection(message.maxMovement);
-    } else if (message.type === "translation_drag_targets") {
-      if (!Array.isArray(message.targets) || !message.targets.every(target =>
-        target && Number.isInteger(target.slot) && target.slot >= 0 && target.slot <= 0xffffffff &&
-        Number.isInteger(target.generation) && target.generation >= 0 && target.generation <= 0xffffffff)) {
-        throw new TypeError("translation drag targets must be semantic slot/generation pairs");
-      }
-      player.setTranslationDragTargetsJson(JSON.stringify({ targets: message.targets }));
     } else if (message.type === "native_state_input") {
       player.setNativeStateInputJson(JSON.stringify({
         source: message.source,
@@ -560,8 +553,7 @@ export async function attachSemanticEngine(
               controls[0].type === "browser_pointer_input" ||
               controls[0].type === "inspection_scroll" ||
               controls[0].type === "browser_pointer_view" ||
-              controls[0].type === "pointer_fill_selection" ||
-              controls[0].type === "translation_drag_targets")) {
+              controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
         try {
           const accepted = applyNativeInput(message);
@@ -805,7 +797,6 @@ export async function attachSemanticEngine(
           case "browser_pointer_input":
           case "inspection_scroll":
           case "pointer_fill_selection":
-          case "translation_drag_targets":
           case "browser_pointer_view": {
             pointerInputAccepted = applyNativeInput(message);
             if (player === null) break;
@@ -962,7 +953,7 @@ export async function attachSemanticEngine(
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "translation_drag_targets", "inspection_scroll",
+          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -996,8 +987,7 @@ export async function attachSemanticEngine(
              message.type === "native_event" ||
              message.type === "browser_pointer_input" ||
              message.type === "inspection_scroll" ||
-             message.type === "pointer_fill_selection" ||
-             message.type === "translation_drag_targets")) {
+             message.type === "pointer_fill_selection")) {
           throw new Error("native input requires an active Python source continuation segment");
         }
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&

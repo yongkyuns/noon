@@ -2318,33 +2318,6 @@ test("selection configuration rejection does not drain or replace the current wa
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("translation drag target declarations forward only stable semantic handles", { timeout: 5000 }, async () => {
-  const f = fixture("transferable", null, null, { initiallyPaused: true });
-  let endpoint;
-  const declarations = [];
-  f.player.setTranslationDragTargetsJson = json => { declarations.push(JSON.parse(json)); };
-  try {
-    const ready = next(f.control.port2);
-    endpoint = await f.attach();
-    await ready;
-
-    const accepted = await request(f.control.port2, "translation_drag_targets", 31, {
-      targets: [{ slot: 4, generation: 2 }, { slot: 8, generation: 5 }],
-    });
-    assert.equal(accepted.type, "translation_drag_targets");
-    assert.deepEqual(declarations, [{ targets: [
-      { slot: 4, generation: 2 }, { slot: 8, generation: 5 },
-    ] }]);
-
-    const malformed = await request(f.control.port2, "translation_drag_targets", 32, {
-      targets: [{ slot: -1, generation: 0 }],
-    });
-    assert.equal(malformed.type, "error");
-    assert.match(malformed.message, /semantic slot\/generation pairs/);
-    assert.equal(declarations.length, 1, "invalid transport cannot reach Rust");
-  } finally { endpoint?.stop(); f.close(); }
-});
-
 for (const cancelFails of [false, true]) {
   test(`worker receipt invalidations retain the acknowledged frame behind backpressure${cancelFails ? " and stop on cancellation failure" : ""}`, async () => {
     const f = fixture();
