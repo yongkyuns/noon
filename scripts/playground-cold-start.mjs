@@ -182,11 +182,19 @@ try {
         if (preloadEditRaceEnabled) {
           preloadEditRace = await runPreloadEditRace(page);
         }
-        await page.waitForFunction(
-          () => document.querySelector("#status")?.dataset.liveAuthoring === "ready",
-          null,
-          { timeout: 240_000 },
-        );
+        try {
+          await page.waitForFunction(
+            () => document.querySelector("#status")?.dataset.liveAuthoring === "ready",
+            null,
+            { timeout: 240_000 },
+          );
+        } catch (error) {
+          const startupState = await page.locator("#status").evaluate((node) => ({
+            text: node.textContent,
+            dataset: { ...node.dataset },
+          }));
+          throw new Error(`live authoring did not become ready: ${JSON.stringify({ startupState, failures })}`, { cause: error });
+        }
         await page.waitForFunction(
           () => {
             const draws = Number(document.querySelector("#metric-draws")?.value);
@@ -292,6 +300,29 @@ try {
       const editCompleted = monotonicNow();
       const warmPresentation = await waitForSessionFirstPresented(page, previousPresentationSession);
       const warmMetrics = warmPresentation.response;
+      const warmPhases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
+      const completedRunGeneration = Number(await page.locator("#patch-status").getAttribute("data-run-generation"));
+      assert.equal(warmPhases?.exampleId, example.id, "warm phase timings must belong to the selected example");
+      assert.ok(completedRunGeneration > beforeGeneration,
+        "warm source edit must complete a newer run generation");
+      assert.equal(warmPhases?.runGeneration, completedRunGeneration,
+        "warm phase timings must belong to the exact accepted run generation");
+      assert.ok(Number.isFinite(warmPhases.sourceRunStartedAtMs) &&
+        Number.isFinite(warmPhases.sourceRunCompletedAtMs),
+      "warm source run timing boundaries must be recorded");
+      assert.ok(warmPhases.sourceRunStartedAtMs <= warmPhases.sourceRunCompletedAtMs,
+        "warm source run boundaries must be ordered");
+      assert.ok(Array.isArray(warmPhases.reconciliations) && warmPhases.reconciliations.length > 0,
+        "warm semantic reconciliation calls must be recorded");
+      for (const reconciliation of warmPhases.reconciliations) {
+        assert.ok(["continuation", "continuation-replay", "final"].includes(reconciliation.phase) &&
+          Number.isFinite(reconciliation.startedAtMs) &&
+          Number.isFinite(reconciliation.completedAtMs) &&
+          reconciliation.startedAtMs <= reconciliation.completedAtMs,
+        "warm semantic reconciliation boundaries must be valid");
+      }
+      assert.equal(typeof warmPhases.semanticContextId, "string",
+        "warm phase timings must retain semantic execution identity");
       assert.equal(workerHandles.length, workersBeforeEdit, `warm source edit must reuse durable workers: ${JSON.stringify(workers)}`);
       assert.ok(warmMetrics?.metrics?.objectCount > 0, "warm rerun must retain rendered content");
       assert.ok(warmMetrics.metrics.presentedFrames > 0, "warm rerun must present a frame");
@@ -300,6 +331,23 @@ try {
       if (failures.length > 0) throw new Error(failures.join("\n"));
       const warmRerun = {
         editToCompletedRunMs: editCompleted - editStarted,
+        phases: {
+          identity: {
+            exampleId: warmPhases.exampleId,
+            selectionGeneration: warmPhases.selectionGeneration,
+            runGeneration: warmPhases.runGeneration,
+            semanticContextId: warmPhases.semanticContextId,
+            presentedSession: warmPresentation.metrics.presentedSession,
+          },
+          sourceRunRoundTripMs: warmPhases.sourceRunCompletedAtMs -
+            warmPhases.sourceRunStartedAtMs,
+          semanticReconcileCalls: warmPhases.reconciliations.map((call) => ({
+            phase: call.phase,
+            roundTripMs: call.completedAtMs - call.startedAtMs,
+            overlapsSourceRun: call.startedAtMs < warmPhases.sourceRunCompletedAtMs,
+          })),
+          meaning: "page-observed client.run and player.reconcileSemanticExecution round trips include worker transport; continuation reconciliation can occur inside client.run, so the intervals are not additive",
+        },
         firstPresentedAfterEdit: {
           measured: true,
           identity: "retained transport session from the reconciled semantic execution publication",

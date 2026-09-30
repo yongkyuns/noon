@@ -26,7 +26,7 @@ test("playground attaches an early Python continuation then promotes the same se
   assert.match(adoption, /contextId: semanticExecution\.contextId/);
   assert.match(adoption, /callbackSessionId: semanticExecution\.callbackSessionId \?\? null/);
   assert.match(adoption, /continuationGeneration: null/);
-  assert.match(adoption, /await player\.reconcileSemanticExecution\(replayExecution,[\s\S]*?loopDurationSeconds,/);
+  assert.match(adoption, /await measureReconciliation\("continuation-replay", \(\) => player\.reconcileSemanticExecution\(replayExecution,[\s\S]*?loopDurationSeconds,/);
   assert.doesNotMatch(adoption, /await player\.state\(\)/);
 });
 
