@@ -64,6 +64,15 @@ fn callback_json_regions_preserve_native_host_order_and_publish_once() {
             {"kind":"stroke_width", "object":first["objects"][0]["node"], "stroke_width":3.0}
         ]
     }).to_string();
+    let premature_content = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"],
+            "geometry": {"kind": "circle", "radius": 2.0}}
+    });
+    assert!(player
+        .commit_callback_phase_json(&premature_content.to_string())
+        .is_err());
+    assert_eq!(player.session.publication_context(), publication);
     let second_json = player
         .commit_callback_phase_json(&first_batch)
         .unwrap()
@@ -93,6 +102,143 @@ fn callback_json_regions_preserve_native_host_order_and_publish_once() {
     assert_eq!(
         player.session.publication_context().frame_epoch(),
         publication.frame_epoch().checked_next().unwrap()
+    );
+}
+
+#[test]
+fn terminal_callback_content_replaces_one_effective_row_across_frames() {
+    let mut scene = noon::Scene::new();
+    let source = scene.circle(1.0).unwrap();
+    let unrelated = scene.circle(0.5).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&unrelated).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        2.0,
+        77,
+    )
+    .unwrap();
+    let before = player.session.publication_context();
+    let first: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let content_batch = |phase: &serde_json::Value, radius: f32| {
+        serde_json::json!({
+            "token": phase["token"], "region": phase["region"],
+            "writes": [{"kind": "translation", "object": phase["objects"][0]["node"],
+                "translation": {"x": 3.0, "y": 0.0}}],
+            "content": {"object": phase["objects"][0]["node"],
+                "geometry": {"kind": "circle", "radius": radius}}
+        })
+        .to_string()
+    };
+    let malformed = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"],
+            "geometry": {"kind": "circle", "radius": "invalid"}}
+    });
+    assert!(player
+        .commit_callback_phase_json(&malformed.to_string())
+        .is_err());
+    assert_eq!(player.session.publication_context(), before);
+    assert!(player.session.pending_callback_token().is_some());
+    assert!(player
+        .commit_callback_phase_json(&content_batch(&first, 2.0))
+        .unwrap()
+        .is_none());
+    let lease = player
+        .session
+        .effective_content_lease(source.node_id())
+        .unwrap();
+    assert_eq!(
+        player.session.publication_context().frame_epoch(),
+        before.frame_epoch().checked_next().unwrap()
+    );
+    assert_eq!(
+        player.session.publication_context().scene_revision(),
+        before.scene_revision()
+    );
+    assert_eq!(
+        player.session.frame().objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(2.0))
+    );
+    assert_eq!(
+        player.session.frame().objects[1].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(0.5))
+    );
+
+    let next: serde_json::Value =
+        serde_json::from_str(&player.advance_to_callback_phase(1.0).unwrap().unwrap()).unwrap();
+    assert!(player
+        .commit_callback_phase_json(&content_batch(&next, 3.0))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.effective_content_lease(source.node_id()),
+        Some(lease)
+    );
+    assert_eq!(
+        player.session.frame().objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(3.0))
+    );
+    assert_eq!(player.session.frame().time, 1.0);
+}
+
+#[test]
+fn callback_content_does_not_adopt_another_producers_lease() {
+    let mut scene = noon::Scene::new();
+    let source = scene.circle(1.0).unwrap();
+    scene.add(&source).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let replacement = session
+        .prepare_effective_content_replacement(
+            source.node_id(),
+            ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            None,
+            None,
+        )
+        .unwrap();
+    let foreign = session
+        .commit_effective_content_replacement(replacement)
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        78,
+    )
+    .unwrap();
+    let before = player.session.publication_context();
+    let phase: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let batch = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": {"object": phase["objects"][0]["node"],
+            "geometry": {"kind": "circle", "radius": 3.0}}
+    });
+    assert!(player
+        .commit_callback_phase_json(&batch.to_string())
+        .is_err());
+    assert_eq!(player.session.publication_context(), before);
+    assert_eq!(
+        player.session.effective_content_lease(source.node_id()),
+        Some(foreign)
+    );
+    assert_eq!(
+        player.session.frame().objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(2.0))
     );
 }
 

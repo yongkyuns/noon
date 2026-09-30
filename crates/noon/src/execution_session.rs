@@ -789,6 +789,9 @@ pub struct ExecutionSession {
     callback_schedule: CallbackSchedule,
     next_callback_sequence: Option<u64>,
     pending_callback: Option<PendingCallbackPhase>,
+    /// Exact runtime leases acquired by callback-produced effective content.
+    /// An unrelated producer cannot be adopted by a later callback result.
+    callback_content_leases: BTreeMap<SemanticNodeId, noon_runtime::EffectiveContentLease>,
     callback_termination: Option<CallbackTermination>,
     next_segment_sequence: Option<u64>,
     pending_segment_completion: Option<PendingSegmentCompletion>,
@@ -802,6 +805,17 @@ pub struct ExecutionSession {
 impl Clone for ExecutionSession {
     fn clone(&self) -> Self {
         let runtime = self.runtime.clone();
+        let callback_content_leases = self
+            .callback_content_leases
+            .iter()
+            .filter_map(|(&target, &known)| {
+                let object = self.execution_index.execution_object_id(target)?;
+                if self.runtime.effective_content_lease(object) != Some(known) {
+                    return None;
+                }
+                Some((target, runtime.effective_content_lease(object)?))
+            })
+            .collect();
         let callback_termination = self.callback_termination.or_else(|| {
             self.pending_callback
                 .as_ref()
@@ -833,6 +847,7 @@ impl Clone for ExecutionSession {
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),
             pending_callback: None,
+            callback_content_leases,
             callback_termination,
             next_segment_sequence: self.next_segment_sequence,
             pending_segment_completion: None,
@@ -1007,6 +1022,7 @@ impl ExecutionSession {
             callback_schedule,
             next_callback_sequence: Some(0),
             pending_callback: None,
+            callback_content_leases: BTreeMap::new(),
             callback_termination: None,
             next_segment_sequence: Some(0),
             pending_segment_completion: None,

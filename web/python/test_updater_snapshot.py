@@ -68,6 +68,26 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             explicit_style.to_wire()["stroke_width_mode"], "screen_space"
         )
 
+    def test_effective_circle_is_one_terminal_content_result(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "final updater"):
+                mobject.set_effective_circle(2.5)
+            self.assertNotIn("content", context.effective_batch())
+            context._last_invocation = True
+            self.assertIs(mobject.set_effective_circle(2.5), mobject)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "geometry": {"kind": "circle", "radius": 2.5},
+            })
+            with self.assertRaisesRegex(NotImplementedError, "bounds are unavailable"):
+                mobject.get_center()
+            with self.assertRaisesRegex(NotImplementedError, "one effective content"):
+                mobject.set_effective_circle(3.0)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
 

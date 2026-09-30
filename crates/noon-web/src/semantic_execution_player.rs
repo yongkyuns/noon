@@ -34,8 +34,8 @@ use noon_core::{
     NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction, Vec2,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
-    Transform2D,
+    ExecutionRevision, FrameEpoch, GeometryRef, ObjectContentRef, PublicationContext, Rect,
+    SceneRevision, SemanticNodeId, Style, Transform2D,
 };
 use serde::{Deserialize, Serialize};
 
@@ -3072,6 +3072,28 @@ struct CallbackBatchWire {
     #[serde(default)]
     region: u32,
     writes: Vec<CallbackWriteWire>,
+    #[serde(default)]
+    content: Option<CallbackContentWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackContentWire {
+    object: CallbackNodeWire,
+    geometry: CallbackAnalyticGeometryWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackAnalyticGeometryWire {
+    Circle { radius: f32 },
+}
+
+impl CallbackAnalyticGeometryWire {
+    fn into_geometry(self) -> GeometryRef {
+        match self {
+            Self::Circle { radius } => GeometryRef::circle(radius),
+        }
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -3140,7 +3162,15 @@ fn validate_callback_style(style: Style) -> Result<(), String> {
     Ok(())
 }
 
-fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
+fn decode_callback_batch(
+    json: &str,
+) -> Result<
+    (
+        EffectivePropertyBatch,
+        Option<(SemanticNodeId, ObjectContentRef)>,
+    ),
+    String,
+> {
     let wire: CallbackBatchWire = serde_json::from_str(json)
         .map_err(|error| format!("invalid callback batch JSON: {error}"))?;
     let token = CallbackPhaseToken::try_from(wire.token)?;
@@ -3206,7 +3236,16 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(EffectivePropertyBatch::new(token, writes).with_region(wire.region))
+    let content = wire.content.map(|content| {
+        (
+            content.object.into(),
+            ObjectContentRef::Geometry(content.geometry.into_geometry()),
+        )
+    });
+    Ok((
+        EffectivePropertyBatch::new(token, writes).with_region(wire.region),
+        content,
+    ))
 }
 
 // Keep the shared callback failures typed until the actual JS boundary. The
@@ -3286,7 +3325,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         batch_json: &str,
     ) -> Result<Option<String>, AuthoringFailure> {
-        let batch = decode_callback_batch(batch_json)?;
+        let (batch, content) = decode_callback_batch(batch_json)?;
         let token = batch.token();
         let time = match self.pending_callback_phase {
             Some((pending, time)) if pending == token => time,
@@ -3299,6 +3338,15 @@ impl SemanticExecutionPlayer {
             }
             None => return Err(noon::ExecutionSessionCallbackError::NoPendingPhase.into()),
         };
+        if content.is_some() {
+            #[cfg(any(target_arch = "wasm32", test))]
+            if self.callback_membership_transaction.is_some() {
+                return Err("callback effective content and authored membership cannot share this publication yet".into());
+            }
+            self.session
+                .require_terminal_callback_content_region(token, batch.region())
+                .map_err(AuthoringFailure::from)?;
+        }
         let advance = match self.session.submit_required_callback_region(batch) {
             Ok(advance) => advance,
             Err(error) => {
@@ -3326,6 +3374,7 @@ impl SemanticExecutionPlayer {
                 invocations,
                 overlay,
             } => {
+                debug_assert!(content.is_none(), "content region was proven terminal");
                 return self
                     .retain_callback_phase(invocations, overlay)
                     .map(Some)
@@ -3420,15 +3469,27 @@ impl SemanticExecutionPlayer {
                         Some(CommittedCallbackProvisionals { token, nodes });
                 }
             } else {
-                self.session
-                    .commit_required_callback_phase(batch)
-                    .map_err(AuthoringFailure::from)?;
+                if let Some((target, content)) = content {
+                    self.session
+                        .commit_required_callback_phase_with_owned_content(batch, target, content)
+                        .map_err(AuthoringFailure::from)?;
+                } else {
+                    self.session
+                        .commit_required_callback_phase(batch)
+                        .map_err(AuthoringFailure::from)?;
+                }
             }
         }
         #[cfg(not(any(target_arch = "wasm32", test)))]
-        self.session
-            .commit_required_callback_phase(batch)
-            .map_err(AuthoringFailure::from)?;
+        if let Some((target, content)) = content {
+            self.session
+                .commit_required_callback_phase_with_owned_content(batch, target, content)
+                .map_err(AuthoringFailure::from)?;
+        } else {
+            self.session
+                .commit_required_callback_phase(batch)
+                .map_err(AuthoringFailure::from)?;
+        }
         // The callback phase time is session-owned. Re-anchoring presentation
         // only after its commit avoids a host-side progression cursor.
         self.clock.seek(time).map_err(|error| error.to_string())?;

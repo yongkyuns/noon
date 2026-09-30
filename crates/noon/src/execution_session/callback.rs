@@ -779,6 +779,7 @@ pub enum ExecutionSessionCallbackError {
         actual: u32,
     },
     IncompleteRegion,
+    ContentRequiresFinalRegion,
     SequenceExhausted,
     NonMonotonicAdvance {
         current: f64,
@@ -823,6 +824,8 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
             Self::IncompleteRegion => {
                 formatter.write_str("ordered callback regions must finish before publication")
             }
+            Self::ContentRequiresFinalRegion => formatter
+                .write_str("effective content replacement requires the final host callback region"),
             Self::SequenceExhausted => formatter.write_str("callback sequence space exhausted"),
             Self::NonMonotonicAdvance { current, requested } => write!(
                 formatter,
@@ -916,6 +919,39 @@ impl PendingCallbackPhase {
 }
 
 impl ExecutionSession {
+    /// This first content producer is terminal within the ordered callback
+    /// sequence. Earlier regions need a content-aware read overlay before they
+    /// can expose new geometry to later host callbacks.
+    pub fn require_terminal_callback_content_region(
+        &self,
+        token: CallbackPhaseToken,
+        region: u32,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .ok_or(ExecutionSessionCallbackError::NoPendingPhase)?;
+        if token != pending.token {
+            return Err(ExecutionSessionCallbackError::StaleToken {
+                expected: pending.token,
+                actual: token,
+            });
+        }
+        if region != pending.region {
+            return Err(ExecutionSessionCallbackError::StaleRegion {
+                expected: pending.region,
+                actual: region,
+            });
+        }
+        if pending.ordered_updates[pending.next_update..]
+            .iter()
+            .any(|update| matches!(update, SemanticOrderedUpdater::Host(_)))
+        {
+            return Err(ExecutionSessionCallbackError::ContentRequiresFinalRegion);
+        }
+        Ok(())
+    }
+
     /// Read through the exact unpublished evaluation pinned by `token`.
     /// This does not advance, commit, or mutate callback/runtime state.
     /// Read unique family leaves through the existing pinned object read path.
@@ -1641,6 +1677,35 @@ impl ExecutionSession {
         Ok(lease)
     }
 
+    /// The callback session owns this producer lease across frames. A foreign
+    /// effective-content owner remains a conflict rather than being adopted.
+    pub fn commit_required_callback_phase_with_owned_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        content: ObjectContentRef,
+    ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
+        let known = self.callback_content_leases.get(&target).copied();
+        let current = self.runtime.effective_content_lease(object);
+        let lease = match (known, current) {
+            (None, None) | (Some(_), None) => None,
+            (Some(known), Some(current)) if known == current => Some(current),
+            _ => {
+                return Err(ExecutionSessionCallbackError::Content(
+                    EffectiveContentError::DriverConflict(object),
+                ));
+            }
+        };
+        let lease =
+            self.commit_required_callback_phase_with_content(batch, target, content, None, lease)?;
+        self.callback_content_leases.insert(target, lease);
+        Ok(lease)
+    }
+
     fn prepare_callback_writes(
         &self,
         batch: EffectivePropertyBatch,
@@ -1733,6 +1798,7 @@ impl ExecutionSession {
                 self.callback_schedule
                     .set_target_live(target, live, self.frame().time);
                 if !live {
+                    self.callback_content_leases.remove(&target);
                     if let Some(receipt) = self.last_callback_receipt.as_mut() {
                         receipt.domains.remove(&target);
                     }
