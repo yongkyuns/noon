@@ -394,6 +394,24 @@ fn frame_object_conservative_bounds_with_resources(
 ) -> Option<Rect> {
     let object = frame.objects.get(object_index)?;
     let geometry = frame.render_geometry(object_index);
+    effective_object_conservative_bounds_with_resources(
+        geometry,
+        object
+            .text_bounds
+            .or_else(|| object.content.image().map(|image| image.local_bounds())),
+        frame.render_transform(object_index),
+        object.style,
+        resources,
+    )
+}
+
+pub(crate) fn effective_object_conservative_bounds_with_resources(
+    geometry: Option<&GeometryRef>,
+    text_bounds: Option<Rect>,
+    render_transform: noon_core::Transform2D,
+    style: noon_core::Style,
+    resources: &impl GeometryResourceLookup,
+) -> Option<Rect> {
     let external_bounds = match geometry {
         Some(GeometryRef::External(id)) => {
             let handle = resources.current_handle(*id)?;
@@ -405,11 +423,9 @@ fn frame_object_conservative_bounds_with_resources(
     };
     effective_object_conservative_bounds_with_external(
         geometry,
-        object
-            .text_bounds
-            .or_else(|| object.content.image().map(|image| image.local_bounds())),
-        frame.render_transform(object_index),
-        object.style,
+        text_bounds,
+        render_transform,
+        style,
         external_bounds,
     )
 }
