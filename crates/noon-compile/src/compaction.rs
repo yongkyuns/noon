@@ -1,4 +1,4 @@
-//! Explicit reclamation of retired compiled-object rows and static resource versions.
+//! Explicit reclamation of retired compiled-object rows and resource versions.
 //!
 //! This is a maintenance barrier, never part of an ordinary execution patch. It
 //! deliberately relocates live execution rows, so its caller must rebuild every
@@ -6,9 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon_core::{FontResourceKey, GeometryRef, ObjectContentRef};
+use noon_core::{FontResourceKey, GeometryRef, ObjectContentRef, TrackValues};
 
-use crate::{CompiledChannelKey, CompiledScene, CompiledTrack, CompiledTrackLocator};
+use crate::{
+    CompiledChannelKey, CompiledScene, CompiledTrack, CompiledTrackLocator, TransformGeometryPlan,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompiledSceneCompactionError {
@@ -41,8 +43,8 @@ pub struct CompiledSceneCompactionStats {
 }
 
 impl CompiledScene {
-    /// Pack live execution rows and release retired object-row history. Static
-    /// plans also drop compiled resource versions unreachable from live objects.
+    /// Pack live execution rows and release retired object-row history. Plans
+    /// without untraversed derived owners also drop unreachable resource versions.
     ///
     /// This intentionally visits retained slots and live tracks. Runtime owners
     /// must use their explicit maintenance barrier to renew execution/frame
@@ -65,8 +67,7 @@ impl CompiledScene {
             return Ok(CompiledSceneCompactionStats {
                 object_slots_before: slots_before,
                 object_slots_after: slots_before,
-                resource_entries_reclaimed: self
-                    .prune_unreferenced_static_resources(retained_contents),
+                resource_entries_reclaimed: self.prune_unreferenced_resources(retained_contents),
                 ..CompiledSceneCompactionStats::default()
             });
         }
@@ -139,8 +140,7 @@ impl CompiledScene {
         self.family_ranks = family_ranks;
         self.painter_order = painter_order;
         self.painter_ranks = painter_ranks;
-        let resource_entries_reclaimed =
-            self.prune_unreferenced_static_resources(retained_contents);
+        let resource_entries_reclaimed = self.prune_unreferenced_resources(retained_contents);
 
         Ok(CompiledSceneCompactionStats {
             object_slots_before: slots_before,
@@ -151,16 +151,12 @@ impl CompiledScene {
         })
     }
 
-    /// Reclaim when every compiled resource owner is a live static object or
-    /// an explicit effective-content root. Tracks, family plans, graph
-    /// derivation and numeric text can retain their own references; those plans
-    /// keep the complete closure until this barrier can traverse them safely.
-    fn prune_unreferenced_static_resources(
-        &mut self,
-        retained_contents: &[ObjectContentRef],
-    ) -> usize {
-        if self.track_count != 0
-            || !self.family_animation_plans.is_empty()
+    /// Reclaim when every compiled resource owner is a live object, a track, or
+    /// an explicit effective-content root. Family plans, graph derivation and
+    /// numeric text retain their complete closure until their dependencies can
+    /// be traversed safely at this barrier.
+    fn prune_unreferenced_resources(&mut self, retained_contents: &[ObjectContentRef]) -> usize {
+        if !self.family_animation_plans.is_empty()
             || !self.family_animations.is_empty()
             || !self.graph_edge_dependencies.is_empty()
             || !self.numeric_text_drivers.is_empty()
@@ -242,6 +238,38 @@ impl CompiledScene {
             }
         }
 
+        // Ordinary property tracks carry no resource handles, but transform
+        // endpoints and prepared morphs may name external geometry. Resolve
+        // those IDs before pruning, just like live object content above.
+        for track in self.tracks.values().flatten() {
+            let geometry_refs: &[&GeometryRef] = match &track.values {
+                TrackValues::Object { from, to } => &[&from.geometry, &to.geometry],
+                TrackValues::PreparedMorph { geometry, .. } => &[geometry],
+                _ => &[],
+            };
+            for geometry in geometry_refs.iter().copied().chain(
+                track
+                    .transform_geometry_plan
+                    .as_ref()
+                    .and_then(|plan| match plan {
+                        TransformGeometryPlan::PathPair { geometry, .. } => Some(geometry.as_ref()),
+                        _ => None,
+                    }),
+            ) {
+                let GeometryRef::External(id) = geometry else {
+                    continue;
+                };
+                let Some(handle) = self.resources.geometry_handles.get(id).copied() else {
+                    return 0;
+                };
+                if !self.resources.geometries.contains_key(&handle) {
+                    return 0;
+                }
+                geometry_ids.insert(*id);
+                geometries.insert(handle);
+            }
+        }
+
         let before = self.resources.images.len()
             + self.resources.texts.len()
             + self.resources.fonts.len()
@@ -283,7 +311,7 @@ mod tests {
         RasterImageResourceId, RateFunction, Rect, SemanticImageContent, Style,
         TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceHandle,
         TextResourceId, TextSourceKind, TextVectorItem, TextVectorStyle, TrackDefinition, TrackId,
-        TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+        TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
     };
 
     use crate::{CompiledObject, CompiledScene};
@@ -465,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn authored_track_keeps_the_resource_closure_until_its_dependencies_are_traversed() {
+    fn ordinary_property_track_does_not_pin_unrelated_resource_history() {
         let mut compiled = CompiledScene::compile_objects(
             vec![circle(1)],
             &[TrackDefinition {
@@ -491,10 +519,47 @@ mod tests {
             .resources
             .geometry_handles
             .insert(handle.id, handle);
-        let before = compiled.resources.clone();
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.resource_entries_reclaimed, 1);
+        assert!(compiled.resources.geometries.is_empty());
+        assert!(compiled.resources.geometry_handles.is_empty());
+    }
+
+    #[test]
+    fn transform_track_keeps_only_its_external_geometry_dependency() {
+        let mut source = GeometryResourceArena::new();
+        let kept = source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let obsolete = source.insert_path(VectorPath::new().move_to(Vec2::ONE));
+        let endpoint = TransformTrackEndpoint::new(GeometryRef::External(kept.id));
+        let mut compiled = CompiledScene::compile_objects(
+            vec![circle(1)],
+            &[TrackDefinition {
+                id: TrackId::new(1),
+                object: ObjectId::new(1),
+                property: Property::Transform,
+                values: TrackValues::Object {
+                    from: endpoint.clone(),
+                    to: endpoint,
+                },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .unwrap();
+        for handle in [kept, obsolete] {
+            compiled
+                .resources
+                .geometries
+                .insert(handle, source.get(handle).unwrap().clone());
+            compiled
+                .resources
+                .geometry_handles
+                .insert(handle.id, handle);
+        }
 
         let stats = compiled.compact_retired_object_slots().unwrap();
-        assert_eq!(stats.resource_entries_reclaimed, 0);
-        assert_eq!(compiled.resources, before);
+        assert_eq!(stats.resource_entries_reclaimed, 1);
+        assert!(compiled.resources.geometries.contains_key(&kept));
+        assert!(!compiled.resources.geometries.contains_key(&obsolete));
     }
 }
