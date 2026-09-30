@@ -508,10 +508,8 @@ async def check_delayed_callback_completion_rejects_stale_receipt():
         before_stale_result = fixture.state()
         release.set()
         stale_error = await task
-        assert isinstance(stale_error, NoonError)
-        # The player currently reports a stale pending-phase batch through its
-        # unclassified string error path, which the shared boundary preserves.
-        assert (stale_error.category, stale_error.code) == ("unclassified", "unclassified")
+        assert isinstance(stale_error, NoonStalePublicationError)
+        assert (stale_error.category, stale_error.code) == ("stale_publication", "callback.stale_token")
         assert fixture.state() == before_stale_result
         fixture.finish()
     finally:

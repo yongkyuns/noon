@@ -3288,10 +3288,17 @@ impl SemanticExecutionPlayer {
     ) -> Result<Option<String>, AuthoringFailure> {
         let batch = decode_callback_batch(batch_json)?;
         let token = batch.token();
-        let (_, time) = self
-            .pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback batch does not match the player pending phase")?;
+        let time = match self.pending_callback_phase {
+            Some((pending, time)) if pending == token => time,
+            Some((pending, _)) => {
+                return Err(noon::ExecutionSessionCallbackError::StaleToken {
+                    expected: pending,
+                    actual: token,
+                }
+                .into());
+            }
+            None => return Err(noon::ExecutionSessionCallbackError::NoPendingPhase.into()),
+        };
         let advance = match self.session.submit_required_callback_region(batch) {
             Ok(advance) => advance,
             Err(error) => {
