@@ -263,6 +263,59 @@ test("suspended callback reads stay token-pinned and cannot settle after cancell
   assert.match(source, /semantic continuation callback cannot complete while a callback read is pending/);
 });
 
+test("a late sparse read cannot cross a failed callback phase into its successor", async () => {
+  const context = {};
+  const continuation = {
+    context,
+    terminal: false,
+    pending: null,
+    callbackRead: null,
+    callbackRequest: null,
+  };
+  const api = new Function("activeAuthoringRun", "isRecord", `
+    ${source.slice(source.indexOf("function continuationEvent("), source.indexOf("function isContinuationControl("))}
+    return { readContinuationCallback, failContinuationCallback };
+  `)({ continuation }, (value) => typeof value === "object" && value !== null && !Array.isArray(value));
+  let finishOldRead;
+  let readCalls = 0;
+  continuation.callbackRead = (token) => {
+    readCalls += 1;
+    if (token === "old") return new Promise((resolve) => { finishOldRead = resolve; });
+    return Promise.resolve(`value:${token}`);
+  };
+  const oldCallbackFailure = new Promise((_, reject) => { continuation.callbackRequest = {
+    phaseTokenJson: "old",
+    read: null,
+    reject,
+  }; });
+
+  const oldRead = api.readContinuationCallback(context, "old", JSON.stringify({
+    request_id: 1, kind: "object", node: { slot: 7, generation: 2 },
+  }));
+  await Promise.resolve();
+  assert.equal(readCalls, 1, "the old token must start exactly one suspended read");
+  void api.failContinuationCallback(context, "old", "phase failed");
+  await assert.rejects(oldRead, /phase failed/);
+  await assert.rejects(oldCallbackFailure, /phase failed/);
+
+  continuation.callbackRequest = {
+    phaseTokenJson: "next",
+    read: null,
+    reject() {},
+  };
+  const nextRead = api.readContinuationCallback(context, "next", JSON.stringify({
+    request_id: 1, kind: "object", node: { slot: 7, generation: 2 },
+  }));
+  assert.equal(await nextRead, "value:next");
+
+  finishOldRead("obsolete-value");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(continuation.callbackRequest.phaseTokenJson, "next");
+  assert.equal(continuation.callbackRequest.read, null);
+  assert.equal(readCalls, 2, "a stale read result must not replay or replace the successor read");
+});
+
 test("sparse callback proof keeps scalar and inactive-object reads in its updater", async () => {
   const example = await readFile(
     new URL("./python/examples/ordinary_callback_sparse_reads.py", import.meta.url),
