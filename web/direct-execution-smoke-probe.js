@@ -198,6 +198,8 @@ async function directNativeDragProof(expectedBackend) {
 }
 
 async function directRetainedLocalityProof(expectedBackend) {
+  const sustainedTicks = 64;
+  const tickIntervalMs = 15;
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectRetainedLocalityRenderer(canvas);
   try {
@@ -207,14 +209,31 @@ async function directRetainedLocalityProof(expectedBackend) {
     const objectCount = renderer.objectCount();
     // Advance normal playback; inspection seek intentionally rebuilds its frame.
     renderer.directWakeDirectiveJson(0);
-    renderer.advanceDirectRealtime(500);
-    await presentDirectFrame(renderer);
-    const updateBytesUploaded = renderer.lastBytesUploaded();
+    const tickUploads = [];
+    let previousTime = renderer.time();
+    for (let tick = 1; tick <= sustainedTicks; tick += 1) {
+      const wallTimeMs = tick * tickIntervalMs;
+      if (!renderer.advanceDirectRealtime(wallTimeMs)) {
+        throw new Error(`100k locality tick ${tick} did not publish a changed frame`);
+      }
+      await presentDirectFrame(renderer);
+      const time = renderer.time();
+      const bytesUploaded = renderer.lastBytesUploaded();
+      if (!(time > previousTime)) {
+        throw new Error(`100k locality target stopped changing at tick ${tick}: ${time} <= ${previousTime}`);
+      }
+      if (bytesUploaded <= 0 || bytesUploaded > 256) {
+        throw new Error(`100k locality tick ${tick} uploaded non-local bytes: ${bytesUploaded}`);
+      }
+      tickUploads.push(bytesUploaded);
+      previousTime = time;
+    }
     const metrics = {
       backend: renderer.rendererBackend(),
       objectCount,
       initialBytesUploaded,
-      updateBytesUploaded,
+      sustainedTicks,
+      tickUploads,
       drawCalls: renderer.lastDrawCalls(),
     };
     if (metrics.backend !== expectedBackend) {
@@ -226,10 +245,10 @@ async function directRetainedLocalityProof(expectedBackend) {
     if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
       throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
     }
-    // Bound a local upload independently of how much of the initial scene the
-    // renderer elects to install. Native coverage pins the exact instance size.
-    if (metrics.updateBytesUploaded <= 0 || metrics.updateBytesUploaded > 256) {
-      throw new Error(`single-target update uploaded non-local bytes: ${JSON.stringify(metrics)}`);
+    // Bound every local upload independently of how much of the initial scene
+    // the renderer elects to install. Native coverage pins the exact instance size.
+    if (metrics.tickUploads.length !== sustainedTicks) {
+      throw new Error(`100k locality trace completed ${metrics.tickUploads.length}/${sustainedTicks} ticks`);
     }
     return metrics;
   } finally {
