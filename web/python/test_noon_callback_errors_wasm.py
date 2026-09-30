@@ -403,11 +403,13 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
             (fixture.player.interruptCallbackPhaseJson, ["{broken json"]),
             (fixture.player.commitCallbackPhaseJson, ["{broken json"]),
             (fixture.player.requiredCallbackReadJson, ["{}", "{}"]),
-            (fixture.player.commitCallbackPhaseJson, [json.dumps({"token": foreign.phase["token"], "writes": []})]),
             (fixture.player.requiredCallbackReadJson, [json.dumps(foreign.phase["token"]), "{}"]),
         ):
             with self.subTest(function=str(function)):
                 self.rejection(fixture, function, args, NoonError, "unclassified", "unclassified")
+        self.rejection(fixture, fixture.player.commitCallbackPhaseJson,
+                       [json.dumps({"token": foreign.phase["token"], "writes": []})],
+                       NoonStalePublicationError, "stale_publication", "callback.stale_token")
         fixture.finish()
 
 
