@@ -963,6 +963,8 @@ Semantic resource retention follows durable object references, including detache
 
 Long-running interactive/hot-reload churn must have a bounded reclamation/compaction strategy. Stable/tombstoned execution identities and retained caches are allowed, but memory usage must not grow indefinitely with historical mutations when the corresponding semantic/execution/resource state is no longer live or deliberately cached. Explicit maintenance compaction may use the deliberate maintenance-barrier exception defined above.
 
+The current explicit execution maintenance barrier prunes superseded compiled resources in static plans even when no object slots need relocation. Resource-only pruning advances the execution/frame publication and requests one presentation refresh without rebuilding retained rows, so older prepared work and displayed input context cannot silently cross the barrier. It retains the full closure for plans with tracks, family/Graph derivation or numeric-text owners until those dependencies can be traversed safely, and it does not reclaim an active effective-content lease or replay projection. This is a partial reclamation path; general long-churn resource retirement still needs qualification.
+
 Text, Graph, 3D and interaction are features of the same scene/runtime architecture, not separate scene engines.
 
 ---

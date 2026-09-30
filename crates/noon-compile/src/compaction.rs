@@ -1,10 +1,12 @@
-//! Explicit reclamation of retired compiled-object rows.
+//! Explicit reclamation of retired compiled-object rows and static resource versions.
 //!
 //! This is a maintenance barrier, never part of an ordinary execution patch. It
 //! deliberately relocates live execution rows, so its caller must rebuild every
 //! row-indexed derived consumer under a new execution revision.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use noon_core::{FontResourceKey, GeometryRef, ObjectContentRef};
 
 use crate::{CompiledChannelKey, CompiledScene, CompiledTrack, CompiledTrackLocator};
 
@@ -35,10 +37,12 @@ pub struct CompiledSceneCompactionStats {
     pub object_slots_after: usize,
     pub object_slots_reclaimed: usize,
     pub track_rows_reindexed: usize,
+    pub resource_entries_reclaimed: usize,
 }
 
 impl CompiledScene {
-    /// Pack live execution rows and release all retired object-row history.
+    /// Pack live execution rows and release retired object-row history. Static
+    /// plans also drop compiled resource versions unreachable from live objects.
     ///
     /// This intentionally visits retained slots and live tracks. Runtime owners
     /// must use their explicit maintenance barrier to renew execution/frame
@@ -51,6 +55,7 @@ impl CompiledScene {
             return Ok(CompiledSceneCompactionStats {
                 object_slots_before: slots_before,
                 object_slots_after: slots_before,
+                resource_entries_reclaimed: self.prune_unreferenced_static_resources(),
                 ..CompiledSceneCompactionStats::default()
             });
         }
@@ -123,12 +128,338 @@ impl CompiledScene {
         self.family_ranks = family_ranks;
         self.painter_order = painter_order;
         self.painter_ranks = painter_ranks;
+        let resource_entries_reclaimed = self.prune_unreferenced_static_resources();
 
         Ok(CompiledSceneCompactionStats {
             object_slots_before: slots_before,
             object_slots_after: self.objects.len(),
             object_slots_reclaimed: slots_before - self.objects.len(),
             track_rows_reindexed,
+            resource_entries_reclaimed,
         })
+    }
+
+    /// Reclaim only when every compiled resource owner is a live static object.
+    /// Tracks, family plans, graph derivation and numeric text can retain their
+    /// own references; those plans keep the complete closure until their own
+    /// dependency traversal is part of this maintenance barrier.
+    fn prune_unreferenced_static_resources(&mut self) -> usize {
+        if self.track_count != 0
+            || !self.family_animation_plans.is_empty()
+            || !self.family_animations.is_empty()
+            || !self.graph_edge_dependencies.is_empty()
+            || !self.numeric_text_drivers.is_empty()
+            || (self.resources.images.is_empty()
+                && self.resources.texts.is_empty()
+                && self.resources.fonts.is_empty()
+                && self.resources.geometries.is_empty())
+        {
+            return 0;
+        }
+
+        let mut images = BTreeSet::new();
+        let mut texts = BTreeSet::new();
+        let mut fonts = BTreeSet::new();
+        let mut font_keys = BTreeSet::new();
+        let mut geometries = BTreeSet::new();
+        let mut geometry_ids = BTreeSet::new();
+        for object in self.objects.iter().filter(|object| object.live) {
+            match &object.content {
+                ObjectContentRef::Image(image) => {
+                    if !self.resources.images.contains_key(&image.resource()) {
+                        return 0;
+                    }
+                    images.insert(image.resource());
+                }
+                ObjectContentRef::Text(handle) => {
+                    let Some(resource) = self.resources.texts.get(handle) else {
+                        return 0;
+                    };
+                    texts.insert(*handle);
+                    for run in resource.runs.iter() {
+                        let key = FontResourceKey::from_face(&run.font);
+                        let Some(font) = self.resources.font_handles.get(&key).copied() else {
+                            return 0;
+                        };
+                        if !self.resources.fonts.contains_key(&font) {
+                            return 0;
+                        }
+                        fonts.insert(font);
+                        font_keys.insert(key);
+                    }
+                    for item in resource.vector_items.iter() {
+                        if !self.resources.geometries.contains_key(&item.geometry) {
+                            return 0;
+                        }
+                        geometries.insert(item.geometry);
+                        let Some(current) = self
+                            .resources
+                            .geometry_handles
+                            .get(&item.geometry.id)
+                            .copied()
+                        else {
+                            return 0;
+                        };
+                        if !self.resources.geometries.contains_key(&current) {
+                            return 0;
+                        }
+                        geometry_ids.insert(item.geometry.id);
+                        geometries.insert(current);
+                    }
+                }
+                ObjectContentRef::Geometry(GeometryRef::External(id)) => {
+                    let Some(handle) = self.resources.geometry_handles.get(id).copied() else {
+                        return 0;
+                    };
+                    if !self.resources.geometries.contains_key(&handle) {
+                        return 0;
+                    }
+                    geometry_ids.insert(*id);
+                    geometries.insert(handle);
+                }
+                ObjectContentRef::Geometry(_) => {}
+            }
+        }
+
+        let before = self.resources.images.len()
+            + self.resources.texts.len()
+            + self.resources.fonts.len()
+            + self.resources.geometries.len();
+        self.resources
+            .images
+            .retain(|handle, _| images.contains(handle));
+        self.resources
+            .texts
+            .retain(|handle, _| texts.contains(handle));
+        self.resources
+            .fonts
+            .retain(|handle, _| fonts.contains(handle));
+        self.resources
+            .font_handles
+            .retain(|key, _| font_keys.contains(key));
+        self.resources
+            .geometries
+            .retain(|handle, _| geometries.contains(handle));
+        self.resources
+            .geometry_handles
+            .retain(|id, _| geometry_ids.contains(id));
+        before
+            - self.resources.images.len()
+            - self.resources.texts.len()
+            - self.resources.fonts.len()
+            - self.resources.geometries.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use noon_core::{
+        CompositionTimeMap, FontFaceIdentity, FontResource, FontResourceHandle, FontResourceId,
+        FontResourceKey, GeometryRef, GeometryResourceArena, GlyphRun, ObjectContentRef, ObjectId,
+        Property, RasterImageContentRef, RasterImageResource, RasterImageResourceHandle,
+        RasterImageResourceId, RateFunction, Rect, SemanticImageContent, Style,
+        TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceHandle,
+        TextResourceId, TextSourceKind, TextVectorItem, TextVectorStyle, TrackDefinition, TrackId,
+        TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    };
+
+    use crate::{CompiledObject, CompiledScene};
+
+    fn circle(id: u64) -> CompiledObject {
+        CompiledObject::new(
+            ObjectId::new(id),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        )
+    }
+
+    #[test]
+    fn static_compaction_prunes_superseded_resources_without_retired_rows() {
+        let mut compiled =
+            CompiledScene::compile_objects(vec![circle(1), circle(2), circle(3)], &[]).unwrap();
+        let mut source_geometries = GeometryResourceArena::new();
+        let kept_geometry =
+            source_geometries.insert_path(VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE));
+        let obsolete_geometry = source_geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 2.0)),
+        );
+        for handle in [kept_geometry, obsolete_geometry] {
+            compiled
+                .resources
+                .geometries
+                .insert(handle, source_geometries.get(handle).unwrap().clone());
+            compiled
+                .resources
+                .geometry_handles
+                .insert(handle.id, handle);
+        }
+
+        let kept_font = FontResourceHandle {
+            arena: 1,
+            id: FontResourceId::new(1),
+            version: 0,
+        };
+        let obsolete_font = FontResourceHandle {
+            arena: 1,
+            id: FontResourceId::new(2),
+            version: 0,
+        };
+        let face = FontFaceIdentity {
+            family: Arc::from("Test"),
+            face_key: Arc::from("kept-face"),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        let kept_font_key = FontResourceKey::from_face(&face);
+        for (handle, key) in [
+            (kept_font, kept_font_key.clone()),
+            (
+                obsolete_font,
+                FontResourceKey {
+                    face_key: Arc::from("obsolete-face"),
+                    face_index: 0,
+                },
+            ),
+        ] {
+            compiled.resources.font_handles.insert(key.clone(), handle);
+            compiled.resources.fonts.insert(
+                handle,
+                Arc::new(FontResource {
+                    key,
+                    data: Arc::from([0_u8]),
+                }),
+            );
+        }
+
+        let kept_text = TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(1),
+            version: 0,
+        };
+        let obsolete_text = TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(2),
+            version: 0,
+        };
+        let text = TextResource {
+            source: Arc::from(""),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([GlyphRun {
+                font: face,
+                variations: Arc::from([]),
+                font_size: 12.0,
+                direction: TextDirection::LeftToRight,
+                fill: None,
+                stroke: None,
+                transform: TextAffineTransform::IDENTITY,
+                glyphs: Arc::from([]),
+            }]),
+            vector_items: Arc::from([TextVectorItem {
+                geometry: kept_geometry,
+                transform: TextAffineTransform::IDENTITY,
+                style: TextVectorStyle::default(),
+                source_span: None,
+                semantic_key: None,
+            }]),
+            render_items: Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]),
+            parts: Arc::from([]),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+            baseline: 0.0,
+            layout_artifact: None,
+        };
+        compiled
+            .resources
+            .texts
+            .insert(kept_text, Arc::new(text.clone()));
+        compiled
+            .resources
+            .texts
+            .insert(obsolete_text, Arc::new(text));
+        compiled.objects[0].content = ObjectContentRef::Text(kept_text);
+        compiled.objects[0].text_bounds = Some(Rect::new(Vec2::ZERO, Vec2::ONE));
+
+        let kept_image = RasterImageResourceHandle {
+            arena: 1,
+            id: RasterImageResourceId::new(1),
+            version: 0,
+        };
+        let obsolete_image = RasterImageResourceHandle {
+            arena: 1,
+            id: RasterImageResourceId::new(2),
+            version: 0,
+        };
+        let image = Arc::new(RasterImageResource::from_rgba8(1, 1, [255, 0, 0, 255]).unwrap());
+        compiled.resources.images.insert(kept_image, image.clone());
+        compiled
+            .resources
+            .images
+            .insert(obsolete_image, image.clone());
+        compiled.objects[1].content = ObjectContentRef::Image(
+            RasterImageContentRef::from_resource(SemanticImageContent::new(kept_image), &image),
+        );
+        compiled.objects[2].content =
+            ObjectContentRef::Geometry(GeometryRef::External(kept_geometry.id));
+
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.object_slots_reclaimed, 0);
+        assert_eq!(stats.resource_entries_reclaimed, 4);
+        assert_eq!(compiled.resources.images.len(), 1);
+        assert_eq!(compiled.resources.texts.len(), 1);
+        assert_eq!(compiled.resources.fonts.len(), 1);
+        assert_eq!(compiled.resources.geometries.len(), 1);
+        assert_eq!(
+            compiled.resources.geometry_handles.get(&kept_geometry.id),
+            Some(&kept_geometry)
+        );
+        assert!(!compiled
+            .resources
+            .geometry_handles
+            .contains_key(&obsolete_geometry.id));
+        assert_eq!(
+            compiled
+                .compact_retired_object_slots()
+                .unwrap()
+                .resource_entries_reclaimed,
+            0
+        );
+    }
+
+    #[test]
+    fn authored_track_keeps_the_resource_closure_until_its_dependencies_are_traversed() {
+        let mut compiled = CompiledScene::compile_objects(
+            vec![circle(1)],
+            &[TrackDefinition {
+                id: TrackId::new(1),
+                object: ObjectId::new(1),
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .unwrap();
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        compiled
+            .resources
+            .geometries
+            .insert(handle, source.get(handle).unwrap().clone());
+        compiled
+            .resources
+            .geometry_handles
+            .insert(handle.id, handle);
+        let before = compiled.resources.clone();
+
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.resource_entries_reclaimed, 0);
+        assert_eq!(compiled.resources, before);
     }
 }
