@@ -28,6 +28,27 @@ fn app(selection: bool, inspection: bool) -> NativeApp {
     )
 }
 
+fn click_indicate_app() -> NativeApp {
+    let mut scene = Scene::new();
+    let mut rectangle = scene.rectangle(1.5, 1.2).unwrap();
+    rectangle.set_fill(0.0, 0.5, 1.0, 1.0).unwrap();
+    scene.add(&rectangle).unwrap();
+    scene
+        .on_click_indicate(
+            &rectangle,
+            IndicateOptions::default(),
+            AnimationOptions::new().run_time(1.0),
+        )
+        .unwrap();
+    NativeApp::new(
+        scene.execution_session().unwrap(),
+        NativeViewportConfig {
+            inspection_zoom: true,
+            ..Default::default()
+        },
+    )
+}
+
 // Models successful presentation only. The separate X11 smoke below exercises
 // real acquire/encode/submit/present with normalized wheel delivery.
 fn present(app: &mut NativeApp) {
@@ -57,6 +78,28 @@ fn wheel(app: &mut NativeApp, y: f64) -> PointerDispatch {
 }
 fn half_height() -> f64 {
     500.0 * std::f64::consts::LN_2
+}
+
+#[test]
+fn native_click_indicate_uses_the_shared_session_and_independent_wall_time() {
+    let mut app = click_indicate_app();
+    present(&mut app);
+    let baseline = app.session().frame().objects[0].clone();
+    move_to(&mut app, 400.0, 200.0);
+    edge(&mut app, ElementState::Pressed);
+    edge(&mut app, ElementState::Released);
+    assert!(app.session().interactions_active());
+    assert_eq!(app.session().frame().time, 0.0);
+
+    app.execution.advance_interactions(0.0).unwrap();
+    app.execution.advance_interactions(0.5).unwrap();
+    assert!(app.session().frame().objects[0].transform.scale.x > baseline.transform.scale.x);
+    assert_eq!(app.session().frame().time, 0.0);
+    app.execution.advance_interactions(1.0).unwrap();
+    assert_eq!(app.session().frame().objects[0], baseline);
+    assert!(!app.session().wake_state().is_quiescent());
+    present(&mut app);
+    assert!(app.session().wake_state().is_quiescent());
 }
 
 #[test]
@@ -429,4 +472,135 @@ fn native_surface_smoke_presents_inspection_zoom_and_recovery() {
     event_loop.run_app(&mut harness).unwrap();
     assert!(harness.app.error.is_none(), "{:?}", harness.app.error);
     assert_eq!(harness.presents, 4);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an X11 display and a working native wgpu adapter"]
+fn native_surface_smoke_presents_click_indicate_zoom_and_retrigger() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    use winit::window::WindowId;
+
+    struct Harness {
+        app: NativeApp,
+        stage: u8,
+        presentations: usize,
+        baseline: noon_core::Transform2D,
+        second_peak: bool,
+    }
+    impl Harness {
+        fn click_center(&mut self) {
+            let window = self.app.window.as_ref().unwrap();
+            let size = window.inner_size();
+            let scale = window.scale_factor();
+            self.app
+                .dispatch_pointer_position(
+                    PhysicalPosition::new(
+                        f64::from(size.width) / 2.0,
+                        f64::from(size.height) / 2.0,
+                    ),
+                    size,
+                    scale,
+                )
+                .unwrap();
+            for state in [ElementState::Pressed, ElementState::Released] {
+                self.app
+                    .dispatch_pointer_button(MouseButton::Left, state, size, scale)
+                    .unwrap();
+            }
+        }
+    }
+    impl ApplicationHandler for Harness {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            self.app.resumed(event_loop);
+        }
+        fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            self.app.about_to_wait(event_loop);
+        }
+        fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+            let redraw = matches!(event, WindowEvent::RedrawRequested);
+            self.app.window_event(event_loop, id, event);
+            if self.app.error.is_some() || !redraw {
+                return;
+            }
+            let Some(frame) = self.app.pointer.presented.clone() else {
+                return;
+            };
+            assert_eq!(self.app.presented_frame_time, Some(0.0));
+            assert_eq!(frame.view().camera(), self.app.execution.camera().unwrap());
+            assert_eq!(
+                frame.publication(),
+                self.app.session().publication_context()
+            );
+            assert!(self.app.last_geometry_draw_calls > 0);
+            self.presentations += 1;
+            let transform = self.app.session().frame().objects[0].transform;
+            match self.stage {
+                0 => {
+                    self.click_center();
+                    assert!(self.app.session().interactions_active());
+                    self.stage = 1;
+                }
+                1 if transform.scale.x > self.baseline.scale.x + 0.02 => {
+                    let window = self.app.window.as_ref().unwrap();
+                    let size = window.inner_size();
+                    let scale = window.scale_factor();
+                    assert_eq!(
+                        self.app
+                            .dispatch_inspection_scroll(
+                                MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                                    0.0,
+                                    half_height() * scale,
+                                )),
+                                size,
+                                scale,
+                            )
+                            .unwrap(),
+                        PointerDispatch::Admitted
+                    );
+                    self.stage = 2;
+                }
+                2 if !self.app.session().interactions_active() => {
+                    assert_eq!(transform, self.baseline);
+                    assert_eq!(self.app.execution.camera().unwrap().height, 4.0);
+                    self.click_center();
+                    assert!(self.app.session().interactions_active());
+                    self.stage = 3;
+                }
+                3 => {
+                    self.second_peak |= transform.scale.x > self.baseline.scale.x + 0.02;
+                    if !self.app.session().interactions_active() {
+                        assert!(self.second_peak);
+                        assert_eq!(transform, self.baseline);
+                        assert!(self.app.session().wake_state().is_quiescent());
+                        self.stage = 4;
+                        event_loop.exit();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut builder = EventLoop::builder();
+    builder.with_x11().with_any_thread(true);
+    let event_loop = builder.build().unwrap();
+    let mut app = click_indicate_app();
+    app.config.width = SIZE.width;
+    app.config.height = SIZE.height;
+    let baseline = app.session().frame().objects[0].transform;
+    let mut harness = Harness {
+        app,
+        stage: 0,
+        presentations: 0,
+        baseline,
+        second_peak: false,
+    };
+    event_loop.run_app(&mut harness).unwrap();
+    assert!(harness.app.error.is_none(), "{:?}", harness.app.error);
+    assert_eq!(harness.stage, 4);
+    assert!(harness.presentations >= 5);
 }

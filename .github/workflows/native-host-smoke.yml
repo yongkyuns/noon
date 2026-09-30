@@ -110,6 +110,12 @@ jobs:
             cargo test -p noon-native native_surface_smoke_presents_paused_click_selection_and_clear \
               -- --ignored --nocapture --test-threads=1
 
+      - name: Present click Indicate, zoom, restore, and retrigger on native surface
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_click_indicate_zoom_and_retrigger \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Retain selection pixel evidence
         if: always()
         uses: actions/upload-artifact@v7
