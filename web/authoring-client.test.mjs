@@ -91,9 +91,21 @@ test("correlates a Python request with a validated shared Scene response", async
     workerMessage("result", {
       requestId: 0,
       resultJson: JSON.stringify(semanticResult()),
+      workerRunTiming: {
+        performanceTimeOriginMs: 1000,
+        startedAtMs: 20,
+        completedAtMs: 35,
+      },
     }),
   );
-  assert.deepEqual(await resultPromise, parsedSemanticResult());
+  assert.deepEqual(await resultPromise, {
+    ...parsedSemanticResult(),
+    workerRunTiming: {
+      performanceTimeOriginMs: 1000,
+      startedAtMs: 20,
+      completedAtMs: 35,
+    },
+  });
 });
 
 test("scene results without a semantic execution descriptor are rejected", () => {

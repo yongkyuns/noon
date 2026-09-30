@@ -890,15 +890,25 @@ async function handleRequest(request) {
       activeAuthoringRun = run;
       let completed = false;
       try {
+        const workerRunStartedAtMs = performance.now();
         const resultJson = await runAuthoringSource(
           pyodide,
           request.source,
           request.context,
         );
+        const workerRunCompletedAtMs = performance.now();
         if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
         }
-        post("result", { requestId, resultJson });
+        post("result", {
+          requestId,
+          resultJson,
+          workerRunTiming: {
+            performanceTimeOriginMs: performance.timeOrigin,
+            startedAtMs: workerRunStartedAtMs,
+            completedAtMs: workerRunCompletedAtMs,
+          },
+        });
         completed = true;
       } finally {
         if (!completed && run.continuation !== null) {
