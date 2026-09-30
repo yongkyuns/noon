@@ -336,6 +336,99 @@ fn click_action_runs_while_an_unrelated_source_segment_is_pending() {
 }
 
 #[test]
+fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_continues() {
+    let (mut store, root, target, moving, _) = fixture(0);
+    let mut target_endpoint = store.semantic_object_state_checked(target).unwrap().clone();
+    target_endpoint.transform.scale = noon_core::SemanticVec3::new(2.0, 2.0, 1.0);
+    let target_endpoint = store.insert_semantic_object(target_endpoint);
+    let mut moving_endpoint = store.semantic_object_state_checked(moving).unwrap().clone();
+    moving_endpoint.transform.translation.x = 7.0;
+    let moving_endpoint = store.insert_semantic_object(moving_endpoint);
+    let target_animation = store
+        .insert_semantic_transform_animation(target, target_endpoint, AnimationOptions::new())
+        .unwrap();
+    let moving_animation = store
+        .insert_semantic_transform_animation(moving, moving_endpoint, AnimationOptions::new())
+        .unwrap();
+    let parallel = store
+        .insert_semantic_parallel_animation(
+            &[target_animation, moving_animation],
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+
+    click(&mut session, 1, 0.0);
+    session.advance_interactions(0.0).unwrap();
+    session.advance_interactions(0.1).unwrap();
+    assert!(session.interactions_active());
+    let segment = session
+        .activate_animation_segment(
+            &store,
+            parallel,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(noon_core::RateFunction::Linear),
+        )
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    session.advance_interactions(0.2).unwrap();
+
+    let target_row = session
+        .runtime
+        .effective_object(session.execution_object_id(target).unwrap())
+        .unwrap();
+    assert!(
+        !session.interactions_active(),
+        "overlapping authored driver must retire the click effect"
+    );
+    // The source segment starts from the currently visible 1.1 scale, then
+    // takes ownership; the old click driver must not add its own scale on top.
+    assert_eq!(target_row.transform.scale, Vec2::new(1.55, 1.55));
+    assert_ne!(
+        target_row.style.fill,
+        Some(YELLOW),
+        "the source owns the color transition"
+    );
+    let moving_row = session
+        .runtime
+        .effective_object(session.execution_object_id(moving).unwrap())
+        .unwrap();
+    assert!((moving_row.transform.translation.x - 6.0).abs() < 1e-5);
+    assert_eq!(session.frame().time, 0.5);
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        session
+            .runtime
+            .effective_object(session.execution_object_id(target).unwrap())
+            .unwrap()
+            .transform
+            .scale,
+        Vec2::new(2.0, 2.0)
+    );
+    assert_eq!(
+        session
+            .runtime
+            .effective_object(session.execution_object_id(target).unwrap())
+            .unwrap()
+            .style
+            .fill,
+        Some(noon_core::WHITE)
+    );
+    assert!(!session.interactions_active());
+    click(&mut session, 3, 0.0);
+    assert!(
+        session.interactions_active(),
+        "fresh click may acquire the released channels"
+    );
+}
+
+#[test]
 fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.9).unwrap();
