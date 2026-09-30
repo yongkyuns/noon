@@ -62,11 +62,15 @@ impl SceneInstance {
         &mut self,
     ) -> Result<RuntimeCompactionStats, RuntimeCompactionError> {
         if self.compiled.retired_object_slot_count() == 0 {
-            // A live effective-content lease may reference a compiled resource
-            // that is no longer named by any authored object. Replay may also
-            // retain a prior resource projection. Keep this no-op barrier inert
-            // until both owners have been released.
-            if self.replay_history.is_some() || !self.effective_content_drivers.is_empty() {
+            // Replay may retain an older resource projection that this local
+            // barrier cannot traverse. Active property/interaction drivers may
+            // depend on this execution revision. Effective content leases are
+            // explicit roots below, so they need not pin unrelated history.
+            if self.replay_history.is_some()
+                || !self.effective_driver_rows.is_empty()
+                || !self.translation_drag_rows.is_empty()
+                || self.interactions_active()
+            {
                 let count = self.compiled.objects().len();
                 return Ok(RuntimeCompactionStats {
                     compiled: CompiledSceneCompactionStats {
@@ -76,6 +80,11 @@ impl SceneInstance {
                     },
                 });
             }
+            let retained_contents: Vec<_> = self
+                .effective_content_drivers
+                .values()
+                .map(|driver| driver.content.clone())
+                .collect();
             let resources = self.compiled.resources();
             // Resource pruning changes the compiled dependency closure even
             // when every execution row stays put. Reserve a fresh publication
@@ -104,7 +113,7 @@ impl SceneInstance {
             };
             let compiled = self
                 .compiled
-                .compact_retired_object_slots()
+                .compact_retired_object_slots_with_content_roots(&retained_contents)
                 .map_err(RuntimeCompactionError::UnsupportedCompiledState)?;
             if compiled.resource_entries_reclaimed != 0 {
                 self.publication =
@@ -239,6 +248,52 @@ mod tests {
         }
     }
 
+    fn compiled_text_history(
+        sources: &[&str],
+    ) -> (CompiledScene, Vec<noon_core::TextResourceHandle>) {
+        let mut store = SemanticStore::new();
+        let handles: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                store
+                    .import_text_resource(
+                        TextResource {
+                            source: (*source).into(),
+                            kind: TextSourceKind::Plain,
+                            runs: Default::default(),
+                            vector_items: Default::default(),
+                            render_items: Default::default(),
+                            parts: Default::default(),
+                            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+                            baseline: 0.0,
+                            layout_artifact: None,
+                        },
+                        &FontResourceArena::new(),
+                        &GeometryResourceArena::new(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let target = store.insert_semantic_object(SemanticObjectState::new(handles[0]));
+        store.attach_to_scene(target).unwrap();
+        let mut compiled = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .compiled()
+            .clone();
+        for &handle in handles.iter().skip(1) {
+            let previous = compiled.resources().clone();
+            let mut edit = SemanticMutationTransaction::new();
+            edit.replace_content(target, SemanticObjectContent::Text(handle));
+            edit.apply(&mut store).unwrap();
+            compiled = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+                .unwrap()
+                .compiled()
+                .clone();
+            compiled.merge_prepared_resources(previous);
+        }
+        (compiled, handles)
+    }
+
     #[test]
     fn explicit_compaction_bounds_repeated_churn_and_preserves_live_frame() {
         let survivor = ObjectId::new(1);
@@ -328,46 +383,8 @@ mod tests {
 
     #[test]
     fn static_resource_pruning_invalidates_prepared_publication_without_repacking_rows() {
-        let mut store = SemanticStore::new();
-        let text = |source| TextResource {
-            source,
-            kind: TextSourceKind::Plain,
-            runs: Default::default(),
-            vector_items: Default::default(),
-            render_items: Default::default(),
-            parts: Default::default(),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
-            baseline: 0.0,
-            layout_artifact: None,
-        };
-        let old = store
-            .import_text_resource(
-                text("old".into()),
-                &FontResourceArena::new(),
-                &GeometryResourceArena::new(),
-            )
-            .unwrap();
-        let replacement = store
-            .import_text_resource(
-                text("new".into()),
-                &FontResourceArena::new(),
-                &GeometryResourceArena::new(),
-            )
-            .unwrap();
-        let target = store.insert_semantic_object(SemanticObjectState::new(old));
-        store.attach_to_scene(target).unwrap();
-        let previous = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
-            .unwrap()
-            .compiled()
-            .clone();
-        let mut edit = SemanticMutationTransaction::new();
-        edit.replace_content(target, SemanticObjectContent::Text(replacement));
-        edit.apply(&mut store).unwrap();
-        let mut current = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
-            .unwrap()
-            .compiled()
-            .clone();
-        current.merge_prepared_resources(previous.resources().clone());
+        let (current, handles) = compiled_text_history(&["old", "new"]);
+        let [old, replacement] = [handles[0], handles[1]];
         assert_eq!(current.resources().text_count(), 2);
 
         let mut runtime = SceneInstance::new(current);
@@ -405,6 +422,119 @@ mod tests {
         ));
         assert!(TextResourceLookup::get(runtime.text_resources(), old).is_none());
         assert!(TextResourceLookup::get(runtime.text_resources(), replacement).is_some());
+    }
+
+    #[test]
+    fn content_lease_roots_only_its_own_resource_history() {
+        let (compiled, handles) = compiled_text_history(&["held", "obsolete", "authored"]);
+        let [held, obsolete, authored] = [handles[0], handles[1], handles[2]];
+        assert_eq!(compiled.resources().text_count(), 3);
+        let mut runtime = SceneInstance::new(compiled);
+        let object = runtime.frame().objects[0].id;
+        let prepared = runtime
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Text(held),
+                Some(Rect::new(Vec2::ZERO, Vec2::ZERO)),
+                None,
+            )
+            .unwrap();
+        let lease = runtime
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        runtime.take_frame_changes();
+        let before = runtime.publication_context();
+
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.object_slots_reclaimed, 0);
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 1);
+        assert_eq!(runtime.effective_content_lease(object), Some(lease));
+        assert_eq!(
+            runtime.frame().objects[0].content,
+            ObjectContentRef::Text(held)
+        );
+        assert_eq!(
+            runtime.publication_context().scene_revision(),
+            before.scene_revision()
+        );
+        assert_ne!(
+            runtime.publication_context().execution_revision(),
+            before.execution_revision()
+        );
+        assert!(runtime.take_frame_changes().requires_presentation_redraw());
+        assert!(TextResourceLookup::get(runtime.text_resources(), held).is_some());
+        assert!(TextResourceLookup::get(runtime.text_resources(), authored).is_some());
+        assert!(TextResourceLookup::get(runtime.text_resources(), obsolete).is_none());
+
+        let next = runtime
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Text(authored),
+                Some(Rect::new(Vec2::ZERO, Vec2::ZERO)),
+                Some(lease),
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.commit_effective_content_replacement(next).unwrap(),
+            lease
+        );
+        assert_eq!(
+            runtime
+                .reclaim_retired_object_slots()
+                .unwrap()
+                .compiled
+                .resource_entries_reclaimed,
+            1
+        );
+        assert!(TextResourceLookup::get(runtime.text_resources(), held).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), authored).is_some());
+        runtime.release_effective_content(lease).unwrap();
+        assert_eq!(
+            runtime.frame().objects[0].content,
+            ObjectContentRef::Text(authored)
+        );
+    }
+
+    #[test]
+    fn resource_only_compaction_waits_for_an_active_interaction() {
+        let (compiled, handles) = compiled_text_history(&["obsolete", "authored"]);
+        let mut runtime = SceneInstance::new(compiled);
+        let target = ObjectId::new(99);
+        runtime
+            .apply_execution_patch(&ExecutionPatch::CreateObject(object(99)))
+            .unwrap();
+        let effect = runtime
+            .prepare_click_indicate(target, SemanticClickIndicate::new(1.2, Color::YELLOW, 1.0))
+            .unwrap()
+            .unwrap();
+        runtime.start_transient_animation(effect).unwrap();
+        let publication = runtime.publication_context();
+
+        assert_eq!(
+            runtime
+                .reclaim_retired_object_slots()
+                .unwrap()
+                .compiled
+                .resource_entries_reclaimed,
+            0
+        );
+        assert_eq!(runtime.publication_context(), publication);
+        assert!(runtime.interactions_active());
+        runtime.advance_interactions(0.0).unwrap();
+        runtime.advance_interactions(0.5).unwrap();
+        assert!(runtime.interactions_active());
+        runtime.advance_interactions(1.0).unwrap();
+        assert!(!runtime.interactions_active());
+        assert_eq!(
+            runtime
+                .reclaim_retired_object_slots()
+                .unwrap()
+                .compiled
+                .resource_entries_reclaimed,
+            1
+        );
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[0]).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[1]).is_some());
     }
 
     #[test]

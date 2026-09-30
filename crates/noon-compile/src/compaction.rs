@@ -50,12 +50,23 @@ impl CompiledScene {
     pub fn compact_retired_object_slots(
         &mut self,
     ) -> Result<CompiledSceneCompactionStats, CompiledSceneCompactionError> {
+        self.compact_retired_object_slots_with_content_roots(&[])
+    }
+
+    /// The runtime may hold effective content whose resource was superseded
+    /// in the authored plan. Treat those versions as roots at this explicit
+    /// barrier without making the compiled plan own the leases themselves.
+    pub fn compact_retired_object_slots_with_content_roots(
+        &mut self,
+        retained_contents: &[ObjectContentRef],
+    ) -> Result<CompiledSceneCompactionStats, CompiledSceneCompactionError> {
         let slots_before = self.objects.len();
         if self.retired_object_indices.is_empty() {
             return Ok(CompiledSceneCompactionStats {
                 object_slots_before: slots_before,
                 object_slots_after: slots_before,
-                resource_entries_reclaimed: self.prune_unreferenced_static_resources(),
+                resource_entries_reclaimed: self
+                    .prune_unreferenced_static_resources(retained_contents),
                 ..CompiledSceneCompactionStats::default()
             });
         }
@@ -128,7 +139,8 @@ impl CompiledScene {
         self.family_ranks = family_ranks;
         self.painter_order = painter_order;
         self.painter_ranks = painter_ranks;
-        let resource_entries_reclaimed = self.prune_unreferenced_static_resources();
+        let resource_entries_reclaimed =
+            self.prune_unreferenced_static_resources(retained_contents);
 
         Ok(CompiledSceneCompactionStats {
             object_slots_before: slots_before,
@@ -139,11 +151,14 @@ impl CompiledScene {
         })
     }
 
-    /// Reclaim only when every compiled resource owner is a live static object.
-    /// Tracks, family plans, graph derivation and numeric text can retain their
-    /// own references; those plans keep the complete closure until their own
-    /// dependency traversal is part of this maintenance barrier.
-    fn prune_unreferenced_static_resources(&mut self) -> usize {
+    /// Reclaim when every compiled resource owner is a live static object or
+    /// an explicit effective-content root. Tracks, family plans, graph
+    /// derivation and numeric text can retain their own references; those plans
+    /// keep the complete closure until this barrier can traverse them safely.
+    fn prune_unreferenced_static_resources(
+        &mut self,
+        retained_contents: &[ObjectContentRef],
+    ) -> usize {
         if self.track_count != 0
             || !self.family_animation_plans.is_empty()
             || !self.family_animations.is_empty()
@@ -163,8 +178,14 @@ impl CompiledScene {
         let mut font_keys = BTreeSet::new();
         let mut geometries = BTreeSet::new();
         let mut geometry_ids = BTreeSet::new();
-        for object in self.objects.iter().filter(|object| object.live) {
-            match &object.content {
+        for content in self
+            .objects
+            .iter()
+            .filter(|object| object.live)
+            .map(|object| &object.content)
+            .chain(retained_contents.iter())
+        {
+            match content {
                 ObjectContentRef::Image(image) => {
                     if !self.resources.images.contains_key(&image.resource()) {
                         return 0;
@@ -405,10 +426,16 @@ mod tests {
         compiled.objects[2].content =
             ObjectContentRef::Geometry(GeometryRef::External(kept_geometry.id));
 
-        let stats = compiled.compact_retired_object_slots().unwrap();
+        let retained_image = ObjectContentRef::Image(RasterImageContentRef::from_resource(
+            SemanticImageContent::new(obsolete_image),
+            &image,
+        ));
+        let stats = compiled
+            .compact_retired_object_slots_with_content_roots(&[retained_image])
+            .unwrap();
         assert_eq!(stats.object_slots_reclaimed, 0);
-        assert_eq!(stats.resource_entries_reclaimed, 4);
-        assert_eq!(compiled.resources.images.len(), 1);
+        assert_eq!(stats.resource_entries_reclaimed, 3);
+        assert_eq!(compiled.resources.images.len(), 2);
         assert_eq!(compiled.resources.texts.len(), 1);
         assert_eq!(compiled.resources.fonts.len(), 1);
         assert_eq!(compiled.resources.geometries.len(), 1);
@@ -420,6 +447,14 @@ mod tests {
             .resources
             .geometry_handles
             .contains_key(&obsolete_geometry.id));
+        assert_eq!(
+            compiled
+                .compact_retired_object_slots()
+                .unwrap()
+                .resource_entries_reclaimed,
+            1
+        );
+        assert_eq!(compiled.resources.images.len(), 1);
         assert_eq!(
             compiled
                 .compact_retired_object_slots()
