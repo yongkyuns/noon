@@ -1023,6 +1023,47 @@ fn callback_aware_advance_runs_time_zero_phase_once_in_compiler_order() {
 }
 
 #[test]
+fn required_callback_phase_stays_local_with_ten_thousand_unrelated_objects() {
+    let mut store = SemanticStore::new();
+    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(target).unwrap();
+    for _ in 0..10_000 {
+        let unrelated =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 2.0,
+            }));
+        store.attach_to_scene(unrelated).unwrap();
+    }
+    let callback = HostCallbackId::new(31);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target, callback, 0.0, None);
+    transaction.apply(&mut store).unwrap();
+
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    let (invocations, overlay) = match session.advance_to_callback_barrier(0.0).unwrap() {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => (invocations, overlay),
+        CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+    };
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].callback_id(), callback);
+    assert_eq!(overlay.objects().count(), 1);
+    assert_eq!(overlay.staged_row_count(), 0);
+    assert_eq!(overlay.prior_driver_row_count(), 0);
+    assert!(overlay.object(target).is_some());
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    assert_eq!(session.frame().objects.len(), 10_001);
+    assert_eq!(session.frame().time, 0.0);
+}
+
+#[test]
 fn large_advance_stops_at_bounded_callback_activation_before_crossing_it() {
     let mut store = SemanticStore::new();
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
