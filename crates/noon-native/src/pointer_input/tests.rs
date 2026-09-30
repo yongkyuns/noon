@@ -13,6 +13,7 @@ use noon::example_scenes::pointer_input_trace as shared_trace;
 
 struct Fixture {
     app: NativeApp,
+    target: SemanticNodeId,
     position: SemanticNodeId,
     button: SemanticNodeId,
     down: SemanticNodeId,
@@ -42,6 +43,7 @@ impl Fixture {
         session.enable_pointer_fill_selection(4.0).unwrap();
         Self {
             app: NativeApp::new(session, NativeViewportConfig::default()),
+            target: fixture.target,
             position: fixture.position,
             button: fixture.button,
             down: fixture.down,
@@ -127,6 +129,41 @@ fn paused_move_press_and_release_use_one_coherent_session_path() {
         f.app.session().selected_pointer_target().is_some(),
         shared_trace::EXPECTED_SELECTED
     );
+}
+
+#[test]
+fn paired_trace_qualifies_reactive_edges_selection_and_cancellation() {
+    let mut f = Fixture::new();
+
+    // The shared Rust-authored fixture puts its target at the center of this
+    // view. A click should update the subscribed edge signals and C5 selection
+    // policy in the same admitted session path.
+    f.move_to(400.0, 200.0);
+    f.edge(ElementState::Pressed);
+    f.edge(ElementState::Released);
+    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(1.0));
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(1.0));
+    assert_eq!(f.app.session().frame().objects[0].transform.rotation, 1.0);
+    assert_eq!(f.app.session().frame().objects[1].transform.rotation, 1.0);
+    assert_eq!(f.app.session().selected_pointer_target(), Some(f.target));
+
+    // Focus loss retires a held contact without fabricating another up edge.
+    f.move_to(400.0, 200.0);
+    f.edge(ElementState::Pressed);
+    f.app.pointer_focus_lost().unwrap();
+    assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
+    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(2.0));
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(1.0));
+    assert_eq!(f.app.session().selected_pointer_target(), Some(f.target));
+
+    // A fresh background click clears selection after cancellation.
+    f.move_to(20.0, 20.0);
+    f.edge(ElementState::Pressed);
+    f.edge(ElementState::Released);
+    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(3.0));
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(2.0));
+    assert_eq!(f.app.session().selected_pointer_target(), None);
+    assert_eq!(f.app.session().frame().time, 0.0);
 }
 
 #[test]

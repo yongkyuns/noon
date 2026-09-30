@@ -104,6 +104,14 @@ impl Fixture {
             )
             .unwrap();
         fixture
+            .store
+            .bind_semantic_signal(
+                fixture.up,
+                fixture.unrelated,
+                SemanticObjectProperty::RotationZ,
+            )
+            .unwrap();
+        fixture
     }
 
     /// Input/replay qualification without a property-driven execution domain.
