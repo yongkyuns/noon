@@ -205,6 +205,10 @@ pub struct SceneInstance {
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
     effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
+    effective_images: BTreeMap<
+        noon_core::RasterImageResourceHandle,
+        (std::sync::Arc<noon_core::RasterImageResource>, usize),
+    >,
     next_effective_content_sequence: u64,
     /// Session-owned pointer translation leases. Unlike ordinary whole-row
     /// effective writes these own only Position, so unrelated channels continue
@@ -243,6 +247,7 @@ impl Clone for SceneInstance {
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
             effective_content_drivers,
+            effective_images: self.effective_images.clone(),
             next_effective_content_sequence: self.next_effective_content_sequence,
             translation_drag_rows: self.translation_drag_rows.clone(),
             transient_animations: self.transient_animations.clone(),
@@ -260,6 +265,18 @@ impl noon_core::TextResourceLookup for SceneInstance {
             .resources()
             .get(handle)
             .or_else(|| self.compiled.text_resources().get(handle))
+    }
+}
+
+impl noon_core::RasterImageResourceLookup for SceneInstance {
+    fn get(
+        &self,
+        handle: noon_core::RasterImageResourceHandle,
+    ) -> Option<&noon_core::RasterImageResource> {
+        self.effective_images
+            .get(&handle)
+            .map(|(resource, _)| resource.as_ref())
+            .or_else(|| self.compiled.raster_image_resources().get(handle))
     }
 }
 
@@ -296,6 +313,7 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
+            effective_images: BTreeMap::new(),
             next_effective_content_sequence: 1,
             translation_drag_rows: BTreeMap::new(),
             transient_animations: Default::default(),
@@ -372,7 +390,7 @@ impl SceneInstance {
             self,
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
-            self.compiled.raster_image_resources(),
+            self,
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
@@ -398,7 +416,7 @@ impl SceneInstance {
             self,
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
-            self.compiled.raster_image_resources(),
+            self,
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
@@ -472,7 +490,7 @@ impl SceneInstance {
     }
 
     pub fn raster_image_resources(&self) -> &impl noon_core::RasterImageResourceLookup {
-        self.compiled.raster_image_resources()
+        self
     }
 
     pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
