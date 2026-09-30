@@ -702,6 +702,63 @@ fn target_animation_blocks_drag_acquisition_without_acknowledging_input() {
 }
 
 #[test]
+fn parallel_animation_pending_barrier_preserves_both_tracks_during_rejected_drag() {
+    use noon_core::AnimationOptions;
+
+    let (mut store, target, unrelated, mut session) = fixture();
+    let target_endpoint = store.insert_semantic_object(circle(12.0));
+    let unrelated_endpoint = store.insert_semantic_object(circle(12.0));
+    let target_animation = store
+        .insert_semantic_transform_animation(target, target_endpoint, AnimationOptions::new())
+        .unwrap();
+    let unrelated_animation = store
+        .insert_semantic_transform_animation(unrelated, unrelated_endpoint, AnimationOptions::new())
+        .unwrap();
+    let parallel = store
+        .insert_semantic_parallel_animation(
+            &[target_animation, unrelated_animation],
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    let segment = session
+        .activate_animation_segment(&store, parallel, AnimationOptions::new().run_time(1.0))
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(6.0, 0.0));
+    assert_eq!(translation(&session, unrelated), Vec2::new(11.0, 0.0));
+    let before_press = session.publication_context();
+    let token = session.native_pointer_input_token().unwrap();
+
+    assert_eq!(
+        submit(
+            &mut session,
+            &mut store,
+            1,
+            NativePointerInputKind::Press {
+                position: position(6.0),
+                button: 0,
+            }
+        ),
+        Err(TranslationDragError::Publication(
+            ExecutionSessionPublicationError::SegmentCompletionPending
+        ))
+    );
+    assert!(!session.translation_drag_active());
+    assert_eq!(session.publication_context(), before_press);
+    assert_eq!(session.native_pointer_input_token().unwrap(), token);
+    assert_eq!(session.frame().time, 0.5);
+    assert_eq!(translation(&session, target), Vec2::new(6.0, 0.0));
+    assert_eq!(translation(&session, unrelated), Vec2::new(11.0, 0.0));
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(12.0, 0.0));
+    assert_eq!(translation(&session, unrelated), Vec2::new(12.0, 0.0));
+}
+
+#[test]
 fn active_drag_rejects_new_animation_without_installing_tracks() {
     use noon_core::AnimationOptions;
     let (mut store, target, _, mut session) = fixture();
