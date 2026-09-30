@@ -52,7 +52,7 @@ pub struct RuntimeCompactionStats {
 }
 
 impl SceneInstance {
-    /// Explicitly reclaim tombstoned execution rows.
+    /// Explicitly reclaim tombstoned execution rows and eligible static resources.
     ///
     /// The barrier visits retained slots and rebuilds live row-indexed structures.
     /// It preserves the runtime identity, authored scene revision, current time,
@@ -62,10 +62,57 @@ impl SceneInstance {
         &mut self,
     ) -> Result<RuntimeCompactionStats, RuntimeCompactionError> {
         if self.compiled.retired_object_slot_count() == 0 {
+            // A live effective-content lease may reference a compiled resource
+            // that is no longer named by any authored object. Replay may also
+            // retain a prior resource projection. Keep this no-op barrier inert
+            // until both owners have been released.
+            if self.replay_history.is_some() || !self.effective_content_drivers.is_empty() {
+                let count = self.compiled.objects().len();
+                return Ok(RuntimeCompactionStats {
+                    compiled: CompiledSceneCompactionStats {
+                        object_slots_before: count,
+                        object_slots_after: count,
+                        ..CompiledSceneCompactionStats::default()
+                    },
+                });
+            }
+            let resources = self.compiled.resources();
+            // Resource pruning changes the compiled dependency closure even
+            // when every execution row stays put. Reserve a fresh publication
+            // before allowing that mutation so outstanding prepared work cannot
+            // commit against a resource set it no longer owns.
+            let next_publication = if resources.image_count() == 0
+                && resources.text_count() == 0
+                && resources.font_count() == 0
+                && resources.geometry_count() == 0
+            {
+                None
+            } else {
+                let execution = self.publication.execution_revision().checked_next().ok_or(
+                    RuntimeCompactionError::ExecutionRevisionExhausted(
+                        self.publication.execution_revision(),
+                    ),
+                )?;
+                let frame_epoch = self.publication.frame_epoch().checked_next().ok_or(
+                    RuntimeCompactionError::FrameEpochExhausted(self.publication.frame_epoch()),
+                )?;
+                Some(PublicationContext::new(
+                    self.publication.scene_revision(),
+                    execution,
+                    frame_epoch,
+                ))
+            };
             let compiled = self
                 .compiled
                 .compact_retired_object_slots()
                 .map_err(RuntimeCompactionError::UnsupportedCompiledState)?;
+            if compiled.resource_entries_reclaimed != 0 {
+                self.publication =
+                    next_publication.expect("reclaimed resource had a closure entry");
+                if self.changes.is_empty() {
+                    self.changes = crate::FrameChanges::presentation_redraw();
+                }
+            }
             return Ok(RuntimeCompactionStats { compiled });
         }
         if self.replay_history.is_some() && self.compiled.retired_object_slot_count() != 0 {
@@ -163,9 +210,11 @@ mod tests {
         SemanticExecutionIndex,
     };
     use noon_core::{
-        Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction,
-        SemanticClickIndicate, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-        SemanticVec3, StoredGeometry, Style, TrackDefinition, TrackId, TrackTiming, TrackValues,
+        Color, CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena,
+        ObjectContentRef, ObjectId, Property, RateFunction, Rect, SemanticClickIndicate,
+        SemanticMutationTransaction, SemanticObjectContent, SemanticObjectProperty,
+        SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TextResource,
+        TextResourceLookup, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues,
         Transform2D, Vec2,
     };
 
@@ -248,6 +297,114 @@ mod tests {
         churn(&mut runtime, 100, 32);
         runtime.reclaim_retired_object_slots().unwrap();
         assert_eq!(runtime.frame().objects.len(), 1);
+    }
+
+    #[test]
+    fn no_row_compaction_preserves_a_live_effective_content_lease() {
+        let mut runtime =
+            SceneInstance::new(CompiledScene::compile_objects(vec![object(1)], &[]).unwrap());
+        let prepared = runtime
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let lease = runtime
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        let publication = runtime.publication_context();
+
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.object_slots_reclaimed, 0);
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 0);
+        assert_eq!(runtime.publication_context(), publication);
+        assert_eq!(
+            runtime.effective_content_lease(ObjectId::new(1)),
+            Some(lease)
+        );
+    }
+
+    #[test]
+    fn static_resource_pruning_invalidates_prepared_publication_without_repacking_rows() {
+        let mut store = SemanticStore::new();
+        let text = |source| TextResource {
+            source,
+            kind: TextSourceKind::Plain,
+            runs: Default::default(),
+            vector_items: Default::default(),
+            render_items: Default::default(),
+            parts: Default::default(),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            baseline: 0.0,
+            layout_artifact: None,
+        };
+        let old = store
+            .import_text_resource(
+                text("old".into()),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        let replacement = store
+            .import_text_resource(
+                text("new".into()),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        let target = store.insert_semantic_object(SemanticObjectState::new(old));
+        store.attach_to_scene(target).unwrap();
+        let previous = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .compiled()
+            .clone();
+        let mut edit = SemanticMutationTransaction::new();
+        edit.replace_content(target, SemanticObjectContent::Text(replacement));
+        edit.apply(&mut store).unwrap();
+        let mut current = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .compiled()
+            .clone();
+        current.merge_prepared_resources(previous.resources().clone());
+        assert_eq!(current.resources().text_count(), 2);
+
+        let mut runtime = SceneInstance::new(current);
+        runtime.take_frame_changes();
+        let before = runtime.publication_context();
+        let prepared = runtime
+            .prepare_effective_content_replacement(
+                runtime.frame().objects[0].id,
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.object_slots_reclaimed, 0);
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 1);
+        assert_eq!(
+            runtime.publication_context().scene_revision(),
+            before.scene_revision()
+        );
+        assert_eq!(
+            runtime.publication_context().execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            runtime.publication_context().frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        let changes = runtime.take_frame_changes();
+        assert!(changes.requires_presentation_redraw());
+        assert!(!changes.has_stable_changes());
+        assert!(matches!(
+            runtime.commit_effective_content_replacement(prepared),
+            Err(crate::EffectiveContentError::StalePublication { .. })
+        ));
+        assert!(TextResourceLookup::get(runtime.text_resources(), old).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), replacement).is_some());
     }
 
     #[test]

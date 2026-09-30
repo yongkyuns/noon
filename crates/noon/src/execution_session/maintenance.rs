@@ -39,7 +39,7 @@ impl std::fmt::Display for ExecutionSessionMaintenanceError {
 impl std::error::Error for ExecutionSessionMaintenanceError {}
 
 impl ExecutionSession {
-    /// Reclaim tombstoned compiled/runtime rows at an explicit maintenance barrier.
+    /// Reclaim tombstoned rows and eligible static resources at a maintenance barrier.
     ///
     /// The session keeps its semantic store and runtime identities, current
     /// effective frame and authored time. Compaction advances only the execution
@@ -68,8 +68,12 @@ impl ExecutionSession {
             .runtime
             .reclaim_retired_object_slots()
             .map_err(ExecutionSessionMaintenanceError::Runtime)?;
-        if stats.compiled.object_slots_reclaimed != 0 {
+        if stats.compiled.object_slots_reclaimed != 0
+            || stats.compiled.resource_entries_reclaimed != 0
+        {
             self.last_callback_receipt = None;
+        }
+        if stats.compiled.object_slots_reclaimed != 0 {
             self.sync_spatial_index();
             self.reconcile_pointer_selection();
         }
