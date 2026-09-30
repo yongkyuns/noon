@@ -980,7 +980,8 @@ impl ExecutionSession {
             let object = runtime.frame().objects.get(index)?;
             slots.slot_for_object(object.id).map(|slot| (slot, index))
         });
-        let last_spatial_update = spatial_index.rebuild(runtime.frame(), live_slots);
+        let last_spatial_update =
+            spatial_index.rebuild(runtime.frame(), runtime.geometry_resources(), live_slots);
         let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
@@ -1281,7 +1282,11 @@ impl ExecutionSession {
                     .slot_for_object(object.id)
                     .map(|slot| (slot, index))
             });
-            self.last_spatial_update = self.spatial_index.rebuild(self.runtime.frame(), live_slots);
+            self.last_spatial_update = self.spatial_index.rebuild(
+                self.runtime.frame(),
+                self.runtime.geometry_resources(),
+                live_slots,
+            );
             return;
         }
         let mut stats = SpatialIndexUpdateStats::default();
@@ -1294,6 +1299,7 @@ impl ExecutionSession {
                     let painter_order = self.runtime.painter_rank(index).unwrap_or(index as u32);
                     stats.merge_from(self.spatial_index.upsert_frame_slot(
                         self.runtime.frame(),
+                        self.runtime.geometry_resources(),
                         slot,
                         index,
                         painter_order as u64,
@@ -1315,6 +1321,7 @@ impl ExecutionSession {
                 if let Some(slot) = self.slots.slot_for_object(object.id) {
                     stats.merge_from(self.spatial_index.upsert_frame_slot(
                         self.runtime.frame(),
+                        self.runtime.geometry_resources(),
                         slot,
                         index,
                         rank as u64,
