@@ -19,7 +19,7 @@ native input -------------------------------+--> interactive session
                                            |
 spatial/local renderer ---------------------+
                                            |
-content replacement / hot reload -----------+
+content replacement ------------------------+
 
 browser startup measurement runs independently.
 measured specialization starts only from evidence.
@@ -74,18 +74,18 @@ The handoff covers:
 
 C4 replacement and C5 precise picking/selection/manipulation can consume this contract independently. C2 supplies normalized input; scene-target interpretation stays with C5.
 
-### CH4 — localized replacement and reconciliation contract
+### CH4 — localized replacement contract
 
-Owned by C4/#368/#64.
+Owned by C4/#368. Source hot reload under #64 is a separate follow-on that may consume this contract.
 
 The handoff covers:
 - `ReplaceContent` through the shared semantic transaction;
 - source/content generation safety;
 - local relowering/runtime/resource install;
 - rollback on failed preparation;
-- stable source/semantic identity reconciliation.
+- effective content lease/version safety and resource lifetime.
 
-C1 `always_redraw`/host replacement and C5 hot-reload session migration consume this contract.
+C1 `always_redraw`/host replacement consumes this contract. A future #64 implementation must define source identity and session migration separately.
 
 ### CH5 — measurement contract
 
@@ -125,13 +125,13 @@ C7 specialization may begin only when a measured cost is isolated with represent
 
 **Primary output:** CH3.
 
-### Track CR — content replacement and hot reload
+### Track CR — content replacement
 
-**Owners:** C4/#368/#64.
+**Owner:** C4/#368.
 
-**Owns:** generic generation-safe resource/content replacement and stable source-identity reconciliation.
+**Owns:** generic generation-safe authored/effective resource and content replacement.
 
-**Can proceed independently from:** direct manipulation UI and most native input work. Generic `ReplaceContent` can be proven with semantic/runtime fixtures before editor hot reload is integrated.
+**Can proceed independently from:** direct manipulation UI, most native input work and the separate source hot-reload feature. Generic `ReplaceContent` can be proven with semantic/runtime fixtures.
 
 **Primary output:** CH4.
 
@@ -143,9 +143,9 @@ This is primarily an **integration/convergence track**. It consumes:
 - CH2 for normalized input;
 - CH3 for hit-test candidates/locality;
 - CH1 for mutation/driver ownership;
-- CH4 for hot-reload reference migration.
+- CH4 for content results used by interaction actions.
 
-Session identity, overlay projection, and other state explicitly outside authored scene content can be developed before every integration is available. C5 also owns language-neutral trigger synthesis and semantic interaction-binding/action dispatch: Rust, Python and future language wrappers declare the same bindings, while ordinary native actions execute on the shared Rust path without host callbacks. Hit/select, click/highlight, drag, and hot-reload integration land as their specific handoffs become usable.
+Session identity, overlay projection, and other state explicitly outside authored scene content can be developed before every integration is available. C5 also owns language-neutral trigger synthesis and semantic interaction-binding/action dispatch: Rust, Python and future language wrappers declare the same bindings, while ordinary native actions execute on the shared Rust path without host callbacks. Hit/select, click/highlight and drag land as their specific handoffs become usable. Source hot-reload migration is a separate #64 follow-on.
 
 The names `InputIngress`, `Trigger`, `InteractionBinding`, `Action`, and `InteractiveSession` identify shared Rust responsibilities, not mandatory new public types, crates, or a second scheduler. Action execution reuses existing session, signal, driver, animation, callback and authored-mutation operations. Qualification and the concrete click/highlight integration sequence belong in #69 and #846.
 
@@ -176,7 +176,7 @@ Track CI: input --------------- CH2 -----+
                                           |
 Track CL: locality/spatial ---- CH3 -----+--> Track CS: session/manipulation
                                           |
-Track CR: replacement/reload -- CH4 -----+
+Track CR: replacement --------- CH4 -----+
 
 Track CB: startup measurement runs beside the above.
 Track CL/CB measurements -- CH5 --> Track CO only when evidence justifies it.
@@ -211,16 +211,16 @@ The final Phase C exit remains the existing #955 completion checklist. Parallel 
 
 ## Phase C evidence ledger
 
-Snapshot: 2026-09-29. This ledger points to executable evidence and named gaps; it does not change the roadmap or close an owning issue. Unit tests, focused smokes and renderer-specific fixtures prove only the contract they exercise.
+Snapshot: 2026-09-30. This ledger points to executable evidence and named gaps; it does not change the roadmap or close an owning issue. Unit tests, focused smokes and renderer-specific fixtures prove only the contract they exercise.
 
 | #955 area | Existing evidence | Remaining acceptance gap |
 | --- | --- | --- |
-| **C1 — callbacks and staged publication** | `crates/noon/src/host_callbacks.rs` (`callbacks_share_ordered_overlay_and_accumulate_from_prior_effective_frame`); `crates/noon/src/execution_session/callback.rs` (ordered phase and transaction-local provisional-node tests); `web/python/test_noon_callback_errors_wasm.py` (`test_typed_callback_membership_stages_ordered_existing_handles_until_one_commit`); `crates/noon-web/src/semantic_execution_player.rs` (membership collector commit/retry tests); `web/semantic-engine-endpoint.test.mjs` (complete/discard lifecycle); `scripts/shared-authoring-smoke.mjs` (ordered callback continuation/pixels); `scripts/host-callback-perf.mjs` (native/host workload counters). | #70 remains open. Python callbacks now stage ordered add/remove/clear operations for **existing typed handles**, but Python provisional object construction is not qualified. Ordered mixed native/host execution remains follow-up, as do all slow-callback/read-miss/backpressure and stale-resource cases. Do not treat Rust transaction-local provisional tests or existing-handle membership as Python provisional construction. |
+| **C1 — callbacks and staged publication** | `crates/noon/src/host_callbacks.rs` and `crates/noon/src/execution_session/callback.rs` cover versioned callback reads, ordered transaction overlays, effective writes and provisional identities. Python fixtures `web/python/examples/ordinary_mixed_updater_order.py` and `ordinary_callback_provisional_path.py`, with their smoke paths in `scripts/shared-authoring-smoke.mjs`, qualify mixed native/host declaration order, same-phase reads and callback-local path construction; #1745 merged their shared publication path. | #70 remains open. Arbitrary `always_redraw` resource production is not wired to an effective content/resource lane. Slow required-callback latency, read-miss failure/suspension and stale async resource outcomes still need complete qualification; external host side effects remain outside Noon rollback. |
 | **C2 — native input/events** | Native normalization/lifecycle cases in `crates/noon-native/src/pointer_input/tests.rs`, including `normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale`, `repeated_edges_and_nonpointer_events_share_sequence_without_coalescing`, `pending_callback_rejects_bursts_without_acknowledging_or_overwriting_position`, and `paused_move_press_and_release_use_one_coherent_session_path`; DOM collector DPR 1/2 cases in `scripts/browser-pointer-input-smoke.mjs`; direct Rust/WASM interaction across WebGPU/WebGL and DPR 1/2 in `scripts/pointer-selection-direct-qualification.mjs`; worker/browser pixel path in `scripts/pointer-selection-qualification.mjs`. Bounded browser lanes are covered by `web/browser-pointer-input.test.mjs` (64 in-flight samples) and `web/semantic-engine-endpoint.test.mjs` (128 queued semantic controls); time-domain/replay classification is covered by `semantic_execution_player.rs::browser_input_classifies_unrecorded_replay_without_blocking_first_execution` and `semantic-engine-endpoint.test.mjs` (renderer timestamps do not become playback time). The WebKit DPR2 touch drag path is `scripts/playground-gallery-selection-smoke.mjs`. | #69 remains open. These tests cover normalization, DPI, bounded admission, paused wake and classification as separate contracts; they do not provide the complete paired native/browser trace through one Rust-authored scene, native reactive event subscriptions and C5 interaction/session policy, including all lifecycle outcomes. DPR qualification alone does not close C2. |
 | **C3 — retained locality/spatial queries** | `crates/noon-runtime/tests/static_frame_locality.rs` proves 100k static objects do zero timeline work on an unchanged frame; `geometry_patch_locality.rs` and `property_patch_locality.rs` prove one-object changes in a 100k scene; renderer residency/dirty upload cases are in `crates/noon-render-wgpu/tests/retained_static_frame_locality.rs` and `src/gpu/mod.rs`. `web/direct-execution-smoke-probe.js` runs a real direct-WASM 100k sparse-locality scene during `scripts/browser-smoke.mjs` and asserts the normal-playback single-target upload remains at most 256 bytes. The 88-byte scope is independently exact: packed circle/rectangle/line instances are 88 bytes in `crates/noon-render-wgpu/src/lib.rs`; `src/gpu/mod.rs` verifies a dirty circle upload equals one `CircleInstance` (88 bytes), and `tests/line_instance_vertex_abi.rs` pins the line stride to 88 bytes. | #569/#362/#835 remain open. The 100k tests establish selected runtime locality and the direct-WASM smoke bounds one normal-playback update; the 88-byte assertion is for a one-circle renderer fixture, not a universal per-scene or all-shapes update budget. The full 100k acceptance still needs same-index interaction/viewport candidate, stale-context and platform/backend coverage across the specified workload shapes and long churn. |
-| **C4 — content replacement/hot reload** | Shared `ReplaceContent` publication and rollback coverage is in `crates/noon-compile/src/semantic_lowering/publication.rs` and `crates/noon-runtime/tests/live_patch.rs`. Source restart/Run lifecycle contracts are exercised by `web/playground-source-restart.test.mjs`, `web/playground-restart-integration.test.mjs`, and `web/playground-run-request-router.test.mjs`. | #368/#64 remain open. Passing Run/restart lifecycle tests are not stable-identity hot-reload qualification: normal Run has not been qualified as local `ReplaceContent` reconciliation with compatible live/session-state migration. For web resources, wgpu retains submitted handles through their GPU use; the remaining gap is proving bounded ownership/dependency closure and accepted transport retirement while preserving in-flight resources through wgpu, not requiring a custom completion fence before CPU semantic retirement. |
-| **C5 — session/direct manipulation** | Native and browser input contracts above feed the public touch drag/cancel/Run-reset qualification in `scripts/playground-gallery-selection-smoke.mjs`; its artifact harness is `web/playground-gallery-selection-artifacts.test.mjs`. Direct interaction pixels and DPR coverage are also in `scripts/pointer-selection-direct-qualification.mjs`. | #846 remains open. These prove selected click/drag/reset paths, not the complete pure-Rust/Python/future-wrapper equivalence, undo grouping, overlapping animated hit targets, stationary hover transitions, or every driver-arbitration case. |
+| **C4 — content replacement** | Shared semantic `ReplaceContent` publication and rollback coverage is in `crates/noon-compile/src/semantic_lowering/publication.rs` and `crates/noon-runtime/tests/live_patch.rs`. #1747 adds a runtime/session effective content lease with stale-result and conflict checks; its 600-lease test stages only the unrelated animated row, and a session test checks local spatial picking on replace/release. Existing text/image handles and inline geometry are supported. | #368 remains open. New dynamic text/image/external-geometry resource admission, bounded version retirement across long churn and an arbitrary Python `always_redraw` producer still need integration and platform qualification. #64 owns source hot reload separately; normal Python Run is an explicit restart, not a Phase C C4 exit requirement. |
+| **C5 — session/direct manipulation** | Native and browser input contracts feed public touch drag/cancel/Run-reset qualification in `scripts/playground-gallery-selection-smoke.mjs`; its artifact harness is `web/playground-gallery-selection-artifacts.test.mjs`. `crates/noon/src/execution_session/selection/tests.rs` covers native click-to-Indicate, stationary hover under presented geometry, out-and-back motion, callback barriers and 10k-object candidate locality. Direct interaction pixels and DPR coverage are in `scripts/pointer-selection-direct-qualification.mjs`. | #846 remains open. The existing paths do not yet prove the full pure-Rust/Python platform-equivalent trace, all overlapping animated hit targets, gesture cancellation/undo and driver arbitration under long-running mixed workloads. Source hot-reload reference migration belongs to #64. |
 | **C6 — startup/topology** | `scripts/playground-cold-start.mjs` compares the existing `live-authoring-bootstrap.js` automatic preload with a controlled off arm that fulfills only that module as empty, waits the same two-animation-frame gate, then submits the identical public source edit. `web/main.js` marks selected-source/public-gallery-API readiness; the existing bootstrap marks preload start. Scene presentation is attributed to the exact retained transport session’s first successful `renderer.render()` (blank prepared-canvas frames are excluded). Production package `c06f27f49848542a9f6d4ddfc21334e942f1ad2a` (66,804,567-byte WASM), Chromium 151 on macOS 15.5 / Intel i7-9750H; mobile-class is 390×844 DPR2 with 4× CPU throttle. Three runs per profile and mode, geometry and retained text; summary `/tmp/noon-c6-preload-comparison-summary.json`, run artifacts `/tmp/noon-c6-content-{desktop,mobile-class}-{on,off}[-r2|-r3].json`; measurement code is committed as `3cadc6db9`. After preload completion, first edit→scene render medians were desktop 1.550 s geometry / 0.551 s text and mobile-class 1.554 s / 0.571 s. Without preload, the first edit→scene render medians were desktop 5.511 s / 4.459 s and mobile-class 5.686 s / 4.785 s. The measured first-edit improvement is 3.91–4.21 s (about 72–88%). Selected source/API readiness preceded the two-frame gate; automatic preload began 24–49 ms later on desktop and 16–112 ms later on mobile-class. Both arms had one authoring and one render worker after the first run; the warm follow-up retained their worker topology. | #642 remains open. The comparison establishes lower first-edit latency only after preload has completed; it does not measure edits arriving during preload. The source-ready mark identifies the selected source and public API, while two rAFs give the browser a paint opportunity; neither is pixel proof of source text reaching scanout. Renderer-return timestamps are not physical scanout. Navigation-to-authored-frame medians also varied: on/off were 4.906/5.905 s geometry and 4.075/4.810 s text on desktop, 5.806/6.467 s and 4.553/5.657 s mobile-class; the off path waits for a first source edit and its normal debounce, so these are not an isolated startup-overlap attribution. Still missing are source execution vs reconciliation phase durations, actual WASM instance/instantiated-byte accounting, true peak memory, an un-overlapped reference to isolate overlap benefit, and latency evidence for edits coalesced during preload. Sampled process-tree RSS may double-count shared pages and excludes external GPU allocations. |
 | **C7 — measured specialization** | The locality and startup measurement paths above provide workload/counter entry points. | No specialization should be claimed from these proofs alone. A proposed optimization still needs an isolated representative trace, before/after evidence and equivalence checks against the stable path. |
 
-The current evidence therefore supports selected input, locality, renderer ABI and startup telemetry contracts; it does not establish Phase C exit. In addition to the row-specific gaps, #955 still requires ordered native/host callback behavior, provisional Python structural mutations, C4 normal-Run reconciliation and browser GPU-safe resource retirement to be qualified before those areas can be claimed complete.
+The current evidence supports selected callback ordering, provisional Python construction, input, locality, renderer ABI, effective content and startup contracts; it does not establish Phase C exit. The remaining gaps are the row-specific producer/resource, cross-platform trace, long-churn and startup qualification above. Source hot reload is the separate #64 follow-on; normal Run remains an explicit restart.
