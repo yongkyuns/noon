@@ -575,6 +575,7 @@ async function ensureRuntimeReady({
   semanticExecution,
   authoringClient: client,
   loopDurationSeconds,
+  runPhaseMetrics = null,
 }) {
   if (runtimeStartPromise !== null) return runtimeStartPromise;
   if (player !== null) return null;
@@ -591,10 +592,20 @@ async function ensureRuntimeReady({
       patchStatus.value = "Preparing authored animation…";
       patchStatus.dataset.state = "running";
 
-      const ready = await nextPlayer.startSemanticExecution(semanticExecution, {
-        authoringClient: client,
-        loopDurationSeconds,
-      });
+      if (runPhaseMetrics !== null) {
+        runPhaseMetrics.initialEngineStartStartedAtMs = performance.now();
+      }
+      let ready;
+      try {
+        ready = await nextPlayer.startSemanticExecution(semanticExecution, {
+          authoringClient: client,
+          loopDurationSeconds,
+        });
+      } finally {
+        if (runPhaseMetrics !== null) {
+          runPhaseMetrics.initialEngineStartCompletedAtMs = performance.now();
+        }
+      }
       const initialState = await nextPlayer.state();
 
       player = nextPlayer;
@@ -921,6 +932,9 @@ async function runScene() {
     runGeneration: runToken.runGeneration,
     sourceRunStartedAtMs: null,
     sourceRunCompletedAtMs: null,
+    pythonWorkerRunTiming: null,
+    initialEngineStartStartedAtMs: null,
+    initialEngineStartCompletedAtMs: null,
     reconciliations: [],
     semanticContextId: null,
   };
@@ -979,6 +993,7 @@ async function runScene() {
                 semanticExecution: registration.semanticExecution,
                 authoringClient: client,
                 loopDurationSeconds,
+                runPhaseMetrics,
               });
             } else {
               await ensureExecutionReady();
@@ -1017,6 +1032,7 @@ async function runScene() {
         });
         runPhaseMetrics.sourceRunCompletedAtMs = performance.now();
         runPhaseMetrics.semanticContextId = authored.semanticExecution?.contextId ?? null;
+        runPhaseMetrics.pythonWorkerRunTiming = authored.workerRunTiming ?? null;
         if (isCurrentRun(runToken)) status.dataset.authoringWarmup = "ready";
       } catch (error) {
         authoringFailed = true;
@@ -1089,6 +1105,7 @@ async function runScene() {
           semanticExecution,
           authoringClient: client,
           loopDurationSeconds,
+          runPhaseMetrics,
         });
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
       } else {
