@@ -157,7 +157,7 @@ impl ExecutionSession {
 mod tests {
     use noon_core::{
         GeometryRef, GeometryResourceArena, GeometryResourceLookup, ObjectContentRef,
-        RasterImageResourceArena, SemanticImageContent, SemanticObjectState, SemanticStore,
+        RasterImageResourceArena, Rect, SemanticImageContent, SemanticObjectState, SemanticStore,
         StoredGeometry, Vec2, VectorPath,
     };
 
@@ -271,7 +271,23 @@ mod tests {
             Some(handle)
         );
         assert!(session.geometry_resources().get(handle).is_some());
+        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 1);
+        let external_view =
+            session.query_viewport(Rect::new(Vec2::new(1.5, -0.1), Vec2::new(1.75, 0.1)));
+        assert_eq!(external_view.object_indices(), &[0]);
+        assert_eq!(external_view.spatial_stats().full_scan_fallbacks, 0);
+        assert_eq!(
+            session.pick_effective_fill(Vec2::new(1.6, 0.0), |_| true).0,
+            PointerFillOutcome::Unsupported {
+                target,
+                reason: PointerFillUnsupported::Content,
+            }
+        );
         session.release_effective_content(lease).unwrap();
         assert!(session.geometry_resources().get(handle).is_none());
+        assert!(session
+            .query_viewport(Rect::new(Vec2::new(1.5, -0.1), Vec2::new(1.75, 0.1),))
+            .object_indices()
+            .is_empty());
     }
 }
