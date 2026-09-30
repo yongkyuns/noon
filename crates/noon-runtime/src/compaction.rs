@@ -80,11 +80,19 @@ impl SceneInstance {
                     },
                 });
             }
-            let retained_contents: Vec<_> = self
-                .effective_content_drivers
-                .values()
-                .map(|driver| driver.content.clone())
-                .collect();
+            let retained_contents: Vec<_> =
+                self.effective_content_drivers
+                    .values()
+                    // An effective image admitted into the runtime overlay is not
+                    // a compiled dependency. Passing it as a compiled root would
+                    // make one missing handle defer pruning all unrelated history.
+                    .filter(|driver| {
+                        driver.content.image().is_none_or(|image| {
+                            !self.effective_images.contains_key(&image.resource())
+                        })
+                    })
+                    .map(|driver| driver.content.clone())
+                    .collect();
             let resources = self.compiled.resources();
             // Resource pruning changes the compiled dependency closure even
             // when every execution row stays put. Reserve a fresh publication
@@ -220,7 +228,8 @@ mod tests {
     };
     use noon_core::{
         Color, CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena,
-        ObjectContentRef, ObjectId, Property, RateFunction, Rect, SemanticClickIndicate,
+        ObjectContentRef, ObjectId, Property, RasterImageResourceArena, RasterImageResourceLookup,
+        RateFunction, Rect, SemanticClickIndicate, SemanticImageContent,
         SemanticMutationTransaction, SemanticObjectContent, SemanticObjectProperty,
         SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TextResource,
         TextResourceLookup, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues,
@@ -523,6 +532,39 @@ mod tests {
             runtime.frame().objects[0].content,
             ObjectContentRef::Text(authored)
         );
+    }
+
+    #[test]
+    fn runtime_owned_image_lease_does_not_pin_unrelated_compiled_history() {
+        let (compiled, handles) = compiled_text_history(&["obsolete", "authored"]);
+        let mut runtime = SceneInstance::new(compiled);
+        let object = ObjectId::new(99);
+        runtime
+            .apply_execution_patch(&ExecutionPatch::CreateObject(self::object(99)))
+            .unwrap();
+        let mut source = RasterImageResourceArena::new();
+        let handle = source.intern_rgba8(1, 1, vec![255; 4]).unwrap();
+        let prepared = runtime
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(handle),
+                &source,
+                None,
+            )
+            .unwrap();
+        let lease = runtime
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        drop(source);
+
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 1);
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[0]).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[1]).is_some());
+        assert!(runtime.raster_image_resources().get(handle).is_some());
+        assert_eq!(runtime.effective_content_lease(object), Some(lease));
+        runtime.release_effective_content(lease).unwrap();
+        assert!(runtime.raster_image_resources().get(handle).is_none());
     }
 
     #[test]
