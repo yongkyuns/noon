@@ -7,7 +7,7 @@ use noon_core::{ReactiveValue, SignalId};
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds, upper_bound_start, EffectiveBoundsBasis,
+    effective_object_conservative_bounds_with_resources, upper_bound_start, EffectiveBoundsBasis,
     EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
     SceneInstance, TrackGroup, PROPERTY_ORDER,
 };
@@ -225,24 +225,31 @@ impl SceneInstance {
         let bounds = if row.spatially_differs_from_frame(&self.frame, object_index) {
             let object = &self.frame.objects[object_index];
             let content = row.content_override.as_ref().unwrap_or(&object.content);
-            effective_object_conservative_bounds(
+            let local_bounds = object
+                .text_bounds
+                .or_else(|| content.image().map(|image| image.local_bounds()));
+            effective_object_conservative_bounds_with_resources(
                 row.render_geometry
                     .as_deref()
                     .or_else(|| content.geometry()),
-                object.text_bounds,
+                local_bounds,
                 row.render_transform.unwrap_or(row.transform),
                 row.style,
+                self.geometry_resources(),
             )
         } else {
             cached_bounds
         };
         let object = &self.frame.objects[object_index];
         let content = row.content_override.as_ref().unwrap_or(&object.content);
+        let local_bounds = object
+            .text_bounds
+            .or_else(|| content.image().map(|image| image.local_bounds()));
         let bounds_basis = EffectiveBoundsBasis::from_content(
             row.render_geometry
                 .as_deref()
                 .or_else(|| content.geometry()),
-            object.text_bounds,
+            local_bounds,
         );
         Some(row.properties(bounds, bounds_basis))
     }
@@ -707,9 +714,10 @@ mod tests {
         SemanticExecutionIndex,
     };
     use noon_core::{
-        CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, SemanticObjectProperty,
+        CompositionTimeMap, GeometryRef, GeometryResourceArena, ObjectId, Property,
+        RasterImageResourceArena, RateFunction, SemanticImageContent, SemanticObjectProperty,
         SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TrackDefinition,
-        TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+        TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
     };
 
     use super::*;
@@ -734,6 +742,76 @@ mod tests {
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")
+    }
+
+    #[test]
+    fn prepared_bounds_resolve_leased_path_and_image_for_staged_transform() {
+        let object = ObjectId::new(1);
+        let compiled = CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track = TrackDefinition {
+            id: TrackId::new(1),
+            object,
+            property: Property::Position,
+            values: TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(10.0, 0.0),
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::default(),
+        };
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[track]).unwrap());
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::new(-2.0, -1.0))
+                .line_to(Vec2::new(2.0, 3.0)),
+        );
+        let replacement = instance
+            .prepare_effective_geometry_replacement(object, handle, &source, None)
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(replacement)
+            .unwrap();
+
+        let prepared = instance.prepare_advance_to(1.0).unwrap();
+        let properties = instance.prepared_properties_at(&prepared, 0, None).unwrap();
+        assert_eq!(
+            properties.bounds,
+            Some(noon_core::Rect {
+                min: Vec2::new(3.0, -1.0),
+                max: Vec2::new(7.0, 3.0),
+            })
+        );
+
+        instance.release_effective_content(lease).unwrap();
+        let mut images = RasterImageResourceArena::new();
+        let image = images.intern_rgba8(2, 1, vec![255; 8]).unwrap();
+        let replacement = instance
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(image),
+                &images,
+                None,
+            )
+            .unwrap();
+        instance
+            .commit_effective_content_replacement(replacement)
+            .unwrap();
+        let prepared = instance.prepare_advance_to(1.0).unwrap();
+        let properties = instance.prepared_properties_at(&prepared, 0, None).unwrap();
+        assert_eq!(
+            properties.bounds,
+            Some(noon_core::Rect {
+                min: Vec2::new(4.0, -0.5),
+                max: Vec2::new(6.0, 0.5),
+            })
+        );
     }
 
     #[test]
