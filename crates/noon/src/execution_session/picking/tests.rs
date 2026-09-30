@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use noon_core::{
-    AnimationOptions, Color, NativeInputModifiers, NativePointerCancellation, NativePointerId,
-    NativePointerInputKind, NativePointerPosition, RateFunction, SemanticMutationTransaction,
-    SemanticNodeCreation, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-    SemanticStore, SemanticVec3, StoredGeometry, Transform2D, VectorPath,
+    AnimationOptions, Color, CompositionTimeMap, NativeInputModifiers, NativePointerCancellation,
+    NativePointerId, NativePointerInputKind, NativePointerPosition, RateFunction,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty, SemanticObjectState,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticPaint, SemanticStore,
+    SemanticVec3, StoredGeometry, TrackTiming, Transform2D, VectorPath,
 };
 
 use super::*;
@@ -610,6 +611,77 @@ fn hundred_thousand_objects_share_local_viewport_and_pointer_updates_through_chu
         assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
         assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
         previous = next;
+    }
+}
+
+#[test]
+fn hundred_thousand_object_animation_and_pointer_view_stay_local_across_ticks() {
+    let mut store = SemanticStore::new();
+    let mut target = None;
+    let scene_root = store.insert_family();
+    for index in 0..100_000 {
+        let mut state = circle();
+        state.transform.translation = if index == 123 {
+            SemanticVec3::new(492.0, 0.0, 0.0)
+        } else {
+            SemanticVec3::new(
+                100.0 + f64::from(index % 400) * 4.0,
+                100.0 + f64::from(index / 400) * 4.0,
+                0.0,
+            )
+        };
+        let node = store.insert_semantic_object(state);
+        store.add_member(scene_root, node).unwrap();
+        if index == 123 {
+            target = Some(node);
+        }
+    }
+    let target = target.unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let track = transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Position,
+        SemanticObjectTrackValues::Vec3 {
+            from: SemanticVec3::new(492.0, 0.0, 0.0),
+            to: SemanticVec3::new(748.0, 0.0, 0.0),
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let animation = transaction.create_animation_composition(
+        noon_core::SemanticAnimationCompositionKind::Parallel,
+        [track],
+        Default::default(),
+    );
+    let committed = transaction.apply(&mut store).unwrap();
+    store.attach_to_scene(scene_root).unwrap();
+    let mut session = ExecutionSession::from_semantic_root_with_animation_root(
+        &store,
+        scene_root,
+        committed.resolve(animation).unwrap(),
+    )
+    .unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.take_frame_changes();
+    for tick in 1..=32 {
+        let time = f64::from(tick) / 32.0;
+        session.advance_to(time).unwrap();
+        let x = 492.0 + 256.0 * time as f32;
+        let viewport = session.query_viewport(noon_core::Rect::new(
+            Vec2::new(x - 1.1, -1.1),
+            Vec2::new(x + 1.1, 1.1),
+        ));
+        assert_eq!(viewport.object_indices(), &[123]);
+        assert_eq!(viewport.spatial_stats().full_scan_fallbacks, 0);
+        assert!(viewport.spatial_stats().candidates_tested <= 16);
+        assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 1);
+        let picked = query(&mut session, Vec2::new(x, 0.0));
+        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target));
+        assert_eq!(picked.precise_tests(), 1);
+        assert_eq!(picked.spatial_stats().full_scan_fallbacks, 0);
+        assert!(picked.spatial_stats().candidates_tested <= 16);
+        assert_eq!(session.take_frame_changes().object_indices(), &[123]);
     }
 }
 
