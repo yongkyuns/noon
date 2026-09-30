@@ -1,10 +1,11 @@
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2, VectorPath,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{RenderPrimitive, RetainedFramePreparer};
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState, SceneInstance};
 
 fn retained_geometry_frame(
     semantic_geometry: GeometryRef,
@@ -80,6 +81,61 @@ fn assert_prepares_path(frame: &FrameState) {
         assert_eq!(warm.geometry_stats().path_vertices_repacked, 0);
         assert_eq!(warm.geometry_stats().path_indices_repacked, 0);
     }
+}
+
+#[test]
+fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
+    let object = ObjectId::new(1);
+    let compiled = CompiledScene::compile_objects(
+        vec![CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        )],
+        &[],
+    )
+    .unwrap();
+    let mut runtime = SceneInstance::new(compiled);
+    let mut source = GeometryResourceArena::new();
+    let handle = source.insert_path(
+        VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close(),
+    );
+    let prepared = runtime
+        .prepare_effective_geometry_replacement(object, handle, &source, None)
+        .unwrap();
+    let lease = runtime
+        .commit_effective_content_replacement(prepared)
+        .unwrap();
+    drop(source);
+
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+    {
+        let publication = runtime.take_renderer_publication();
+        let frame = preparer
+            .prepare_publication(&device, &publication, metrics)
+            .unwrap();
+        assert!(frame
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches.iter())
+            .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+    }
+
+    runtime.release_effective_content(lease).unwrap();
+    let publication = runtime.take_renderer_publication();
+    let frame = preparer
+        .prepare_publication(&device, &publication, metrics)
+        .unwrap();
+    assert!(!frame
+        .geometry_render_chunks()
+        .flat_map(|chunk| chunk.render_batches.iter())
+        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
 }
 
 #[test]

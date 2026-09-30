@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon_core::{GeometryRef, ObjectId, Rect, Vec2};
+use noon_core::{
+    GeometryRef, GeometryResource, GeometryResourceLookup, ObjectId, Rect, Vec2, VectorPath,
+};
 
 use crate::{ExecutionSlotId, FrameState};
 
@@ -136,6 +138,7 @@ impl ExecutionSpatialIndex {
     pub fn rebuild(
         &mut self,
         frame: &FrameState,
+        resources: &impl GeometryResourceLookup,
         live_slots: impl IntoIterator<Item = (ExecutionSlotId, usize)>,
     ) -> SpatialIndexUpdateStats {
         self.cells.clear();
@@ -149,6 +152,7 @@ impl ExecutionSpatialIndex {
         for (painter_order, (slot, frame_index)) in live_slots.into_iter().enumerate() {
             stats.merge_from(self.upsert_frame_slot(
                 frame,
+                resources,
                 slot,
                 frame_index,
                 painter_order as u64,
@@ -160,6 +164,7 @@ impl ExecutionSpatialIndex {
     pub fn upsert_frame_slot(
         &mut self,
         frame: &FrameState,
+        resources: &impl GeometryResourceLookup,
         slot: ExecutionSlotId,
         frame_index: usize,
         painter_order: u64,
@@ -173,7 +178,9 @@ impl ExecutionSpatialIndex {
         {
             return self.remove_object(object.id);
         }
-        let Some(bounds) = frame_object_conservative_bounds(frame, frame_index) else {
+        let Some(bounds) =
+            frame_object_conservative_bounds_with_resources(frame, frame_index, resources)
+        else {
             return self.remove_object(object.id);
         };
         self.upsert_bounds(slot, object.id, bounds, painter_order)
@@ -380,14 +387,58 @@ pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize)
     )
 }
 
+fn frame_object_conservative_bounds_with_resources(
+    frame: &FrameState,
+    object_index: usize,
+    resources: &impl GeometryResourceLookup,
+) -> Option<Rect> {
+    let object = frame.objects.get(object_index)?;
+    let geometry = frame.render_geometry(object_index);
+    let external_bounds = match geometry {
+        Some(GeometryRef::External(id)) => {
+            let handle = resources.current_handle(*id)?;
+            match resources.get(handle)? {
+                GeometryResource::VectorPath(path) => vector_path_bounds(path),
+            }
+        }
+        _ => None,
+    };
+    effective_object_conservative_bounds_with_external(
+        geometry,
+        object
+            .text_bounds
+            .or_else(|| object.content.image().map(|image| image.local_bounds())),
+        frame.render_transform(object_index),
+        object.style,
+        external_bounds,
+    )
+}
+
 pub(crate) fn effective_object_conservative_bounds(
     geometry: Option<&GeometryRef>,
     text_bounds: Option<Rect>,
     render_transform: noon_core::Transform2D,
     style: noon_core::Style,
 ) -> Option<Rect> {
+    effective_object_conservative_bounds_with_external(
+        geometry,
+        text_bounds,
+        render_transform,
+        style,
+        None,
+    )
+}
+
+fn effective_object_conservative_bounds_with_external(
+    geometry: Option<&GeometryRef>,
+    text_bounds: Option<Rect>,
+    render_transform: noon_core::Transform2D,
+    style: noon_core::Style,
+    external_bounds: Option<Rect>,
+) -> Option<Rect> {
     let mut world = match geometry {
         Some(GeometryRef::Circle { radius }) => circle_world_bounds(*radius, render_transform),
+        Some(GeometryRef::External(_)) => transform_rect(external_bounds?, render_transform),
         Some(geometry) => transform_rect(geometry_local_bounds(geometry)?, render_transform),
         None => transform_rect(text_bounds?, render_transform),
     };
@@ -432,17 +483,19 @@ fn geometry_local_bounds(geometry: &GeometryRef) -> Option<Rect> {
             Some(Rect::new(-half, half))
         }
         GeometryRef::Line { start, end } => Rect::from_points([*start, *end]),
-        GeometryRef::VectorPath(path) => {
-            let source = path.conservative_bounds();
-            let target = path
-                .morph_target()
-                .and_then(|target| target.conservative_bounds());
-            match (source, target) {
-                (Some(source), Some(target)) => Some(source.union(target)),
-                (source, target) => source.or(target),
-            }
-        }
+        GeometryRef::VectorPath(path) => vector_path_bounds(path),
         GeometryRef::External(_) => None,
+    }
+}
+
+fn vector_path_bounds(path: &VectorPath) -> Option<Rect> {
+    let source = path.conservative_bounds();
+    let target = path
+        .morph_target()
+        .and_then(|target| target.conservative_bounds());
+    match (source, target) {
+        (Some(source), Some(target)) => Some(source.union(target)),
+        (source, target) => source.or(target),
     }
 }
 
