@@ -70,7 +70,7 @@ try {
           // scene-space conversion and the renderer owns physical pixels.
           canvas.width = Math.round(640 * devicePixelRatio);
           canvas.height = Math.round(360 * devicePixelRatio);
-          const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), liveProgram);
+          const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), liveProgram, false);
           // Observe only calls that actually return from the Rust ABI. This is
           // test instrumentation, not an alternate collector or input consumer.
           const admittedInputs = [], nativePointerInput = renderer.nativePointerInput.bind(renderer);
@@ -310,12 +310,13 @@ try {
       }
      }
     }
-    if (backend === "webgpu") {
-      const prefix = "webgpu-rust-input-trace-dpr1";
-      const result = { backend, mode: "shared-rust-input-trace", deviceScaleFactor: 1,
+    {
+      const deviceScaleFactor = backend === "webgpu" ? 1 : 2;
+      const prefix = `${backend}-rust-input-trace-dpr${deviceScaleFactor}`;
+      const result = { backend, mode: "shared-rust-input-trace", deviceScaleFactor,
         status: "running", steps: [] };
       report.cases.push(result);
-      const page = await browser.newPage({ viewport: { width: 800, height: 500 }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: 800, height: 500 }, deviceScaleFactor });
       const errors = [];
       page.on("pageerror", error => errors.push(String(error)));
       page.setDefaultTimeout(60_000);
@@ -352,7 +353,8 @@ try {
           const { attachNativeInputs } = await import("./native-inputs.js");
           const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
           const canvas = document.querySelector("#scene"), errors = [];
-          canvas.width = 640; canvas.height = 360;
+          canvas.width = Math.round(640 * devicePixelRatio);
+          canvas.height = Math.round(360 * devicePixelRatio);
           const renderer = await createDirectPointerInputTraceRenderer(canvas.transferControlToOffscreen());
           const admittedInputs = [], nativePointerInput = renderer.nativePointerInput.bind(renderer);
           renderer.nativePointerInput = (...args) => {
@@ -369,6 +371,8 @@ try {
         await settled();
         const before = await state(), baseline = await image("baseline");
         assert.equal(before.frame.objects.length, 2, "use the shared Rust-authored pointer fixture");
+        assert.equal(await page.evaluate(() => direct.renderer.rendererBackend()),
+          backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal(before.time, 0);
 
         // Target click drives both native event subscriptions and C5 selection.
