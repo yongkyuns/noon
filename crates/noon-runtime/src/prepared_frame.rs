@@ -48,7 +48,7 @@ impl PreparedFrameEvaluation {
         self.expected
     }
 
-    fn staged_row(&self, object_index: usize) -> Option<&FrameRowState> {
+    pub(crate) fn staged_row(&self, object_index: usize) -> Option<&FrameRowState> {
         self.rows
             .binary_search_by_key(&object_index, |row| row.object_index)
             .ok()
@@ -582,6 +582,7 @@ impl SceneInstance {
         prepared.time != self.frame.time
             || !prepared.rows.is_empty()
             || !prepared.requested_family_animations.is_empty()
+            || !self.pending_family_endpoint_expirations.is_empty()
             || prepared
                 .reactive
                 .as_ref()
@@ -608,7 +609,7 @@ impl SceneInstance {
         self.commit_prepared_frame_inner(prepared, effective, false)
     }
 
-    fn commit_prepared_frame_inner(
+    pub(crate) fn commit_prepared_frame_inner(
         &mut self,
         prepared: PreparedFrameEvaluation,
         effective: PreparedEffectivePropertyBatch,

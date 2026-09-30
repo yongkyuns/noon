@@ -1,7 +1,7 @@
 use super::*;
 use noon_core::{
-    Color, SemanticClickIndicate, SemanticMutationTransaction, SemanticObjectState, SemanticStore,
-    StoredGeometry,
+    Color, GeometryId, GeometryRef, ObjectContentRef, SemanticClickIndicate,
+    SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
 };
 
 fn fixture() -> (
@@ -87,6 +87,46 @@ fn maintenance_rejects_pending_callback_before_touching_tombstones() {
         Err(ExecutionSessionMaintenanceError::RequiredCallbackPending)
     );
     assert_eq!(session.frame().objects.len(), 2);
+}
+
+#[test]
+fn callback_content_failure_keeps_phase_retryable_and_success_publishes_once() {
+    let (_store, mut session, _root, keep, _retired) = fixture();
+    let batch = session
+        .begin_required_callback_phase(1.0, [keep])
+        .unwrap()
+        .finish();
+    let before = session.publication_context();
+    assert!(matches!(
+        session.commit_required_callback_phase_with_content(
+            batch.clone(),
+            keep,
+            ObjectContentRef::Geometry(GeometryRef::External(GeometryId::new(777))),
+            None,
+            None,
+        ),
+        Err(ExecutionSessionCallbackError::Content(_))
+    ));
+    assert_eq!(session.pending_callback_token(), Some(batch.token()));
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.frame().time, 0.0);
+
+    let lease = session
+        .commit_required_callback_phase_with_content(
+            batch,
+            keep,
+            ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 3.0)),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(session.pending_callback_token(), None);
+    assert_eq!(session.frame().time, 1.0);
+    assert_eq!(
+        session.publication_context().frame_epoch(),
+        before.frame_epoch().checked_next().unwrap()
+    );
+    assert_eq!(session.effective_content_lease(keep), Some(lease));
 }
 
 #[test]
