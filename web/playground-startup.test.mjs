@@ -101,7 +101,7 @@ const preparationCall = runSceneBody.indexOf(
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
-const reconcileCall = runSceneBody.indexOf("await player.reconcileSemanticExecution(semanticExecution,");
+const reconcileCall = runSceneBody.indexOf("player.reconcileSemanticExecution(semanticExecution,");
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,

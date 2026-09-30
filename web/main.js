@@ -353,6 +353,7 @@ let playbackControls = null;
 let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
+let latestRunPhaseMetrics = null;
 let activeSourceContinuation = null;
 let activeRunRequest = null;
 let runtimeStartPromise = null;
@@ -914,6 +915,28 @@ async function runScene() {
 
   resetPresentationRate();
   const runToken = generations.beginRun(example.id);
+  const runPhaseMetrics = {
+    exampleId: example.id,
+    selectionGeneration: runToken.selectionGeneration,
+    runGeneration: runToken.runGeneration,
+    sourceRunStartedAtMs: null,
+    sourceRunCompletedAtMs: null,
+    reconciliations: [],
+    semanticContextId: null,
+  };
+  latestRunPhaseMetrics = runPhaseMetrics;
+  const measureReconciliation = async (phase, work) => {
+    const startedAtMs = performance.now();
+    try {
+      return await work();
+    } finally {
+      runPhaseMetrics.reconciliations.push({
+        phase,
+        startedAtMs,
+        completedAtMs: performance.now(),
+      });
+    }
+  };
   const source = sceneSourceEditor.value;
   const runRequest = { token: runToken, source };
   activeRunRequest = runRequest;
@@ -931,6 +954,7 @@ async function runScene() {
       status.dataset.authoringWarmup = "started";
       let authored;
       try {
+        runPhaseMetrics.sourceRunStartedAtMs = performance.now();
         authored = await client.run(source, {
           playground: {
             example_id: example.id,
@@ -958,7 +982,7 @@ async function runScene() {
               });
             } else {
               await ensureExecutionReady();
-              result = await player.reconcileSemanticExecution(
+              result = await measureReconciliation("continuation", () => player.reconcileSemanticExecution(
                 registration.semanticExecution,
                 {
                   authoringClient: client,
@@ -966,7 +990,7 @@ async function runScene() {
                     ? registration.duration
                     : null,
                 },
-              );
+              ));
             }
             const attachedPlayer = player;
             if (!isCurrentRun(runToken)) {
@@ -991,6 +1015,8 @@ async function runScene() {
             patchStatus.dataset.state = "running";
           },
         });
+        runPhaseMetrics.sourceRunCompletedAtMs = performance.now();
+        runPhaseMetrics.semanticContextId = authored.semanticExecution?.contextId ?? null;
         if (isCurrentRun(runToken)) status.dataset.authoringWarmup = "ready";
       } catch (error) {
         authoringFailed = true;
@@ -1046,10 +1072,10 @@ async function runScene() {
           callbackSessionId: semanticExecution.callbackSessionId ?? null,
           continuationGeneration: null,
         };
-        result = await player.reconcileSemanticExecution(replayExecution, {
+        result = await measureReconciliation("continuation-replay", () => player.reconcileSemanticExecution(replayExecution, {
           authoringClient: client,
           loopDurationSeconds,
-        });
+        }));
         if (!isCurrentRun(runToken)) {
           return recordStale(runToken, "after-continuation-replay");
         }
@@ -1071,10 +1097,10 @@ async function runScene() {
           await discardSemanticExecution(authored, client);
           return recordStale(runToken, "after-restart");
         }
-        result = await player.reconcileSemanticExecution(semanticExecution, {
+        result = await measureReconciliation("final", () => player.reconcileSemanticExecution(semanticExecution, {
           authoringClient: client,
           loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-        });
+        }));
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
       }
 
@@ -1477,6 +1503,9 @@ try {
     },
     get generationDiagnostics() {
       return generations.diagnostics;
+    },
+    get runPhaseMetrics() {
+      return latestRunPhaseMetrics;
     },
     async select(id) {
       return selectExample(id, { run: true, updateUrl: true });
