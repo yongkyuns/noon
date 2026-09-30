@@ -2,7 +2,7 @@
 
 Python owns callable identity and invocation. Rust owns semantic registration,
 activation ordering, the staged effective snapshot, and publication. Callbacks
-return one property-only effective batch to their existing session.
+return one effective batch to their existing session.
 """
 
 from __future__ import annotations
@@ -552,6 +552,8 @@ class _CanonicalCallbackContext:
         self._prefetch_errors: dict[tuple[int, int], Exception] = {}
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
+        self._content: dict[str, Any] | None = None
+        self._last_invocation = False
         # Python retains only delayed wrapper bookkeeping. The player owns the
         # one typed semantic transaction and is the sole publication authority.
         self._membership_finalizers: list[Callable[[], None]] = []
@@ -1036,7 +1038,32 @@ class _CanonicalCallbackContext:
                                      channel: new[channel]})
 
     def effective_batch(self) -> dict[str, Any]:
-        return {"token": self.token, "region": self.region, "writes": self._writes}
+        batch = {"token": self.token, "region": self.region, "writes": self._writes}
+        if self._content is not None:
+            batch["content"] = self._content
+        return batch
+
+    def replace_effective_circle(self, mobject: _base.Mobject, radius: float) -> None:
+        if not self._last_invocation:
+            raise NotImplementedError(
+                "effective circle replacement must be the final updater in this region"
+            )
+        if self._content is not None:
+            raise NotImplementedError("one effective content replacement per callback phase")
+        key, row = self.row(mobject)
+        self._content = {
+            "object": _phase_node_json(key),
+            "geometry": {"kind": "circle", "radius": _phase_number("circle radius", radius)},
+        }
+        row.invalidate_bounds()
+
+
+def set_effective_circle(mobject: _base.Mobject, radius: float) -> _base.Mobject:
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_circle requires an active canonical callback phase")
+    context.replace_effective_circle(mobject, radius)
+    return mobject
 
 
 def callback_line_target(
@@ -1540,7 +1567,9 @@ def run_canonical_callback_phase(
     _ACTIVE_CONTEXTS[scene_key] = context
     context_token = _ACTIVE_CANONICAL_CONTEXT.set(context)
     try:
-        for invocation in frame.get("invocations", []):
+        invocations = frame.get("invocations", [])
+        for invocation_index, invocation in enumerate(invocations):
+            context._last_invocation = invocation_index == len(invocations) - 1
             if not isinstance(invocation, dict):
                 raise TypeError("canonical callback invocation must be an object")
             callback_id = invocation.get("callback_id")

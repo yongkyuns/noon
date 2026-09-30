@@ -517,6 +517,14 @@ class Mobject:
     ) -> Mobject:
         return _callback_operations().add_updater(self, update_function, index, call_updater)
 
+    def set_effective_circle(self, radius: float) -> Mobject:
+        """Replace this callback target's effective circle without editing authored content.
+
+        This first producer is supported only by the last updater in an ordered
+        callback phase. A later region cannot yet read the new geometry.
+        """
+        return _callback_operations().set_effective_circle(self, radius)
+
     def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
         return _callback_operations().remove_updater(self, update_function)
 
