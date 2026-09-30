@@ -130,9 +130,12 @@ impl SceneInstance {
             .map(|driver| driver.lease)
     }
 
-    /// Prepare one content version against the exact effective publication. A
-    /// replacement of an existing lease must name that lease; a new producer
-    /// passes `None` and acquires ownership only when the result commits.
+    /// Prepare one content version. Initial acquisition pins the exact effective
+    /// publication; a replacement of an existing lease names that lease and
+    /// may commit after unrelated frame advances. This only versions the
+    /// supplied content value: a producer whose value depends on authored time
+    /// or other effective inputs must separately reject obsolete source samples.
+    /// A new producer passes `None` and acquires ownership only at commit.
     pub fn prepare_effective_content_replacement(
         &self,
         object: ObjectId,
@@ -349,7 +352,18 @@ impl SceneInstance {
         if prepared.lease.runtime != self.identity {
             return Err(EffectiveContentError::ForeignRuntime);
         }
-        if prepared.expected != self.publication {
+        // A producer that already owns this object may finish preparation after
+        // unrelated effective frames advance. Its lease version still orders
+        // content results, while the current row supplies the transform/style
+        // used for bounds and rendering. Initial acquisition remains pinned to
+        // the exact frame because its sequence is reserved only at commit.
+        let compatible = if prepared.expected_version.is_some() {
+            prepared.expected.scene_revision() == self.publication.scene_revision()
+                && prepared.expected.execution_revision() == self.publication.execution_revision()
+        } else {
+            prepared.expected == self.publication
+        };
+        if !compatible {
             return Err(EffectiveContentError::StalePublication {
                 expected: prepared.expected,
                 actual: self.publication,
@@ -359,6 +373,13 @@ impl SceneInstance {
         if !self.object_slot_is_live(index) || self.frame.objects[index].id != prepared.lease.object
         {
             return Err(EffectiveContentError::UnknownObject(prepared.lease.object));
+        }
+        if self.frame.render_geometries[index].is_some()
+            || self.frame.render_transforms[index].is_some()
+        {
+            return Err(EffectiveContentError::ActiveRenderOverride(
+                prepared.lease.object,
+            ));
         }
         match (
             self.effective_content_drivers.get(&index),
@@ -597,6 +618,77 @@ mod tests {
         assert_eq!(
             original.frame().objects[0].geometry(),
             Some(&GeometryRef::circle(2.0))
+        );
+    }
+
+    #[test]
+    fn leased_result_survives_unrelated_frame_but_not_authored_plan_change() {
+        let mut instance = scene(2, true);
+        let object = ObjectId::new(0);
+        let first = instance
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(first)
+            .unwrap();
+        let prepared = instance
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Geometry(GeometryRef::circle(3.0)),
+                None,
+                Some(lease),
+            )
+            .unwrap();
+        let superseded = instance
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Geometry(GeometryRef::circle(5.0)),
+                None,
+                Some(lease),
+            )
+            .unwrap();
+        instance.advance_to(1.0).unwrap();
+        instance
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        assert!(matches!(
+            instance.commit_effective_content_replacement(superseded),
+            Err(EffectiveContentError::StaleLease(_))
+        ));
+        assert_eq!(
+            instance.frame().objects[0].geometry(),
+            Some(&GeometryRef::circle(3.0))
+        );
+
+        let stale = instance
+            .prepare_effective_content_replacement(
+                object,
+                ObjectContentRef::Geometry(GeometryRef::circle(4.0)),
+                None,
+                Some(lease),
+            )
+            .unwrap();
+        instance
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: ObjectId::new(1),
+                style: Style {
+                    opacity: 0.6,
+                    ..Style::default()
+                },
+            })
+            .unwrap();
+        assert!(matches!(
+            instance.commit_effective_content_replacement(stale),
+            Err(EffectiveContentError::StalePublication { .. })
+        ));
+        assert_eq!(
+            instance.frame().objects[0].geometry(),
+            Some(&GeometryRef::circle(3.0))
         );
     }
 }

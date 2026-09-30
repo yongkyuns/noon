@@ -66,8 +66,10 @@ impl ExecutionSession {
         Ok(())
     }
 
-    /// Stage a versioned effective content result against this session's exact
-    /// runtime/frame publication. It does not mutate authored semantic state.
+    /// Stage a versioned effective content result. Initial acquisition pins the
+    /// exact runtime/frame publication; a held lease tolerates unrelated frame
+    /// advances while retaining authored/execution revision and lease checks.
+    /// It does not mutate authored semantic state.
     pub fn prepare_effective_content_replacement(
         &self,
         target: SemanticNodeId,
