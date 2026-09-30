@@ -328,6 +328,81 @@ fn animated_object_is_picked_at_its_current_effective_position_only() {
 }
 
 #[test]
+fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position() {
+    let mut store = SemanticStore::new();
+    let mut bottom_state = circle();
+    bottom_state.transform.translation = SemanticVec3::new(-4.0, 0.0, 0.0);
+    let bottom = attach(&mut store, bottom_state);
+    let mut top_state = circle();
+    top_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+    let top = attach(&mut store, top_state);
+
+    let mut bottom_endpoint_state = circle();
+    bottom_endpoint_state.transform.translation = SemanticVec3::ZERO;
+    let bottom_endpoint = store.insert_semantic_object(bottom_endpoint_state);
+    let bottom_animation = store
+        .insert_semantic_transform_animation(bottom, bottom_endpoint, AnimationOptions::new())
+        .unwrap();
+    let mut top_endpoint_state = circle();
+    top_endpoint_state.transform.translation = SemanticVec3::new(-4.0, 0.0, 0.0);
+    let top_endpoint = store.insert_semantic_object(top_endpoint_state);
+    let top_animation = store
+        .insert_semantic_transform_animation(top, top_endpoint, AnimationOptions::new())
+        .unwrap();
+    let mut session = session(&store);
+    assert_eq!(
+        query(&mut session, Vec2::new(-4.0, 0.0)).outcome(),
+        PointerFillOutcome::Hit(bottom)
+    );
+    assert_eq!(
+        query(&mut session, Vec2::new(4.0, 0.0)).outcome(),
+        PointerFillOutcome::Hit(top)
+    );
+    let bottom_segment = session
+        .activate_animation_segment(
+            &store,
+            bottom_animation,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    session.advance_to(2.0).unwrap();
+    session
+        .complete_segment(&mut store, bottom_segment)
+        .unwrap();
+    assert_eq!(
+        query(&mut session, Vec2::ZERO).outcome(),
+        PointerFillOutcome::Hit(bottom)
+    );
+    session
+        .activate_animation_segment(
+            &store,
+            top_animation,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+
+    session.advance_to(3.0).unwrap();
+    let midpoint = query(&mut session, Vec2::ZERO);
+    assert_eq!(midpoint.outcome(), PointerFillOutcome::Hit(top));
+    assert_eq!(midpoint.spatial_stats().results, 2);
+    assert_eq!(midpoint.precise_tests(), 1);
+
+    session.advance_to(3.5).unwrap();
+    assert_eq!(
+        query(&mut session, Vec2::ZERO).outcome(),
+        PointerFillOutcome::Hit(bottom)
+    );
+    assert_eq!(
+        query(&mut session, Vec2::new(-2.0, 0.0)).outcome(),
+        PointerFillOutcome::Hit(top)
+    );
+}
+
+#[test]
 fn removed_and_reused_semantic_nodes_do_not_resolve_as_the_old_target() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
