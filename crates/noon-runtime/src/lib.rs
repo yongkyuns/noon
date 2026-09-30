@@ -30,6 +30,7 @@ pub use signal_timeline::{
 pub use derived_display_evaluation::*;
 pub use effective_content::{
     EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
+    PreparedFrameContentCommitError,
 };
 use effective_write::apply_effective_property_to_row;
 pub use effective_write::EffectivePropertyWrite;

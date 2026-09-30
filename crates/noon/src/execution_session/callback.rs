@@ -5,13 +5,14 @@ use noon_compile::{
     SemanticOrderedUpdater,
 };
 use noon_core::{
-    HostCallbackId, Property, PublicationContext, ReactiveValue, SemanticNodeId,
-    SemanticObjectProperty, Style, Transform2D,
+    HostCallbackId, ObjectContentRef, Property, PublicationContext, ReactiveValue, Rect,
+    SemanticNodeId, SemanticObjectProperty, Style, Transform2D,
 };
 use noon_runtime::{
-    EffectiveObjectProperties, EffectivePropertyWrite as RuntimeEffectivePropertyWrite,
-    EvaluationError, ExecutionSlotId, FrameState, PreparedFrameCommitError,
-    PreparedFrameEvaluation, RuntimeIdentity,
+    EffectiveContentError, EffectiveContentLease, EffectiveObjectProperties,
+    EffectivePropertyWrite as RuntimeEffectivePropertyWrite, EvaluationError, ExecutionSlotId,
+    FrameState, PreparedFrameCommitError, PreparedFrameContentCommitError, PreparedFrameEvaluation,
+    RuntimeIdentity,
 };
 
 use super::{ExecutionEvaluationMode, ExecutionSession};
@@ -788,6 +789,8 @@ pub enum ExecutionSessionCallbackError {
     Read(ExecutionSessionCallbackReadError),
     Evaluation(EvaluationError),
     InvalidEffectiveWrite(CompilePatchError),
+    Content(EffectiveContentError),
+    ContentCommit(PreparedFrameContentCommitError),
     Commit(PreparedFrameCommitError),
     Publication(super::ExecutionSessionPublicationError),
 }
@@ -840,6 +843,8 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
             Self::Read(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::InvalidEffectiveWrite(error) => error.fmt(formatter),
+            Self::Content(error) => error.fmt(formatter),
+            Self::ContentCommit(error) => error.fmt(formatter),
             Self::Commit(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
@@ -1589,6 +1594,51 @@ impl ExecutionSession {
             .expect("preflighted callback phase cannot stale before synchronous commit");
         self.finish_callback_publication(completion, receipt_domains);
         Ok(self.runtime.frame())
+    }
+
+    /// Commit one callback-produced content version with the native/property
+    /// result at the same publication boundary. A failed content preparation
+    /// leaves the exact pending phase retryable.
+    pub fn commit_required_callback_phase_with_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        content: ObjectContentRef,
+        text_bounds: Option<Rect>,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
+        let batch = self.complete_callback_batch_for_commit(batch)?;
+        let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
+        let replacement = self
+            .runtime
+            .prepare_effective_content_replacement(object, content, text_bounds, lease)
+            .map_err(ExecutionSessionCallbackError::Content)?;
+        self.runtime
+            .preflight_prepared_frame_with_content(
+                &self
+                    .pending_callback
+                    .as_ref()
+                    .expect("phase remains pending")
+                    .prepared,
+                &effective,
+                &replacement,
+            )
+            .map_err(ExecutionSessionCallbackError::ContentCommit)?;
+        let pending = self
+            .pending_callback
+            .take()
+            .expect("pending phase remained live throughout preflight");
+        let (frame, completion) = pending.into_parts();
+        let lease = self
+            .runtime
+            .commit_prepared_frame_with_content(frame, effective, replacement)
+            .expect("preflighted callback remains valid during synchronous commit");
+        self.finish_callback_publication(completion, receipt_domains);
+        Ok(lease)
     }
 
     fn prepare_callback_writes(
