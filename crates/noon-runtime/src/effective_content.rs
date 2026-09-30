@@ -782,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn sole_lease_can_replace_the_same_geometry_id_with_a_new_version() {
+    fn long_running_lease_geometry_churn_keeps_only_the_latest_version() {
         let object = ObjectId::new(0);
         let mut instance = scene(1, false);
         let mut source = GeometryResourceArena::new();
@@ -796,35 +796,41 @@ mod tests {
         instance.take_frame_changes();
         let before = instance.publication_context();
 
-        let second = source
-            .replace(
-                first.id,
-                GeometryResource::VectorPath(Arc::new(
-                    VectorPath::new()
-                        .move_to(Vec2::ZERO)
-                        .line_to(Vec2::new(2.0, 0.0)),
-                )),
-            )
-            .unwrap();
-        assert_eq!(first.id, second.id);
-        assert_ne!(first, second);
-        let prepared = instance
-            .prepare_effective_geometry_replacement(object, second, &source, Some(lease))
-            .unwrap();
-        assert_eq!(
-            instance.commit_effective_content_replacement(prepared),
-            Ok(lease)
-        );
+        let mut previous = first;
+        for version in 1..=64 {
+            let next = source
+                .replace(
+                    first.id,
+                    GeometryResource::VectorPath(Arc::new(
+                        VectorPath::new()
+                            .move_to(Vec2::ZERO)
+                            .line_to(Vec2::new(version as f32, 0.0)),
+                    )),
+                )
+                .unwrap();
+            assert_eq!(first.id, next.id);
+            assert_ne!(previous, next);
+            let prepared = instance
+                .prepare_effective_geometry_replacement(object, next, &source, Some(lease))
+                .unwrap();
+            assert_eq!(
+                instance.commit_effective_content_replacement(prepared),
+                Ok(lease)
+            );
+            assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+            assert_eq!(
+                instance.geometry_resources().current_handle(first.id),
+                Some(next)
+            );
+            assert!(instance.geometry_resources().get(previous).is_none());
+            assert!(instance.geometry_resources().get(next).is_some());
+            assert_eq!(instance.effective_geometries.len(), 1);
+            previous = next;
+        }
         assert_ne!(instance.publication_context(), before);
-        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
-        assert_eq!(
-            instance.geometry_resources().current_handle(first.id),
-            Some(second)
-        );
-        assert!(instance.geometry_resources().get(first).is_none());
-        assert!(instance.geometry_resources().get(second).is_some());
         instance.release_effective_content(lease).unwrap();
-        assert!(instance.geometry_resources().get(second).is_none());
+        assert!(instance.geometry_resources().get(previous).is_none());
+        assert!(instance.effective_geometries.is_empty());
     }
 
     #[test]
