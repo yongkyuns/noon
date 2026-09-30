@@ -70,6 +70,49 @@ test("retired command completion cannot mutate a replacement's controls or error
   assert.deepEqual(f.errors, []);
 });
 
+test("source handoff suppresses an in-flight playback rejection and permits the next seek", async () => {
+  const f = fixture(); let reject;
+  f.player.seek = () => new Promise((_, fail) => { reject = fail; });
+  f.range.value = "1.5";
+  f.range.dispatchEvent(new Event("input"));
+  f.controls.setBusy(true);
+  f.controls.setControllable(false);
+  f.controls.setControllable(true);
+  f.controls.setBusy(false);
+  reject(new Error("playback controls are unavailable while a Python source continuation owns execution"));
+  await flush();
+  assert.deepEqual(f.errors, [], "superseded transport rejection is not a playback failure");
+  f.player.seek = async (time) => ({ time, playing: false });
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(f.output.value, "0.50 / 2.00 s");
+});
+
+test("source handoff ignores a late toggle result", async () => {
+  const f = fixture(); let resolve;
+  f.player.pause = () => new Promise((done) => { resolve = done; });
+  f.preview.querySelector(".playback-toggle").dispatchEvent(new Event("click"));
+  f.controls.setBusy(true);
+  f.controls.setControllable(false);
+  f.controls.sync({ time: 0.75, playing: false });
+  f.controls.setControllable(true);
+  f.controls.setBusy(false);
+  resolve({ time: 0.25, playing: true });
+  await flush();
+  assert.equal(f.output.value, "0.75 / 2.00 s");
+  assert.deepEqual(f.errors, []);
+});
+
+test("a current playback command rejection still reaches the error handler", async () => {
+  const f = fixture();
+  f.player.pause = async () => { throw new Error("current transport failure"); };
+  f.preview.querySelector(".playback-toggle").dispatchEvent(new Event("click"));
+  await flush();
+  assert.equal(f.errors.length, 1);
+  assert.match(f.errors[0].message, /current transport failure/);
+});
+
 
 test("first-pass segment changes never expose a misleading percentage, and completed replay uses the full duration", () => {
   const f = fixture();

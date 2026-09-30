@@ -22,6 +22,7 @@ export class PlaygroundPlaybackControls {
   #commandPending = false;
   #seekActive = false;
   #desiredSeek = null;
+  #controlGeneration = 0;
   #destroyed = false;
 
   constructor(
@@ -105,7 +106,9 @@ export class PlaygroundPlaybackControls {
   }
 
   setControllable(controllable) {
-    this.#controllable = Boolean(controllable);
+    const next = Boolean(controllable);
+    if (this.#controllable && !next) this.#invalidateCommands();
+    this.#controllable = next;
     this.#unavailableReason = null;
     this.#root.dataset.controllable = String(this.#controllable);
     this.#root.title = this.#controllable ? "" : "Live progress · seeking is available after Python finishes";
@@ -128,8 +131,15 @@ export class PlaygroundPlaybackControls {
   }
 
   setBusy(busy) {
-    this.#externalBusy = Boolean(busy);
+    const next = Boolean(busy);
+    if (next && !this.#externalBusy) this.#invalidateCommands();
+    this.#externalBusy = next;
     this.#renderDisabled();
+  }
+
+  #invalidateCommands() {
+    this.#controlGeneration += 1;
+    this.#desiredSeek = null;
   }
 
   sync({ time, playing, durationSeconds = undefined }) {
@@ -171,16 +181,16 @@ export class PlaygroundPlaybackControls {
   }
 
   #handleToggle = () => {
-    void this.#runCommand(async () => {
+    void this.#runCommand(async (generation) => {
       const result = this.#playing ? await this.#player.pause() : await this.#player.resume();
-      if (!this.#destroyed) this.sync(result);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   };
 
   #handleRestart = () => {
-    void this.#runCommand(async () => {
+    void this.#runCommand(async (generation) => {
       const result = await this.#player.restartPlayback();
-      if (!this.#destroyed) this.sync(result);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   };
 
@@ -201,12 +211,13 @@ export class PlaygroundPlaybackControls {
 
   async #runCommand(operation) {
     if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive) return;
+    const generation = this.#controlGeneration;
     this.#commandPending = true;
     this.#renderDisabled();
     try {
-      await operation();
+      await operation(generation);
     } catch (error) {
-      this.#reportError(error);
+      if (generation === this.#controlGeneration) this.#reportError(error);
     } finally {
       this.#commandPending = false;
       this.#renderDisabled();
@@ -215,13 +226,15 @@ export class PlaygroundPlaybackControls {
 
   async #drainSeek() {
     if (this.#seekActive || this.#destroyed) return;
+    const generation = this.#controlGeneration;
     this.#seekActive = true;
     this.#renderDisabled();
     try {
-      while (!this.#destroyed && this.#desiredSeek !== null) {
+      while (!this.#destroyed && generation === this.#controlGeneration && this.#desiredSeek !== null) {
         const target = this.#desiredSeek;
         this.#desiredSeek = null;
         const result = await this.#player.seek(target);
+        if (generation !== this.#controlGeneration) break;
         if (this.#desiredSeek === null) {
           if (!this.#destroyed) this.sync(result);
         } else if (typeof result.playing === "boolean") {
@@ -232,11 +245,16 @@ export class PlaygroundPlaybackControls {
         }
       }
     } catch (error) {
-      this.#desiredSeek = null;
-      this.#reportError(error);
+      if (generation === this.#controlGeneration) {
+        this.#desiredSeek = null;
+        this.#reportError(error);
+      }
     } finally {
       this.#seekActive = false;
       this.#renderDisabled();
+      if (!this.#destroyed && !this.#externalBusy && this.#controllable && this.#desiredSeek !== null) {
+        void this.#drainSeek();
+      }
     }
   }
 
