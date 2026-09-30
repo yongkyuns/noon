@@ -4,6 +4,7 @@ Native discovery explicitly skips these tests. The fixtures never forge semantic
 handles or import diagnostic state into the engine; detached objects and callback
 receipts come from actual public WASM operations.
 """
+import asyncio
 import copy
 import json
 import unittest
@@ -402,11 +403,13 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
             (fixture.player.interruptCallbackPhaseJson, ["{broken json"]),
             (fixture.player.commitCallbackPhaseJson, ["{broken json"]),
             (fixture.player.requiredCallbackReadJson, ["{}", "{}"]),
-            (fixture.player.commitCallbackPhaseJson, [json.dumps({"token": foreign.phase["token"], "writes": []})]),
             (fixture.player.requiredCallbackReadJson, [json.dumps(foreign.phase["token"]), "{}"]),
         ):
             with self.subTest(function=str(function)):
                 self.rejection(fixture, function, args, NoonError, "unclassified", "unclassified")
+        self.rejection(fixture, fixture.player.commitCallbackPhaseJson,
+                       [json.dumps({"token": foreign.phase["token"], "writes": []})],
+                       NoonStalePublicationError, "stale_publication", "callback.stale_token")
         fixture.finish()
 
 
@@ -445,4 +448,74 @@ async def check_sparse_callback_read_callsite():
         fixture.finish()
     finally:
         restore()
+        fixture.close()
+
+
+async def check_delayed_callback_completion_rejects_stale_receipt():
+    """A delayed host completion cannot publish after a later phase is pending."""
+    fixture = CallbackFixture()
+    old_phase = copy.deepcopy(fixture.phase)
+    transform = copy.deepcopy(old_phase["objects"][0]["transform"])
+    transform["translation"]["x"] = 1.25
+    delayed_result = {
+        "token": old_phase["token"],
+        "writes": [{
+            "kind": "transform",
+            "object": old_phase["objects"][0]["node"],
+            "transform": transform,
+        }],
+    }
+    old_state = fixture.state()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_completion():
+        started.set()
+        await release.wait()
+        try:
+            engine_call(
+                fixture.player.commitCallbackPhaseJson,
+                json.dumps(delayed_result),
+                operation="callback.commit",
+            )
+        except NoonError as error:
+            return error
+        raise AssertionError("delayed callback result was accepted after its phase ended")
+
+    task = asyncio.create_task(delayed_completion())
+    try:
+        await started.wait()
+        assert fixture.state() == old_state
+        observed = json.loads(engine_call(
+            fixture.player.requiredCallbackReadJson,
+            json.dumps(old_phase["token"]),
+            json.dumps({"kind": "object", "node": old_phase["objects"][0]["node"]}),
+            operation="callback.read",
+        ))
+        assert observed["object"]["transform"] == old_phase["objects"][0]["transform"]
+        assert fixture.state() == old_state
+        assert not task.done()
+
+        # Complete phase one independently while the host result remains held.
+        fixture.commit()
+        fixture.phase = None
+        fixture.player.drainDeltaJson()
+
+        # Advancing creates a newer required phase while preserving the frame
+        # until that phase completes. The delayed receipt from phase one is stale.
+        assert not fixture.advance()
+        new_phase = fixture.phase
+        assert new_phase is not None
+        assert new_phase["token"] != old_phase["token"]
+        before_stale_result = fixture.state()
+        release.set()
+        stale_error = await task
+        assert isinstance(stale_error, NoonStalePublicationError)
+        assert (stale_error.category, stale_error.code) == ("stale_publication", "callback.stale_token")
+        assert fixture.state() == before_stale_result
+        fixture.finish()
+    finally:
+        if not task.done():
+            release.set()
+            await task
         fixture.close()
