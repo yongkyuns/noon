@@ -1223,6 +1223,71 @@ mod tests {
     }
 
     #[test]
+    fn required_callback_read_miss_fails_phase_without_replaying_host_side_effects() {
+        let mut scene = Scene::new();
+        let target = scene.circle(1.0).unwrap();
+        scene.add(&target).unwrap();
+        let calls = Rc::new(RefCell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                *callback_calls.borrow_mut() += 1;
+                let mut transform = context.target_state().transform;
+                transform.translation.y = 42.0;
+                context
+                    .set_target_transform(transform)
+                    .map_err(std::io::Error::other)?;
+                // This semantic identity is not part of the pinned execution. A
+                // required read miss fails this invocation instead of publishing
+                // its earlier staged write or retrying opaque host work.
+                context
+                    .read_object(SemanticNodeId::new(u32::MAX, 0))
+                    .map_err(std::io::Error::other)?;
+                Ok::<_, std::io::Error>(())
+            })
+            .unwrap();
+        callbacks
+            .add_updater(
+                &mut scene.integration_store().borrow_mut(),
+                target.node_id(),
+                SET_Y,
+                0.0,
+                None,
+            )
+            .unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let frame = session.frame().clone();
+        let publication = session.publication_context();
+        let error = callbacks.advance_to(&mut session, 0.0).unwrap_err();
+        let source = match error {
+            RustHostCallbackError::CallbackFailed {
+                callback: SET_Y,
+                occurrence_index: 0,
+                source,
+            } => source,
+            other => panic!("expected required read failure, got {other}"),
+        };
+        assert!(matches!(
+            source
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .and_then(|error| error.downcast_ref::<ExecutionSessionCallbackError>()),
+            Some(ExecutionSessionCallbackError::Read(
+                crate::ExecutionSessionCallbackReadError::UnknownObject(_)
+            ))
+        ));
+        assert_eq!(*calls.borrow(), 1);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.callback_termination().is_some());
+        assert!(!callbacks.last_advance_completed_callback_phase());
+        assert!(callbacks.advance_to(&mut session, 0.0).is_err());
+        assert_eq!(*calls.borrow(), 1);
+    }
+
+    #[test]
     fn invalid_effective_paint_edit_terminates_without_publishing() {
         let mut scene = Scene::new();
         let target = scene.circle(1.0).unwrap();
