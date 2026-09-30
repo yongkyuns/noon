@@ -841,6 +841,128 @@ fn unrelated_animation_and_drag_resolve_in_either_order_or_cancel() {
 }
 
 #[test]
+fn sustained_unrelated_animation_and_drag_cycles_restore_a_quiescent_baseline() {
+    use noon_core::AnimationOptions;
+
+    let (mut store, target, unrelated, mut session) = fixture();
+    let mut sequence = 0;
+    let mut unrelated_x = 10.0;
+
+    for cycle in 0..32 {
+        let endpoint = store.insert_semantic_object(circle(unrelated_x + 2.0));
+        let animation = store
+            .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
+            .unwrap();
+        let segment = session
+            .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+            .unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        assert_eq!(
+            store
+                .semantic_object_state_checked(unrelated)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(unrelated_x, 0.0, 0.0)
+        );
+
+        sequence += 1;
+        submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Press {
+                position: position(0.0),
+                button: 0,
+            },
+        )
+        .unwrap();
+        sequence += 1;
+        submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Move(position(2.0)),
+        )
+        .unwrap();
+        assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        sequence += 1;
+        let undo = submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Release {
+                position: position(2.0),
+                button: 0,
+            },
+        )
+        .unwrap()
+        .undo
+        .unwrap();
+        undo.undo(&mut session, &mut store).unwrap();
+        assert_eq!(translation(&session, target), Vec2::ZERO);
+        assert_eq!(
+            store
+                .semantic_object_state_checked(target)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::ZERO
+        );
+
+        sequence += 1;
+        submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Press {
+                position: position(0.0),
+                button: 0,
+            },
+        )
+        .unwrap();
+        sequence += 1;
+        submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Move(position(3.0)),
+        )
+        .unwrap();
+        sequence += 1;
+        submit(
+            &mut session,
+            &mut store,
+            sequence,
+            NativePointerInputKind::Cancel(NativePointerCancellation::CaptureLost),
+        )
+        .unwrap();
+        assert_eq!(translation(&session, target), Vec2::ZERO);
+
+        unrelated_x += 2.0;
+        assert_eq!(
+            translation(&session, unrelated),
+            Vec2::new(unrelated_x as f32, 0.0)
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(unrelated)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(unrelated_x, 0.0, 0.0)
+        );
+        assert!(!session.translation_drag_active());
+        session.take_frame_changes();
+        assert!(session.wake_state().is_quiescent(), "cycle {cycle}");
+    }
+}
+
+#[test]
 fn structural_segment_cannot_acquire_a_drag_even_on_an_unrelated_object() {
     let (mut store, target, unrelated, mut session) = fixture();
     let root = store.node(unrelated).unwrap().parents()[0];
