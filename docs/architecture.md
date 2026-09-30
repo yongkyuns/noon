@@ -951,6 +951,8 @@ Runtime/effective content drivers, where supported for compatibility such as red
 
 A held effective resource is resident state, not recurring frame work. Preparing an unrelated frame must not visit every held content lease or copy its path payload; only changed objects and their dependents may be prepared.
 
+The initial runtime content lease publishes a validated replacement into one effective row without relowering the compiled scene. A producer must present its exact lease and publication context for each later version; stale work cannot commit, and release reveals the latest authored content. Acquisition excludes numeric text, Graph-owned rows, and targets with Morph, Transform or family-animation tracks. If one of those authored owners is installed later, that publication retires the lease. Existing compiled text/image handles and inline geometry can be referenced; admitting new external geometry or text resources remains a separate resource-versioning step. Held leases do not enter the ordinary forward-frame loop, and a full seek may revisit them as part of its deliberate whole-scene rebuild.
+
 Async preparation normally remains staged while the old resource/execution version remains active. If a feature deliberately publishes a semantic pending state, that state is explicit and queryable; it does not imply that incomplete resource data has become the active execution representation.
 
 Renderer/GPU lifetime is decoupled from semantic publication: an old resource version may remain physically resident while already-submitted GPU work still references it. Resource retirement occurs only when the relevant `SubmissionSerial`/fence indicates it is safe. New content must not overwrite buffers/resources still referenced by in-flight frames.

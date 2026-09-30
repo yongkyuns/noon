@@ -1,5 +1,6 @@
 mod callback;
 mod completion;
+mod effective_content;
 mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
@@ -41,6 +42,7 @@ pub use callback::{
     ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
 };
 pub use completion::ExecutionSegmentCompletionError;
+pub use effective_content::ExecutionSessionContentError;
 pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
     EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,

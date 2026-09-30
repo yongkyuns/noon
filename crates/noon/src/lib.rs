@@ -194,8 +194,8 @@ pub use execution_segment::{
 pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
-    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
+    ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
     SignalTimelineAppendError, TranslationDragError, TranslationDragReceipt, TranslationDragUndo,
 };
@@ -260,7 +260,10 @@ pub use noon_geometry::{
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
     DEFAULT_VECTOR_FIELD_STEP,
 };
-pub use noon_runtime::EvaluationError;
+pub use noon_runtime::{
+    EffectiveContentError, EffectiveContentLease, EvaluationError,
+    PreparedEffectiveContentReplacement,
+};
 #[cfg(feature = "latex")]
 pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
 pub use path_queries::PathQuery;

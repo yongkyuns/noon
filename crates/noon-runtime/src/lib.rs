@@ -5,6 +5,7 @@
 mod compaction;
 mod derived_display_evaluation;
 pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
+mod effective_content;
 mod effective_write;
 mod execution_slots;
 mod frame;
@@ -27,6 +28,9 @@ pub use signal_timeline::{
 };
 
 pub use derived_display_evaluation::*;
+pub use effective_content::{
+    EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
+};
 use effective_write::apply_effective_property_to_row;
 pub use effective_write::EffectivePropertyWrite;
 pub use execution_slots::*;
@@ -200,6 +204,8 @@ pub struct SceneInstance {
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
+    next_effective_content_sequence: u64,
     /// Session-owned pointer translation leases. Unlike ordinary whole-row
     /// effective writes these own only Position, so unrelated channels continue
     /// through the normal scheduler while a pointer is held.
@@ -214,8 +220,13 @@ pub struct SceneInstance {
 
 impl Clone for SceneInstance {
     fn clone(&self) -> Self {
+        let identity = RuntimeIdentity::fresh();
+        let mut effective_content_drivers = self.effective_content_drivers.clone();
+        for driver in effective_content_drivers.values_mut() {
+            driver.lease.runtime = identity;
+        }
         Self {
-            identity: RuntimeIdentity::fresh(),
+            identity,
             compiled: self.compiled.clone(),
             replay_history: self.replay_history.clone(),
             frame: self.frame.clone(),
@@ -231,6 +242,8 @@ impl Clone for SceneInstance {
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            effective_content_drivers,
+            next_effective_content_sequence: self.next_effective_content_sequence,
             translation_drag_rows: self.translation_drag_rows.clone(),
             transient_animations: self.transient_animations.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
@@ -282,6 +295,8 @@ impl SceneInstance {
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            effective_content_drivers: BTreeMap::new(),
+            next_effective_content_sequence: 1,
             translation_drag_rows: BTreeMap::new(),
             transient_animations: Default::default(),
             active_family_animation_indices: BTreeSet::new(),
@@ -543,6 +558,47 @@ impl SceneInstance {
         self.require_replay_writable()?;
         let inverse = self.prepare_replay_change(patch);
         self.apply_patch_without_history(patch)?;
+        match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
+                if matches!(track.property, Property::Morph | Property::Transform) =>
+            {
+                if let Some(index) = self.compiled.object_index(track.object) {
+                    self.retire_effective_content_driver(index as usize);
+                }
+            }
+            ExecutionPatch::AddFamilyAnimation(animation) => {
+                if let Some(index) = self.compiled.object_index(animation.target) {
+                    self.retire_effective_content_driver(index as usize);
+                }
+            }
+            ExecutionPatch::SetGraphDependencies { owner, .. } => {
+                let mut affected = BTreeSet::new();
+                for &dependency_index in self.compiled.graph_dependencies_for_owner(*owner) {
+                    let Some(dependency) = self.compiled.graph_edge_dependency(dependency_index)
+                    else {
+                        continue;
+                    };
+                    affected.extend([
+                        dependency.start_vertex_index() as usize,
+                        dependency.end_vertex_index() as usize,
+                        dependency.line_index() as usize,
+                    ]);
+                    if let noon_compile::CompiledGraphEdgeKind::Arrow {
+                        end_tip_index,
+                        start_tip_index,
+                        ..
+                    } = dependency.kind()
+                    {
+                        affected.insert(end_tip_index as usize);
+                        affected.extend(start_tip_index.map(|index| index as usize));
+                    }
+                }
+                for index in affected {
+                    self.retire_effective_content_driver(index);
+                }
+            }
+            _ => {}
+        }
         self.retain_replay_change(inverse);
         Ok(&self.frame)
     }
@@ -666,6 +722,7 @@ impl SceneInstance {
                 self.frame.render_transforms[object_index] = None;
                 self.clear_family_animation_runtime_state(object_index);
                 self.effective_driver_rows.remove(&object_index);
+                self.effective_content_drivers.remove(&object_index);
                 self.translation_drag_rows.remove(&object_index);
                 let position = self.painter_ranks[object_index]
                     .take()
@@ -871,6 +928,7 @@ impl SceneInstance {
                 // this phase without rebuilding unrelated runtime slots.
                 self.frame.render_geometries[index] = None;
                 self.frame.render_transforms[index] = None;
+                self.reapply_effective_content_driver(index);
             }
             ExecutionPatch::SetTransform { transform, .. } => {
                 self.frame.release_render_transform(index);
@@ -1139,6 +1197,14 @@ impl SceneInstance {
 
         self.reapply_reactive();
         self.reapply_numeric_text();
+        for (&index, driver) in &self.effective_content_drivers {
+            if self.object_slot_is_live(index) {
+                self.frame.objects[index].content = driver.content.clone();
+                self.frame.objects[index].text_bounds = driver.text_bounds;
+                self.frame.render_geometries[index] = None;
+                self.frame.render_transforms[index] = None;
+            }
+        }
         self.refresh_all_graph_dependencies();
         self.last_stats = stats;
     }
