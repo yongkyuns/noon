@@ -34,9 +34,9 @@ use noon_core::{
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
-    GeometryId, GeometryResource, GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef,
-    Rect, RetainedFamilyAnimationPlan, SemanticStore, TextResource, TextResourceHandle,
-    TextResourceLookup,
+    GeometryId, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
+    GeometryResourceLookup, ObjectContentRef, Rect, RetainedFamilyAnimationPlan, SemanticStore,
+    TextResource, TextResourceHandle, TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -273,6 +273,23 @@ impl CompiledResources {
             ),
         };
         Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    /// Prepare one immutable geometry dependency from its producer-owned arena.
+    /// The resource remains sparse until this set is admitted to a compiled or
+    /// runtime-owned resource projection.
+    pub fn capture_geometry_from_arena(
+        &mut self,
+        source: &GeometryResourceArena,
+        handle: GeometryResourceHandle,
+    ) -> Result<(), CompiledResourceError> {
+        let resource = source
+            .get(handle)
+            .cloned()
+            .ok_or(CompiledResourceError::MissingGeometry(handle))?;
+        self.geometry_handles.insert(handle.id, handle);
+        self.geometries.insert(handle, resource);
+        Ok(())
     }
 
     pub fn text_count(&self) -> usize {

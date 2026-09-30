@@ -209,6 +209,14 @@ pub struct SceneInstance {
         noon_core::RasterImageResourceHandle,
         (std::sync::Arc<noon_core::RasterImageResource>, usize),
     >,
+    effective_geometries: BTreeMap<
+        noon_core::GeometryId,
+        (
+            noon_core::GeometryResourceHandle,
+            noon_core::GeometryResource,
+            usize,
+        ),
+    >,
     next_effective_content_sequence: u64,
     /// Session-owned pointer translation leases. Unlike ordinary whole-row
     /// effective writes these own only Position, so unrelated channels continue
@@ -248,6 +256,7 @@ impl Clone for SceneInstance {
             effective_driver_rows: self.effective_driver_rows.clone(),
             effective_content_drivers,
             effective_images: self.effective_images.clone(),
+            effective_geometries: self.effective_geometries.clone(),
             next_effective_content_sequence: self.next_effective_content_sequence,
             translation_drag_rows: self.translation_drag_rows.clone(),
             transient_animations: self.transient_animations.clone(),
@@ -277,6 +286,29 @@ impl noon_core::RasterImageResourceLookup for SceneInstance {
             .get(&handle)
             .map(|(resource, _)| resource.as_ref())
             .or_else(|| self.compiled.raster_image_resources().get(handle))
+    }
+}
+
+impl noon_core::GeometryResourceLookup for SceneInstance {
+    fn current_handle(
+        &self,
+        id: noon_core::GeometryId,
+    ) -> Option<noon_core::GeometryResourceHandle> {
+        self.effective_geometries
+            .get(&id)
+            .map(|(handle, _, _)| *handle)
+            .or_else(|| self.compiled.geometry_resources().current_handle(id))
+    }
+
+    fn get(
+        &self,
+        handle: noon_core::GeometryResourceHandle,
+    ) -> Option<&noon_core::GeometryResource> {
+        self.effective_geometries
+            .get(&handle.id)
+            .filter(|(effective, _, _)| *effective == handle)
+            .map(|(_, resource, _)| resource)
+            .or_else(|| self.compiled.geometry_resources().get(handle))
     }
 }
 
@@ -314,6 +346,7 @@ impl SceneInstance {
             effective_driver_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
             effective_images: BTreeMap::new(),
+            effective_geometries: BTreeMap::new(),
             next_effective_content_sequence: 1,
             translation_drag_rows: BTreeMap::new(),
             transient_animations: Default::default(),
@@ -389,7 +422,7 @@ impl SceneInstance {
             changes,
             self,
             self.compiled.font_resources(),
-            self.compiled.geometry_resources(),
+            self,
             self,
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
@@ -415,7 +448,7 @@ impl SceneInstance {
             changes,
             self,
             self.compiled.font_resources(),
-            self.compiled.geometry_resources(),
+            self,
             self,
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
@@ -498,7 +531,7 @@ impl SceneInstance {
     }
 
     pub fn geometry_resources(&self) -> &impl noon_core::GeometryResourceLookup {
-        self.compiled.geometry_resources()
+        self
     }
 
     pub fn object_slot_is_live(&self, object_index: usize) -> bool {

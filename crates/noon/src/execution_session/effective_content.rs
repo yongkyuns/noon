@@ -1,5 +1,6 @@
 use noon_core::{
-    ObjectContentRef, RasterImageResourceArena, Rect, SemanticImageContent, SemanticNodeId,
+    GeometryResourceArena, GeometryResourceHandle, ObjectContentRef, RasterImageResourceArena,
+    Rect, SemanticImageContent, SemanticNodeId,
 };
 use noon_runtime::{
     EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
@@ -109,6 +110,24 @@ impl ExecutionSession {
             .map_err(Into::into)
     }
 
+    /// Stage producer-owned external geometry for a live semantic object.
+    pub fn prepare_effective_geometry_replacement(
+        &self,
+        target: SemanticNodeId,
+        handle: GeometryResourceHandle,
+        source: &GeometryResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, ExecutionSessionContentError> {
+        self.require_effective_content_ready()?;
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionContentError::UnknownObject(target))?;
+        self.runtime
+            .prepare_effective_geometry_replacement(object, handle, source, lease)
+            .map_err(Into::into)
+    }
+
     /// Publish one prepared effective result and refit only its changed spatial
     /// slot/dependencies. The semantic revision and compiled plan stay pinned.
     pub fn commit_effective_content_replacement(
@@ -137,8 +156,9 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, ObjectContentRef, RasterImageResourceArena, SemanticImageContent,
-        SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
+        GeometryRef, GeometryResourceArena, GeometryResourceLookup, ObjectContentRef,
+        RasterImageResourceArena, SemanticImageContent, SemanticObjectState, SemanticStore,
+        StoredGeometry, Vec2, VectorPath,
     };
 
     use super::super::picking::{PointerFillOutcome, PointerFillUnsupported};
@@ -222,5 +242,36 @@ mod tests {
             session.pick_effective_fill(point, |_| true).0,
             PointerFillOutcome::Miss
         );
+    }
+
+    #[test]
+    fn effective_external_geometry_reaches_session_renderer_lookup() {
+        let mut store = SemanticStore::new();
+        let target =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(target).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::new(0.0, 0.0))
+                .line_to(Vec2::new(2.0, 0.0)),
+        );
+        let prepared = session
+            .prepare_effective_geometry_replacement(target, handle, &source, None)
+            .unwrap();
+        drop(source);
+        let lease = session
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        assert_eq!(
+            session.geometry_resources().current_handle(handle.id),
+            Some(handle)
+        );
+        assert!(session.geometry_resources().get(handle).is_some());
+        session.release_effective_content(lease).unwrap();
+        assert!(session.geometry_resources().get(handle).is_none());
     }
 }
