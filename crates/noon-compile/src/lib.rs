@@ -23,7 +23,8 @@ use std::{
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
-    RasterImageResourceHandle, RasterImageResourceLookup, SemanticImageContent,
+    RasterImageResourceArena, RasterImageResourceHandle, RasterImageResourceLookup,
+    SemanticImageContent,
 };
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
@@ -251,12 +252,22 @@ impl CompiledResources {
         store: &SemanticStore,
         content: SemanticImageContent,
     ) -> Result<RasterImageContentRef, CompiledResourceError> {
+        self.capture_image_from_arena(store.raster_image_resources(), content)
+    }
+
+    /// Prepare one immutable image dependency without changing compiled state.
+    /// A producer may drop its source arena after the prepared result owns the
+    /// captured pixels.
+    pub fn capture_image_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        content: SemanticImageContent,
+    ) -> Result<RasterImageContentRef, CompiledResourceError> {
         let handle = content.resource();
         let resource = match self.images.entry(handle) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
-                store
-                    .raster_image_resources()
+                source
                     .get_shared(handle)
                     .ok_or(CompiledResourceError::MissingImage(handle))?,
             ),

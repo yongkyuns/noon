@@ -1,8 +1,16 @@
 //! Runtime-owned content leases. The compiled object's authored content remains
 //! the release baseline; only the effective frame row changes at publication.
 
-use noon_compile::{CompilePatchError, ExecutionMutationTransaction, ExecutionPatch};
-use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Property, PublicationContext, Rect};
+use std::sync::Arc;
+
+use noon_compile::{
+    CompilePatchError, CompiledResourceError, CompiledResources, ExecutionMutationTransaction,
+    ExecutionPatch,
+};
+use noon_core::{
+    GeometryRef, ObjectContentRef, ObjectId, Property, PublicationContext, RasterImageResource,
+    RasterImageResourceArena, RasterImageResourceHandle, Rect, SemanticImageContent,
+};
 
 use crate::{RuntimeIdentity, SceneInstance};
 
@@ -27,6 +35,7 @@ pub struct PreparedEffectiveContentReplacement {
     object_index: usize,
     content: ObjectContentRef,
     text_bounds: Option<Rect>,
+    image_resource: Option<Arc<RasterImageResource>>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +49,7 @@ pub(crate) struct EffectiveContentDriver {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EffectiveContentError {
     Invalid(CompilePatchError),
+    Resource(CompiledResourceError),
     UnknownObject(ObjectId),
     DriverConflict(ObjectId),
     UnsupportedExternalGeometry(ObjectId),
@@ -60,6 +70,7 @@ impl std::fmt::Display for EffectiveContentError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(error) => error.fmt(formatter),
+            Self::Resource(error) => error.fmt(formatter),
             Self::UnknownObject(object) => write!(
                 formatter,
                 "unknown effective content object {}",
@@ -114,6 +125,7 @@ impl std::error::Error for EffectiveContentError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Invalid(error) => Some(error),
+            Self::Resource(error) => Some(error),
             _ => None,
         }
     }
@@ -142,6 +154,52 @@ impl SceneInstance {
         content: ObjectContentRef,
         text_bounds: Option<Rect>,
         lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
+        self.prepare_effective_content_replacement_with_image(
+            object,
+            content,
+            text_bounds,
+            lease,
+            None,
+        )
+    }
+
+    /// Prepare a newly produced image against its producer-owned resource arena.
+    /// The pixels are borrowed into an immutable prepared result; neither the
+    /// runtime lookup nor the effective row changes until commit succeeds.
+    pub fn prepare_effective_image_replacement(
+        &self,
+        object: ObjectId,
+        content: SemanticImageContent,
+        source: &RasterImageResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
+        let mut additions = CompiledResources::default();
+        let lowered = additions
+            .capture_image_from_arena(source, content)
+            .map_err(EffectiveContentError::Resource)?;
+        let image_resource =
+            source
+                .get_shared(content.resource())
+                .ok_or(EffectiveContentError::Resource(
+                    CompiledResourceError::MissingImage(content.resource()),
+                ))?;
+        self.prepare_effective_content_replacement_with_image(
+            object,
+            ObjectContentRef::Image(lowered),
+            None,
+            lease,
+            Some((additions, image_resource)),
+        )
+    }
+
+    fn prepare_effective_content_replacement_with_image(
+        &self,
+        object: ObjectId,
+        content: ObjectContentRef,
+        text_bounds: Option<Rect>,
+        lease: Option<EffectiveContentLease>,
+        image: Option<(CompiledResources, Arc<RasterImageResource>)>,
     ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
         if self.replay_is_sealed() {
             return Err(EffectiveContentError::ReplaySealed);
@@ -228,9 +286,16 @@ impl SceneInstance {
             content: content.clone(),
             text_bounds,
         };
-        self.compiled
-            .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([patch]))
-            .map_err(EffectiveContentError::Invalid)?;
+        let transaction = ExecutionMutationTransaction::from_mutations([patch]);
+        if let Some((additions, _)) = image.as_ref() {
+            self.compiled
+                .preflight_execution_transaction_with_resources(&transaction, additions)
+                .map_err(EffectiveContentError::Invalid)?;
+        } else {
+            self.compiled
+                .preflight_execution_transaction(&transaction)
+                .map_err(EffectiveContentError::Invalid)?;
+        }
 
         Ok(PreparedEffectiveContentReplacement {
             lease,
@@ -239,6 +304,7 @@ impl SceneInstance {
             object_index: index,
             content,
             text_bounds,
+            image_resource: image.map(|(_, resource)| resource),
         })
     }
 
@@ -268,6 +334,23 @@ impl SceneInstance {
             None
         };
         let version = prepared.expected_version.map_or(0, |version| version + 1);
+        let old_image = self
+            .effective_content_drivers
+            .get(&index)
+            .and_then(|driver| driver.content.image())
+            .map(|image| image.resource());
+        let new_image = prepared.content.image().map(|image| image.resource());
+        if old_image != new_image {
+            if let Some(resource) = prepared.image_resource.as_ref() {
+                self.retain_effective_image(
+                    new_image.expect("prepared image has handle"),
+                    resource,
+                );
+            }
+            if let Some(handle) = old_image {
+                self.release_effective_image(handle);
+            }
+        }
         if prepared.expected_version.is_none() {
             self.next_effective_content_sequence += 1;
         }
@@ -331,7 +414,11 @@ impl SceneInstance {
         };
         let authored_content = changed.then(|| authored.content.clone());
         let authored_text_bounds = authored.text_bounds;
-        self.effective_content_drivers.remove(&index);
+        if let Some(driver) = self.effective_content_drivers.remove(&index) {
+            if let Some(image) = driver.content.image() {
+                self.release_effective_image(image.resource());
+            }
+        }
         self.invalidate_replay_domain();
         if let Some(next_epoch) = next_epoch {
             self.frame.objects[index].content =
@@ -409,10 +496,37 @@ impl SceneInstance {
     /// An authored geometry owner supersedes a content lease. This runs only
     /// after its patch has succeeded; the old producer token then becomes stale.
     pub(crate) fn retire_effective_content_driver(&mut self, index: usize) {
-        if self.effective_content_drivers.remove(&index).is_some() {
+        if let Some(driver) = self.effective_content_drivers.remove(&index) {
+            if let Some(image) = driver.content.image() {
+                self.release_effective_image(image.resource());
+            }
             self.frame.objects[index].content = self.compiled.objects()[index].content.clone();
             self.frame.objects[index].text_bounds = self.compiled.objects()[index].text_bounds;
             self.mark_changed(index);
+        }
+    }
+
+    fn retain_effective_image(
+        &mut self,
+        handle: RasterImageResourceHandle,
+        resource: &Arc<RasterImageResource>,
+    ) {
+        let entry = self
+            .effective_images
+            .entry(handle)
+            .or_insert_with(|| (Arc::clone(resource), 0));
+        entry.1 += 1;
+    }
+
+    fn release_effective_image(&mut self, handle: RasterImageResourceHandle) {
+        if let std::collections::btree_map::Entry::Occupied(mut entry) =
+            self.effective_images.entry(handle)
+        {
+            if entry.get().1 == 1 {
+                entry.remove();
+            } else {
+                entry.get_mut().1 -= 1;
+            }
         }
     }
 }
@@ -421,8 +535,9 @@ impl SceneInstance {
 mod tests {
     use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
     use noon_core::{
-        CompositionTimeMap, GeometryRef, ObjectContentRef, ObjectId, Property, RateFunction, Style,
-        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+        CompositionTimeMap, GeometryRef, ObjectContentRef, ObjectId, Property,
+        RasterImageResourceArena, RasterImageResourceLookup, RateFunction, SemanticImageContent,
+        Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
     };
 
     use super::{EffectiveContentError, SceneInstance};
@@ -690,5 +805,167 @@ mod tests {
             instance.frame().objects[0].geometry(),
             Some(&GeometryRef::circle(3.0))
         );
+    }
+
+    #[test]
+    fn prepared_image_is_invisible_until_commit_and_release_retires_its_resource() {
+        let mut instance = scene(1, false);
+        let mut source = RasterImageResourceArena::new();
+        let object = ObjectId::new(0);
+        let before = instance.publication_context();
+        let handle = source.intern_rgba8(2, 1, vec![255; 8]).unwrap();
+        let foreign = RasterImageResourceArena::new();
+        assert!(matches!(
+            instance.prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(handle),
+                &foreign,
+                None,
+            ),
+            Err(EffectiveContentError::Resource(
+                noon_compile::CompiledResourceError::MissingImage(_)
+            ))
+        ));
+        let prepared = instance
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(handle),
+                &source,
+                None,
+            )
+            .unwrap();
+        assert!(instance.raster_image_resources().get(handle).is_none());
+        assert_eq!(instance.publication_context(), before);
+        drop(source);
+        let lease = instance
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        assert_eq!(
+            instance
+                .raster_image_resources()
+                .get(handle)
+                .unwrap()
+                .rgba8(),
+            &[255; 8]
+        );
+        assert_eq!(instance.effective_images.len(), 1);
+        let publication = instance.take_renderer_publication();
+        assert!(publication.raster_image_resources().get(handle).is_some());
+        assert_eq!(
+            publication.frame().objects[0]
+                .content
+                .image()
+                .unwrap()
+                .resource(),
+            handle
+        );
+        instance.release_effective_content(lease).unwrap();
+        assert!(instance.raster_image_resources().get(handle).is_none());
+        assert!(instance.effective_images.is_empty());
+        assert_eq!(
+            instance.frame().objects[0].geometry(),
+            Some(&GeometryRef::circle(1.0))
+        );
+    }
+
+    #[test]
+    fn stale_image_result_does_not_publish_or_accumulate_runtime_resources() {
+        let mut instance = scene(2, true);
+        let mut source = RasterImageResourceArena::new();
+        let object = ObjectId::new(0);
+        let first_handle = source.intern_rgba8(1, 1, vec![1; 4]).unwrap();
+        let prepared = instance
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(first_handle),
+                &source,
+                None,
+            )
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        let stale_handle = source.intern_rgba8(1, 1, vec![2; 4]).unwrap();
+        let stale = instance
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(stale_handle),
+                &source,
+                Some(lease),
+            )
+            .unwrap();
+        instance
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: ObjectId::new(1),
+                style: Style {
+                    opacity: 0.5,
+                    ..Style::default()
+                },
+            })
+            .unwrap();
+        assert!(matches!(
+            instance.commit_effective_content_replacement(stale),
+            Err(EffectiveContentError::StalePublication { .. })
+        ));
+        assert!(instance
+            .raster_image_resources()
+            .get(stale_handle)
+            .is_none());
+        assert_eq!(instance.effective_images.len(), 1);
+        assert!(instance
+            .raster_image_resources()
+            .get(first_handle)
+            .is_some());
+
+        for pixel in 3..35 {
+            let handle = source.intern_rgba8(1, 1, vec![pixel; 4]).unwrap();
+            let prepared = instance
+                .prepare_effective_image_replacement(
+                    object,
+                    SemanticImageContent::new(handle),
+                    &source,
+                    Some(lease),
+                )
+                .unwrap();
+            instance
+                .commit_effective_content_replacement(prepared)
+                .unwrap();
+            assert_eq!(instance.effective_images.len(), 1);
+            assert!(instance.raster_image_resources().get(handle).is_some());
+        }
+        drop(source);
+        assert!(instance
+            .raster_image_resources()
+            .get(first_handle)
+            .is_none());
+        instance.release_effective_content(lease).unwrap();
+        assert!(instance.effective_images.is_empty());
+    }
+
+    #[test]
+    fn shared_effective_image_remains_live_until_its_last_lease_releases() {
+        let mut instance = scene(2, false);
+        let mut source = RasterImageResourceArena::new();
+        let handle = source.intern_rgba8(1, 1, vec![7; 4]).unwrap();
+        let leases = [ObjectId::new(0), ObjectId::new(1)].map(|object| {
+            let prepared = instance
+                .prepare_effective_image_replacement(
+                    object,
+                    SemanticImageContent::new(handle),
+                    &source,
+                    None,
+                )
+                .unwrap();
+            instance
+                .commit_effective_content_replacement(prepared)
+                .unwrap()
+        });
+        drop(source);
+        assert_eq!(instance.effective_images.get(&handle).unwrap().1, 2);
+        instance.release_effective_content(leases[0]).unwrap();
+        assert!(instance.raster_image_resources().get(handle).is_some());
+        assert_eq!(instance.effective_images.get(&handle).unwrap().1, 1);
+        instance.release_effective_content(leases[1]).unwrap();
+        assert!(instance.raster_image_resources().get(handle).is_none());
     }
 }

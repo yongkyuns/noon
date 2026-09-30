@@ -1,4 +1,6 @@
-use noon_core::{ObjectContentRef, Rect, SemanticNodeId};
+use noon_core::{
+    ObjectContentRef, RasterImageResourceArena, Rect, SemanticImageContent, SemanticNodeId,
+};
 use noon_runtime::{
     EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
 };
@@ -87,6 +89,26 @@ impl ExecutionSession {
             .map_err(Into::into)
     }
 
+    /// Stage a producer-owned image without changing the authored scene. The
+    /// prepared pixels become visible to rendering only after the shared lease
+    /// commit succeeds.
+    pub fn prepare_effective_image_replacement(
+        &self,
+        target: SemanticNodeId,
+        content: SemanticImageContent,
+        source: &RasterImageResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, ExecutionSessionContentError> {
+        self.require_effective_content_ready()?;
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionContentError::UnknownObject(target))?;
+        self.runtime
+            .prepare_effective_image_replacement(object, content, source, lease)
+            .map_err(Into::into)
+    }
+
     /// Publish one prepared effective result and refit only its changed spatial
     /// slot/dependencies. The semantic revision and compiled plan stay pinned.
     pub fn commit_effective_content_replacement(
@@ -115,10 +137,11 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, ObjectContentRef, SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
+        GeometryRef, ObjectContentRef, RasterImageResourceArena, SemanticImageContent,
+        SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
     };
 
-    use super::super::picking::PointerFillOutcome;
+    use super::super::picking::{PointerFillOutcome, PointerFillUnsupported};
     use super::ExecutionSession;
 
     #[test]
@@ -151,6 +174,50 @@ mod tests {
             PointerFillOutcome::Hit(target)
         );
         session.release_effective_content(lease).unwrap();
+        assert_eq!(
+            session.pick_effective_fill(point, |_| true).0,
+            PointerFillOutcome::Miss
+        );
+    }
+
+    #[test]
+    fn effective_image_publication_uses_the_same_spatial_and_renderer_paths() {
+        let mut store = SemanticStore::new();
+        let target =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(target).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let point = Vec2::new(1.5, 0.0);
+        assert_eq!(
+            session.pick_effective_fill(point, |_| true).0,
+            PointerFillOutcome::Miss
+        );
+        let mut source = RasterImageResourceArena::new();
+        let handle = source.intern_rgba8(4, 4, vec![255; 64]).unwrap();
+        let prepared = session
+            .prepare_effective_image_replacement(
+                target,
+                SemanticImageContent::new(handle),
+                &source,
+                None,
+            )
+            .unwrap();
+        drop(source);
+        let lease = session
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        assert!(session.raster_image_resources().get(handle).is_some());
+        assert_eq!(
+            session.pick_effective_fill(point, |_| true).0,
+            PointerFillOutcome::Unsupported {
+                target,
+                reason: PointerFillUnsupported::Content,
+            }
+        );
+        session.release_effective_content(lease).unwrap();
+        assert!(session.raster_image_resources().get(handle).is_none());
         assert_eq!(
             session.pick_effective_fill(point, |_| true).0,
             PointerFillOutcome::Miss
