@@ -635,6 +635,7 @@ callback_result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestL
 assert not callback_result.skipped, callback_result.skipped
 assert callback_result.wasSuccessful(), "real callback transaction boundary tests failed"
 await callback_tests.check_sparse_callback_read_callsite()
+await callback_tests.check_delayed_callback_completion_rejects_stale_receipt()
 await tests.check_real_promise_rejection()
 json.dumps({"matrix": results, "liveProperties": property_results, "advancement": advancement_results, "contentObservations": content_results, "additionalTests": result.testsRun, "callbackTests": callback_result.testsRun, "sparseCallbackRead": True, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
