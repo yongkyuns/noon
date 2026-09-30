@@ -236,6 +236,8 @@ test("newest edit wins while the automatic authoring preload is in flight", asyn
   // already been invalidated and must never cross the guarded handoff.
   emitSceneResult(worker, worker.messages[0].requestId, 100);
   await preload;
+  assert.deepEqual(presented, [], "the invalidated preload must not publish after either edit");
+  assert.deepEqual(worker.messages.map(({ source: requestedSource }) => requestedSource), ["preload source"]);
   const latestTimer = [...timers.values()][0];
   timers.clear();
   latestTimer();
@@ -246,6 +248,11 @@ test("newest edit wins while the automatic authoring preload is in flight", asyn
   emitSceneResult(worker, worker.messages[1].requestId, 101);
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 
+  assert.deepEqual(
+    worker.messages.map(({ source: requestedSource }) => requestedSource),
+    ["preload source", "newest edit"],
+    "the two rapid edits must coalesce without dispatching the obsolete intermediate source",
+  );
   assert.deepEqual(presented.map(({ source: presentedSource }) => presentedSource), ["newest edit"]);
   assert.equal(presented[0].generation, generations.diagnostics.runGeneration);
   assert.equal(generations.diagnostics.staleDrops, 1);
