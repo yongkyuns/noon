@@ -132,8 +132,10 @@ impl SceneInstance {
 
     /// Prepare one content version. Initial acquisition pins the exact effective
     /// publication; a replacement of an existing lease names that lease and
-    /// may commit after unrelated frame advances. A new producer passes `None`
-    /// and acquires ownership only when the result commits.
+    /// may commit after unrelated frame advances. This only versions the
+    /// supplied content value: a producer whose value depends on authored time
+    /// or other effective inputs must separately reject obsolete source samples.
+    /// A new producer passes `None` and acquires ownership only at commit.
     pub fn prepare_effective_content_replacement(
         &self,
         object: ObjectId,
