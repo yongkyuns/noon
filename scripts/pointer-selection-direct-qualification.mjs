@@ -310,6 +310,123 @@ try {
       }
      }
     }
+    if (backend === "webgpu") {
+      const prefix = "webgpu-rust-input-trace-dpr1";
+      const result = { backend, mode: "shared-rust-input-trace", deviceScaleFactor: 1,
+        status: "running", steps: [] };
+      report.cases.push(result);
+      const page = await browser.newPage({ viewport: { width: 800, height: 500 }, deviceScaleFactor: 1 });
+      const errors = [];
+      page.on("pageerror", error => errors.push(String(error)));
+      page.setDefaultTimeout(60_000);
+      const image = async name => {
+        const bytes = await page.locator("#scene").screenshot({ scale: "css" });
+        await writeFile(path.join(output, `${prefix}-${name}.png`), bytes);
+        return PNG.sync.read(bytes);
+      };
+      const targetCenter = image => Array.from(image.data.subarray((180 * image.width + 320) * 4,
+        (180 * image.width + 321) * 4));
+      const state = () => page.evaluate(() => ({ frame: JSON.parse(direct.renderer.debugSelectionFrameJson()),
+        time: direct.renderer.time(), stats: direct.driver.stats() }));
+      const settled = async () => {
+        await page.waitForFunction(() => direct.driver.stats().idle);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.deepEqual(errors, []);
+        assert.deepEqual(await page.evaluate(() => direct.errors), []);
+      };
+      const changed = async before => {
+        await page.waitForFunction(count => direct.driver.stats().presentedFrames > count,
+          before.stats.presentedFrames);
+        await settled();
+      };
+      const click = async (x, y) => {
+        const bounds = await page.locator("#scene").boundingBox();
+        await page.mouse.click(bounds.x + x, bounds.y + y);
+      };
+      try {
+        await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
+        await page.evaluate(async () => {
+          globalThis.Worker = class { constructor() { throw new Error("direct path attempted a Worker"); } };
+          const { default: init, createDirectPointerInputTraceRenderer } = await import("./pkg/noon_web.js");
+          await init();
+          const { attachNativeInputs } = await import("./native-inputs.js");
+          const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+          const canvas = document.querySelector("#scene"), errors = [];
+          canvas.width = 640; canvas.height = 360;
+          const renderer = await createDirectPointerInputTraceRenderer(canvas.transferControlToOffscreen());
+          const admittedInputs = [], nativePointerInput = renderer.nativePointerInput.bind(renderer);
+          renderer.nativePointerInput = (...args) => {
+            const result = nativePointerInput(...args);
+            admittedInputs.push(args);
+            return result;
+          };
+          const driver = createDirectExecutionWakeDriver(renderer);
+          const attach = () => attachNativeInputs(renderer, canvas, {
+            onInput: () => driver.wake(), onError: error => errors.push(String(error)),
+          });
+          globalThis.direct = { renderer, driver, attach, detach: attach(), errors, admittedInputs };
+        });
+        await settled();
+        const before = await state(), baseline = await image("baseline");
+        assert.equal(before.frame.objects.length, 2, "use the shared Rust-authored pointer fixture");
+        assert.equal(before.time, 0);
+
+        // Target click drives both native event subscriptions and C5 selection.
+        let prior = await state(); await click(320, 180); await changed(prior);
+        const selected = await image("selected");
+        const selectedFrame = await state();
+        assert.notDeepEqual(targetCenter(selected), targetCenter(baseline),
+          "Rust selection overlay should change the target center pixel");
+        assert.notDeepEqual(selectedFrame.frame.objects[0].transform, before.frame.objects[0].transform,
+          "the subscribed down event should update the target rotation");
+        assert.notDeepEqual(selectedFrame.frame.objects[1].transform, before.frame.objects[1].transform,
+          "the subscribed up event should update the unrelated rotation");
+        assert.equal(selectedFrame.time, 0, "paused native input must not advance authored time");
+
+        // Retire a held contact through actual DOM cancellation; it must not
+        // publish another up edge or disturb the prior selection.
+        const bounds = await page.locator("#scene").boundingBox();
+        await page.mouse.move(bounds.x + 320, bounds.y + 180);
+        await page.mouse.down();
+        const press = await page.evaluate(() => direct.admittedInputs.findLast(args => args[0] === "press"));
+        assert.ok(press, "target press must reach the shared Rust session");
+        await page.evaluate(pointerId => document.querySelector("#scene").dispatchEvent(
+          new PointerEvent("pointercancel", { pointerId, pointerType: "mouse", isPrimary: true })), press[2]);
+        await page.mouse.up(); await settled();
+        const afterCancel = await page.evaluate(() => direct.admittedInputs.map(args => args[0]));
+        assert.equal(afterCancel.at(-1), "cancel");
+        assert.equal(afterCancel.filter(kind => kind === "release").length, 1,
+          "cancellation must not fabricate a second up event");
+        const cancelledFrame = await state();
+        assert.deepEqual(cancelledFrame.frame.objects[1].transform, selectedFrame.frame.objects[1].transform,
+          "cancellation must not publish an up event");
+        assert.equal(cancelledFrame.time, 0);
+        const cancelled = await image("cancelled-contact");
+        assert.deepEqual(targetCenter(cancelled), targetCenter(selected),
+          "cancellation must retain the selected target");
+
+        prior = await state(); await click(20, 20); await changed(prior);
+        const cleared = await image("background-clear");
+        assert.deepEqual(targetCenter(cleared), targetCenter(baseline),
+          "background click should clear selection");
+        const final = await state();
+        assert.notDeepEqual(final.frame.objects[0].transform, selectedFrame.frame.objects[0].transform,
+          "background click should publish its subscribed down event");
+        assert.notDeepEqual(final.frame.objects[1].transform, selectedFrame.frame.objects[1].transform,
+          "background click should publish its subscribed up event");
+        assert.equal(final.time, 0);
+        result.steps.push({ name: "reactive-events-and-selection", status: "passed" },
+          { name: "cancel-without-release", status: "passed" },
+          { name: "background-clear", status: "passed" });
+        result.status = "passed";
+        console.log(`[PASS] ${prefix}: shared Rust fixture, reactive edges, selection, and cancellation`);
+      } catch (error) {
+        result.status = "failed"; result.error = String(error.stack ?? error); throw error;
+      } finally {
+        await page.evaluate(() => { direct.detach(); direct.driver.stop(); direct.renderer.free(); }).catch(() => {});
+        await page.close();
+      }
+    }
     await browser.close(); browser = null;
   }
   report.status = "passed";

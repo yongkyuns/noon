@@ -37,6 +37,23 @@ pub async fn create_direct_pointer_selection_renderer(
     }
 }
 
+/// Direct-browser counterpart of the native collector's shared Rust-authored
+/// pointer fixture. It retains the fixture's pointer state/event subscriptions
+/// and enables the same paused-session selection policy used by qualification.
+#[wasm_bindgen(js_name = createDirectPointerInputTraceRenderer)]
+pub async fn create_direct_pointer_input_trace_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let fixture = noon::example_scenes::pointer_input_trace::Fixture::new();
+    let session = noon::ExecutionSession::from_semantic_root(&fixture.store, fixture.root)
+        .map_err(js_error)?;
+    let mut session = session;
+    session
+        .enable_pointer_fill_selection(4.0)
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Qualification-only live animation; not click-action dispatch. Inspection must
 /// remain independent while the normal shared Indicate segment owns the shape.
 #[wasm_bindgen(js_name = createDirectInspectionIndicateRenderer)]
