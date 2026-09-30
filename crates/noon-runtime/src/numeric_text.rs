@@ -114,6 +114,10 @@ impl NumericTextRuntime {
         self.driver_by_object.keys().copied()
     }
 
+    pub(crate) fn has_object_driver(&self, object_index: usize) -> bool {
+        self.driver_by_object.contains_key(&object_index)
+    }
+
     pub(crate) fn signal(&self, driver_index: usize) -> SignalId {
         self.driver(driver_index).declaration.signal
     }

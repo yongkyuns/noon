@@ -72,6 +72,7 @@ impl SceneInstance {
             return Err(RuntimeCompactionError::ReplayRetentionActive);
         }
         if !self.effective_driver_rows.is_empty()
+            || !self.effective_content_drivers.is_empty()
             || !self.translation_drag_rows.is_empty()
             || self.interactions_active()
         {
