@@ -89,7 +89,12 @@ impl SceneInstance {
                     .filter(|driver| {
                         driver.content.image().is_none_or(|image| {
                             !self.effective_images.contains_key(&image.resource())
-                        })
+                        }) && match &driver.content {
+                            noon_core::ObjectContentRef::Geometry(
+                                noon_core::GeometryRef::External(id),
+                            ) => !self.effective_geometries.contains_key(id),
+                            _ => true,
+                        }
                     })
                     .map(|driver| driver.content.clone())
                     .collect();
@@ -228,12 +233,12 @@ mod tests {
     };
     use noon_core::{
         Color, CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena,
-        ObjectContentRef, ObjectId, Property, RasterImageResourceArena, RasterImageResourceLookup,
-        RateFunction, Rect, SemanticClickIndicate, SemanticImageContent,
+        GeometryResourceLookup, ObjectContentRef, ObjectId, Property, RasterImageResourceArena,
+        RasterImageResourceLookup, RateFunction, Rect, SemanticClickIndicate, SemanticImageContent,
         SemanticMutationTransaction, SemanticObjectContent, SemanticObjectProperty,
         SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TextResource,
         TextResourceLookup, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues,
-        Transform2D, Vec2,
+        Transform2D, Vec2, VectorPath,
     };
 
     fn object(id: u64) -> CompiledObject {
@@ -565,6 +570,38 @@ mod tests {
         assert_eq!(runtime.effective_content_lease(object), Some(lease));
         runtime.release_effective_content(lease).unwrap();
         assert!(runtime.raster_image_resources().get(handle).is_none());
+    }
+
+    #[test]
+    fn runtime_owned_geometry_lease_does_not_pin_unrelated_compiled_history() {
+        let (compiled, handles) = compiled_text_history(&["obsolete", "authored"]);
+        let mut runtime = SceneInstance::new(compiled);
+        let object = ObjectId::new(99);
+        runtime
+            .apply_execution_patch(&ExecutionPatch::CreateObject(self::object(99)))
+            .unwrap();
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+        );
+        let prepared = runtime
+            .prepare_effective_geometry_replacement(object, handle, &source, None)
+            .unwrap();
+        let lease = runtime
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        drop(source);
+
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 1);
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[0]).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), handles[1]).is_some());
+        assert!(runtime.geometry_resources().get(handle).is_some());
+        assert_eq!(runtime.effective_content_lease(object), Some(lease));
+        runtime.release_effective_content(lease).unwrap();
+        assert!(runtime.geometry_resources().get(handle).is_none());
     }
 
     #[test]

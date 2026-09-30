@@ -8,8 +8,10 @@ use noon_compile::{
     ExecutionPatch,
 };
 use noon_core::{
-    GeometryRef, ObjectContentRef, ObjectId, Property, PublicationContext, RasterImageResource,
-    RasterImageResourceArena, RasterImageResourceHandle, Rect, SemanticImageContent,
+    GeometryId, GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
+    GeometryResourceLookup, ObjectContentRef, ObjectId, Property, PublicationContext,
+    RasterImageResource, RasterImageResourceArena, RasterImageResourceHandle, Rect,
+    SemanticImageContent,
 };
 
 use crate::{RuntimeIdentity, SceneInstance};
@@ -36,6 +38,7 @@ pub struct PreparedEffectiveContentReplacement {
     content: ObjectContentRef,
     text_bounds: Option<Rect>,
     image_resource: Option<Arc<RasterImageResource>>,
+    geometry_resource: Option<(GeometryId, GeometryResourceHandle, GeometryResource)>,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +56,7 @@ pub enum EffectiveContentError {
     UnknownObject(ObjectId),
     DriverConflict(ObjectId),
     UnsupportedExternalGeometry(ObjectId),
+    GeometryResourceConflict(GeometryId),
     ActiveRenderOverride(ObjectId),
     GeometryDriverConflict(ObjectId),
     ReplaySealed,
@@ -85,6 +89,11 @@ impl std::fmt::Display for EffectiveContentError {
                 formatter,
                 "object {} requires an owned inline or versioned content resource",
                 object.get()
+            ),
+            Self::GeometryResourceConflict(id) => write!(
+                formatter,
+                "external geometry ID {} is already owned by another resource",
+                id.get()
             ),
             Self::ActiveRenderOverride(object) => write!(
                 formatter,
@@ -155,13 +164,48 @@ impl SceneInstance {
         text_bounds: Option<Rect>,
         lease: Option<EffectiveContentLease>,
     ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
-        self.prepare_effective_content_replacement_with_image(
+        self.prepare_effective_content_replacement_with_resources(
             object,
             content,
             text_bounds,
             lease,
             None,
+            None,
         )
+    }
+
+    /// Prepare a producer-owned external geometry. GeometryRef stores a bare ID,
+    /// so admission rejects IDs already visible from another resource owner.
+    pub fn prepare_effective_geometry_replacement(
+        &self,
+        object: ObjectId,
+        handle: GeometryResourceHandle,
+        source: &GeometryResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
+        let mut additions = CompiledResources::default();
+        additions
+            .capture_geometry_from_arena(source, handle)
+            .map_err(EffectiveContentError::Resource)?;
+        if self.geometry_resource_conflicts(object, handle, lease) {
+            return Err(EffectiveContentError::GeometryResourceConflict(handle.id));
+        }
+        let resource = source
+            .get(handle)
+            .cloned()
+            .ok_or(EffectiveContentError::Resource(
+                CompiledResourceError::MissingGeometry(handle),
+            ))?;
+        let mut prepared = self.prepare_effective_content_replacement_with_resources(
+            object,
+            ObjectContentRef::Geometry(GeometryRef::External(handle.id)),
+            None,
+            lease,
+            Some(additions),
+            None,
+        )?;
+        prepared.geometry_resource = Some((handle.id, handle, resource));
+        Ok(prepared)
     }
 
     /// Prepare a newly produced image against its producer-owned resource arena.
@@ -184,22 +228,24 @@ impl SceneInstance {
                 .ok_or(EffectiveContentError::Resource(
                     CompiledResourceError::MissingImage(content.resource()),
                 ))?;
-        self.prepare_effective_content_replacement_with_image(
+        self.prepare_effective_content_replacement_with_resources(
             object,
             ObjectContentRef::Image(lowered),
             None,
             lease,
-            Some((additions, image_resource)),
+            Some(additions),
+            Some(image_resource),
         )
     }
 
-    fn prepare_effective_content_replacement_with_image(
+    fn prepare_effective_content_replacement_with_resources(
         &self,
         object: ObjectId,
         content: ObjectContentRef,
         text_bounds: Option<Rect>,
         lease: Option<EffectiveContentLease>,
-        image: Option<(CompiledResources, Arc<RasterImageResource>)>,
+        resource_additions: Option<CompiledResources>,
+        image_resource: Option<Arc<RasterImageResource>>,
     ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
         if self.replay_is_sealed() {
             return Err(EffectiveContentError::ReplaySealed);
@@ -273,7 +319,8 @@ impl SceneInstance {
         if matches!(
             content,
             ObjectContentRef::Geometry(GeometryRef::External(_))
-        ) {
+        ) && resource_additions.is_none()
+        {
             return Err(EffectiveContentError::UnsupportedExternalGeometry(object));
         }
         if self.frame.render_geometries[index].is_some()
@@ -287,7 +334,7 @@ impl SceneInstance {
             text_bounds,
         };
         let transaction = ExecutionMutationTransaction::from_mutations([patch]);
-        if let Some((additions, _)) = image.as_ref() {
+        if let Some(additions) = resource_additions.as_ref() {
             self.compiled
                 .preflight_execution_transaction_with_resources(&transaction, additions)
                 .map_err(EffectiveContentError::Invalid)?;
@@ -304,7 +351,8 @@ impl SceneInstance {
             object_index: index,
             content,
             text_bounds,
-            image_resource: image.map(|(_, resource)| resource),
+            image_resource,
+            geometry_resource: None,
         })
     }
 
@@ -319,8 +367,18 @@ impl SceneInstance {
         }
         self.validate_content_prepared(&prepared)?;
         let index = prepared.object_index;
+        let geometry_resource_changed =
+            prepared
+                .geometry_resource
+                .as_ref()
+                .is_some_and(|(id, handle, _)| {
+                    self.effective_geometries
+                        .get(id)
+                        .is_none_or(|(current, _, _)| current != handle)
+                });
         let changed = self.frame.objects[index].content != prepared.content
             || self.frame.objects[index].text_bounds != prepared.text_bounds
+            || geometry_resource_changed
             || self.frame.render_geometries[index].is_some()
             || self.frame.render_transforms[index].is_some();
         let next_epoch = if changed {
@@ -340,6 +398,11 @@ impl SceneInstance {
             .and_then(|driver| driver.content.image())
             .map(|image| image.resource());
         let new_image = prepared.content.image().map(|image| image.resource());
+        let old_geometry = self
+            .effective_content_drivers
+            .get(&index)
+            .and_then(|driver| external_geometry_id(&driver.content));
+        let new_geometry = external_geometry_id(&prepared.content);
         if old_image != new_image {
             if let Some(resource) = prepared.image_resource.as_ref() {
                 self.retain_effective_image(
@@ -349,6 +412,14 @@ impl SceneInstance {
             }
             if let Some(handle) = old_image {
                 self.release_effective_image(handle);
+            }
+        }
+        if old_geometry != new_geometry || geometry_resource_changed {
+            if let Some(id) = old_geometry {
+                self.release_effective_geometry(id);
+            }
+            if let Some((id, handle, resource)) = prepared.geometry_resource.as_ref() {
+                self.retain_effective_geometry(*id, *handle, resource);
             }
         }
         if prepared.expected_version.is_none() {
@@ -418,6 +489,9 @@ impl SceneInstance {
             if let Some(image) = driver.content.image() {
                 self.release_effective_image(image.resource());
             }
+            if let Some(id) = external_geometry_id(&driver.content) {
+                self.release_effective_geometry(id);
+            }
         }
         self.invalidate_replay_domain();
         if let Some(next_epoch) = next_epoch {
@@ -468,6 +542,18 @@ impl SceneInstance {
                 prepared.lease.object,
             ));
         }
+        if let Some((id, handle, _)) = prepared.geometry_resource.as_ref() {
+            // A held lease may outlive unrelated effective frame advances. A
+            // different producer can therefore claim the same bare GeometryId
+            // after preparation, and must not silently supply this row's path.
+            if self.geometry_resource_conflicts(
+                prepared.lease.object,
+                *handle,
+                Some(prepared.lease),
+            ) {
+                return Err(EffectiveContentError::GeometryResourceConflict(*id));
+            }
+        }
         match (
             self.effective_content_drivers.get(&index),
             prepared.expected_version,
@@ -500,6 +586,9 @@ impl SceneInstance {
             if let Some(image) = driver.content.image() {
                 self.release_effective_image(image.resource());
             }
+            if let Some(id) = external_geometry_id(&driver.content) {
+                self.release_effective_geometry(id);
+            }
             self.frame.objects[index].content = self.compiled.objects()[index].content.clone();
             self.frame.objects[index].text_bounds = self.compiled.objects()[index].text_bounds;
             self.mark_changed(index);
@@ -529,15 +618,84 @@ impl SceneInstance {
             }
         }
     }
+
+    fn retain_effective_geometry(
+        &mut self,
+        id: GeometryId,
+        handle: GeometryResourceHandle,
+        resource: &GeometryResource,
+    ) {
+        let entry = self
+            .effective_geometries
+            .entry(id)
+            .or_insert_with(|| (handle, resource.clone(), 0));
+        entry.2 += 1;
+    }
+
+    fn geometry_resource_conflicts(
+        &self,
+        object: ObjectId,
+        handle: GeometryResourceHandle,
+        lease: Option<EffectiveContentLease>,
+    ) -> bool {
+        if self
+            .compiled
+            .geometry_resources()
+            .current_handle(handle.id)
+            .is_some()
+        {
+            return true;
+        }
+        let Some((current, _, references)) = self.effective_geometries.get(&handle.id) else {
+            return false;
+        };
+        if *current == handle {
+            return false;
+        }
+        // GeometryRef carries only an ID. A version swap is safe only when the
+        // same lease is the sole reader of the old version; sharing readers or
+        // an unrelated producer would otherwise silently observe new payloads.
+        let Some(lease) = lease else { return true };
+        *references != 1
+            || self.effective_content_lease(object) != Some(lease)
+            || self
+                .compiled
+                .object_index(object)
+                .and_then(|index| self.effective_content_drivers.get(&(index as usize)))
+                .and_then(|driver| external_geometry_id(&driver.content))
+                != Some(handle.id)
+    }
+
+    fn release_effective_geometry(&mut self, id: GeometryId) {
+        if let std::collections::btree_map::Entry::Occupied(mut entry) =
+            self.effective_geometries.entry(id)
+        {
+            if entry.get().2 == 1 {
+                entry.remove();
+            } else {
+                entry.get_mut().2 -= 1;
+            }
+        }
+    }
+}
+
+fn external_geometry_id(content: &ObjectContentRef) -> Option<GeometryId> {
+    match content {
+        ObjectContentRef::Geometry(GeometryRef::External(id)) => Some(*id),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
     use noon_core::{
-        CompositionTimeMap, GeometryRef, ObjectContentRef, ObjectId, Property,
-        RasterImageResourceArena, RasterImageResourceLookup, RateFunction, SemanticImageContent,
-        Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+        CompositionTimeMap, GeometryRef, GeometryResource, GeometryResourceArena,
+        GeometryResourceLookup, ObjectContentRef, ObjectId, Property, RasterImageResourceArena,
+        RasterImageResourceLookup, RateFunction, SemanticImageContent, Style, TrackDefinition,
+        TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
     };
 
     use super::{EffectiveContentError, SceneInstance};
@@ -565,6 +723,195 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap())
+    }
+
+    #[test]
+    fn external_geometry_is_published_and_retired_by_effective_content_leases() {
+        let mut instance = scene(2, false);
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::new(0.0, 0.0))
+                .line_to(Vec2::new(2.0, 0.0)),
+        );
+        let first = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(0), handle, &source, None)
+            .unwrap();
+        let first_lease = instance
+            .commit_effective_content_replacement(first)
+            .unwrap();
+        let second = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(1), handle, &source, None)
+            .unwrap();
+        let second_lease = instance
+            .commit_effective_content_replacement(second)
+            .unwrap();
+        drop(source);
+
+        let publication = instance.take_renderer_publication();
+        assert!(publication.geometry_resources().get(handle).is_some());
+        drop(publication);
+        assert_eq!(
+            instance.geometry_resources().current_handle(handle.id),
+            Some(handle)
+        );
+        assert!(instance.geometry_resources().get(handle).is_some());
+        assert_eq!(instance.effective_geometries.get(&handle.id).unwrap().2, 2);
+        instance.release_effective_content(first_lease).unwrap();
+        assert!(instance.geometry_resources().get(handle).is_some());
+        assert_eq!(instance.effective_geometries.get(&handle.id).unwrap().2, 1);
+        instance.release_effective_content(second_lease).unwrap();
+        assert!(instance.geometry_resources().get(handle).is_none());
+        assert!(!instance.effective_geometries.contains_key(&handle.id));
+    }
+
+    #[test]
+    fn external_geometry_preparation_rejects_a_stale_initial_publication() {
+        let mut instance = scene(1, false);
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(VectorPath::new().move_to(Vec2::new(1.0, 1.0)));
+        let prepared = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(0), handle, &source, None)
+            .unwrap();
+        instance.evaluate(1.0).unwrap();
+        assert!(matches!(
+            instance.commit_effective_content_replacement(prepared),
+            Err(EffectiveContentError::StalePublication { .. })
+        ));
+        assert!(instance.geometry_resources().get(handle).is_none());
+    }
+
+    #[test]
+    fn sole_lease_can_replace_the_same_geometry_id_with_a_new_version() {
+        let object = ObjectId::new(0);
+        let mut instance = scene(1, false);
+        let mut source = GeometryResourceArena::new();
+        let first = source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let prepared = instance
+            .prepare_effective_geometry_replacement(object, first, &source, None)
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(prepared)
+            .unwrap();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+
+        let second = source
+            .replace(
+                first.id,
+                GeometryResource::VectorPath(Arc::new(
+                    VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(2.0, 0.0)),
+                )),
+            )
+            .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_ne!(first, second);
+        let prepared = instance
+            .prepare_effective_geometry_replacement(object, second, &source, Some(lease))
+            .unwrap();
+        assert_eq!(
+            instance.commit_effective_content_replacement(prepared),
+            Ok(lease)
+        );
+        assert_ne!(instance.publication_context(), before);
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            instance.geometry_resources().current_handle(first.id),
+            Some(second)
+        );
+        assert!(instance.geometry_resources().get(first).is_none());
+        assert!(instance.geometry_resources().get(second).is_some());
+        instance.release_effective_content(lease).unwrap();
+        assert!(instance.geometry_resources().get(second).is_none());
+    }
+
+    #[test]
+    fn shared_geometry_id_cannot_swap_version_under_one_lease() {
+        let mut instance = scene(2, false);
+        let mut source = GeometryResourceArena::new();
+        let first = source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let mut leases = Vec::new();
+        for id in 0..2 {
+            let prepared = instance
+                .prepare_effective_geometry_replacement(ObjectId::new(id), first, &source, None)
+                .unwrap();
+            leases.push(
+                instance
+                    .commit_effective_content_replacement(prepared)
+                    .unwrap(),
+            );
+        }
+        let second = source
+            .replace(
+                first.id,
+                GeometryResource::VectorPath(Arc::new(
+                    VectorPath::new().move_to(Vec2::new(1.0, 0.0)),
+                )),
+            )
+            .unwrap();
+        assert!(matches!(
+            instance.prepare_effective_geometry_replacement(
+                ObjectId::new(0), second, &source, Some(leases[0])
+            ),
+            Err(EffectiveContentError::GeometryResourceConflict(id)) if id == first.id
+        ));
+        assert_eq!(
+            instance.geometry_resources().current_handle(first.id),
+            Some(first)
+        );
+        instance.release_effective_content(leases[0]).unwrap();
+        instance.release_effective_content(leases[1]).unwrap();
+    }
+
+    #[test]
+    fn held_lease_rejects_geometry_id_claimed_by_another_producer_after_prepare() {
+        let mut instance = scene(2, false);
+        let inline = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(0),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let held_lease = instance
+            .commit_effective_content_replacement(inline)
+            .unwrap();
+        let mut first_source = GeometryResourceArena::new();
+        let first = first_source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let mut second_source = GeometryResourceArena::new();
+        let second = second_source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        assert_eq!(first.id, second.id);
+        assert_ne!(first, second);
+
+        let second_prepared = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(1), second, &second_source, None)
+            .unwrap();
+        let first_prepared = instance
+            .prepare_effective_geometry_replacement(
+                ObjectId::new(0),
+                first,
+                &first_source,
+                Some(held_lease),
+            )
+            .unwrap();
+        let second_lease = instance
+            .commit_effective_content_replacement(second_prepared)
+            .unwrap();
+        assert_eq!(
+            instance.commit_effective_content_replacement(first_prepared),
+            Err(EffectiveContentError::GeometryResourceConflict(first.id))
+        );
+        assert_eq!(
+            instance.geometry_resources().current_handle(first.id),
+            Some(second)
+        );
+        assert_eq!(instance.effective_geometries.get(&first.id).unwrap().2, 1);
+        instance.release_effective_content(held_lease).unwrap();
+        instance.release_effective_content(second_lease).unwrap();
+        assert!(instance.geometry_resources().get(second).is_none());
     }
 
     #[test]
