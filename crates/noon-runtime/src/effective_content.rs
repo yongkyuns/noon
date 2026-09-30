@@ -8,10 +8,10 @@ use noon_compile::{
     ExecutionPatch,
 };
 use noon_core::{
-    GeometryId, GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
-    GeometryResourceLookup, ObjectContentRef, ObjectId, Property, PublicationContext,
-    RasterImageResource, RasterImageResourceArena, RasterImageResourceHandle, Rect,
-    SemanticImageContent,
+    ExecutionRevision, FontResourceArena, GeometryId, GeometryRef, GeometryResource,
+    GeometryResourceArena, GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef,
+    ObjectId, Property, PublicationContext, RasterImageResource, RasterImageResourceArena,
+    RasterImageResourceHandle, Rect, SemanticImageContent, TextResourceArena, TextResourceHandle,
 };
 
 use crate::{
@@ -42,6 +42,7 @@ pub struct PreparedEffectiveContentReplacement {
     text_bounds: Option<Rect>,
     image_resource: Option<Arc<RasterImageResource>>,
     geometry_resource: Option<(GeometryId, GeometryResourceHandle, GeometryResource)>,
+    text_resource_additions: Option<CompiledResources>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +72,7 @@ pub enum EffectiveContentError {
     StaleLease(ObjectId),
     SequenceExhausted,
     FrameEpochExhausted,
+    ExecutionRevisionExhausted(ExecutionRevision),
 }
 
 /// Validation failure for one coherent native/host callback publication.
@@ -147,6 +149,10 @@ impl std::fmt::Display for EffectiveContentError {
             Self::FrameEpochExhausted => {
                 formatter.write_str("effective content frame epoch exhausted")
             }
+            Self::ExecutionRevisionExhausted(revision) => write!(
+                formatter,
+                "effective content execution revision exhausted at {revision:?}"
+            ),
         }
     }
 }
@@ -257,6 +263,38 @@ impl SceneInstance {
             Some(additions),
             Some(image_resource),
         )
+    }
+
+    /// Prepare producer-owned immutable text and its font/path dependency
+    /// closure. The resource closure enters the existing compiled projection
+    /// only if the effective-content lease publishes successfully.
+    pub fn prepare_effective_text_replacement(
+        &self,
+        object: ObjectId,
+        handle: TextResourceHandle,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
+        let mut additions = CompiledResources::default();
+        let text_bounds = additions
+            .capture_text_from_arenas(texts, fonts, geometries, handle)
+            .map_err(EffectiveContentError::Resource)?;
+        self.compiled
+            .resources()
+            .preflight_merge(&additions)
+            .map_err(EffectiveContentError::Resource)?;
+        let mut prepared = self.prepare_effective_content_replacement_with_resources(
+            object,
+            ObjectContentRef::Text(handle),
+            Some(text_bounds),
+            lease,
+            Some(additions.clone()),
+            None,
+        )?;
+        prepared.text_resource_additions = Some(additions);
+        Ok(prepared)
     }
 
     fn prepare_effective_content_replacement_with_resources(
@@ -374,6 +412,7 @@ impl SceneInstance {
             text_bounds,
             image_resource,
             geometry_resource: None,
+            text_resource_additions: None,
         })
     }
 
@@ -397,11 +436,24 @@ impl SceneInstance {
         } else {
             None
         };
+        let next_execution = self
+            .content_resource_projection_changes(&prepared)
+            .then(|| {
+                self.publication.execution_revision().checked_next().ok_or(
+                    EffectiveContentError::ExecutionRevisionExhausted(
+                        self.publication.execution_revision(),
+                    ),
+                )
+            })
+            .transpose()?;
         let lease = prepared.lease;
         let changed = self.apply_prepared_effective_content_replacement(prepared);
         if changed {
-            self.publication = self
-                .publication
+            let mut publication = self.publication;
+            if let Some(execution) = next_execution {
+                publication = publication.with_execution_revision(execution);
+            }
+            self.publication = publication
                 .with_frame_epoch(next_epoch.expect("changed content reserved an epoch"));
         }
         Ok(lease)
@@ -420,6 +472,12 @@ impl SceneInstance {
         let may_change = self.prepared_frame_may_change(&frame)
             || !effective.is_empty()
             || self.content_replacement_changes(&content);
+        let next_execution = self.content_resource_projection_changes(&content).then(|| {
+            self.publication
+                .execution_revision()
+                .checked_next()
+                .expect("preflight reserved an execution revision")
+        });
         let next_epoch = may_change.then(|| {
             self.publication
                 .frame_epoch()
@@ -432,8 +490,11 @@ impl SceneInstance {
         let lease = content.lease;
         let content_changed = self.apply_prepared_effective_content_replacement(content);
         if frame_changed || content_changed {
-            self.publication = self
-                .publication
+            let mut publication = self.publication;
+            if let Some(execution) = next_execution {
+                publication = publication.with_execution_revision(execution);
+            }
+            self.publication = publication
                 .with_frame_epoch(next_epoch.expect("changed callback reserved an epoch"));
         }
         Ok(lease)
@@ -474,6 +535,15 @@ impl SceneInstance {
                 ),
             )?;
         }
+        if self.content_resource_projection_changes(content) {
+            self.publication.execution_revision().checked_next().ok_or(
+                PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::ExecutionRevisionExhausted(
+                        self.publication.execution_revision(),
+                    ),
+                ),
+            )?;
+        }
         Ok(())
     }
 
@@ -485,6 +555,9 @@ impl SceneInstance {
     ) -> bool {
         let index = prepared.object_index;
         let changed = self.content_replacement_changes(&prepared);
+        if let Some(additions) = prepared.text_resource_additions.as_ref() {
+            self.compiled.merge_prepared_resources(additions.clone());
+        }
         let version = prepared.expected_version.map_or(0, |version| version + 1);
         let old_image = self
             .effective_content_drivers
@@ -561,6 +634,17 @@ impl SceneInstance {
             || geometry_resource_changed
             || self.frame.render_geometries[index].is_some()
             || self.frame.render_transforms[index].is_some()
+            || self.content_resource_projection_changes(prepared)
+    }
+
+    fn content_resource_projection_changes(
+        &self,
+        prepared: &PreparedEffectiveContentReplacement,
+    ) -> bool {
+        prepared
+            .text_resource_additions
+            .as_ref()
+            .is_some_and(|additions| !self.compiled.resources().contains_all(additions))
     }
 
     /// Release the exact producer and reveal the current authored/compiled
@@ -673,6 +757,12 @@ impl SceneInstance {
             ) {
                 return Err(EffectiveContentError::GeometryResourceConflict(*id));
             }
+        }
+        if let Some(additions) = prepared.text_resource_additions.as_ref() {
+            self.compiled
+                .resources()
+                .preflight_merge(additions)
+                .map_err(EffectiveContentError::Resource)?;
         }
         match (
             self.effective_content_drivers.get(&index),
@@ -810,12 +900,15 @@ fn external_geometry_id(content: &ObjectContentRef) -> Option<GeometryId> {
 mod tests {
     use std::sync::Arc;
 
-    use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
+    use noon_compile::{CompiledObject, CompiledResources, CompiledScene, ExecutionPatch};
     use noon_core::{
-        CompositionTimeMap, GeometryRef, GeometryResource, GeometryResourceArena,
-        GeometryResourceLookup, ObjectContentRef, ObjectId, Property, RasterImageResourceArena,
-        RasterImageResourceLookup, RateFunction, SemanticImageContent, Style, TrackDefinition,
-        TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+        CompositionTimeMap, FontFaceIdentity, FontResourceArena, FontResourceLookup, GeometryRef,
+        GeometryResource, GeometryResourceArena, GeometryResourceLookup, GlyphRun,
+        ObjectContentRef, ObjectId, PositionedGlyph, Property, RasterImageResourceArena,
+        RasterImageResourceLookup, RateFunction, SemanticImageContent, Style, TextAffineTransform,
+        TextPart, TextRenderItem, TextResource, TextResourceArena, TextSourceKind, TextSourceSpan,
+        TextVectorItem, TextVectorStyle, TrackDefinition, TrackId, TrackTiming, TrackValues,
+        Transform2D, Vec2, VectorPath,
     };
 
     use super::{EffectiveContentError, PreparedFrameContentCommitError, SceneInstance};
@@ -843,6 +936,401 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap())
+    }
+
+    fn text_resource(
+        source: &str,
+        face: FontFaceIdentity,
+        geometry: noon_core::GeometryResourceHandle,
+    ) -> TextResource {
+        TextResource {
+            source: Arc::from(source),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([GlyphRun {
+                font: face,
+                variations: Arc::from([]),
+                font_size: 1.0,
+                direction: noon_core::TextDirection::LeftToRight,
+                fill: None,
+                stroke: None,
+                transform: TextAffineTransform::IDENTITY,
+                glyphs: Arc::from([PositionedGlyph {
+                    glyph_id: 1,
+                    cluster: noon_core::TextClusterIdentity {
+                        source_span: TextSourceSpan::new(0, source.len() as u32),
+                        cluster_ordinal: 0,
+                        semantic_key: None,
+                    },
+                    origin: Vec2::ZERO,
+                    advance: Vec2::new(1.0, 0.0),
+                    bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+                }]),
+            }]),
+            vector_items: Arc::from([TextVectorItem {
+                geometry,
+                transform: TextAffineTransform::IDENTITY,
+                style: TextVectorStyle::default(),
+                source_span: None,
+                semantic_key: None,
+            }]),
+            render_items: Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]),
+            parts: Arc::from([TextPart {
+                source_span: TextSourceSpan::new(0, source.len() as u32),
+                first_cluster: 0,
+                cluster_count: 1,
+                first_vector: 0,
+                vector_count: 1,
+                semantic_key: None,
+            }]),
+            bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+            baseline: 0.0,
+            layout_artifact: None,
+        }
+    }
+
+    fn producer_text(
+        label: &str,
+        texts: &mut TextResourceArena,
+        fonts: &mut FontResourceArena,
+        geometries: &mut GeometryResourceArena,
+    ) -> (
+        noon_core::TextResourceHandle,
+        noon_core::FontResourceHandle,
+        noon_core::GeometryResourceHandle,
+    ) {
+        let face = FontFaceIdentity {
+            family: Arc::from(format!("{label} family")),
+            face_key: Arc::from(format!("{label}-face")),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        producer_text_with_face(label, face, [1, 2, 3], texts, fonts, geometries)
+    }
+
+    fn producer_text_with_face(
+        label: &str,
+        face: FontFaceIdentity,
+        bytes: impl Into<Arc<[u8]>>,
+        texts: &mut TextResourceArena,
+        fonts: &mut FontResourceArena,
+        geometries: &mut GeometryResourceArena,
+    ) -> (
+        noon_core::TextResourceHandle,
+        noon_core::FontResourceHandle,
+        noon_core::GeometryResourceHandle,
+    ) {
+        let font = fonts.intern_face(&face, bytes).unwrap();
+        let geometry = geometries.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let text = texts.insert(text_resource(label, face, geometry)).unwrap();
+        (text, font, geometry)
+    }
+
+    fn instance_with_compiled_geometry(
+        arena: &GeometryResourceArena,
+        handle: noon_core::GeometryResourceHandle,
+    ) -> SceneInstance {
+        let mut compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                ObjectId::new(0),
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[],
+        )
+        .unwrap();
+        let mut resources = CompiledResources::default();
+        resources
+            .capture_geometry_from_arena(arena, handle)
+            .unwrap();
+        compiled.merge_prepared_resources(resources);
+        SceneInstance::new(compiled)
+    }
+
+    #[test]
+    fn effective_text_replacement_keeps_only_current_dependency_closure_at_barrier() {
+        let object = ObjectId::new(0);
+        let mut instance = scene(1, false);
+        let mut texts = TextResourceArena::new();
+        let mut fonts = FontResourceArena::new();
+        let mut geometries = GeometryResourceArena::new();
+        let mut lease = None;
+        let mut resources = Vec::new();
+
+        for index in 0..8 {
+            let (text, font, geometry) = producer_text(
+                &format!("text-{index}"),
+                &mut texts,
+                &mut fonts,
+                &mut geometries,
+            );
+            let prepared = instance
+                .prepare_effective_text_replacement(
+                    object,
+                    text,
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    lease,
+                )
+                .unwrap();
+            let before = instance.publication_context();
+            lease = Some(if index == 0 {
+                let frame = instance.prepare_advance_to(0.0).unwrap();
+                let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+                instance
+                    .commit_prepared_frame_with_content(frame, writes, prepared)
+                    .unwrap()
+            } else {
+                instance
+                    .commit_effective_content_replacement(prepared)
+                    .unwrap()
+            });
+            assert_eq!(
+                instance.publication_context().execution_revision(),
+                before.execution_revision().checked_next().unwrap()
+            );
+            assert_eq!(
+                instance.publication_context().frame_epoch(),
+                before.frame_epoch().checked_next().unwrap()
+            );
+            resources.push((text, font, geometry));
+            assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_some());
+            assert!(FontResourceLookup::get(instance.font_resources(), font).is_some());
+            assert!(GeometryResourceLookup::get(instance.geometry_resources(), geometry).is_some());
+        }
+
+        let current = *resources.last().unwrap();
+        let before_noop = instance.publication_context();
+        let noop = instance
+            .prepare_effective_text_replacement(
+                object,
+                current.0,
+                &texts,
+                &fonts,
+                &geometries,
+                lease,
+            )
+            .unwrap();
+        instance.commit_effective_content_replacement(noop).unwrap();
+        assert_eq!(instance.publication_context(), before_noop);
+
+        // Prepared resources own their immutable payloads independently of the
+        // producer arenas; the maintenance barrier must still see the full closure.
+        drop(texts);
+        drop(fonts);
+        drop(geometries);
+
+        let publication = instance.take_renderer_publication();
+        assert!(
+            noon_core::TextResourceLookup::get(publication.text_resources(), current.0).is_some()
+        );
+        assert!(FontResourceLookup::get(publication.font_resources(), current.1).is_some());
+        assert!(GeometryResourceLookup::get(publication.geometry_resources(), current.2).is_some());
+        assert_eq!(
+            publication.frame().objects[0].content,
+            ObjectContentRef::Text(current.0)
+        );
+        drop(publication);
+
+        let stats = instance.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 21, "{stats:?}");
+        for (text, font, geometry) in resources.iter().copied().take(7) {
+            assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_none());
+            assert!(FontResourceLookup::get(instance.font_resources(), font).is_none());
+            assert!(GeometryResourceLookup::get(instance.geometry_resources(), geometry).is_none());
+        }
+        assert!(noon_core::TextResourceLookup::get(instance.text_resources(), current.0).is_some());
+        assert!(FontResourceLookup::get(instance.font_resources(), current.1).is_some());
+        assert!(GeometryResourceLookup::get(instance.geometry_resources(), current.2).is_some());
+        assert_eq!(
+            instance.frame().objects[0].content,
+            ObjectContentRef::Text(current.0)
+        );
+    }
+
+    #[test]
+    fn effective_text_rejects_bare_geometry_id_collision_without_retargeting_lookup() {
+        let mut existing_geometries = GeometryResourceArena::new();
+        let existing = existing_geometries.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let instance = instance_with_compiled_geometry(&existing_geometries, existing);
+
+        let mut texts = TextResourceArena::new();
+        let mut fonts = FontResourceArena::new();
+        let mut producer_geometries = GeometryResourceArena::new();
+        let (text, _, producer_geometry) = producer_text(
+            "collision",
+            &mut texts,
+            &mut fonts,
+            &mut producer_geometries,
+        );
+        assert_eq!(producer_geometry.id, existing.id);
+        assert_ne!(producer_geometry, existing);
+
+        assert!(matches!(
+            instance.prepare_effective_text_replacement(
+                ObjectId::new(0),
+                text,
+                &texts,
+                &fonts,
+                &producer_geometries,
+                None,
+            ),
+            Err(EffectiveContentError::Resource(
+                noon_compile::CompiledResourceError::ConflictingGeometryId(id)
+            )) if id == existing.id
+        ));
+        assert!(GeometryResourceLookup::get(instance.geometry_resources(), existing).is_some());
+        assert!(
+            GeometryResourceLookup::get(instance.geometry_resources(), producer_geometry).is_none()
+        );
+        assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_none());
+    }
+
+    #[test]
+    fn effective_text_rejects_conflicting_font_face_without_retargeting_lookup() {
+        let object = ObjectId::new(0);
+        let mut instance = scene(1, false);
+        let mut texts = TextResourceArena::new();
+        let mut fonts = FontResourceArena::new();
+        let mut geometries = GeometryResourceArena::new();
+        let (first, first_font, _) =
+            producer_text("shared-face", &mut texts, &mut fonts, &mut geometries);
+        let lease = instance
+            .commit_effective_content_replacement(
+                instance
+                    .prepare_effective_text_replacement(
+                        object,
+                        first,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        None,
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let mut next_texts = TextResourceArena::new();
+        let mut next_fonts = FontResourceArena::new();
+        let mut next_geometries = GeometryResourceArena::new();
+        next_geometries.insert_path(VectorPath::new().move_to(Vec2::new(2.0, 0.0)));
+        let face = FontFaceIdentity {
+            family: Arc::from("shared-face family"),
+            face_key: Arc::from("shared-face-face"),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        let (conflicting_text, conflicting_font, _) = producer_text_with_face(
+            "shared-face-update",
+            face,
+            [9, 8, 7],
+            &mut next_texts,
+            &mut next_fonts,
+            &mut next_geometries,
+        );
+        assert!(matches!(
+            instance.prepare_effective_text_replacement(
+                object,
+                conflicting_text,
+                &next_texts,
+                &next_fonts,
+                &next_geometries,
+                Some(lease),
+            ),
+            Err(EffectiveContentError::Resource(
+                noon_compile::CompiledResourceError::ConflictingFont(_)
+            ))
+        ));
+        assert!(FontResourceLookup::get(instance.font_resources(), first_font).is_some());
+        assert!(FontResourceLookup::get(instance.font_resources(), conflicting_font).is_none());
+        assert!(
+            noon_core::TextResourceLookup::get(instance.text_resources(), conflicting_text)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_effective_text_preparation_and_stale_commit_publish_no_resources() {
+        let object = ObjectId::new(0);
+        let mut instance = scene(1, false);
+        let mut texts = TextResourceArena::new();
+        let mut fonts = FontResourceArena::new();
+        let mut geometries = GeometryResourceArena::new();
+        let (first, _, _) = producer_text("first", &mut texts, &mut fonts, &mut geometries);
+        let lease = instance
+            .commit_effective_content_replacement(
+                instance
+                    .prepare_effective_text_replacement(
+                        object,
+                        first,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        None,
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let (stale_text, stale_font, stale_geometry) =
+            producer_text("stale", &mut texts, &mut fonts, &mut geometries);
+        let stale = instance
+            .prepare_effective_text_replacement(
+                object,
+                stale_text,
+                &texts,
+                &fonts,
+                &geometries,
+                Some(lease),
+            )
+            .unwrap();
+        let (current_text, _, _) =
+            producer_text("current", &mut texts, &mut fonts, &mut geometries);
+        let current = instance
+            .prepare_effective_text_replacement(
+                object,
+                current_text,
+                &texts,
+                &fonts,
+                &geometries,
+                Some(lease),
+            )
+            .unwrap();
+        let current_lease = instance
+            .commit_effective_content_replacement(current)
+            .unwrap();
+        assert!(matches!(
+            instance.commit_effective_content_replacement(stale),
+            Err(EffectiveContentError::StalePublication { .. })
+        ));
+        assert!(
+            noon_core::TextResourceLookup::get(instance.text_resources(), stale_text).is_none()
+        );
+        assert!(FontResourceLookup::get(instance.font_resources(), stale_font).is_none());
+        assert!(
+            GeometryResourceLookup::get(instance.geometry_resources(), stale_geometry).is_none()
+        );
+
+        let (unavailable, _, _) =
+            producer_text("missing-font", &mut texts, &mut fonts, &mut geometries);
+        let missing_fonts = FontResourceArena::new();
+        assert!(matches!(
+            instance.prepare_effective_text_replacement(
+                object,
+                unavailable,
+                &texts,
+                &missing_fonts,
+                &geometries,
+                Some(current_lease),
+            ),
+            Err(EffectiveContentError::Resource(
+                noon_compile::CompiledResourceError::MissingFont(_)
+            ))
+        ));
+        assert!(
+            noon_core::TextResourceLookup::get(instance.text_resources(), unavailable).is_none()
+        );
     }
 
     #[test]
