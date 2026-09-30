@@ -112,6 +112,10 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
     let unrelated = scene.circle(0.5).unwrap();
     scene.add(&source).unwrap();
     scene.add(&unrelated).unwrap();
+    for _ in 2..600 {
+        let static_circle = scene.circle(0.5).unwrap();
+        scene.add(&static_circle).unwrap();
+    }
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
     transaction
@@ -125,9 +129,12 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
         77,
     )
     .unwrap();
+    assert_eq!(player.session.frame().objects.len(), 600);
+    player.session.take_frame_changes();
     let before = player.session.publication_context();
     let first: serde_json::Value =
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    assert_eq!(first["objects"].as_array().unwrap().len(), 1);
     let content_batch = |phase: &serde_json::Value, radius: f32| {
         serde_json::json!({
             "token": phase["token"], "region": phase["region"],
@@ -172,17 +179,29 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
         player.session.frame().objects[1].content,
         ObjectContentRef::Geometry(GeometryRef::circle(0.5))
     );
+    assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+    assert!(player.session.last_spatial_update_stats().leaves_upserted <= 1);
 
-    let next: serde_json::Value =
-        serde_json::from_str(&player.advance_to_callback_phase(1.0).unwrap().unwrap()).unwrap();
-    assert!(player
-        .commit_callback_phase_json(&content_batch(&next, 3.0))
-        .unwrap()
-        .is_none());
-    assert_eq!(
-        player.session.effective_content_lease(source.node_id()),
-        Some(lease)
-    );
+    for step in 1..=32 {
+        let time = f64::from(step) / 32.0;
+        let radius = 2.0 + (step as f32) / 32.0;
+        let next: serde_json::Value =
+            serde_json::from_str(&player.advance_to_callback_phase(time).unwrap().unwrap())
+                .unwrap();
+        assert_eq!(next["objects"].as_array().unwrap().len(), 1);
+        assert!(player
+            .commit_callback_phase_json(&content_batch(&next, radius))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            player.session.effective_content_lease(source.node_id()),
+            Some(lease)
+        );
+        assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+        assert!(player.session.last_spatial_update_stats().leaves_upserted <= 1);
+    }
     assert_eq!(
         player.session.frame().objects[0].content,
         ObjectContentRef::Geometry(GeometryRef::circle(3.0))
