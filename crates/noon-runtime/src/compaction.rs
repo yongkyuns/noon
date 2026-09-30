@@ -425,6 +425,36 @@ mod tests {
     }
 
     #[test]
+    fn property_animation_does_not_pin_obsolete_text_versions() {
+        let (compiled, handles) = compiled_text_history(&["old", "current"]);
+        let [old, current] = [handles[0], handles[1]];
+        let mut runtime = SceneInstance::new(compiled);
+        let object = runtime.frame().objects[0].id;
+        runtime
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        runtime.advance_to(0.5).unwrap();
+        let before = runtime.effective_object(object).unwrap().clone();
+
+        let stats = runtime.reclaim_retired_object_slots().unwrap();
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 1);
+        assert_eq!(runtime.effective_object(object), Some(&before));
+        assert!(TextResourceLookup::get(runtime.text_resources(), old).is_none());
+        assert!(TextResourceLookup::get(runtime.text_resources(), current).is_some());
+        runtime.advance_to(1.0).unwrap();
+    }
+
+    #[test]
     fn content_lease_roots_only_its_own_resource_history() {
         let (compiled, handles) = compiled_text_history(&["held", "obsolete", "authored"]);
         let [held, obsolete, authored] = [handles[0], handles[1], handles[2]];
