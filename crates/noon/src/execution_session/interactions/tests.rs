@@ -133,6 +133,50 @@ fn click_indicate_is_local_and_does_not_change_authored_revisions() {
 }
 
 #[test]
+fn bound_click_indicates_progress_independently_and_ignore_active_retriggers() {
+    let (_, _, first, second, mut session) = fixture(0);
+    let first_object = session.execution_object_id(first).unwrap();
+    let second_object = session.execution_object_id(second).unwrap();
+
+    click(&mut session, 1, 0.0);
+    session.advance_interactions(0.0).unwrap();
+    session.advance_interactions(0.1).unwrap();
+
+    // A duplicate on the first target is ignored; the second target acquires
+    // its own transient driver while the first one is still active.
+    click(&mut session, 3, 0.0);
+    click(&mut session, 5, 5.0);
+    assert!(session.interactions_active());
+
+    session.advance_interactions(0.2).unwrap();
+    session.advance_interactions(0.3).unwrap();
+    let first_midpoint = session.runtime.effective_object(first_object).unwrap();
+    let second_midpoint = session.runtime.effective_object(second_object).unwrap();
+    assert!(first_midpoint.transform.scale.x > 1.0);
+    assert!(second_midpoint.transform.scale.x > 1.0);
+    assert_ne!(first_midpoint.style.fill, Some(noon_core::WHITE));
+    assert_ne!(second_midpoint.style.fill, Some(noon_core::WHITE));
+
+    // The first action finishes on its original deadline while the later
+    // second action is still at its midpoint.
+    session.advance_interactions(0.4).unwrap();
+    let first_restored = session.runtime.effective_object(first_object).unwrap();
+    let second_still_active = session.runtime.effective_object(second_object).unwrap();
+    assert_eq!(first_restored.transform.scale, Vec2::new(1.0, 1.0));
+    assert_eq!(first_restored.style.fill, Some(noon_core::WHITE));
+    assert_eq!(second_still_active.transform.scale, Vec2::new(1.2, 1.2));
+    assert_eq!(second_still_active.style.fill, Some(YELLOW));
+    assert!(session.interactions_active());
+
+    session.advance_interactions(0.61).unwrap();
+    let second_restored = session.runtime.effective_object(second_object).unwrap();
+    assert_eq!(second_restored.transform.scale, Vec2::new(1.0, 1.0));
+    assert_eq!(second_restored.style.fill, Some(noon_core::WHITE));
+    assert!(!session.interactions_active());
+    assert_eq!(session.frame().time, 0.0);
+}
+
+#[test]
 fn click_indicate_overlaps_an_authored_segment_and_restores_independently() {
     let (mut store, root, target, scripted, mut session) = fixture(0);
     let scripted_segment = session
