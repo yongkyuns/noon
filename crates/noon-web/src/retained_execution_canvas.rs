@@ -1,20 +1,24 @@
 #[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct FamilyAdmission<T, E> {
+    pub(crate) outcome: crate::RetainedTransportApplyOutcome,
+    pub(crate) changes: noon_runtime::FrameChanges,
+    pub(crate) resident_preparation: Option<Result<T, E>>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn apply_family_then_resident_preparation<T, E>(
     mirror: &mut crate::InstalledRetainedExecutionMirror,
     delta: crate::RetainedFamilyExecutionDeltaEnvelope,
     prepare_resident: impl FnOnce(&crate::InstalledRetainedExecutionMirror) -> Result<T, E>,
-) -> Result<
-    (
-        crate::RetainedTransportApplyOutcome,
-        noon_runtime::FrameChanges,
-        Option<Result<T, E>>,
-    ),
-    crate::InstalledExecutionError,
-> {
+) -> Result<FamilyAdmission<T, E>, crate::InstalledExecutionError> {
     let applied = mirror.apply_family(delta)?;
     let resident_preparation = (applied.0 == crate::RetainedTransportApplyOutcome::Applied)
         .then(|| prepare_resident(mirror));
-    Ok((applied.0, applied.1, resident_preparation))
+    Ok(FamilyAdmission {
+        outcome: applied.0,
+        changes: applied.1,
+        resident_preparation,
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -29,6 +33,7 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
+    use super::{apply_family_then_resident_preparation, FamilyAdmission};
     use crate::{
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
@@ -363,24 +368,28 @@ mod wasm {
             let queue = &self.queue;
             let preloaded_geometry_count = &mut self.preloaded_geometry_count;
             let preload_bytes_uploaded = &mut self.preload_bytes_uploaded;
-            let (outcome, changes, resident_preparation) =
-                apply_family_then_resident_preparation(mirror, delta, |mirror| {
-                    let Some(preparations) = resident_additions else {
-                        return Ok(());
-                    };
-                    let resources = mirror.resources();
-                    preparer.set_scene_path_mesh_cache_budget(
-                        resources
-                            .render_geometries()
-                            .len()
-                            .max(resources.render_geometry_preparation_count()),
-                        resources.geometry_count(),
-                    );
-                    if !gpu_available {
-                        return Ok(());
-                    }
-                    let geometries = resources.render_geometries();
-                    let requests = preparations
+            let FamilyAdmission {
+                outcome,
+                changes,
+                resident_preparation,
+            } = apply_family_then_resident_preparation(mirror, delta, |mirror| {
+                let Some(preparations) = resident_additions else {
+                    return Ok(());
+                };
+                let resources = mirror.resources();
+                preparer.set_scene_path_mesh_cache_budget(
+                    resources
+                        .render_geometries()
+                        .len()
+                        .max(resources.render_geometry_preparation_count()),
+                    resources.geometry_count(),
+                );
+                if !gpu_available {
+                    return Ok(());
+                }
+                let geometries = resources.render_geometries();
+                let requests =
+                    preparations
                         .iter()
                         .map(|(resource, style, transform)| {
                             geometries.get(*resource as usize)?.geometry.as_deref().map(
@@ -392,24 +401,24 @@ mod wasm {
                             )
                         })
                         .collect::<Option<Vec<_>>>();
-                    let Some(requests) = requests else {
-                        return Err("admitted geometry is missing".to_owned());
-                    };
-                    let preload = preparer
-                        .append_preload_path_meshes(device, queue, renderer, &requests)
-                        .map_err(|error| error.to_string())?;
-                    *preloaded_geometry_count = preloaded_geometry_count
-                        .saturating_add(preload.geometry.geometry_cache_misses);
-                    *preload_bytes_uploaded =
-                        preload_bytes_uploaded.saturating_add(preload.upload.bytes_uploaded);
-                    // Queue writes from the admitted resource suffix precede any
-                    // first-frame uploads/draw submission that follows.
-                    if preload.upload.bytes_uploaded != 0 {
-                        queue.submit([]);
-                    }
-                    Ok(())
-                })
-                .map_err(js_error)?;
+                let Some(requests) = requests else {
+                    return Err("admitted geometry is missing".to_owned());
+                };
+                let preload = preparer
+                    .append_preload_path_meshes(device, queue, renderer, &requests)
+                    .map_err(|error| error.to_string())?;
+                *preloaded_geometry_count =
+                    preloaded_geometry_count.saturating_add(preload.geometry.geometry_cache_misses);
+                *preload_bytes_uploaded =
+                    preload_bytes_uploaded.saturating_add(preload.upload.bytes_uploaded);
+                // Queue writes from the admitted resource suffix precede any
+                // first-frame uploads/draw submission that follows.
+                if preload.upload.bytes_uploaded != 0 {
+                    queue.submit([]);
+                }
+                Ok(())
+            })
+            .map_err(js_error)?;
             if let Some(Err(error)) = resident_preparation {
                 // Admission is authoritative. Preparation hints are opportunistic and
                 // accepted resources remain usable through ordinary lazy path preparation.

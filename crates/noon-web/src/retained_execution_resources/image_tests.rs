@@ -93,17 +93,19 @@ fn resident_preload_failure_does_not_reject_an_admitted_delta() {
     update.snapshot = false;
     update.sequence = 1;
     update.objects[0].transform.translation = noon_core::Vec2::new(3.0, 4.0);
-    let (outcome, changes, preload) =
-        crate::retained_execution_canvas::apply_family_then_resident_preparation(
-            &mut mirror,
-            family_delta(update),
-            |_| Err::<(), _>("forced preload failure"),
-        )
-        .unwrap();
+    let admission = crate::retained_execution_canvas::apply_family_then_resident_preparation(
+        &mut mirror,
+        family_delta(update),
+        |_| Err::<(), _>("forced preload failure"),
+    )
+    .unwrap();
 
-    assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
-    assert_eq!(changes.object_indices(), &[0]);
-    assert_eq!(preload, Some(Err("forced preload failure")));
+    assert_eq!(admission.outcome, RetainedTransportApplyOutcome::Applied);
+    assert_eq!(admission.changes.object_indices(), &[0]);
+    assert_eq!(
+        admission.resident_preparation,
+        Some(Err("forced preload failure"))
+    );
     assert_eq!(
         mirror.frame().unwrap().objects[0].transform.translation,
         noon_core::Vec2::new(3.0, 4.0)
