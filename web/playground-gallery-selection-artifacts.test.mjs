@@ -16,7 +16,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, wheelReplies = [], env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -44,7 +44,12 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
     executionMetrics: async () => ({ metrics: { presentedFrames: frame, objectCount: 3 } }),
   };
-  const browserWindow = { __noonNoJspiWorkerWrapped: true, __noonExampleGallery: gallery };
+  const wheelListeners = [];
+  const browserWindow = {
+    __noonNoJspiWorkerWrapped: true,
+    __noonExampleGallery: gallery,
+    addEventListener: (type, listener) => { if (type === "wheel") wheelListeners.push(listener); },
+  };
   const browserDocument = { querySelector: (selector) => {
     if (selector === ".playback-controls") return {
       dataset: { busy: "false", elapsedSeconds: "2.6", controllable: "false", playing: "false" },
@@ -58,12 +63,20 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       state: "applied", interaction: showcase ? "none" : "pointer-fill-selection", rendererBackend: "WebGL2",
     } };
   } };
-  const inspection = { pending: [], samples: [] };
+  const inspection = { pending: [], samples: [], wheelEvents: [] };
   browserWindow.__noonInspectionTest = inspection;
   const acceptWheel = () => {
     const changed = wheelReplies.length ? wheelReplies.shift() : true;
+    if (changed === null) return false;
     if (changed) frame += 1;
     inspection.pending.push(Promise.resolve({ inspectionScrollChanged: changed }));
+    return true;
+  };
+  const finishWheelEvent = deltaY => {
+    const consumed = acceptWheel();
+    if (consumed) inspection.samples.push({ input: { delta_pixels: deltaY } });
+    const event = { deltaY, defaultPrevented: consumed };
+    for (const listener of wheelListeners) listener(event);
   };
   const canvas = {
     evaluate: async (fn, argument) => {
@@ -73,7 +86,11 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       }
       return fn({ style: { setProperty() {} },
         getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
-        dispatchEvent: event => { event.defaultPrevented = true; acceptWheel(); events.push("DOM:wheel"); },
+        dispatchEvent: event => {
+          event.defaultPrevented = acceptWheel();
+          for (const listener of wheelListeners) listener(event);
+          events.push("DOM:wheel");
+        },
       }, argument);
     },
     boundingBox: async () => ({ x: 0, y: 0, width: 800, height: 600 }),
@@ -94,14 +111,29 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         : "noon-pointer-selection";
     },
     evaluate: async (fn, argument) => {
-      if (String(fn).includes("await import(")) return undefined;
+      if (String(fn).includes("await import(")) {
+        inspection.pending = [];
+        inspection.samples = [];
+        inspection.wheelEvents = [];
+        wheelListeners.push(event => inspection.wheelEvents.push({
+          deltaY: event.deltaY,
+          defaultPrevented: event.defaultPrevented,
+        }));
+        return undefined;
+      }
       const value = await vm.runInNewContext(`(${fn.toString()})(argument)`, {
         window: browserWindow, document: browserDocument, argument,
       });
       return value === undefined ? value : JSON.parse(JSON.stringify(value));
     },
-    waitForFunction: async (fn, argument) => assert.ok(await fn(argument)),
-    waitForTimeout: async () => {},
+    waitForFunction: async (fn, argument, options) => {
+      const deadline = Date.now() + (options?.timeout ?? 5_000);
+      while (!await fn(argument)) {
+        if (Date.now() >= deadline) throw new Error("Timed out waiting for browser observation");
+        await new Promise(setImmediate);
+      }
+    },
+    waitForTimeout: async () => new Promise(setImmediate),
     locator: (selector) => {
       if (selector === "#scene") return canvas;
       if (selector === "#patch-status") return { getAttribute: async () => "applied" };
@@ -114,7 +146,10 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return canvas;
     },
     getByRole: () => ({ count: async () => 1, click: async () => {} }),
-    mouse: { move: async () => {}, wheel: async () => { acceptWheel(); }, click: async (x, y) => {
+    mouse: { move: async () => {}, wheel: async (_x, deltaY) => {
+      if (deferWheelEvent) setImmediate(() => finishWheelEvent(deltaY));
+      else finishWheelEvent(deltaY);
+    }, click: async (x, y) => {
       events.push(`mouse:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },
@@ -167,7 +202,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       window: { ...browserWindow, __noonInspectionTest: inspection },
       document: browserDocument,
       Event: class Event { constructor() {} },
-      WheelEvent: class WheelEvent { constructor() {} },
+      WheelEvent: class WheelEvent { constructor(_type, init = {}) { Object.assign(this, init); } },
       console: { log: () => events.push("passed"), error: () => events.push("diagnostic:error") },
     });
   } catch (caught) { error = caught; }
@@ -327,6 +362,14 @@ test("gallery qualification observes rejection before offering a distinct fresh 
   assert.equal(result.error, undefined);
   const report = JSON.parse(result.writes.get("result.json"));
   assert.deepEqual(report.wheelAcknowledgements, [null, true, true]);
+});
+
+test("gallery wheel waits for delayed browser delivery and submits each consumed event once", async () => {
+  const result = await runSmoke({ deferWheelEvent: true });
+  assert.equal(result.error, undefined);
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.deepEqual(report.wheelAcknowledgements, [true, true]);
+  assert.equal(report.wheelSamples.length, 2, "each direction must create one worker request");
 });
 
 test("gallery qualification bounds fresh wheel attempts and never claims rejected zoom", async () => {

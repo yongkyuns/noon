@@ -217,7 +217,16 @@ try {
   await page.evaluate(async () => {
     const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
     const original = ExecutionWorkerClient.prototype.scrollInspectionView;
-    window.__noonInspectionTest = { pending: [], samples: [] };
+    window.__noonInspectionTest = { pending: [], samples: [], wheelEvents: [] };
+    // Observe the completed DOM event at window bubble phase. Playwright's
+    // mouse.wheel can resolve before the browser delivers that event to the
+    // canvas, so pending.length alone cannot distinguish rejection from delay.
+    window.addEventListener("wheel", event => {
+      window.__noonInspectionTest.wheelEvents.push({
+        deltaY: event.deltaY,
+        defaultPrevented: event.defaultPrevented,
+      });
+    });
     ExecutionWorkerClient.prototype.scrollInspectionView = function(...args) {
       window.__noonInspectionTest.samples.push({ input: { ...args[0] }, receipt: this.pointerPresentation });
       const pending = original.apply(this, args);
@@ -291,7 +300,7 @@ try {
       // collector and real touch picking, without claiming native wheel input.
       await authoredCanvas.evaluate((canvas, deltaY) => {
         const rect = canvas.getBoundingClientRect();
-        const event = new WheelEvent("wheel", { cancelable: true, deltaMode: 0, deltaY,
+        const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaMode: 0, deltaY,
           clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
         canvas.dispatchEvent(event);
         if (!event.defaultPrevented) throw new Error("gallery inspection did not consume DOM wheel");
@@ -304,19 +313,38 @@ try {
   report.wheelAcknowledgements = [];
   const wheel = async delta => {
     for (let attempt = 0; attempt < 8; attempt++) {
-      const count = await page.evaluate(() => window.__noonInspectionTest.pending.length);
+      const before = await page.evaluate(() => ({
+        pending: window.__noonInspectionTest.pending.length,
+        wheelEvents: window.__noonInspectionTest.wheelEvents.length,
+      }));
       await dispatchWheel(delta);
-      const accepted = await page.evaluate(async count => {
-        const pending = window.__noonInspectionTest.pending;
-        return pending.length === count ? null : (await pending.at(-1)).inspectionScrollChanged;
-      }, count);
+      // Wait until the browser has delivered this particular input through the
+      // collector. If it was consumed, the async worker request is recorded in
+      // the same event turn; if it was not consumed, retrying is safe.
+      await waitForBrowserObservation(
+        page,
+        count => window.__noonInspectionTest.wheelEvents.length > count,
+        before.wheelEvents,
+        { timeout: 5_000 },
+      );
+      const observation = await page.evaluate(index => window.__noonInspectionTest.wheelEvents[index], before.wheelEvents);
+      assert.ok(Math.abs(observation.deltaY - delta) < 1e-3,
+        "gallery wheel receipt must belong to the dispatched input");
+      let accepted = null;
+      if (observation.defaultPrevented) {
+        accepted = await page.evaluate(async count => {
+          const pending = window.__noonInspectionTest.pending;
+          if (pending.length <= count) throw new Error("consumed gallery wheel did not submit an inspection request");
+          return (await pending[count]).inspectionScrollChanged;
+        }, before.pending);
+        assert.equal(accepted, true, "gallery zoom request was consumed without changing the view");
+      }
       report.wheelAcknowledgements.push(accepted);
       report.wheelSamples = await page.evaluate(() => window.__noonInspectionTest.samples);
       if (accepted === true) return;
       assert.equal(accepted, null, "gallery zoom unexpectedly admitted a no-op");
-      // A new occurrence uses a new collection-time receipt; no rejected input
-      // is queued or relabelled as current by either the test or production host.
-      await page.waitForTimeout(25);
+      // This DOM event completed without preventDefault, so the collector made
+      // no asynchronous request. A fresh occurrence cannot duplicate late work.
     }
     throw new Error("gallery inspection did not admit a fresh wheel occurrence");
   };
