@@ -84,6 +84,46 @@ fn rejected_family_delta_does_not_run_resident_preparation() {
 }
 
 #[test]
+fn stale_family_delta_does_not_advance_resident_mesh_history() {
+    let (bytes, initial) = initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+    let (bundle, handle) = addition();
+    let stale = RetainedFamilyExecutionDeltaEnvelope {
+        retained: initial,
+        family_states: Vec::new(),
+        family_plans: Vec::new(),
+        resource_additions: Some(bundle),
+        resource_retirements: RetainedResourceRetirements::default(),
+        transient_presentations: Vec::new(),
+        selection_overlay: None,
+        pointer_view: None,
+    };
+    let mut resident_mesh_history = 7;
+    let admission = crate::retained_execution_canvas::apply_family_then_resident_preparation(
+        &mut mirror,
+        stale,
+        |_| {
+            resident_mesh_history += 1;
+            Ok::<_, &'static str>(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        admission.outcome,
+        RetainedTransportApplyOutcome::DroppedStale
+    );
+    assert!(admission.resident_preparation.is_none());
+    assert_eq!(resident_mesh_history, 7);
+    assert_eq!(mirror.resources().image_count(), 1);
+    assert!(mirror
+        .resources()
+        .resolve_image_handle(handle, TransportImageSampling::Nearest)
+        .is_none());
+}
+
+#[test]
 fn resident_preload_failure_does_not_reject_an_admitted_delta() {
     let (bytes, initial) = initial();
     let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();

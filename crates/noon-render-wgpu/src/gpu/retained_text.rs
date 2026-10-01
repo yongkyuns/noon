@@ -1037,6 +1037,7 @@ pub struct RetainedFramePreparer {
     family_plan_scratch_slots: HashMap<usize, HashMap<noon_core::TextAnimationGlyphRef, usize>>,
     resident_path_maintenance_baseline_bytes: usize,
     resident_path_maintenance_baseline_roots: usize,
+    resident_path_maintenance_baseline_mesh_count: usize,
 }
 
 impl Default for RetainedFramePreparer {
@@ -1095,6 +1096,7 @@ impl Default for RetainedFramePreparer {
             family_plan_scratch_slots: HashMap::new(),
             resident_path_maintenance_baseline_bytes: 0,
             resident_path_maintenance_baseline_roots: 0,
+            resident_path_maintenance_baseline_mesh_count: 0,
         }
     }
 }
@@ -1103,14 +1105,20 @@ impl RetainedFramePreparer {
     pub fn resident_path_maintenance_due(&self, live_resource_roots: usize) -> bool {
         const ROOT_HEADROOM: usize = 64;
         const ROOT_SHRINK_FRACTION_DENOMINATOR: usize = 4;
+        const MIN_RESIDENT_CHURN_BEFORE_COMPACTION: usize = 1_024;
+        const RESIDENT_CHURN_FRACTION_DENOMINATOR: usize = 8;
         const BYTE_HEADROOM: usize = 16 * 1024 * 1024;
         let resident = self.resident_path_mesh_count();
         let root_headroom = live_resource_roots.max(ROOT_HEADROOM);
         let shrink_headroom =
             (live_resource_roots / ROOT_SHRINK_FRACTION_DENOMINATOR).max(ROOT_HEADROOM);
+        let churn_headroom = (live_resource_roots / RESIDENT_CHURN_FRACTION_DENOMINATOR)
+            .max(MIN_RESIDENT_CHURN_BEFORE_COMPACTION);
         (live_resource_roots == 0 && self.resident_path_maintenance_baseline_roots != 0)
             || self.resident_path_maintenance_baseline_roots
                 > live_resource_roots.saturating_add(shrink_headroom)
+            || resident.saturating_sub(self.resident_path_maintenance_baseline_mesh_count)
+                >= churn_headroom
             || resident > live_resource_roots.saturating_add(root_headroom)
             || self.geometry.resident_path_byte_count()
                 > self
@@ -1202,6 +1210,8 @@ impl RetainedFramePreparer {
         replacement.resident_path_maintenance_baseline_bytes =
             replacement.geometry.resident_path_byte_count();
         replacement.resident_path_maintenance_baseline_roots = requests.len();
+        replacement.resident_path_maintenance_baseline_mesh_count =
+            replacement.geometry.resident_path_mesh_count();
         *self = replacement;
         Ok(stats)
     }
@@ -1228,6 +1238,8 @@ impl RetainedFramePreparer {
         self.geometry = geometry;
         self.resident_path_maintenance_baseline_bytes = baseline_bytes;
         self.resident_path_maintenance_baseline_roots = requests.len();
+        self.resident_path_maintenance_baseline_mesh_count =
+            self.geometry.resident_path_mesh_count();
         Ok(stats)
     }
 

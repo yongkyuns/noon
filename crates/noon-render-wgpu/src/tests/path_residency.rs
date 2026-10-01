@@ -448,7 +448,7 @@ fn software_vulkan_keeps_submitted_paths_alive_across_resident_compaction() {
 
 #[test]
 fn explicit_residency_compaction_bounds_long_new_slot_churn() {
-    const CHURN: usize = 1_000;
+    const CHURN: usize = 2_500;
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut preparer = RetainedFramePreparer::new();
@@ -510,6 +510,76 @@ fn explicit_residency_compaction_bounds_long_new_slot_churn() {
         );
     }
     assert!(preparer.resident_path_mesh_count() <= 1 + 64);
+}
+
+#[test]
+fn large_live_root_set_compacts_same_slot_churn_at_a_fractional_history_budget() {
+    const LIVE_ROOTS: usize = 100_000;
+    const CHURN_BUDGET: usize = LIVE_ROOTS / 8;
+    let geometry = simple_path(0);
+    let style = styled_object(0, geometry.clone()).style;
+    let requests = vec![
+        PathMeshPreload {
+            geometry: &geometry,
+            style,
+            transform: Transform2D::IDENTITY,
+        };
+        LIVE_ROOTS
+    ];
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut preparer = RetainedFramePreparer::new();
+    preparer
+        .preload_path_meshes(&device, &queue, &mut renderer, &requests)
+        .unwrap();
+    queue.submit([]);
+    assert_eq!(preparer.resident_path_mesh_count(), 1);
+
+    for seed in 1..CHURN_BUDGET {
+        let changed = simple_path(seed);
+        let request = PathMeshPreload {
+            geometry: &changed,
+            style,
+            transform: Transform2D::IDENTITY,
+        };
+        preparer
+            .append_preload_path_meshes(
+                &device,
+                &queue,
+                &mut renderer,
+                std::slice::from_ref(&request),
+            )
+            .unwrap();
+    }
+    assert!(!preparer.resident_path_maintenance_due(LIVE_ROOTS));
+
+    let changed = simple_path(CHURN_BUDGET);
+    let request = PathMeshPreload {
+        geometry: &changed,
+        style,
+        transform: Transform2D::IDENTITY,
+    };
+    preparer
+        .append_preload_path_meshes(
+            &device,
+            &queue,
+            &mut renderer,
+            std::slice::from_ref(&request),
+        )
+        .unwrap();
+    assert!(preparer.resident_path_maintenance_due(LIVE_ROOTS));
+    assert_eq!(
+        preparer.resident_path_mesh_count(),
+        CHURN_BUDGET + 1,
+        "one changed slot must not retain a full live-root-set worth of history"
+    );
+
+    preparer
+        .compact_path_meshes(&device, &queue, &mut renderer, &requests)
+        .unwrap();
+    queue.submit([]);
+    assert_eq!(preparer.resident_path_mesh_count(), 1);
+    assert!(!preparer.resident_path_maintenance_due(LIVE_ROOTS));
 }
 
 #[test]
