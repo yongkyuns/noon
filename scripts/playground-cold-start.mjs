@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { summarizePageTargetThrottleSamples } from "./playground-cold-start-calibration.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
 
@@ -687,14 +688,7 @@ async function calibratePageThrottleInAuthoringWorker(cdp, worker, startupRate, 
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: startupRate });
   }
 
-  const median = (values) => {
-    const ordered = [...values].sort((left, right) => left - right);
-    return (ordered[1] + ordered[2]) / 2;
-  };
-  const oneX = median(samples.filter(({ requestedPageTargetRate }) => requestedPageTargetRate === 1)
-    .map(({ elapsedMs }) => elapsedMs));
-  const fourX = median(samples.filter(({ requestedPageTargetRate }) => requestedPageTargetRate === 4)
-    .map(({ elapsedMs }) => elapsedMs));
+  const summary = summarizePageTargetThrottleSamples(samples);
   return {
     workloadId,
     workloadDefinitionSha256,
@@ -703,8 +697,8 @@ async function calibratePageThrottleInAuthoringWorker(cdp, worker, startupRate, 
     order: "1x, 4x, 4x, 1x after one discarded 1x warm-up",
     requestedPageTargetRateAtStartup: startupRate,
     samples,
-    medianElapsedMsByRequestedPageTargetRate: { "1": oneX, "4": fourX },
-    observedFourXToOneXRatio: fourX / oneX,
+    medianElapsedMsByRequestedPageTargetRate: summary.medianElapsedMsByRequestedPageTargetRate,
+    observedFourXToOneXRatio: summary.observedFourXToOneXRatio,
     baselineTrace: {
       commit: commitSha,
       packageSourceRevision: runtimePackageSourceRevision,
