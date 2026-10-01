@@ -29,6 +29,8 @@ use noon::integration::{
 use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
 use noon::ExecutionSession;
 #[cfg(any(target_arch = "wasm32", test))]
+use noon_core::SemanticObjectContent;
+#[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
     stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
     NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
@@ -345,7 +347,60 @@ impl SemanticExecutionPlayer {
                     )
                     .map_err(AuthoringFailure::from)?;
             }
+            CallbackContentResult::TextSource(source) => {
+                #[cfg(any(target_arch = "wasm32", test))]
+                self.commit_callback_text_content(batch, target, source)?;
+                #[cfg(not(any(target_arch = "wasm32", test)))]
+                {
+                    let _ = (batch, target, source);
+                    return Err("callback text replacement requires the live semantic store".into());
+                }
+            }
         }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn callback_text_source_handle(
+        &self,
+        source: SemanticNodeId,
+    ) -> Result<noon_core::TextResourceHandle, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .as_ref()
+            .ok_or("effective callback text requires the live semantic store")?
+            .clone();
+        let store = semantics.borrow();
+        let source_state = store
+            .node(source)
+            .and_then(|node| node.semantic_object_state())
+            .ok_or("effective callback text source is not a live semantic object")?;
+        let SemanticObjectContent::Text(handle) = source_state.content else {
+            return Err("effective callback text source must contain text".into());
+        };
+        Ok(handle)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn commit_callback_text_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        source: SemanticNodeId,
+    ) -> Result<(), AuthoringFailure> {
+        let handle = self.callback_text_source_handle(source)?;
+        let semantics = self.semantics.as_ref().unwrap().clone();
+        let store = semantics.borrow();
+        self.session
+            .commit_required_callback_phase_with_owned_text(
+                batch,
+                target,
+                handle,
+                store.text_resources(),
+                store.font_resources(),
+                store.geometry_resources(),
+            )
+            .map_err(AuthoringFailure::from)?;
         Ok(())
     }
 
@@ -3142,6 +3197,8 @@ struct CallbackContentWire {
     geometry: Option<CallbackAnalyticGeometryWire>,
     #[serde(default)]
     path: Option<CallbackPathWire>,
+    #[serde(default)]
+    text_source: Option<CallbackNodeWire>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -3167,10 +3224,15 @@ impl CallbackAnalyticGeometryWire {
 
 impl CallbackContentWire {
     fn into_result(self) -> Result<CallbackContentResult, String> {
+        let variant_count = usize::from(self.geometry.is_some())
+            + usize::from(self.path.is_some())
+            + usize::from(self.text_source.is_some());
+        if variant_count != 1 {
+            return Err(
+                "callback content must name exactly one geometry, path, or text_source".into(),
+            );
+        }
         if let Some(path) = self.path {
-            if self.geometry.is_some() {
-                return Err("callback content cannot contain both geometry and path".into());
-            }
             if path.points.len() < 2 || path.points.len() > 4096 {
                 return Err("callback path must contain between 2 and 4096 points".into());
             }
@@ -3188,15 +3250,21 @@ impl CallbackContentWire {
             }
             return Ok(CallbackContentResult::Path(result));
         }
-        self.geometry
-            .map(|geometry| CallbackContentResult::Geometry(geometry.into_geometry()))
-            .ok_or_else(|| "callback content requires geometry or path".into())
+        if let Some(geometry) = self.geometry {
+            return Ok(CallbackContentResult::Geometry(geometry.into_geometry()));
+        }
+        Ok(CallbackContentResult::TextSource(
+            self.text_source
+                .expect("exactly one content variant checked")
+                .into(),
+        ))
     }
 }
 
 enum CallbackContentResult {
     Geometry(GeometryRef),
     Path(VectorPath),
+    TextSource(SemanticNodeId),
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -3455,6 +3523,12 @@ impl SemanticExecutionPlayer {
             self.session
                 .require_terminal_callback_content_region(token, batch.region())
                 .map_err(AuthoringFailure::from)?;
+        }
+        #[cfg(any(target_arch = "wasm32", test))]
+        if let Some((_, CallbackContentResult::TextSource(source))) = &content {
+            // Resolve/validate the source before admitting this region, so a bad
+            // source leaves the exact callback region available for retry.
+            self.callback_text_source_handle(*source)?;
         }
         let advance = match self.session.submit_required_callback_region(batch) {
             Ok(advance) => advance,

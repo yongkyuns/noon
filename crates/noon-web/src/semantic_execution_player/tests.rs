@@ -5,7 +5,7 @@ use noon_core::{
     NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
     RateFunction, SemanticClickIndicate, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-    SemanticVec3, StoredGeometry, TrackTiming,
+    SemanticVec3, StoredGeometry, TextResourceLookup, TrackTiming,
 };
 
 #[test]
@@ -529,6 +529,129 @@ fn callback_content_does_not_adopt_another_producers_lease() {
         player.session.frame().objects[0].content,
         ObjectContentRef::Geometry(GeometryRef::circle(2.0))
     );
+}
+
+#[test]
+fn callback_text_source_uses_the_effective_text_resource_closure() {
+    let mut scene = noon::Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    let text_source = scene
+        .text(noon::Text::new("callback text").with_font_size(24.0))
+        .unwrap();
+    scene.add(&target).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(10), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        91,
+    )
+    .unwrap();
+    let before = player.session.publication_context();
+    let phase: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let invalid_source = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": {
+            "object": phase["objects"][0]["node"],
+            "text_source": phase["objects"][0]["node"]
+        }
+    });
+    assert!(player
+        .commit_callback_phase_json(&invalid_source.to_string())
+        .is_err());
+    assert_eq!(player.session.publication_context(), before);
+    assert!(player.session.pending_callback_token().is_some());
+    let batch = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": {
+            "object": phase["objects"][0]["node"],
+            "text_source": {"slot": text_source.node_id().slot(),
+                "generation": text_source.node_id().generation()}
+        }
+    });
+    assert!(player
+        .commit_callback_phase_json(&batch.to_string())
+        .unwrap()
+        .is_none());
+    let replacement = player.session.frame().objects[0].content.text().unwrap();
+    let source_handle = scene
+        .integration_store()
+        .borrow()
+        .node(text_source.node_id())
+        .unwrap()
+        .semantic_object_state()
+        .unwrap()
+        .content
+        .text()
+        .unwrap();
+    assert_eq!(replacement, source_handle);
+    assert_eq!(
+        player
+            .session
+            .text_resources()
+            .get(replacement)
+            .unwrap()
+            .source
+            .as_ref(),
+        "callback text"
+    );
+    let lease = player
+        .session
+        .effective_content_lease(target.node_id())
+        .unwrap();
+    let next: serde_json::Value =
+        serde_json::from_str(&player.advance_to_callback_phase(0.5).unwrap().unwrap()).unwrap();
+    let repeated = serde_json::json!({
+        "token": next["token"], "region": next["region"], "writes": [],
+        "content": {"object": next["objects"][0]["node"], "text_source": {
+            "slot": text_source.node_id().slot(),
+            "generation": text_source.node_id().generation()
+        }}
+    });
+    assert!(player
+        .commit_callback_phase_json(&repeated.to_string())
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.effective_content_lease(target.node_id()),
+        Some(lease)
+    );
+    assert_eq!(
+        player.session.frame().objects[0].content.text(),
+        Some(source_handle)
+    );
+    assert_eq!(
+        player
+            .session
+            .text_resources()
+            .get(source_handle)
+            .unwrap()
+            .source
+            .as_ref(),
+        "callback text"
+    );
+}
+
+#[test]
+fn callback_content_wire_rejects_missing_or_ambiguous_variants() {
+    let object = serde_json::json!({"slot": 1, "generation": 0});
+    let geometry = serde_json::json!({"kind": "circle", "radius": 1.0});
+    let path = serde_json::json!({"points": [[0.0, 0.0], [1.0, 0.0]]});
+    for content in [
+        serde_json::json!({"object": object}),
+        serde_json::json!({"object": object, "geometry": geometry, "path": path}),
+        serde_json::json!({"object": object, "path": path, "text_source": object}),
+        serde_json::json!({"object": object, "geometry": geometry, "text_source": object}),
+    ] {
+        let wire: CallbackContentWire = serde_json::from_value(content).unwrap();
+        assert!(wire.into_result().is_err());
+    }
 }
 
 struct NumericRuleBackend;

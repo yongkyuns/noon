@@ -2728,6 +2728,7 @@ class SelectedAlignment(Scene):
     ["ordinary_mixed_updater_order", 3],
     ["ordinary_effective_circle_updater", 1],
     ["ordinary_effective_path_updater", 1],
+    ["ordinary_effective_text_updater", 1],
   ]) {
     const callbackSource = await readFile(
       path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",
