@@ -36,6 +36,15 @@ pub fn scene() -> Result<(Scene, Vec<Mobject>), String> {
 
 /// Add the single-target track used by the direct-WASM authored-time proof.
 pub fn target_animation(scene: &Scene, target: &Mobject) -> Result<DeclaredAnimation, String> {
+    target_animation_with_duration(scene, target, 1.0)
+}
+
+/// Add the single-target track with an explicit duration for sustained browser sampling.
+pub fn target_animation_with_duration(
+    scene: &Scene,
+    target: &Mobject,
+    duration: f64,
+) -> Result<DeclaredAnimation, String> {
     let from = target
         .state()
         .map_err(|error| error.to_string())?
@@ -49,7 +58,7 @@ pub fn target_animation(scene: &Scene, target: &Mobject) -> Result<DeclaredAnima
             from,
             to: SemanticVec3::new(from.x + 1.0, from.y, from.z),
         },
-        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        TrackTiming::new(0.0, duration, RateFunction::Linear),
         CompositionTimeMap::identity(),
     );
     let committed = transaction

@@ -711,6 +711,19 @@ try {
     `browser smoke selected ${initial.rendererBackend}; expected ${expectedRendererBackend}`,
   );
   const directMetrics = await directExecutionProof(page, expectedRendererBackend);
+  const retainedTiming = directMetrics.retainedLocality?.frameTiming;
+  assert.equal(retainedTiming?.rafIntervalsMs?.samples, 63,
+    "100k locality proof did not measure 64 real browser animation frames");
+  assert.ok(Number.isFinite(retainedTiming.rafIntervalsMs.p50) &&
+    Number.isFinite(retainedTiming.rafIntervalsMs.p95) &&
+    Number.isFinite(retainedTiming.rafIntervalsMs.p99),
+  "100k locality proof did not report RAF interval percentiles");
+  assert.equal(directMetrics.retainedLocality.frameDrawCalls?.length, 64,
+    "100k locality proof did not capture draw calls for each RAF sample");
+  assert.equal(directMetrics.retainedLocality.frameUploads?.length, 64,
+    "100k locality proof did not capture uploads for each RAF sample");
+  assert.equal(directMetrics.retainedLocality.tickUploads?.length, 64,
+    "100k locality proof did not preserve all synthetic locality samples");
 
   for (const [index, example] of examples.entries()) {
     const expectedObjects = example.objectCount;
@@ -882,7 +895,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} typed Rust renderer fixtures at four semantic checkpoints each; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} typed Rust renderer fixtures at four semantic checkpoints each; 100k mixed-scene RAF p50/p95/p99 ${retainedTiming.rafIntervalsMs.p50.toFixed(2)}/${retainedTiming.rafIntervalsMs.p95.toFixed(2)}/${retainedTiming.rafIntervalsMs.p99.toFixed(2)} ms with ${retainedTiming.rafIntervalsMs.missedAt16_67ms} intervals over 16.67 ms, advance CPU p50/p95 ${retainedTiming.advanceCpuMs.p50.toFixed(3)}/${retainedTiming.advanceCpuMs.p95.toFixed(3)} ms, render-submit CPU p50/p95 ${retainedTiming.renderSubmitCpuMs.p50.toFixed(3)}/${retainedTiming.renderSubmitCpuMs.p95.toFixed(3)} ms; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();
