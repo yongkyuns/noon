@@ -306,10 +306,14 @@ fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
 
 #[test]
 fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compact_buffers() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    submit_compaction_between_submitted_frames(&device, &queue);
+}
+
+fn submit_compaction_between_submitted_frames(device: &wgpu::Device, queue: &wgpu::Queue) {
     const INITIAL_PATHS: usize = 64;
     const LIVE_PATHS: usize = 2;
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     let geometries = (0..INITIAL_PATHS).map(simple_path).collect::<Vec<_>>();
     let style = styled_object(0, geometries[0].clone()).style;
     let all_requests = geometries
@@ -325,7 +329,7 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
     old_preparer.preload_paths(&all_requests).unwrap();
     let resident = old_preparer.preloaded_frame();
     renderer
-        .upload_preloaded_paths(&device, &queue, &resident)
+        .upload_preloaded_paths(device, queue, &resident)
         .unwrap();
     queue.submit([]);
     let old_vertex_capacity = renderer.path_vertex_capacity_bytes();
@@ -355,7 +359,7 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
     let view_a = target_a.create_view(&wgpu::TextureViewDescriptor::default());
     {
         let prepared_a = old_preparer.prepare(&frame_a);
-        renderer.upload(&device, &queue, &prepared_a);
+        renderer.upload(device, queue, &prepared_a);
         let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Submit frame A before resident path compaction"),
         });
@@ -369,7 +373,7 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
     compacted_preparer.preload_paths(&compact_requests).unwrap();
     let compacted_resident = compacted_preparer.preloaded_frame();
     renderer
-        .replace_preloaded_path_buffers(&device, &queue, &compacted_resident)
+        .replace_preloaded_path_buffers(device, queue, &compacted_resident)
         .unwrap();
     queue.submit([]);
     assert!(renderer.path_vertex_capacity_bytes() < old_vertex_capacity);
@@ -401,7 +405,7 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
     let view_b = target_b.create_view(&wgpu::TextureViewDescriptor::default());
     let prepared_b = compacted_preparer.prepare(&frame_b);
     assert_eq!(prepared_b.stats.geometry_cache_misses, 0);
-    let upload_b = renderer.upload(&device, &queue, &prepared_b);
+    let upload_b = renderer.upload(device, queue, &prepared_b);
     assert_eq!(upload_b.buffer_reallocations, 0);
     let mut encoder_b = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Submit frame B using compact resident path buffers"),
@@ -410,6 +414,36 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
     assert!(draw_b.draw_calls > 0);
     queue.submit(Some(encoder_b.finish()));
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+}
+
+#[test]
+#[ignore = "requires software Vulkan; executed by Native Host Smoke"]
+fn software_vulkan_keeps_submitted_paths_alive_across_resident_compaction() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                force_fallback_adapter: true,
+                ..Default::default()
+            })
+            .await
+            .expect("physical resource-lifetime qualification requires software Vulkan");
+        eprintln!("path resource-lifetime adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        submit_compaction_between_submitted_frames(&device, &queue);
+        let validation_error = pollster::block_on(validation_scope.pop());
+        assert!(
+            validation_error.is_none(),
+            "physical submit/compact/submit raised validation: {validation_error:?}"
+        );
+    });
 }
 
 #[test]
