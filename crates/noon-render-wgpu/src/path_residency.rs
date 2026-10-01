@@ -114,6 +114,7 @@ impl FramePreparer {
         }
         self.resident_vertex_count = self.path_vertices.len();
         self.resident_index_count = self.path_indices.len();
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
         self.path_geometry_dirty =
             self.resident_vertex_count != 0 || self.resident_index_count != 0;
         if self.resident_vertex_count != 0 {
@@ -230,6 +231,7 @@ impl FramePreparer {
 
         self.resident_vertex_count = self.path_vertices.len();
         self.resident_index_count = self.path_indices.len();
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
         debug_assert_eq!(self.resident_vertex_count, plan.next_vertex_count);
         debug_assert_eq!(self.resident_index_count, plan.next_index_count);
         self.path_vertex_dirty_ranges

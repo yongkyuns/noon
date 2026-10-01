@@ -22,6 +22,15 @@ fn path(seed: usize) -> GeometryRef {
     )
 }
 
+fn simple_path(seed: usize) -> GeometryRef {
+    let x = seed as f32;
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(Vec2::new(x, 0.0))
+            .line_to(Vec2::new(x + 0.5, 0.5)),
+    )
+}
+
 #[test]
 fn resident_first_use_phases_upload_instances_only_and_keep_prefix_on_fallback() {
     let geometries: Vec<_> = (0..600).map(path).collect();
@@ -165,6 +174,134 @@ fn resident_replacement_never_recycles_prefix_ranges() {
     assert_eq!(result.vertices_repacked, 0);
     assert_eq!(result.indices_repacked, 0);
     assert_eq!(&preparer.path_vertices[..prefix.len()], prefix);
+}
+
+#[test]
+fn incremental_replacement_prunes_stale_meshes_without_changing_row_order() {
+    let mut preparer = FramePreparer::for_individual_path_draws();
+    preparer.set_path_mesh_cache_limit(1);
+    let mut current = frame(vec![
+        styled_object(0, path(0)),
+        styled_object(1, path(1000)),
+    ]);
+    let initial = preparer.prepare(&current);
+    let initial_vertex_count = initial.path_vertices.len();
+    let initial_index_count = initial.path_indices.len();
+    assert_eq!(initial.path_ids, [ObjectId::new(0), ObjectId::new(1)]);
+
+    let mut final_vertices = Vec::new();
+    let mut final_indices = Vec::new();
+    for seed in 1..65 {
+        current.objects[0].content = noon_core::ObjectContentRef::Geometry(path(seed));
+        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        assert_eq!(prepared.path_ids, [ObjectId::new(0), ObjectId::new(1)]);
+        assert_eq!(prepared.path_batches.len(), 2);
+        assert_eq!(prepared.path_vertices.len(), initial_vertex_count);
+        assert_eq!(prepared.path_indices.len(), initial_index_count);
+        assert!(prepared
+            .path_batch_cache_indices
+            .iter()
+            .all(|&index| index < prepared.path_mesh_cache.len()));
+        assert!(prepared.path_mesh_cache.len() <= 4);
+        final_vertices = prepared.path_vertices.to_vec();
+        final_indices = prepared.path_indices.to_vec();
+    }
+
+    let mut full_rebuild = FramePreparer::for_individual_path_draws();
+    let expected = full_rebuild.prepare(&current);
+    assert_eq!(final_vertices, expected.path_vertices);
+    assert_eq!(final_indices, expected.path_indices);
+}
+
+#[test]
+fn incremental_prune_remaps_batches_even_when_packed_generation_is_stale() {
+    let mut preparer = FramePreparer::for_individual_path_draws();
+    preparer.set_path_mesh_cache_limit(1);
+    let mut current = frame(vec![
+        styled_object(0, simple_path(0)),
+        styled_object(1, simple_path(100)),
+    ]);
+    current.reveals[1] = 0.5;
+    preparer.prepare(&current);
+    assert!(matches!(
+        preparer.slots[1],
+        PreparedSlot::Path {
+            reveal_head: Some(_),
+            ..
+        }
+    ));
+
+    // Model a prior cache edit whose packed bytes have not been rebuilt yet.
+    // Pruning must remap descriptors independently of this generation marker.
+    preparer.path_mesh_cache_generation += 1;
+    for seed in 1..=3 {
+        current.objects[0].content = noon_core::ObjectContentRef::Geometry(simple_path(seed));
+        preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+    }
+    assert_ne!(
+        preparer.packed_path_mesh_cache_generation,
+        preparer.path_mesh_cache_generation
+    );
+    assert!(preparer
+        .path_batch_cache_indices
+        .iter()
+        .all(|&index| index < preparer.path_mesh_cache.len()));
+    let GeometryRef::VectorPath(second_path) = current.objects[1].geometry().unwrap() else {
+        panic!("expected vector path geometry");
+    };
+    assert_eq!(
+        preparer.path_mesh_cache[preparer.path_batch_cache_indices[1]].path,
+        *second_path
+    );
+
+    // A subsequent incremental reveal reads the remapped row descriptor to
+    // position its round-cap reveal head.
+    current.reveals[1] = 0.6;
+    let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![1]));
+    assert!(prepared
+        .lines
+        .iter()
+        .any(|line| line.transform.padding == 1.0));
+}
+
+#[test]
+fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
+    const LIVE_ROWS: usize = 100;
+    let mut preparer = FramePreparer::for_individual_path_draws();
+    preparer.set_path_mesh_cache_limit(1);
+    let mut current = frame(
+        (0..LIVE_ROWS)
+            .map(|index| styled_object(index as u64, simple_path(index)))
+            .collect(),
+    );
+    let initial = preparer.prepare(&current);
+    let initial_vertices = initial.path_vertices.len();
+    let initial_indices = initial.path_indices.len();
+
+    for seed in 1..=LIVE_ROWS {
+        current.objects[0].content =
+            noon_core::ObjectContentRef::Geometry(simple_path(seed + 1000));
+        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        assert_eq!(prepared.path_ids.len(), LIVE_ROWS);
+        assert_eq!(prepared.path_vertices.len(), initial_vertices);
+        assert_eq!(prepared.path_indices.len(), initial_indices);
+        assert_eq!(prepared.path_mesh_cache.len(), LIVE_ROWS + seed);
+    }
+
+    current.objects[0].content = noon_core::ObjectContentRef::Geometry(simple_path(2000));
+    let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+    assert_eq!(prepared.path_ids.len(), LIVE_ROWS);
+    assert_eq!(prepared.path_mesh_cache.len(), LIVE_ROWS);
+    assert!(prepared
+        .path_batch_cache_indices
+        .iter()
+        .all(|&index| index < prepared.path_mesh_cache.len()));
+
+    let mut full_rebuild = FramePreparer::for_individual_path_draws();
+    let expected = full_rebuild.prepare(&current);
+    assert_eq!(prepared.path_ids, expected.path_ids);
+    assert_eq!(prepared.path_vertices, expected.path_vertices);
+    assert_eq!(prepared.path_indices, expected.path_indices);
 }
 
 #[test]

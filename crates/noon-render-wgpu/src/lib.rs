@@ -604,6 +604,7 @@ pub struct FramePreparer {
     path_mesh_cache_limit: Option<usize>,
     path_mesh_clock: u64,
     path_mesh_cache_generation: u64,
+    path_mesh_cache_prune_baseline: usize,
     packed_path_mesh_cache_generation: u64,
     // A unique incremental replacement can relocate its mesh into the transient
     // arena. Cache identities still match after that edit, but the arena no
@@ -917,6 +918,21 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_index_dirty_ranges);
+
+        // Incremental path replacements can create one CPU tessellation per
+        // content version. Compact only after crossing a high-water mark, and
+        // pin meshes still referenced by current draw descriptors so pruning
+        // never invalidates a dormant or active row.
+        let path_mesh_prune_window = self
+            .path_mesh_cache_limit()
+            .max(self.path_batch_cache_indices.len())
+            .max(1);
+        let path_mesh_prune_threshold = self
+            .path_mesh_cache_prune_baseline
+            .saturating_add(path_mesh_prune_window);
+        if self.path_mesh_cache.len() > path_mesh_prune_threshold {
+            self.prune_path_mesh_cache(frame, true);
+        }
 
         self.prepared_frame(
             frame.time,
@@ -1415,7 +1431,7 @@ impl FramePreparer {
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
-        self.prune_path_mesh_cache(frame);
+        self.prune_path_mesh_cache(frame, false);
         let capacities_before = self.capacities();
 
         self.circle_ids.clear();
@@ -1617,6 +1633,7 @@ impl FramePreparer {
             self.path_dirty_ranges.push(0..self.paths.len());
         }
         self.initialized = true;
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
 
         let capacities_after = self.capacities();
         let capacity_growths = capacities_before
@@ -2093,9 +2110,10 @@ impl FramePreparer {
         self.path_mesh_cache[index].last_used = last_used;
     }
 
-    fn prune_path_mesh_cache(&mut self, frame: &FrameState) {
+    fn prune_path_mesh_cache(&mut self, frame: &FrameState, preserve_current_batches: bool) {
         let limit = self.path_mesh_cache_limit();
         if self.path_mesh_cache.len() <= limit {
+            self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
             return;
         }
 
@@ -2103,14 +2121,16 @@ impl FramePreparer {
         // `frame.render_geometry`. Defer eviction while any such outline is active
         // so a full rebuild cannot evict and immediately retessellate visible work.
         // Once all analytic reveals complete, normal bounded LRU pruning resumes.
-        if frame.objects.iter().enumerate().any(|(object_index, _)| {
-            frame.is_present(object_index)
-                && frame.reveal(object_index) < 1.0
-                && frame
-                    .render_geometry(object_index)
-                    .and_then(analytic_reveal_key)
-                    .is_some()
-        }) {
+        if !preserve_current_batches
+            && frame.objects.iter().enumerate().any(|(object_index, _)| {
+                frame.is_present(object_index)
+                    && frame.reveal(object_index) < 1.0
+                    && frame
+                        .render_geometry(object_index)
+                        .and_then(analytic_reveal_key)
+                        .is_some()
+            })
+        {
             return;
         }
 
@@ -2119,6 +2139,11 @@ impl FramePreparer {
             .iter()
             .map(|entry| entry.resident.is_some())
             .collect();
+        if preserve_current_batches {
+            for &index in &self.path_batch_cache_indices {
+                keep[index] = true;
+            }
+        }
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
                 continue;
@@ -2168,6 +2193,7 @@ impl FramePreparer {
             keep[index] = true;
         }
         if keep.iter().all(|&retained| retained) {
+            self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
             return;
         }
 
@@ -2203,20 +2229,22 @@ impl FramePreparer {
             }
             self.path_mesh_cache.push(entry);
         }
-        // Evicting stale cache entries changes their indices, not the packed
-        // geometry of surviving batches. Preserve that correspondence so the
-        // next frame does not repack and upload the same meshes a second time.
-        if packed_generation_current
-            && self
-                .path_batch_cache_indices
-                .iter()
-                .all(|&index| remapped_indices[index].is_some())
-        {
+        // Batch descriptors always need their cache indices remapped when all
+        // referenced entries survive. The packed-generation marker separately
+        // controls whether packed vertex/index bytes can be reused.
+        let batches_survive = self
+            .path_batch_cache_indices
+            .iter()
+            .all(|&index| remapped_indices[index].is_some());
+        if batches_survive {
             for index in &mut self.path_batch_cache_indices {
                 *index = remapped_indices[*index].expect("packed mesh survived cache pruning");
             }
-            self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
+            if packed_generation_current {
+                self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
+            }
         }
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
     }
 
     /// Sets the target number of path meshes retained across full rebuilds.

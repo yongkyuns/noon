@@ -8,7 +8,7 @@ use super::{
     RetainedResourceTransportError,
 };
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) struct RenderGeometryAdditionView<'a> {
     pub(crate) session: u32,
     pub(crate) geometries: std::collections::HashMap<u32, &'a GeometryRef>,
@@ -37,7 +37,7 @@ impl RetainedResourceBundle {
             })
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn render_geometry_addition(
         &self,
     ) -> Result<Option<RenderGeometryAdditionView<'_>>, RetainedResourceTransportError> {
