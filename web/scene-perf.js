@@ -83,6 +83,9 @@ try {
     rejectAttached(error);
   });
   const ready = await Promise.race([attached, sourceFailure]);
+  if (stageTimingSamples !== null && !continuation) {
+    throw new Error("stage timing samples require a source-owned semantic continuation");
+  }
   const initialExecutionReadyMs = performance.now() - authorStarted;
   if (!continuation && (await execution.state()).time > 0) {
     // Predeclared deterministic sources may hand off an already-completed
