@@ -1107,12 +1107,11 @@ mod tests {
 
             if (index + 1) % REPLACEMENTS_PER_BARRIER == 0 {
                 let stats = instance.reclaim_retired_object_slots().unwrap();
-                let replacements_retired =
-                    if index + 1 == REPLACEMENTS_PER_BARRIER {
-                        REPLACEMENTS_PER_BARRIER - 1
-                    } else {
-                        REPLACEMENTS_PER_BARRIER
-                    };
+                let replacements_retired = if index + 1 == REPLACEMENTS_PER_BARRIER {
+                    REPLACEMENTS_PER_BARRIER - 1
+                } else {
+                    REPLACEMENTS_PER_BARRIER
+                };
                 assert_eq!(
                     stats.compiled.resource_entries_reclaimed,
                     replacements_retired * 3,
@@ -1121,8 +1120,10 @@ mod tests {
                 assert_eq!(instance.compiled.resources().text_count(), 1);
                 assert_eq!(instance.compiled.resources().font_count(), 1);
                 assert_eq!(instance.compiled.resources().geometry_count(), 1);
-                for (old_text, old_font, old_geometry) in
-                    resources.iter().copied().take(index + 1 - REPLACEMENTS_PER_BARRIER)
+                for (old_text, old_font, old_geometry) in resources
+                    .iter()
+                    .copied()
+                    .take(index + 1 - REPLACEMENTS_PER_BARRIER)
                 {
                     assert!(noon_core::TextResourceLookup::get(
                         instance.text_resources(),
