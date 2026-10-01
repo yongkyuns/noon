@@ -601,7 +601,7 @@ test("external samples wake only active interactions and serialize presented del
   f.player.interactionsActive = () => interactionsActive;
   f.player.advanceInteractionsDeltaJson = (timestamp) => {
     interactionTickTimes.push(timestamp);
-    interactionsActive = interactionTickTimes.length < 2;
+    interactionsActive = interactionTickTimes.length < 3;
     return f.player.seekDeltaJson(f.player.time());
   };
   f.player.submitBrowserPointerInputJson = () => {
@@ -654,23 +654,42 @@ test("external samples wake only active interactions and serialize presented del
     const secondTickDelta = nextMatching(f.render.port2, message =>
       message.type === "execution_delta" && message.sequence !== firstPublication.sequence &&
       message.sequence !== inputPublication.sequence);
-    const idleWake = nextMatching(f.render.port2, message =>
-      message.type === "execution_wake" && message.cadence === "idle");
     f.render.port2.postMessage({ type: "execution_ack", session: firstPublication.session, sequence: firstPublication.sequence });
     f.render.port2.postMessage({ type: "execution_presented", session: firstPublication.session, sequence: firstPublication.sequence });
     const secondPublication = await secondTickDelta;
+    assert.equal(interactionTickTimes.length, 2);
+    assert.ok(interactionTickTimes[1] - interactionTickTimes[0] <= 100 + 1e-6,
+      "a suspended-tab wall-clock gap is capped to 100ms of interaction progress");
+    assert.equal(f.player.time(), 0.5);
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+
+    const thirdTickDelta = nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== secondPublication.sequence &&
+      message.sequence !== firstPublication.sequence && message.sequence !== inputPublication.sequence);
+    const thirdActiveWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "animation_frame");
+    const idleWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "idle");
     f.render.port2.postMessage({ type: "execution_ack", session: secondPublication.session, sequence: secondPublication.sequence });
     f.render.port2.postMessage({ type: "execution_presented", session: secondPublication.session, sequence: secondPublication.sequence });
+    await thirdActiveWake;
+    wallTime += 1_000 / 30;
+    f.render.port2.postMessage({ type: "tick", timestamp: 103 });
+    const thirdPublication = await thirdTickDelta;
+    assert.equal(interactionTickTimes.length, 3);
+    assert.ok(Math.abs((interactionTickTimes[2] - interactionTickTimes[1]) - 1_000 / 30) < 1e-6,
+      "30 FPS RAF pacing advances the interaction clock at wall-clock speed");
+
+    f.render.port2.postMessage({ type: "execution_ack", session: thirdPublication.session, sequence: thirdPublication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: thirdPublication.session, sequence: thirdPublication.sequence });
     await idleWake;
-    assert.equal(interactionTickTimes.length, 2);
-    assert.ok(interactionTickTimes[1] - interactionTickTimes[0] <= 1_000 / 60 + 1e-6,
-      "a throttled-tab wall-clock gap is capped to one interaction frame");
+    assert.equal(interactionTickTimes.length, 3);
     assert.equal(f.player.time(), 0.5);
     assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
 
     f.render.port2.postMessage({ type: "tick", timestamp: 103 });
     await turn();
-    assert.equal(interactionTickTimes.length, 2, "settled interactions stop requesting worker ticks");
+    assert.equal(interactionTickTimes.length, 3, "settled interactions stop requesting worker ticks");
     assert.equal(f.player.time(), 0.5);
   } finally {
     if (ownPerformanceNow) Object.defineProperty(performance, "now", ownPerformanceNow);

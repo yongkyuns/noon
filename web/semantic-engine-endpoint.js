@@ -289,10 +289,10 @@ export async function attachSemanticEngine(
     emitExecutionWake(active ? "animation_frame" : "idle", null, force);
   };
   const advanceExternalInteractionClock = (wallTime) => {
-    // RAF can be throttled or suspended for seconds. Keep the transient clock
-    // monotonic while limiting each admitted step to one nominal frame, so a
-    // resumed tab cannot fast-forward an interaction in a single publication.
-    const maxStepMs = 1000 / 60;
+    // RAF can be throttled or suspended for seconds. Preserve normal 30–60 FPS
+    // wall pacing while bounding catch-up after longer stalls, so a resumed tab
+    // cannot fast-forward an interaction in one publication.
+    const maxStepMs = 100;
     if (externalInteractionWallTime === null || externalInteractionTickTime === null) {
       externalInteractionWallTime = wallTime;
       externalInteractionTickTime = wallTime;
