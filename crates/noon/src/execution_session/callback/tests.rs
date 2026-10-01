@@ -1023,6 +1023,52 @@ fn callback_aware_advance_runs_time_zero_phase_once_in_compiler_order() {
 }
 
 #[test]
+fn latest_sampled_state_remains_coherent_across_a_required_callback_stall() {
+    let mut store = SemanticStore::new();
+    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(target).unwrap();
+    let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
+    let source = NativeStateSource::Control {
+        name: "gain".to_owned(),
+    };
+    store
+        .bind_semantic_signal(signal, target, SemanticObjectProperty::ObjectOpacity)
+        .unwrap();
+    store
+        .bind_semantic_native_state_input(signal, source.clone())
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+    // Sampled state is latest-value data. Deliver a bounded burst through the
+    // session API, then pin that coherent state behind the existing callback
+    // phase instead of introducing another pending-input queue here.
+    let latest = 31.0 / 32.0;
+    for sample in 0..32 {
+        session
+            .set_native_state_input(
+                source.clone(),
+                NativeInputValue::Scalar(sample as f32 / 32.0),
+            )
+            .unwrap();
+    }
+    assert_eq!(session.frame().objects[0].style.opacity, latest);
+    let overlay = session
+        .begin_required_callback_phase(0.0, [target])
+        .unwrap();
+    assert_eq!(overlay.object(target).unwrap().style.opacity, latest);
+    assert_eq!(
+        session.set_native_state_input(source, NativeInputValue::Scalar(0.0)),
+        Err(ExecutionSessionInputError::RequiredCallbackPending),
+    );
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    assert_eq!(session.frame().objects[0].style.opacity, latest);
+}
+
+#[test]
 fn required_callback_phase_stays_local_with_ten_thousand_unrelated_objects() {
     let mut store = SemanticStore::new();
     let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -1056,11 +1102,41 @@ fn required_callback_phase_stays_local_with_ten_thousand_unrelated_objects() {
     assert_eq!(overlay.staged_row_count(), 0);
     assert_eq!(overlay.prior_driver_row_count(), 0);
     assert!(overlay.object(target).is_some());
+
+    // Model an overloaded host by requesting later ticks before its required
+    // callback has returned. The pending token is the barrier: these requests
+    // must stay rejected and cannot move the visible frame through the callback
+    // dependency, even in a large scene.
+    let pending = overlay.token();
+    let coherent_frame = session.frame().clone();
+    let publication = session.publication_context();
+    for _ in 0..512 {
+        assert!(matches!(
+            session.advance_to_callback_barrier(1.0),
+            Err(ExecutionSessionCallbackError::Pending(token)) if token == pending
+        ));
+        assert_eq!(session.pending_callback_token(), Some(pending));
+        assert_eq!(session.publication_context(), publication);
+    }
+    assert_eq!(session.frame(), &coherent_frame);
+
     session
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
     assert_eq!(session.frame().objects.len(), 10_001);
     assert_eq!(session.frame().time, 0.0);
+
+    let resumed = match session.advance_to_callback_barrier(1.0).unwrap() {
+        CallbackAdvance::HostRequired { overlay, .. } => {
+            assert_eq!(overlay.time(), 1.0);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("active callback must resume at the requested time"),
+    };
+    session
+        .commit_required_callback_phase(resumed.finish())
+        .unwrap();
+    assert_eq!(session.frame().time, 1.0);
 }
 
 #[test]
