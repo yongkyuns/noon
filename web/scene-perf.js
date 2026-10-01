@@ -19,6 +19,10 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const rendererMetricsSampling = parameters.get("rendererMetricsSampling") ?? "dense";
+if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
+  throw new Error("unsupported renderer metrics sampling mode");
+}
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
@@ -137,7 +141,8 @@ try {
         ...advanceResult.sampleTiming,
       });
     }
-    if (rendererSamples !== null) {
+    if (rendererSamples !== null && (rendererMetricsSampling === "dense" ||
+        shouldSampleRendererStageFrame(frame, measuredFrames))) {
       const metricsStarted = performance.now();
       const renderer = (await execution.metrics({
         profilePublicationStages: rendererSamples !== null,
@@ -182,6 +187,7 @@ try {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
     ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererSamples === null ? {} : { rendererMetricsSampling }),
     ...(rendererPublicationStageSamples === null ? {} : {
       rendererPublicationStageSamples,
       rendererPublicationStageNotes: {
@@ -189,7 +195,7 @@ try {
         renderMs: "synchronous retained renderer render call; not GPU completion",
         receiveToPresentMs: "render-worker consume entry through successful render return",
         ackPostMs: "synchronous execution_presented MessagePort post duration",
-        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32",
+        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32; sparse mode polls renderer metrics only at those slots",
       },
     }),
     ...(stageTimingSamples === null ? {} : { stageTimingSamples }),

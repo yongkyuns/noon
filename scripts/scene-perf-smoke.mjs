@@ -13,6 +13,7 @@ const reports = [];
 try {
   const cases = [
     { name: "real-demo", frames: 4, hz: 1, objects: 3, continuation: true, includeRendererSamples: true },
+    { name: "sparse-renderer-metrics", frames: 40, hz: 60, objects: 3, continuation: true, includeRendererSamples: true, rendererMetricsSampling: "sparse" },
     { name: "static", warmup: 0, includeSamples: true, source: "from noon import Scene, Circle\nresult = Scene()\nresult.add(Circle(0.5))", objects: 1, continuation: false },
     { name: "predeclared-endpoint", sourcePath: "./python/examples/painter_order_overlap.py", warmup: 0, frames: 4, hz: 2, objects: 3, continuation: false, duration: 1, measured: 2 },
     { name: "empty", source: "from noon import Scene\nresult = Scene()", objects: 0, continuation: false },
@@ -23,7 +24,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
     try {
       if (spec.source) await page.route("**/python/demo_scene.py", route => route.fulfill({ contentType: "text/plain", body: spec.source }));
-      await page.goto(`${server.baseUrl}/web/scene-perf.html?source=${encodeURIComponent(spec.sourcePath ?? "./python/demo_scene.py")}&warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}&includeRendererSamples=${spec.includeRendererSamples ? 1 : 0}`);
+      await page.goto(`${server.baseUrl}/web/scene-perf.html?source=${encodeURIComponent(spec.sourcePath ?? "./python/demo_scene.py")}&warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}&includeRendererSamples=${spec.includeRendererSamples ? 1 : 0}&rendererMetricsSampling=${spec.rendererMetricsSampling ?? "dense"}`);
       await page.waitForFunction(() => ["complete", "error"].includes(document.querySelector("#status")?.dataset.state), null, { timeout: 60000 });
       const result = await page.evaluate(() => ({ state: document.querySelector("#status").dataset.state, status: document.querySelector("#status").value, report: window.__NOON_SCENE_PERF__ }));
       if (spec.error) {
@@ -51,6 +52,11 @@ try {
           assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
           assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
           assert.ok(result.report.rendererSamples.length > 0);
+          assert.equal(result.report.rendererMetricsSampling, spec.rendererMetricsSampling ?? "dense");
+          if (spec.rendererMetricsSampling === "sparse") {
+            assert.ok(result.report.rendererSamples.length <= 32);
+            assert.ok(result.report.rendererSamples.length < result.report.cadence.frames);
+          }
           const stageSamples = result.report.rendererPublicationStageSamples;
           assert.ok(stageSamples.length > 0);
           assert.ok(stageSamples.length <= 32);
