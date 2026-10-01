@@ -178,10 +178,11 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, GeometryResourceArena, GeometryResourceLookup, ObjectContentRef,
-        RasterImageResourceArena, Rect, SemanticImageContent, SemanticObjectState, SemanticStore,
-        StoredGeometry, Vec2, VectorPath,
+        GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceLookup,
+        ObjectContentRef, RasterImageResourceArena, Rect, SemanticImageContent,
+        SemanticObjectState, SemanticStore, StoredGeometry, Vec2, VectorPath,
     };
+    use std::sync::Arc;
 
     use super::super::picking::{PointerFillOutcome, PointerFillUnsupported};
     use super::ExecutionSession;
@@ -279,12 +280,13 @@ mod tests {
         let handle = source.insert_path(
             VectorPath::new()
                 .move_to(Vec2::new(0.0, 0.0))
-                .line_to(Vec2::new(2.0, 0.0)),
+                .line_to(Vec2::new(2.0, 0.0))
+                .line_to(Vec2::new(0.0, 2.0))
+                .close(),
         );
         let prepared = session
             .prepare_effective_geometry_replacement(target, handle, &source, None)
             .unwrap();
-        drop(source);
         let lease = session
             .commit_effective_content_replacement(prepared)
             .unwrap();
@@ -299,16 +301,53 @@ mod tests {
         assert_eq!(external_view.object_indices(), &[0]);
         assert_eq!(external_view.spatial_stats().full_scan_fallbacks, 0);
         assert_eq!(
-            session.pick_effective_fill(Vec2::new(1.6, 0.0), |_| true).0,
-            PointerFillOutcome::Unsupported {
-                target,
-                reason: PointerFillUnsupported::Content,
-            }
+            session.pick_effective_fill(Vec2::new(0.5, 0.5), |_| true).0,
+            PointerFillOutcome::Hit(target)
+        );
+        assert_eq!(
+            session.pick_effective_fill(Vec2::new(1.8, 1.8), |_| true).0,
+            PointerFillOutcome::Miss
+        );
+
+        let next = source
+            .replace(
+                handle.id,
+                GeometryResource::VectorPath(Arc::new(
+                    VectorPath::new()
+                        .move_to(Vec2::new(3.0, 0.0))
+                        .line_to(Vec2::new(5.0, 0.0))
+                        .line_to(Vec2::new(3.0, 2.0))
+                        .close(),
+                )),
+            )
+            .unwrap();
+        let prepared = session
+            .prepare_effective_geometry_replacement(target, next, &source, Some(lease))
+            .unwrap();
+        assert_eq!(
+            session.commit_effective_content_replacement(prepared),
+            Ok(lease)
+        );
+        assert!(session.geometry_resources().get(handle).is_none());
+        assert!(session.geometry_resources().get(next).is_some());
+        assert_eq!(
+            session.pick_effective_fill(Vec2::new(0.5, 0.5), |_| true).0,
+            PointerFillOutcome::Miss,
+            "the superseding path version no longer covers the old location"
+        );
+        assert_eq!(
+            session.pick_effective_fill(Vec2::new(3.5, 0.5), |_| true).0,
+            PointerFillOutcome::Hit(target)
         );
         session.release_effective_content(lease).unwrap();
-        assert!(session.geometry_resources().get(handle).is_none());
+        assert!(session.geometry_resources().get(next).is_none());
+        assert_eq!(
+            session.pick_effective_fill(Vec2::new(0.5, 0.5), |_| true).0,
+            PointerFillOutcome::Hit(target),
+            "release restores the authored analytic circle"
+        );
         assert!(session
-            .query_viewport(Rect::new(Vec2::new(1.5, -0.1), Vec2::new(1.75, 0.1),))
+            .query_viewport(Rect::new(Vec2::new(3.5, 0.4), Vec2::new(3.75, 0.6)))
             .object_indices()
             .is_empty());
     }

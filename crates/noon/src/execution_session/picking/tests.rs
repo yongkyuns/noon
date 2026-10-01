@@ -137,6 +137,37 @@ fn reflected_rotated_nonuniform_fills_use_inverse_effective_transforms() {
 }
 
 #[test]
+fn polygon_fill_uses_the_effective_inverse_transform() {
+    let mut store = SemanticStore::new();
+    let path = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0))
+                .line_to(Vec2::new(0.0, 2.0))
+                .close(),
+        )
+        .unwrap();
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(path));
+    state.transform.translation = SemanticVec3::new(4.0, -3.0, 0.0);
+    state.transform.scale = SemanticVec3::new(-2.0, 0.5, 1.0);
+    state.transform.rotation_z = 0.7;
+    let node = attach(&mut store, state);
+    let mut session = session(&store);
+    let transform = session.frame().render_transform(0);
+    let inside = transform.transform_point(Vec2::new(0.25, 0.5));
+    let outside = transform.transform_point(Vec2::new(1.8, 1.8));
+    assert_eq!(
+        query(&mut session, inside).outcome(),
+        PointerFillOutcome::Hit(node)
+    );
+    assert_eq!(
+        query(&mut session, outside).outcome(),
+        PointerFillOutcome::Miss
+    );
+}
+
+#[test]
 fn rotated_rectangle_rejects_its_world_axis_aligned_box_corner() {
     let mut store = SemanticStore::new();
     let mut state = rectangle();
@@ -178,33 +209,59 @@ fn transparent_and_stroke_only_shapes_do_not_claim_fill_hits() {
 }
 
 #[test]
-fn unsupported_eligible_content_is_not_a_box_hit_or_a_silent_pass_through() {
+fn polygon_paths_use_precise_concave_fill_and_curves_remain_unsupported() {
     let mut store = SemanticStore::new();
     let bottom = attach(&mut store, rectangle());
-    let path = store
+    let polygon = store
         .insert_geometry_path(
             VectorPath::new()
                 .move_to(Vec2::new(-1.0, -1.0))
                 .line_to(Vec2::new(1.0, -1.0))
+                .line_to(Vec2::new(1.0, 0.0))
+                .line_to(Vec2::new(0.0, 0.0))
                 .line_to(Vec2::new(0.0, 1.0))
                 .close(),
         )
         .unwrap();
     let top = attach(
         &mut store,
-        SemanticObjectState::new(StoredGeometry::Resource(path)),
+        SemanticObjectState::new(StoredGeometry::Resource(polygon)),
     );
-    let mut session = session(&store);
+    let mut path_session = session(&store);
     assert_eq!(
-        query(&mut session, Vec2::ZERO).outcome(),
+        query(&mut path_session, Vec2::ZERO).outcome(),
+        PointerFillOutcome::Hit(top)
+    );
+    assert_eq!(
+        query(&mut path_session, Vec2::new(0.8, 0.8)).outcome(),
+        PointerFillOutcome::Hit(bottom),
+        "a concave bounds-only false positive allows the lower fill to win"
+    );
+
+    let curved = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::new(-1.0, -1.0))
+                .quadratic_to(Vec2::new(1.0, 0.0), Vec2::new(1.0, -1.0))
+                .line_to(Vec2::new(0.0, 1.0))
+                .close(),
+        )
+        .unwrap();
+    let curved_top = attach(
+        &mut store,
+        SemanticObjectState::new(StoredGeometry::Resource(curved)),
+    );
+    let mut curved_session = session(&store);
+    assert_eq!(
+        query(&mut curved_session, Vec2::ZERO).outcome(),
         PointerFillOutcome::Unsupported {
-            target: top,
+            target: curved_top,
             reason: PointerFillUnsupported::Content,
         }
     );
-    let (token, input) = record(&session, Vec2::ZERO);
+    let (token, input) = record(&path_session, Vec2::ZERO);
     assert_eq!(
-        session
+        path_session
             .pick_native_pointer_fill(&token, input, |node| node == bottom)
             .unwrap()
             .outcome(),

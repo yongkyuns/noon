@@ -3,7 +3,10 @@
 //! This first C5 query observes the existing session/runtime/index. It owns no
 //! scene, input queue, geometry cache, selection state, or platform mechanics.
 
-use noon_core::{GeometryRef, NativePointerInput, PublicationContext, SemanticNodeId, Vec2};
+use noon_core::{
+    GeometryRef, GeometryResource, GeometryResourceLookup, NativePointerInput, PublicationContext,
+    SemanticNodeId, Vec2,
+};
 use noon_runtime::{FrameState, SpatialQueryStats};
 
 use super::{ExecutionSession, ExecutionSessionInputError, NativePointerInputToken};
@@ -11,8 +14,8 @@ use super::{ExecutionSession, ExecutionSessionInputError, NativePointerInputToke
 /// Why a potentially filled candidate cannot be decided by the initial picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerFillUnsupported {
-    /// Paths, lines, text, images and externally supplied content need another
-    /// explicit hit policy; their bounds are not a precise fill hit.
+    /// Curved paths, lines, text, images and unsupported external content do not
+    /// have a precise policy here; their bounds are not a precise fill hit.
     Content,
     /// Partial reveal and morph progress are not approximated with a full shape.
     PartialGeometry,
@@ -73,7 +76,8 @@ impl ExecutionSession {
     /// The nominal contour is inclusive; raster AA fringes, alpha quantization,
     /// minimum raster proxy sizes, and pixel-perfect coverage are not modelled.
     ///
-    /// Paths, text/image masks, lines, partial reveals/morphs and degenerate
+    /// Line-only vector paths use the renderer-neutral non-zero polygon fill rule;
+    /// curves, text/image masks, lines, partial reveals/morphs and degenerate
     /// geometry return `Unsupported` when encountered as an eligible potentially
     /// filled candidate. The query never calls their bounding box a precise hit.
     /// Groups are traversed by the existing lowering/index; returned identities
@@ -149,7 +153,7 @@ impl ExecutionSession {
                 continue;
             }
             precise_tests += 1;
-            match analytic_fill_contains(frame, index, point) {
+            match effective_fill_contains(frame, index, point, self.runtime.geometry_resources()) {
                 Ok(false) => continue,
                 Ok(true) => outcome = PointerFillOutcome::Hit(target),
                 Err(reason) => outcome = PointerFillOutcome::Unsupported { target, reason },
@@ -164,6 +168,33 @@ pub(super) fn analytic_fill_contains(
     frame: &FrameState,
     index: usize,
     point: Vec2,
+) -> Result<bool, PointerFillUnsupported> {
+    analytic_fill_contains_with_external_path(frame, index, point, None)
+}
+
+fn effective_fill_contains(
+    frame: &FrameState,
+    index: usize,
+    point: Vec2,
+    resources: &impl GeometryResourceLookup,
+) -> Result<bool, PointerFillUnsupported> {
+    let external_path = match frame.render_geometry(index) {
+        Some(GeometryRef::External(id)) => resources
+            .current_handle(*id)
+            .and_then(|handle| resources.get(handle))
+            .map(|resource| match resource {
+                GeometryResource::VectorPath(path) => path.as_ref(),
+            }),
+        _ => None,
+    };
+    analytic_fill_contains_with_external_path(frame, index, point, external_path)
+}
+
+fn analytic_fill_contains_with_external_path(
+    frame: &FrameState,
+    index: usize,
+    point: Vec2,
+    external_path: Option<&noon_core::VectorPath>,
 ) -> Result<bool, PointerFillUnsupported> {
     if frame.reveal(index) != 1.0 || frame.morph(index) != 0.0 {
         return Err(PointerFillUnsupported::PartialGeometry);
@@ -201,6 +232,11 @@ pub(super) fn analytic_fill_contains(
         Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. }) => {
             Err(PointerFillUnsupported::DegenerateGeometry)
         }
+        Some(GeometryRef::VectorPath(path)) => noon_geometry::polygon_fill_contains(path, [x, y])
+            .ok_or(PointerFillUnsupported::Content),
+        Some(GeometryRef::External(_)) => external_path
+            .and_then(|path| noon_geometry::polygon_fill_contains(path, [x, y]))
+            .ok_or(PointerFillUnsupported::Content),
         _ => Err(PointerFillUnsupported::Content),
     }
 }

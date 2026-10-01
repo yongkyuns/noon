@@ -13,6 +13,8 @@ mod isoline;
 mod morph;
 mod outline;
 mod partial;
+mod polygon_fill;
+pub use polygon_fill::polygon_fill_contains;
 mod plotting;
 mod reverse;
 mod smoothing;
