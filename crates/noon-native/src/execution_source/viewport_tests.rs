@@ -1,8 +1,13 @@
 //! CPU-side native-host/renderer regressions included in the workspace library gate.
 
 use super::*;
-use noon::{AnimationOptions, RateFunction, Scene};
-use noon_core::Vec2;
+use noon::integration::PointerFillOutcome;
+use noon::{AnimationOptions, ExecutionSession, RateFunction, Scene};
+use noon_core::{
+    NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
+    NativePointerPosition, SemanticMutationTransaction, SemanticObjectProperty,
+    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
+};
 use noon_render_wgpu::{FramePreparer, RetainedFramePreparer};
 
 fn viewport() -> Rect {
@@ -228,4 +233,118 @@ fn native_viewport_releases_transient_anchors_after_completion() {
         .take_renderer_publication()
         .transient_presentations()
         .is_empty());
+}
+
+#[test]
+fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_churn() {
+    const POINTER: NativePointerId = NativePointerId {
+        source: 4,
+        pointer: 7,
+    };
+
+    let mut store = SemanticStore::new();
+    let mut target = None;
+    for index in 0..100_000 {
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state.transform.translation = if index == 0 {
+            SemanticVec3::new(0.0, 0.0, 0.0)
+        } else {
+            SemanticVec3::new(
+                100.0 + f64::from(index % 400) * 4.0,
+                100.0 + f64::from(index / 400) * 4.0,
+                0.0,
+            )
+        };
+        let node = store.insert_semantic_object(state);
+        store.attach_to_scene(node).unwrap();
+        if index == 0 {
+            target = Some(node);
+        }
+    }
+    let target = target.unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.take_frame_changes();
+    let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
+
+    let mut previous = Vec2::ZERO;
+    let mut sequence = 0;
+    for turn in 0..64 {
+        let next = if turn % 2 == 0 {
+            Vec2::new(8.0, 0.0)
+        } else {
+            Vec2::ZERO
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(
+            target,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(f64::from(next.x), f64::from(next.y), 0.0),
+        );
+        source
+            .session
+            .apply_semantic_transaction(&mut store, transaction)
+            .unwrap();
+
+        // Exercise the native adapter's normalized input lane before comparing
+        // the viewport projection and precise picker at the same publication.
+        let token = source.native_pointer_input_token().unwrap();
+        let position = NativePointerPosition::new(next, Vec2::new(400.0, 200.0)).unwrap();
+        source
+            .submit_native_pointer_input(
+                &token,
+                NativePointerInput::new(
+                    sequence,
+                    POINTER,
+                    token.context(),
+                    NativeInputModifiers::default(),
+                    NativePointerInputKind::Move(position),
+                ),
+            )
+            .unwrap();
+
+        let bounds = Rect::new(next - Vec2::new(1.1, 1.1), next + Vec2::new(1.1, 1.1));
+        let spatial = source.session.query_viewports(&[bounds]);
+        assert_eq!(source.session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(
+            source.session.last_spatial_update_stats().leaves_upserted,
+            1
+        );
+        let native = source.query_viewports(&[bounds]);
+        assert_eq!(native.object_indices(), spatial.object_indices());
+        assert_eq!(native.spatial_stats(), spatial.spatial_stats());
+        assert_eq!(native.object_indices(), &[0]);
+        assert_eq!(native.spatial_stats().full_scan_fallbacks, 0);
+        assert!(native.spatial_stats().candidates_tested <= 16);
+        let pointer_token = source.native_pointer_input_token().unwrap();
+        let picked = source
+            .session
+            .pick_native_pointer_fill(
+                &pointer_token,
+                NativePointerInput::new(
+                    sequence + 1,
+                    POINTER,
+                    pointer_token.context(),
+                    NativeInputModifiers::default(),
+                    NativePointerInputKind::Move(position),
+                ),
+                |_| true,
+            )
+            .unwrap();
+        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target));
+        assert_eq!(picked.precise_tests(), 1);
+        assert_eq!(picked.spatial_stats().full_scan_fallbacks, 0);
+        assert!(picked.spatial_stats().candidates_tested <= 16);
+
+        let previous_bounds = Rect::new(
+            previous - Vec2::new(1.1, 1.1),
+            previous + Vec2::new(1.1, 1.1),
+        );
+        assert!(source
+            .query_viewports(&[previous_bounds])
+            .object_indices()
+            .is_empty());
+        previous = next;
+        sequence += 2;
+    }
 }
