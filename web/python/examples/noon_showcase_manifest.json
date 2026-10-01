@@ -148,6 +148,23 @@
       "playback_limitation": "This lesson uses Python updater callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
     },
     {
+      "id": "showcase-always-redraw",
+      "title": "Redraw from animated values",
+      "lesson": "Rebuild two bounded shapes from animated values with always_redraw producers.",
+      "primary_feature": "bounded-always-redraw",
+      "category": "Reactive animation",
+      "path": "python/examples/showcase_always_redraw.py",
+      "features": ["always_redraw", "Circle", "Rectangle", "ValueTracker"],
+      "duration": 8.2,
+      "thumbnail_time": 4.0,
+      "thumbnail_alt": "A blue circle and teal rectangle reshaped and repositioned by their always_redraw producers",
+      "still_intervals": [[0.8, 1.2], [3.6, 4.1], [7.0, 8.2]],
+      "beats": [{"time": 1.2, "label": "Reveal both targets"}, {"time": 3.4, "label": "Rebuild from animated values"}, {"time": 6.5, "label": "Return to the resolved layout"}],
+      "thumbnail": "thumbnails/showcase/showcase-always-redraw.png",
+      "playback_capability": "nonreplayable-host-callbacks",
+      "playback_limitation": "This lesson uses Python always_redraw callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
+    },
+    {
       "id": "showcase-raster-images", "title": "Pixels in the scene",
       "lesson": "Reveal and animate a recognizable raster landscape without external assets.",
       "primary_feature": "raster-assets", "category": "Images and assets",

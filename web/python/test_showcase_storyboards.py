@@ -11,6 +11,7 @@ LESSONS = {
     "showcase-transform-ownership",
     "showcase-bezier-paths",
     "showcase-reactive-relationships",
+    "showcase-always-redraw",
 }
 
 
@@ -87,6 +88,26 @@ class FeatureLessonStoryboards(unittest.TestCase):
                 pairs[node.func.attr].append((node.func.value.id, node.args[0].id))
         self.assertEqual(len(pairs["add_updater"]), 3)
         self.assertCountEqual(pairs["add_updater"], pairs["remove_updater"])
+
+    def test_always_redraw_lesson_uses_two_bounded_producers_and_declares_callbacks(self):
+        manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+        entry = next(item for item in manifest["entries"] if item["id"] == "showcase-always-redraw")
+        self.assertEqual(entry["playback_capability"], "nonreplayable-host-callbacks")
+        source = (WEB / entry["path"]).read_text()
+        tree = ast.parse(source)
+        redraws = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Name) and node.func.id == "always_redraw"]
+        self.assertEqual(len(redraws), 2)
+        produced_shapes = []
+        for redraw in redraws:
+            self.assertIsInstance(redraw.args[0], ast.Lambda)
+            produced_shapes.extend(node.func.id for node in ast.walk(redraw.args[0])
+                                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                                   and node.func.id in {"Circle", "Rectangle", "Line", "Path"})
+        self.assertCountEqual(produced_shapes, ["Circle", "Rectangle"])
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                             and node.func.attr in {"add_updater", "remove_updater"}
+                             for node in ast.walk(tree)))
 
     def test_reactive_targets_are_bound_and_registered_before_first_play(self):
         source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()
