@@ -2,13 +2,12 @@ use noon_core::{GeometryRef, VectorPath};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnalyticRevealKey {
-    Circle(u32),
     Rectangle(u32, u32),
 }
 
 pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {
     match geometry {
-        GeometryRef::Circle { radius } => Some(AnalyticRevealKey::Circle(radius.to_bits())),
+        GeometryRef::Circle { .. } => None,
         GeometryRef::Rectangle { size } => Some(AnalyticRevealKey::Rectangle(
             size.x.to_bits(),
             size.y.to_bits(),
