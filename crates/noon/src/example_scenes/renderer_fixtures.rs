@@ -240,12 +240,6 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
     let family = scene
         .family(&[(&text).into(), (&circle).into()])
         .map_err(|error| error.to_string())?;
-    scene
-        .add_many(&[
-            crate::MobjectTarget::Object(&text),
-            crate::MobjectTarget::Object(&circle),
-        ])
-        .map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
         .map_err(|error| error.to_string())?;
@@ -256,6 +250,7 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
             false,
             AnimationOptions::new()
                 .run_time(3.2)
+                .lag_ratio(0.0)
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|error| error.to_string())?;
