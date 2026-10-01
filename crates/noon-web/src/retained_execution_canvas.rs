@@ -56,6 +56,7 @@ impl RenderSubstageSamples {
         samples.push_back(sample);
     }
 
+    #[cfg(target_arch = "wasm32")]
     fn clear(&mut self) {
         if let Some(samples) = &mut self.0 {
             samples.clear();
@@ -119,7 +120,7 @@ mod render_substage_tests {
             submit_present_cpu_wall_ms: 0.0,
         });
         assert_eq!(samples.take_json().unwrap().matches("sequence").count(), 1);
-}
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
