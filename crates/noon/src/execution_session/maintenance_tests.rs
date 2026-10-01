@@ -1,7 +1,9 @@
 use super::*;
 use noon_core::{
-    Color, GeometryId, GeometryRef, ObjectContentRef, SemanticClickIndicate,
-    SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
+    Color, FontResourceArena, GeometryId, GeometryRef, GeometryResourceArena, HostCallbackId,
+    ObjectContentRef, Rect, SemanticClickIndicate, SemanticMutationTransaction,
+    SemanticObjectContent, SemanticObjectState, SemanticStore, StoredGeometry, TextResource,
+    TextSourceKind, Vec2,
 };
 
 fn fixture() -> (
@@ -85,6 +87,94 @@ fn maintenance_rejects_pending_callback_before_touching_tombstones() {
     assert_eq!(
         session.reclaim_retired_object_slots(),
         Err(ExecutionSessionMaintenanceError::RequiredCallbackPending)
+    );
+    assert_eq!(session.frame().objects.len(), 2);
+}
+
+#[test]
+fn maintenance_prunes_text_history_with_configured_callback_without_replaying_it() {
+    let mut store = SemanticStore::new();
+    let handles = (0..9)
+        .map(|index| {
+            store
+                .import_text_resource(
+                    TextResource {
+                        source: format!("version-{index}").into(),
+                        kind: TextSourceKind::Plain,
+                        runs: Default::default(),
+                        vector_items: Default::default(),
+                        render_items: Default::default(),
+                        parts: Default::default(),
+                        bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+                        baseline: 0.0,
+                        layout_artifact: None,
+                    },
+                    &FontResourceArena::new(),
+                    &GeometryResourceArena::new(),
+                )
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let target = store.insert_semantic_object(SemanticObjectState::new(handles[0]));
+    store.attach_to_scene(target).unwrap();
+    let mut register = SemanticMutationTransaction::new();
+    register.add_updater(target, HostCallbackId::new(1), 0.0, None);
+    register.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    for &handle in handles.iter().skip(1) {
+        let mut edit = SemanticMutationTransaction::new();
+        edit.replace_content(target, SemanticObjectContent::Text(handle));
+        session
+            .apply_semantic_transaction(&mut store, edit)
+            .unwrap();
+    }
+    let CallbackAdvance::HostRequired { overlay, .. } =
+        session.advance_to_callback_barrier(0.0).unwrap()
+    else {
+        panic!("configured callback should run");
+    };
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    let before = session.publication_context();
+    let stats = session.reclaim_retired_object_slots().unwrap();
+    assert_eq!(stats.compiled.object_slots_reclaimed, 0);
+    assert_eq!(stats.compiled.resource_entries_reclaimed, 8);
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        before.scene_revision()
+    );
+    assert_eq!(
+        session.publication_context().frame_epoch(),
+        before.frame_epoch().checked_next().unwrap()
+    );
+    assert!(matches!(
+        session.advance_to_callback_barrier(0.0).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+}
+
+#[test]
+fn maintenance_still_rejects_row_relocation_with_configured_callback() {
+    let mut store = SemanticStore::new();
+    let keep = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let retired = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 2.0,
+    }));
+    let root = store.insert_family();
+    store.add_member(root, keep).unwrap();
+    store.add_member(root, retired).unwrap();
+    store.attach_to_scene(root).unwrap();
+    let mut register = SemanticMutationTransaction::new();
+    register.add_updater(keep, HostCallbackId::new(1), 0.0, None);
+    register.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    retire(&mut store, &mut session, root, retired);
+    assert_eq!(
+        session.reclaim_retired_object_slots(),
+        Err(ExecutionSessionMaintenanceError::CallbacksConfigured)
     );
     assert_eq!(session.frame().objects.len(), 2);
 }

@@ -55,7 +55,10 @@ impl ExecutionSession {
         if self.pending_segment_completion.is_some() {
             return Err(ExecutionSessionMaintenanceError::SegmentCompletionPending);
         }
-        if !self.callback_schedule.is_empty() {
+        // A configured callback plan is keyed to semantic targets. Resource-only
+        // pruning cannot relocate its execution rows, but row compaction still
+        // needs a separate schedule-remapping contract.
+        if !self.callback_schedule.is_empty() && self.runtime.has_retired_object_slots() {
             return Err(ExecutionSessionMaintenanceError::CallbacksConfigured);
         }
         if self.derived_display_plan.is_some() {
@@ -72,6 +75,10 @@ impl ExecutionSession {
             || stats.compiled.resource_entries_reclaimed != 0
         {
             self.last_callback_receipt = None;
+            let time = self.frame().time;
+            let publication = self.publication_context();
+            self.callback_schedule
+                .carry_completed_publication(time, publication);
         }
         if stats.compiled.object_slots_reclaimed != 0 {
             self.sync_spatial_index();

@@ -52,6 +52,12 @@ pub struct RuntimeCompactionStats {
 }
 
 impl SceneInstance {
+    /// Whether maintenance would relocate execution rows rather than only
+    /// prune unreachable immutable resources.
+    pub fn has_retired_object_slots(&self) -> bool {
+        self.compiled.retired_object_slot_count() != 0
+    }
+
     /// Explicitly reclaim tombstoned execution rows and eligible static resources.
     ///
     /// The barrier visits retained slots and rebuilds live row-indexed structures.
