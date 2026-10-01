@@ -24,7 +24,7 @@ use std::{
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
     RasterImageResourceArena, RasterImageResourceHandle, RasterImageResourceLookup,
-    SemanticImageContent,
+    SemanticImageContent, TextResourceArena,
 };
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
@@ -33,10 +33,11 @@ use noon_core::{
     VectorPath,
 };
 use noon_core::{
-    FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
-    GeometryId, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
-    GeometryResourceLookup, ObjectContentRef, Rect, RetainedFamilyAnimationPlan, SemanticStore,
-    TextResource, TextResourceHandle, TextResourceLookup,
+    FontFaceIdentity, FontResource, FontResourceArena, FontResourceHandle, FontResourceKey,
+    FontResourceLookup, GeometryId, GeometryResource, GeometryResourceArena,
+    GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef, Rect,
+    RetainedFamilyAnimationPlan, SemanticStore, TextResource, TextResourceHandle,
+    TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -204,9 +205,14 @@ impl GeometryResourceLookup for CompiledResources {
 pub enum CompiledResourceError {
     MissingImage(RasterImageResourceHandle),
     ImageDimensionsMismatch(RasterImageResourceHandle),
+    ConflictingImage(RasterImageResourceHandle),
     MissingText(TextResourceHandle),
     MissingFont(FontResourceKey),
     MissingGeometry(GeometryResourceHandle),
+    ConflictingText(TextResourceHandle),
+    ConflictingFont(FontResourceHandle),
+    ConflictingGeometry(GeometryResourceHandle),
+    ConflictingGeometryId(GeometryId),
 }
 
 impl std::fmt::Display for CompiledResourceError {
@@ -219,6 +225,9 @@ impl std::fmt::Display for CompiledResourceError {
                 formatter,
                 "raster image dimensions differ from resource {handle:?}"
             ),
+            Self::ConflictingImage(handle) => {
+                write!(formatter, "conflicting image payload for {handle:?}")
+            }
             Self::MissingText(handle) => write!(
                 formatter,
                 "missing text resource {}@{}",
@@ -236,11 +245,31 @@ impl std::fmt::Display for CompiledResourceError {
                 handle.id.get(),
                 handle.version
             ),
+            Self::ConflictingText(handle) => {
+                write!(formatter, "conflicting text payload for {handle:?}")
+            }
+            Self::ConflictingFont(handle) => {
+                write!(formatter, "conflicting font payload for {handle:?}")
+            }
+            Self::ConflictingGeometry(handle) => {
+                write!(formatter, "conflicting geometry payload for {handle:?}")
+            }
+            Self::ConflictingGeometryId(id) => {
+                write!(formatter, "conflicting geometry owner for ID {}", id.get())
+            }
         }
     }
 }
 
 impl std::error::Error for CompiledResourceError {}
+
+fn geometry_resources_equal(left: &GeometryResource, right: &GeometryResource) -> bool {
+    match (left, right) {
+        (GeometryResource::VectorPath(left), GeometryResource::VectorPath(right)) => {
+            Arc::ptr_eq(left, right) || left == right
+        }
+    }
+}
 
 impl CompiledResources {
     pub fn image_count(&self) -> usize {
@@ -273,6 +302,129 @@ impl CompiledResources {
             ),
         };
         Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    /// Capture one producer-owned immutable text resource and its font/path
+    /// dependency closure. The prepared set owns the payloads after the source
+    /// arenas are dropped; callers decide when to merge it into a compiled plan.
+    pub fn capture_text_from_arenas(
+        &mut self,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        handle: TextResourceHandle,
+    ) -> Result<Rect, CompiledResourceError> {
+        let resource = texts
+            .get_shared(handle)
+            .ok_or(CompiledResourceError::MissingText(handle))?;
+        self.capture_text_payload(
+            handle,
+            resource,
+            |face| {
+                let key = FontResourceKey::from_face(face);
+                let font_handle = fonts
+                    .handle_for_face(face)
+                    .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+                let font = fonts
+                    .get_shared(font_handle)
+                    .ok_or(CompiledResourceError::MissingFont(key))?;
+                Ok((font_handle, font))
+            },
+            |geometry| {
+                geometries
+                    .get(geometry)
+                    .cloned()
+                    .ok_or(CompiledResourceError::MissingGeometry(geometry))
+            },
+        )
+    }
+
+    /// Reject a prepared resource closure that would retarget an immutable
+    /// handle already visible through this compiled projection.
+    pub fn preflight_merge(&self, additions: &Self) -> Result<(), CompiledResourceError> {
+        for (handle, resource) in &additions.images {
+            if self.images.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingImage(*handle));
+            }
+        }
+        for (handle, resource) in &additions.texts {
+            if self.texts.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingText(*handle));
+            }
+        }
+        for (handle, resource) in &additions.fonts {
+            if self.fonts.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingFont(*handle));
+            }
+        }
+        for (handle, resource) in &additions.geometries {
+            if self
+                .geometries
+                .get(handle)
+                .is_some_and(|existing| !geometry_resources_equal(existing, resource))
+            {
+                return Err(CompiledResourceError::ConflictingGeometry(*handle));
+            }
+        }
+        for (face, incoming_handle) in &additions.font_handles {
+            if let Some(existing_handle) = self.font_handles.get(face) {
+                if existing_handle != incoming_handle {
+                    let existing = self.fonts.get(existing_handle);
+                    let incoming = additions.fonts.get(incoming_handle);
+                    if existing
+                        .zip(incoming)
+                        .is_none_or(|(a, b)| !Arc::ptr_eq(a, b) && a.data != b.data)
+                    {
+                        return Err(CompiledResourceError::ConflictingFont(*incoming_handle));
+                    }
+                }
+            }
+        }
+        for (id, incoming_handle) in &additions.geometry_handles {
+            if self
+                .geometry_handles
+                .get(id)
+                .is_some_and(|existing| existing != incoming_handle)
+            {
+                return Err(CompiledResourceError::ConflictingGeometryId(*id));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether merging `additions` would change this dependency projection.
+    /// Call only after `preflight_merge` has ruled out handle conflicts.
+    pub fn contains_all(&self, additions: &Self) -> bool {
+        additions
+            .texts
+            .iter()
+            .all(|(handle, _)| self.texts.contains_key(handle))
+            && additions
+                .fonts
+                .iter()
+                .all(|(handle, _)| self.fonts.contains_key(handle))
+            && additions
+                .font_handles
+                .iter()
+                .all(|(face, handle)| self.font_handles.get(face) == Some(handle))
+            && additions
+                .geometries
+                .iter()
+                .all(|(handle, _)| self.geometries.contains_key(handle))
+            && additions
+                .geometry_handles
+                .iter()
+                .all(|(id, handle)| self.geometry_handles.get(id) == Some(handle))
+            && additions
+                .images
+                .iter()
+                .all(|(handle, _)| self.images.contains_key(handle))
     }
 
     /// Prepare one immutable geometry dependency from its producer-owned arena.
@@ -329,33 +481,79 @@ impl CompiledResources {
             .text_resources()
             .get_shared(handle)
             .ok_or(CompiledResourceError::MissingText(handle))?;
+        self.capture_text_payload(
+            handle,
+            resource,
+            |face| {
+                let key = FontResourceKey::from_face(face);
+                let font_handle = store
+                    .font_resources()
+                    .handle_for_face(face)
+                    .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+                let font = store
+                    .font_resources()
+                    .get_shared(font_handle)
+                    .ok_or(CompiledResourceError::MissingFont(key))?;
+                Ok((font_handle, font))
+            },
+            |geometry| {
+                store
+                    .geometry_resources()
+                    .get(geometry)
+                    .cloned()
+                    .ok_or(CompiledResourceError::MissingGeometry(geometry))
+            },
+        )
+    }
 
+    fn capture_text_payload(
+        &mut self,
+        handle: TextResourceHandle,
+        resource: Arc<TextResource>,
+        mut font: impl FnMut(
+            &FontFaceIdentity,
+        )
+            -> Result<(FontResourceHandle, Arc<FontResource>), CompiledResourceError>,
+        mut geometry: impl FnMut(
+            GeometryResourceHandle,
+        ) -> Result<GeometryResource, CompiledResourceError>,
+    ) -> Result<Rect, CompiledResourceError> {
+        if let Some(existing) = self.texts.get(&handle) {
+            if !Arc::ptr_eq(existing, &resource) && existing.as_ref() != resource.as_ref() {
+                return Err(CompiledResourceError::ConflictingText(handle));
+            }
+            return Ok(existing.bounds);
+        }
+
+        let mut additions = Self::default();
         for run in resource.runs.iter() {
             let key = FontResourceKey::from_face(&run.font);
-            let font_handle = store
-                .font_resources()
-                .handle_for_face(&run.font)
-                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
-            let font = store
-                .font_resources()
-                .get_shared(font_handle)
-                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
-            self.font_handles.insert(key, font_handle);
-            self.fonts.insert(font_handle, font);
+            let (font_handle, font_resource) = font(&run.font)?;
+            additions.font_handles.insert(key, font_handle);
+            additions.fonts.insert(font_handle, font_resource);
         }
         for item in resource.vector_items.iter() {
-            let geometry = store
-                .geometry_resources()
-                .get(item.geometry)
-                .cloned()
-                .ok_or(CompiledResourceError::MissingGeometry(item.geometry))?;
-            self.geometry_handles
+            let geometry_resource = geometry(item.geometry)?;
+            if additions
+                .geometry_handles
+                .get(&item.geometry.id)
+                .is_some_and(|existing| *existing != item.geometry)
+            {
+                return Err(CompiledResourceError::ConflictingGeometryId(
+                    item.geometry.id,
+                ));
+            }
+            additions
+                .geometry_handles
                 .insert(item.geometry.id, item.geometry);
-            self.geometries.insert(item.geometry, geometry);
+            additions
+                .geometries
+                .insert(item.geometry, geometry_resource);
         }
-
         let bounds = resource.bounds;
-        self.texts.insert(handle, resource);
+        additions.texts.insert(handle, resource);
+        self.preflight_merge(&additions)?;
+        self.merge(additions);
         Ok(bounds)
     }
 }

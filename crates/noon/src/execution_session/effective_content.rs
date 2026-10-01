@@ -1,6 +1,7 @@
 use noon_core::{
-    GeometryResourceArena, GeometryResourceHandle, ObjectContentRef, RasterImageResourceArena,
-    Rect, SemanticImageContent, SemanticNodeId,
+    FontResourceArena, GeometryResourceArena, GeometryResourceHandle, ObjectContentRef,
+    RasterImageResourceArena, Rect, SemanticImageContent, SemanticNodeId, TextResourceArena,
+    TextResourceHandle,
 };
 use noon_runtime::{
     EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
@@ -107,6 +108,27 @@ impl ExecutionSession {
             .ok_or(ExecutionSessionContentError::UnknownObject(target))?;
         self.runtime
             .prepare_effective_image_replacement(object, content, source, lease)
+            .map_err(Into::into)
+    }
+
+    /// Stage producer-owned retained text for publication through the existing
+    /// effective-content lease and compiled resource projection.
+    pub fn prepare_effective_text_replacement(
+        &self,
+        target: SemanticNodeId,
+        handle: TextResourceHandle,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        lease: Option<EffectiveContentLease>,
+    ) -> Result<PreparedEffectiveContentReplacement, ExecutionSessionContentError> {
+        self.require_effective_content_ready()?;
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionContentError::UnknownObject(target))?;
+        self.runtime
+            .prepare_effective_text_replacement(object, handle, texts, fonts, geometries, lease)
             .map_err(Into::into)
     }
 
