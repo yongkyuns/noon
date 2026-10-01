@@ -547,14 +547,16 @@ function ensureRuntimePreparation() {
   if (runtimePreparation !== null) return runtimePreparation;
 
   const candidate = createRuntimeClient();
+  const startedAtMs = performance.now();
   const ready = candidate.prepare();
-  const preparation = { candidate, ready };
+  const preparation = { candidate, ready, startedAtMs, readyAtMs: null };
   runtimePreparation = preparation;
   status.dataset.runtimeStartup = "preparing-on-run";
   status.dataset.executionTopology = "preparing-render-owner";
 
   ready.then(
     () => {
+      preparation.readyAtMs = performance.now();
       if (runtimePreparation === preparation) {
         status.dataset.runtimeStartup = "prepared-on-run";
         status.dataset.executionTopology = "prepared-render-owner";
@@ -588,6 +590,12 @@ async function ensureRuntimeReady({
     const nextPlayer = prepared.candidate;
     try {
       await prepared.ready;
+      if (runPhaseMetrics !== null) {
+        runPhaseMetrics.renderPreparation = {
+          startedAtMs: prepared.startedAtMs,
+          readyAtMs: prepared.readyAtMs,
+        };
+      }
       setRuntimeStatus("Preparing animation…", "running");
       patchStatus.value = "Preparing authored animation…";
       patchStatus.dataset.state = "running";
@@ -933,6 +941,7 @@ async function runScene() {
     sourceRunStartedAtMs: null,
     sourceRunCompletedAtMs: null,
     pythonWorkerRunTiming: null,
+    renderPreparation: null,
     initialEngineStartStartedAtMs: null,
     initialEngineStartCompletedAtMs: null,
     reconciliations: [],

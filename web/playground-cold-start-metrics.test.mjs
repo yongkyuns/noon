@@ -5,6 +5,7 @@ import {
   classifyWorkerUrl,
   coldStartMilestones,
   preloadedColdStartMilestones,
+  summarizeStartupPreparationOverlap,
   summarizeAuthoringStartup,
   summarizeResourceFootprint,
   summarizeWorkers,
@@ -79,6 +80,48 @@ test("preloadedColdStartMilestones reports the automatic preload path", () => {
       }),
     /precedes/,
   );
+});
+
+test("startup overlap reports actual interval intersections on a shared epoch clock", () => {
+  assert.deepEqual(
+    summarizeStartupPreparationOverlap({
+      renderPreparation: { startedAtEpochMs: 100, completedAtEpochMs: 500 },
+      pageSourceRun: { startedAtEpochMs: 150, completedAtEpochMs: 550 },
+      workerSourceRun: { startedAtEpochMs: 200, completedAtEpochMs: 400 },
+    }),
+    {
+      measured: true,
+      renderPreparation: { startedAtEpochMs: 100, completedAtEpochMs: 500 },
+      pageObservedSourceRun: {
+        startedAtEpochMs: 150,
+        completedAtEpochMs: 550,
+        overlapMs: 350,
+        meaning: "page interval around client.run, including worker transport and awaited semantic-continuation work",
+      },
+      authoringWorkerSourceRun: {
+        startedAtEpochMs: 200,
+        completedAtEpochMs: 400,
+        overlapMs: 200,
+        meaning: "worker interval around runAuthoringSource; includes work and any awaited source continuations",
+      },
+      caveat: "Wall-clock interval intersection only: required source continuations can await render preparation, so positive overlap does not prove independent CPU work ran concurrently or quantify saved startup time.",
+    },
+  );
+});
+
+test("startup overlap reports zero for disjoint phases and rejects malformed intervals", () => {
+  const disjoint = summarizeStartupPreparationOverlap({
+    renderPreparation: { startedAtEpochMs: 10, completedAtEpochMs: 20 },
+    pageSourceRun: { startedAtEpochMs: 20, completedAtEpochMs: 30 },
+    workerSourceRun: { startedAtEpochMs: 30, completedAtEpochMs: 40 },
+  });
+  assert.equal(disjoint.pageObservedSourceRun.overlapMs, 0);
+  assert.equal(disjoint.authoringWorkerSourceRun.overlapMs, 0);
+  assert.throws(() => summarizeStartupPreparationOverlap({
+    renderPreparation: { startedAtEpochMs: 20, completedAtEpochMs: 10 },
+    pageSourceRun: { startedAtEpochMs: 10, completedAtEpochMs: 30 },
+    workerSourceRun: { startedAtEpochMs: 10, completedAtEpochMs: 30 },
+  }), /render preparation.*ordered finite epoch interval/);
 });
 
 test("authoring startup metrics expose module graph, parallel resources, and sequential bootstrap cost", () => {
