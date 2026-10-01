@@ -1,6 +1,5 @@
-// Same declared selection scene and ordered DOM input trace through the direct
-// Rust/WASM path and Python authoring worker. This qualifies filled-shape
-// selection only; it does not claim click-action or drag parity.
+// Paired selection and drag fixtures receive ordered DOM input through direct
+// Rust/WASM and Python-worker hosts. Click-action parity remains separate.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -19,6 +18,15 @@ const output = path.resolve(process.env.NOON_PLATFORM_INTERACTION_ARTIFACTS ??
   path.join(root, "browser-smoke-artifacts/platform-interaction-parity"));
 const source = selectionFixtureSource();
 const movingSource = selectionFixtureSource({ moving: true });
+const dragSource = `from noon import *
+
+class DragFixture(Scene):
+    def construct(self):
+        target = Circle(radius=0.9, color=Color(0, 0, 1), fill_opacity=1, stroke_width=0)
+        unrelated = Square(side_length=1, color=Color(0, 0.75, 0), fill_opacity=1, stroke_width=0).shift([2.5, 1, 0])
+        self.add(target, unrelated)
+        self.set_drag_targets(target)
+`;
 const hash = value => createHash("sha256").update(value).digest("hex");
 const trace = [
   { id: "select-circle", point: () => shapeSurfaceCenter(SHAPES[0]) },
@@ -27,11 +35,13 @@ const trace = [
 ];
 const report = {
   status: "running",
-  scope: "static-and-moving-filled-shape-selection",
+  scope: "static-and-moving-selection-and-translation-drag",
   pythonSourceSha256: hash(source),
   movingPythonSourceSha256: hash(movingSource),
+  dragPythonSourceSha256: hash(dragSource),
   rustFixture: "noon::example_scenes::pointer_selection::scene",
   movingRustFixture: "noon::example_scenes::pointer_selection::moving_selection_session",
+  dragRustFixture: "createDirectNativeDragSmokeRenderer",
   cases: [],
 };
 let server, browser;
@@ -48,6 +58,16 @@ async function image(page, label, backend, pathName) {
   return PNG.sync.read(bytes);
 }
 
+async function openParityPages(pages, errors) {
+  for (const pathName of ["direct", "worker"]) {
+    const page = await browser.newPage({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
+    pages[pathName] = page;
+    page.setDefaultTimeout(90_000);
+    page.on("pageerror", error => errors[pathName].push(String(error)));
+    await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
+  }
+}
+
 async function movingParity(backend) {
   const pages = {};
   const errors = { direct: [], worker: [] };
@@ -55,13 +75,7 @@ async function movingParity(backend) {
   const settlePaint = () => Promise.all(Object.values(pages).map(page =>
     page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))));
   try {
-    for (const pathName of ["direct", "worker"]) {
-      const page = await browser.newPage({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
-      pages[pathName] = page;
-      page.setDefaultTimeout(90_000);
-      page.on("pageerror", error => errors[pathName].push(String(error)));
-      await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-    }
+    await openParityPages(pages, errors);
     await pages.direct.evaluate(async () => {
       const nativeWorker = globalThis.Worker;
       globalThis.Worker = class { constructor() { throw new Error("direct path created a worker"); } };
@@ -223,6 +237,122 @@ async function movingParity(backend) {
   }
 }
 
+async function dragParity(backend) {
+  const pages = {}, errors = { direct: [], worker: [] }, checkpoints = [];
+  try {
+    await openParityPages(pages, errors);
+    await pages.direct.evaluate(async () => {
+      const nativeWorker = globalThis.Worker;
+      globalThis.Worker = class { constructor() { throw new Error("direct drag created a worker"); } };
+      try {
+        const { default: init, createDirectNativeDragSmokeRenderer } = await import("./pkg/noon_web.js");
+        await init();
+        const { attachNativeInputs } = await import("./native-inputs.js");
+        const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+        const canvas = document.querySelector("#scene"), errors = [];
+        canvas.width = 640; canvas.height = 360;
+        const renderer = await createDirectNativeDragSmokeRenderer(canvas.transferControlToOffscreen());
+        const driver = createDirectExecutionWakeDriver(renderer);
+        const detach = attachNativeInputs(renderer, canvas, {
+          onInput: () => driver.wake(), onError: error => errors.push(String(error)),
+        });
+        globalThis.dragParity = { renderer, driver, detach, errors };
+      } finally { globalThis.Worker = nativeWorker; }
+    });
+    await pages.worker.evaluate(async source => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+      const canvas = document.querySelector("#scene"), errors = [];
+      canvas.width = 640; canvas.height = 360;
+      const authoring = new PythonAuthoringClient();
+      const execution = new AuthoringExecutionClient(canvas, {
+        onError: error => errors.push(String(error)),
+        onRecoverableError: error => errors.push(String(error)),
+      });
+      const authored = await authoring.run(source);
+      if (authored.duration !== 0 || authored.semanticExecution?.continuationGeneration != null) {
+        throw new Error("drag parity must be a static, native interaction scene");
+      }
+      await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+      });
+      await execution.advanceTo(0);
+      globalThis.dragParity = { authoring, execution, errors };
+    }, dragSource);
+    await pages.direct.waitForFunction(() =>
+      dragParity.driver.stats().idle && dragParity.driver.stats().presentedFrames > 0);
+    await pages.worker.waitForFunction(async () => {
+      const { metrics } = await dragParity.execution.metrics();
+      return metrics.ready && metrics.retained && metrics.presentedFrames > 0 && !metrics.needsPresent;
+    });
+    const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
+    assert.equal(await pages.direct.evaluate(() => dragParity.renderer.rendererBackend()), expectedBackend);
+    assert.equal((await pages.worker.evaluate(async () => (await dragParity.execution.metrics()).metrics)).backend,
+      expectedBackend);
+    const initialRevision = await pages.direct.evaluate(() => String(dragParity.renderer.directSceneRevision()));
+    const initialWorkerFrame = await pages.worker.evaluate(() => dragParity.execution.debugFrame());
+    assert.equal(initialWorkerFrame.present_object_count, 2);
+    const initialWorkerRevision = initialWorkerFrame.publication.scene_revision;
+    const capture = async label => {
+      const direct = await image(pages.direct, label, backend, "direct-drag");
+      const worker = await image(pages.worker, label, backend, "worker-drag");
+      equalPixels(direct, worker, `${backend} drag ${label}`);
+      checkpoints.push({ id: label, directSha256: hash(direct.data), workerSha256: hash(worker.data) });
+      return direct;
+    };
+    const baseline = await capture("baseline");
+    const start = { x: VIEW.width / 2, y: VIEW.height / 2 };
+    const end = { x: start.x + VIEW.height / VIEW.cameraHeight, y: start.y };
+    const directBeforeMove = await pages.direct.evaluate(() => dragParity.driver.stats().presentedFrames);
+    const workerBeforeMove = await pages.worker.evaluate(async () =>
+      (await dragParity.execution.metrics()).metrics.presentedFrames);
+    for (const pathName of ["direct", "worker"]) {
+      const bounds = await pages[pathName].locator("#scene").boundingBox();
+      assert.ok(bounds);
+      await pages[pathName].mouse.move(bounds.x + start.x, bounds.y + start.y);
+      await pages[pathName].mouse.down();
+      await pages[pathName].mouse.move(bounds.x + end.x, bounds.y + end.y);
+    }
+    await pages.direct.waitForFunction(count =>
+      dragParity.driver.stats().presentedFrames > count && dragParity.driver.stats().idle,
+    directBeforeMove);
+    await pages.worker.waitForFunction(async count => {
+      const { metrics } = await dragParity.execution.metrics();
+      return metrics.presentedFrames > count && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+    }, workerBeforeMove);
+    const moved = await capture("effective-move");
+    assert.notDeepEqual(moved.data, baseline.data, `${backend} drag must move a visible target`);
+    assert.equal(await pages.direct.evaluate(() => String(dragParity.renderer.directSceneRevision())), initialRevision,
+      `${backend} samples must not author scene revisions`);
+    const movedWorkerFrame = await pages.worker.evaluate(() => dragParity.execution.debugFrame());
+    assert.equal(movedWorkerFrame.publication.scene_revision, initialWorkerRevision);
+    assert.ok(Math.abs(movedWorkerFrame.objects[0].center[0] - 1) < 1e-5);
+    assert.ok(Math.abs(movedWorkerFrame.objects[1].center[0] - 2.5) < 1e-5);
+    for (const pathName of ["direct", "worker"]) await pages[pathName].mouse.up();
+    await pages.direct.waitForFunction(initial =>
+      dragParity.driver.stats().idle && dragParity.renderer.directSceneRevision() === BigInt(initial) + 1n,
+    initialRevision);
+    await pages.worker.waitForFunction(async initial => {
+      const { metrics } = await dragParity.execution.metrics();
+      const frame = await dragParity.execution.debugFrame();
+      return !metrics.needsPresent && metrics.bufferedDeltas === 0 &&
+        frame.publication.scene_revision === initial + 1;
+    }, initialWorkerRevision);
+    const released = await capture("released");
+    assertExactPixels(released, moved, `${backend} released drag retains the effective value`);
+    assert.equal(BigInt(await pages.direct.evaluate(() => String(dragParity.renderer.directSceneRevision()))),
+      BigInt(initialRevision) + 1n, `${backend} release must reconcile exactly one authored edit`);
+    assert.equal((await pages.worker.evaluate(() => dragParity.execution.debugFrame())).publication.scene_revision,
+      initialWorkerRevision + 1, `${backend} worker release must reconcile exactly one authored edit`);
+    assert.deepEqual(errors, { direct: [], worker: [] });
+    return checkpoints;
+  } finally {
+    await pages.direct?.evaluate(() => { dragParity.detach(); dragParity.driver.stop(); dragParity.renderer.free(); }).catch(() => {});
+    await pages.worker?.evaluate(() => { dragParity.execution.terminate(); dragParity.authoring.terminate(); }).catch(() => {});
+    for (const page of Object.values(pages)) await page.close();
+  }
+}
+
 try {
   const declarationPath = path.join(root, "web/pkg/noon_web.d.ts");
   const wasmPath = path.join(root, "web/pkg/noon_web_bg.wasm");
@@ -231,6 +361,8 @@ try {
     "build the patched web package with NOON_RENDERER_SMOKE=1 before this qualification");
   assert.match(declarations, /createDirectMovingPointerSelectionRenderer\(/,
     "build the moving-selection renderer-smoke package before this qualification");
+  assert.match(declarations, /createDirectNativeDragSmokeRenderer\(/,
+    "build the native-drag renderer-smoke package before this qualification");
   report.wasmSha256 = hash(await readFile(wasmPath));
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
 
@@ -241,13 +373,7 @@ try {
     const pages = {};
     const errors = { direct: [], worker: [] };
     try {
-      for (const pathName of ["direct", "worker"]) {
-        const page = await browser.newPage({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
-        pages[pathName] = page;
-        page.setDefaultTimeout(90_000);
-        page.on("pageerror", error => errors[pathName].push(String(error)));
-        await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-      }
+      await openParityPages(pages, errors);
 
       await pages.direct.evaluate(async () => {
         const nativeWorker = globalThis.Worker;
@@ -361,16 +487,22 @@ try {
       const directFrame = await pages.direct.evaluate(() => JSON.parse(parity.renderer.debugSelectionFrameJson()));
       const workerFrame = await pages.worker.evaluate(() => parity.execution.debugFrame());
       assert.equal(directFrame.time, 0); assert.equal(workerFrame.time, 0);
-      result.movingCheckpoints = await movingParity(backend);
-      result.status = "passed";
     } catch (error) {
       result.status = "failed"; result.error = String(error.stack ?? error); throw error;
     } finally {
       await pages.direct?.evaluate(() => { parity.detach(); parity.driver.stop(); parity.renderer.free(); }).catch(() => {});
       for (const page of Object.values(pages)) await page.close();
+    }
+    try {
+      assert.deepEqual(errors, { direct: [], worker: [] });
+      result.movingCheckpoints = await movingParity(backend);
+      result.dragCheckpoints = await dragParity(backend);
+      result.status = "passed";
+    } catch (error) {
+      result.status = "failed"; result.error = String(error.stack ?? error); throw error;
+    } finally {
       await browser.close(); browser = null;
     }
-    assert.deepEqual(errors, { direct: [], worker: [] });
   }
   report.status = "passed";
 } catch (error) {
