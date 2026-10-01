@@ -1780,7 +1780,7 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
 }
 
 #[test]
-fn callback_batch_accepts_multiple_direct_inline_geometries_atomically() {
+fn callback_batch_accepts_mixed_direct_and_provisional_inline_geometry() {
     let mut scene = noon::Scene::new();
     let first = scene.circle(1.0).unwrap();
     let second = scene.circle(0.5).unwrap();
@@ -1802,12 +1802,19 @@ fn callback_batch_accepts_multiple_direct_inline_geometries_atomically() {
     .unwrap();
     let phase: serde_json::Value =
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let token = player.pending_callback_phase.unwrap().0;
+    let provisional = player
+        .stage_required_callback_provisional_geometry(
+            token,
+            noon::ManimGeometryOptions::circle(3.0).unwrap(),
+        )
+        .unwrap();
     let before = player.session.publication_context();
     let batch = serde_json::json!({
         "token": phase["token"], "region": phase["region"], "writes": [],
         "content": [
             {"object": phase["objects"][0]["node"], "geometry": {"kind": "circle", "radius": 2.0}},
-            {"object": phase["objects"][1]["node"], "geometry": {"kind": "circle", "radius": 3.0}}
+            {"object": phase["objects"][1]["node"], "provisional": callback_provisional_key(provisional)}
         ]
     });
     assert!(player
