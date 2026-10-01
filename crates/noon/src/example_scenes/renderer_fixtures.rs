@@ -250,6 +250,7 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
             false,
             AnimationOptions::new()
                 .run_time(3.2)
+                // Keep Text and Circle visible together in renderer midpoint captures.
                 .lag_ratio(0.0)
                 .rate_func(RateFunction::Linear),
         )
