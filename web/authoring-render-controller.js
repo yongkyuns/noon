@@ -86,6 +86,11 @@ export function createAuthoringRenderController(host) {
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
+  // Profiling is enabled only by an explicit metrics request. Keep a small
+  // rolling window so diagnostics cannot grow with a long-running session.
+  let publicationStageProfiling = false;
+  const publicationStageSamples = [];
+  let pendingPublicationStageSample = null;
   let webglRecoveryPromise = null;
   let webglContextLost = false;
 
@@ -132,6 +137,7 @@ export function createAuthoringRenderController(host) {
           return;
         case "metrics":
           if (!drainGpuDiagnostics()) return;
+          if (message.profilePublicationStages === true) publicationStageProfiling = true;
           respond(message.requestId, { type: "metrics", metrics: currentMetrics() });
           return;
         case "stop":
@@ -550,6 +556,9 @@ export function createAuthoringRenderController(host) {
     if (needsPresent) {
       return false;
     }
+    const stageSample = publicationStageProfiling && publication !== null
+      ? { session: publication.session, sequence: publication.sequence, receivedAtMs: performance.now() }
+      : null;
     const applied = applyRendererDelta(json);
     if (!applied) {
       acknowledgeAlreadyPresented(publication);
@@ -557,6 +566,7 @@ export function createAuthoringRenderController(host) {
     }
     armRendererObservation(publication);
     pendingPresentationPublication = publication;
+    pendingPublicationStageSample = stageSample;
     needsPresent = true;
     tryPresent();
     if (engineWake !== null) scheduleFrame();
@@ -698,8 +708,16 @@ export function createAuthoringRenderController(host) {
     presentedFrames += 1;
     firstPresentedAtMs ??= presentedAtMs;
     const publication = pendingPresentationPublication;
+    const stageSample = pendingPublicationStageSample;
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
+    if (stageSample !== null) {
+      stageSample.presentedAtMs = presentedAtMs;
+      stageSample.applyMs = lastDeltaApplyMs;
+      stageSample.receiveToPresentMs = Math.max(0, presentedAtMs - stageSample.receivedAtMs);
+      stageSample.renderMs = lastRendererCallMs;
+    }
     pendingRendererObservationPublication = null;
     if (publication !== null) {
       lastPresentedPublication = publication;
@@ -722,7 +740,14 @@ export function createAuthoringRenderController(host) {
         presentation: presentedFrames, view_revision: displayed.pointerView.revision,
       });
     } else lastPointerReceipt = null;
+    const ackStartedAtMs = stageSample === null ? 0 : performance.now();
     acknowledgePresented(displayed);
+    if (stageSample !== null) {
+      stageSample.ackPostMs = Math.max(0, performance.now() - ackStartedAtMs);
+      stageSample.renderToAckMs = Math.max(0, performance.now() - presentedAtMs);
+      publicationStageSamples.push(stageSample);
+      if (publicationStageSamples.length > 32) publicationStageSamples.shift();
+    }
     return drainGpuDiagnostics();
   }
 
@@ -978,6 +1003,10 @@ export function createAuthoringRenderController(host) {
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
       needsPresent,
+      ...(publicationStageProfiling ? {
+        publicationStageProfiling: true,
+        publicationStageSamples: publicationStageSamples.slice(),
+      } : {}),
     };
     if (renderer === null) {
       return {
