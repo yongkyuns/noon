@@ -1227,7 +1227,7 @@ mod tests {
                 if start == Vec2::new(-1.0, 0.0) && end == Vec2::new(1.0, 0.0)
         ));
 
-        let compiled = crate::CompiledScene::from_semantic_projection(&lowered).unwrap();
+        let mut compiled = crate::CompiledScene::from_semantic_projection(&lowered).unwrap();
         let a_index = compiled.object_index(dependency.start_vertex).unwrap();
         let b_index = compiled.object_index(dependency.end_vertex).unwrap();
         let line_index = compiled.object_index(dependency.line).unwrap();
@@ -1252,6 +1252,20 @@ mod tests {
                 },
             ],
             "compiled Graph rows use a recoverable local basis without replacing semantic truth"
+        );
+        compiled
+            .apply_execution_patch(&crate::ExecutionPatch::SetGraphDependencies {
+                owner: dependency.owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            compiled.objects()[line_index as usize].geometry(),
+            Some(&GeometryRef::line(
+                Vec2::new(-1.0, 0.0),
+                Vec2::new(1.0, 0.0),
+            )),
+            "releasing the graph dependency restores initially authored line content"
         );
     }
 }
