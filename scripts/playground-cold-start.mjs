@@ -39,6 +39,14 @@ assert.ok(["on", "off"].includes(preloadEditRaceMode),
 const preloadEditRaceEnabled = preloadEditRaceMode === "on";
 assert.ok(!preloadEditRaceEnabled || preloadEnabled,
   "the preload edit race requires NOON_COLD_START_PRELOAD=on");
+const wasmAccountingMode = process.env.NOON_COLD_START_WASM_ACCOUNTING ?? "off";
+assert.ok(["on", "off"].includes(wasmAccountingMode),
+  "NOON_COLD_START_WASM_ACCOUNTING must be on or off");
+const wasmAccountingEnabled = wasmAccountingMode === "on";
+const pythonComputeProbeMode = process.env.NOON_COLD_START_PYTHON_COMPUTE ?? "off";
+assert.ok(["on", "off"].includes(pythonComputeProbeMode),
+  "NOON_COLD_START_PYTHON_COMPUTE must be on or off");
+const pythonComputeProbeEnabled = pythonComputeProbeMode === "on";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const examples = parseExamples(
   process.env.NOON_COLD_START_EXAMPLES ??
@@ -86,6 +94,7 @@ try {
       const page = await browser.newPage(profile === "mobile-class"
         ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
         : { viewport: { width: 1200, height: 900 } });
+      if (wasmAccountingEnabled) await installColdStartWasmAccountingRoutes(page);
       if (!preloadEnabled) {
         await page.route("**/live-authoring-bootstrap.js", (route) =>
           route.fulfill({ status: 200, contentType: "text/javascript", body: "" }),
@@ -300,6 +309,9 @@ try {
       const resourceFootprint = summarizeResourceFootprint(resourceContexts, {
         noonWasmPackageBytes,
       });
+      const noonWasmInstantiation = wasmAccountingEnabled
+        ? await collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled })
+        : disabledNoonWasmInstantiation();
 
       const status = await page.locator("#status").evaluate((node) => ({
         ...node.dataset,
@@ -399,6 +411,48 @@ try {
           uploadBytes: warmMetrics.metrics.uploadBytes,
         },
       };
+      let pythonComputeProbe = null;
+      if (pythonComputeProbeEnabled) {
+        const previousGeneration = await page.evaluate(() =>
+          window.__noonExampleGallery.generationDiagnostics.runGeneration);
+        const source = [
+          "from noon import Scene, Circle",
+          "checksum = 0",
+          "for index in range(300000):",
+          "    checksum += (index * index) % 97",
+          "class PythonComputeProbe(Scene):",
+          "    def construct(self):",
+          "        self.add(Circle(0.5))",
+          "result = PythonComputeProbe()",
+          "",
+        ].join("\n");
+        await page.evaluate((replacement) => {
+          const editor = document.querySelector("#python-scene-source");
+          editor.value = replacement;
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }, source);
+        await waitForCompletedRun(page, previousGeneration);
+        const phases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
+        assert.ok(phases?.runGeneration > previousGeneration,
+          "compute probe timings must belong to a newly accepted run");
+        const worker = phases.pythonWorkerRunTiming;
+        assert.ok(Number.isFinite(worker?.startedAtMs) && Number.isFinite(worker?.completedAtMs) &&
+          worker.startedAtMs <= worker.completedAtMs,
+        "compute probe must record Python worker execution boundaries");
+        assert.ok(Array.isArray(phases.reconciliations),
+          "compute probe must record semantic reconciliation separately");
+        pythonComputeProbe = {
+          workload: "300000-iteration pure-Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
+          runGeneration: phases.runGeneration,
+          pythonWorkerExecutionMs: worker.completedAtMs - worker.startedAtMs,
+          pythonWorkerClock: "worker performance.now around runAuthoringSource; includes imports, compilation and interpreter/setup overhead; no awaited source continuation in this fixture",
+          finalReconciliationCalls: phases.reconciliations.map((call) => ({
+            phase: call.phase,
+            roundTripMs: call.completedAtMs - call.startedAtMs,
+          })),
+          meaning: "worker source interval and page-observed reconciliation are reported independently; neither is pure interpreter CPU time",
+        };
+      }
       const report = {
         label: example.label,
         exampleId: example.id,
@@ -421,9 +475,11 @@ try {
         }) : null,
         authoringStartup,
         resourceFootprint,
+        noonWasmInstantiation,
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
+        ...(pythonComputeProbe === null ? {} : { pythonComputeProbe }),
         preloadEditRace,
         firstEditComparison: preloadEnabled ? {
           phase: preloadEditRaceEnabled
@@ -449,7 +505,13 @@ try {
           `imports ${format(authoringStartup.compatibilityImportInstallMs)} ms), ` +
           `Noon WASM ${formatBytes(resourceFootprint.noonWasm.packageBytes)} × ` +
           `${resourceFootprint.noonWasm.observedOwnerCount} observed owners = ` +
-          `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint, ` +
+          `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint; ` +
+          (wasmAccountingEnabled
+            ? `${noonWasmInstantiation.observedInstanceCount} observed instances / ` +
+              `${noonWasmInstantiation.exactInputByteLengths
+                ? formatBytes(noonWasmInstantiation.observedInstantiatedBytes)
+                : "n/a"} module input bytes, `
+            : "WASM instance accounting off, ") +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)}), ` +
           `first worker-present ${format(firstPresented.navigationToFirstPresentedMs)} ms from navigation, ` +
           `renderer ready ${format(firstPresented.rendererReady.navigationToRendererReadyMs)} ms from navigation, ` +
@@ -511,8 +573,16 @@ try {
       freshBrowserProcessPerCase: true,
       automaticPreload: preloadEnabled,
       preloadEditRace: preloadEditRaceEnabled,
+      noonWasmAccounting: wasmAccountingEnabled,
     },
     memoryMeasurement: "Each case records 250 ms sampled aggregate RSS across the Chromium process tree. Shared pages can be counted more than once and GPU allocations outside process RSS are excluded; this is not a true instantaneous peak.",
+    wasmAccountingMeasurement: {
+      enabled: wasmAccountingEnabled,
+      observerEffect: wasmAccountingEnabled
+        ? "Enabled runs rewrite only authoring/render worker entry responses to import the probe helper; worker network interception, helper parsing, and WebAssembly method wrappers are included in startup timings. Do not compare these startup timings directly with uninstrumented runs."
+        : null,
+      meaning: "When enabled, noonWasmInstantiation counts successful instances with the Noon wasm-bindgen __wbindgen_start/__wbindgen_malloc/__wbindgen_free export signature and reports exact input byte lengths for ArrayBuffer/view instantiation or identity-encoded streaming responses with Content-Length. It reports observed instance/input-byte counts, not WebAssembly.Memory capacity or physical/peak memory; missing or retired worker contexts make the result partial.",
+    },
     note:
     "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
     cases,
@@ -750,6 +820,96 @@ async function runPreloadEditRace(page) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function installColdStartWasmAccountingRoutes(page) {
+  const workerEntrypoints = new Set(["/web/python-worker.js", "/web/execution-render-worker.js"]);
+  await page.route((url) => workerEntrypoints.has(new URL(url).pathname), async (route) => {
+    // The authoring worker fetches and verifies its own original source against
+    // runtime-build-identity.json. Instrument only the Worker script request;
+    // leave that later verification fetch byte-for-byte untouched.
+    if (!["script", "worker"].includes(route.request().resourceType())) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const originalSource = await response.text();
+    const injectedSource = `import "./playground-cold-start-wasm-accounting.js";\n${originalSource}`;
+    const headers = { ...response.headers() };
+    delete headers["content-length"];
+    delete headers["content-encoding"];
+    await route.fulfill({ response, body: injectedSource, headers });
+  });
+}
+
+async function collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled }) {
+  const contexts = [];
+  const unavailable = [];
+  for (const handle of workerHandles.filter(({ role }) => role === "authoring" || role === "render")) {
+    try {
+      const accounting = await handle.worker.evaluate(() => {
+        const report = globalThis.__noonColdStartWasmAccounting;
+        if (!report) return null;
+        return { schemaVersion: report.schemaVersion, role: report.role, records: [...report.records] };
+      });
+      contexts.push({
+        worker: handle.name,
+        role: handle.role,
+        instrumentationInstalled: accounting !== null,
+        report: accounting,
+      });
+    } catch (error) {
+      if (!preloadEditRaceEnabled ||
+          !String(error).includes("Target page, context or browser has been closed")) {
+        throw error;
+      }
+      unavailable.push({
+        worker: handle.name,
+        role: handle.role,
+        reason: `worker was retired before the instance snapshot: ${String(error)}`,
+      });
+    }
+  }
+
+  const allRecords = contexts.flatMap((context) =>
+    (context.report?.records ?? []).map((record) => ({
+      worker: context.worker,
+      role: context.role,
+      ...record,
+    })));
+  const allWorkersInstrumented = unavailable.length === 0 &&
+    ["authoring", "render"].every((role) => contexts.some((context) => context.role === role)) &&
+    contexts.every(({ instrumentationInstalled }) => instrumentationInstalled);
+  const everyByteLengthExact = allRecords.every(({ instantiatedBytes }) => Number.isSafeInteger(instantiatedBytes));
+  return {
+    enabled: true,
+    measurement: "successful WebAssembly instances identified by Noon wasm-bindgen exports in probe-instrumented authoring/render workers",
+    observedInstanceCount: allRecords.length,
+    observedInstantiatedBytes: allRecords.length > 0 && everyByteLengthExact
+      ? allRecords.reduce((total, { instantiatedBytes }) => total + instantiatedBytes, 0)
+      : null,
+    exactInputByteLengths: allRecords.length > 0 && everyByteLengthExact,
+    completeWorkerCoverage: allWorkersInstrumented,
+    everyInstrumentedWorkerProducedNoonInstance: contexts.length > 0 &&
+      contexts.every(({ report }) => (report?.records.length ?? 0) > 0),
+    contexts,
+    unavailable,
+    records: allRecords,
+  };
+}
+
+function disabledNoonWasmInstantiation() {
+  return {
+    enabled: false,
+    observedInstanceCount: null,
+    observedInstantiatedBytes: null,
+    exactInputByteLengths: false,
+    completeWorkerCoverage: false,
+    everyInstrumentedWorkerProducedNoonInstance: false,
+    contexts: [],
+    unavailable: [],
+    records: [],
+  };
 }
 
 async function submitMeasuredSourceEdit(page, note) {
