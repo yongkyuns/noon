@@ -797,6 +797,40 @@ class Scene:
 Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
+def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
+    """Refresh one stable inline shape from a callback-local visual producer.
+
+    The current bounded producer accepts Circle, Rectangle/Square, and Line.
+    Its result replaces effective geometry, transform, and style together;
+    authored content and object identity stay fixed. The producer runs during
+    construction and once per scheduled callback phase.
+    """
+    if not callable(producer):
+        raise TypeError("always_redraw producer must be callable")
+    from _manim_compat import Circle, Rectangle, Line
+    target = producer()
+    if not isinstance(target, (Circle, Rectangle, Line)):
+        raise NotImplementedError(
+            "always_redraw currently requires Circle, Rectangle, Square, or Line"
+        )
+
+    def refresh(mobject: Mobject, _dt: float) -> None:
+        result = producer()
+        if not isinstance(result, (Circle, Rectangle, Line)):
+            raise NotImplementedError(
+                "always_redraw producer must return Circle, Rectangle, Square, or Line"
+            )
+        from _manim_updaters import _canonical_provisional_context
+        if _canonical_provisional_context(result) is None:
+            raise RuntimeError(
+                "always_redraw producer must construct a fresh shape in its callback phase"
+            )
+        mobject.become(result)
+
+    target.add_updater(refresh)
+    return target
+
+
 _PUBLIC_EXPORTS = {
     "SampleSpace": "_manim_sample_space",
     "NumberLine": "_manim_plotting",
@@ -1027,6 +1061,7 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
+    "always_redraw",
     "SMALL_BUFF",
     "MED_SMALL_BUFF",
     "MED_LARGE_BUFF",

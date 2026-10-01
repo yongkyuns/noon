@@ -553,6 +553,7 @@ class _CanonicalCallbackContext:
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
         self._content: dict[str, Any] | None = None
+        self._content_write_count: int | None = None
         self._last_invocation = False
         # Python retains only delayed wrapper bookkeeping. The player owns the
         # one typed semantic transaction and is the sole publication authority.
@@ -1038,6 +1039,10 @@ class _CanonicalCallbackContext:
                                      channel: new[channel]})
 
     def effective_batch(self) -> dict[str, Any]:
+        if self._content_write_count is not None and len(self._writes) != self._content_write_count:
+            raise NotImplementedError(
+                "effective content replacement must be the final callback write"
+            )
         batch = {"token": self.token, "region": self.region, "writes": self._writes}
         if self._content is not None:
             batch["content"] = self._content
@@ -1055,6 +1060,28 @@ class _CanonicalCallbackContext:
             "object": _phase_node_json(key),
             "geometry": {"kind": "circle", "radius": _phase_number("circle radius", radius)},
         }
+        self._content_write_count = len(self._writes)
+        row.invalidate_bounds()
+
+    def replace_effective_provisional(
+        self, mobject: _base.Mobject, source: _base.Mobject
+    ) -> None:
+        """Use a callback-local constructor result as one effective visual snapshot."""
+        if not self._last_invocation:
+            raise NotImplementedError(
+                "effective visual replacement must be the final updater in this region"
+            )
+        if self._content is not None:
+            raise NotImplementedError("one effective content replacement per callback phase")
+        resolved = _canonical_provisional_context(source)
+        if resolved is None or resolved[0] is not self:
+            raise RuntimeError("effective visual source must belong to this callback phase")
+        key, row = self.row(mobject)
+        self._content = {
+            "object": _phase_node_json(key),
+            "provisional": self.provisional_membership_key(resolved[1]),
+        }
+        self._content_write_count = len(self._writes)
         row.invalidate_bounds()
 
     def replace_effective_path(
@@ -1077,6 +1104,7 @@ class _CanonicalCallbackContext:
             "object": _phase_node_json(key),
             "path": {"points": checked, "closed": bool(closed)},
         }
+        self._content_write_count = len(self._writes)
         row.invalidate_bounds()
 
     def replace_effective_text(self, mobject: _base.Mobject, source: _base.Mobject) -> None:
@@ -1098,6 +1126,7 @@ class _CanonicalCallbackContext:
             "object": _phase_node_json(key),
             "text_source": _phase_node_json(source_key),
         }
+        self._content_write_count = len(self._writes)
         row.invalidate_bounds()
 
 

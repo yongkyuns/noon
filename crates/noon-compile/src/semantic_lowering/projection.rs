@@ -704,6 +704,18 @@ pub(crate) fn lower_semantic_transform_value(
     })
 }
 
+/// Lower one callback-produced visual snapshot through the same value rules as
+/// authored semantic publication. A producer has no durable semantic node ID,
+/// so callers retain the node-free error until they choose its existing target.
+pub fn lower_semantic_visual_values(
+    state: &SemanticObjectState,
+) -> Result<(Transform2D, Style), SemanticExecutionValueError> {
+    Ok((
+        lower_semantic_transform_value(state)?,
+        lower_semantic_style_value(state)?,
+    ))
+}
+
 fn lower_vector_xy(
     field: SemanticExecutionField,
     value: noon_core::SemanticVec3,

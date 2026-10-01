@@ -215,7 +215,7 @@ Snapshot: 2026-10-01. The [Phase C issue](https://github.com/yongkyuns/noon/issu
 
 ### C1 — callbacks and staged publication
 
-The shared callback/session path proves ordered native–host evaluation, coherent overlays, provisional construction, effective writes without relowering, stale-result rejection, and bounded input backpressure. See `crates/noon/src/execution_session/callback/tests.rs`, `web/python/examples/ordinary_mixed_updater_order.py`, and `scripts/shared-authoring-smoke.mjs`. [#70](https://github.com/yongkyuns/noon/issues/70) still needs a bounded arbitrary `always_redraw` producer and broader callback read-miss/latency qualification. Python circle and polygon producers already use the C4 effective-content lane.
+The shared callback/session path proves ordered native–host evaluation, coherent overlays, provisional construction, effective writes without relowering, stale-result rejection, and bounded input backpressure. See `crates/noon/src/execution_session/callback/tests.rs`, `web/python/examples/ordinary_mixed_updater_order.py`, and `scripts/shared-authoring-smoke.mjs`. Python `always_redraw` now gives one stable target an effective geometry/transform/style snapshot from a callback-local Circle, Rectangle/Square, or Line constructor; the 600-object regression checks 16 replacements without authored revision or store growth and with one dirty row. Unsupported content and nonvisual declarations fail explicitly. [#70](https://github.com/yongkyuns/noon/issues/70) still needs broader producer content plus callback read-miss/latency qualification. Python circle and polygon producers already use the C4 effective-content lane.
 
 ### C2 — native input and events
 

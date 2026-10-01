@@ -88,6 +88,34 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
+    def test_become_callback_provisional_uses_one_effective_visual_source(self) -> None:
+        scene, target, context = self._mobject_and_context()
+        source = identity_only_wrapper(compat.Rectangle)
+        source._callback_provisional_handle = SimpleNamespace(localKey="callback-local:source")
+        source._callback_provisional_context = context
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(context)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "final updater"):
+                target.become(source)
+            self.assertNotIn("content", context.effective_batch())
+            context._last_invocation = True
+            with self.assertRaisesRegex(NotImplementedError, "dimension matching"):
+                target.become(source, match_width=True)
+            self.assertIs(target.become(source), target)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "provisional": "callback-local:source",
+            })
+            with self.assertRaisesRegex(NotImplementedError, "one effective content"):
+                target.become(source)
+            context._writes.append({"kind": "opacity", "object": {"slot": 11, "generation": 3}, "opacity": 0.5})
+            with self.assertRaisesRegex(NotImplementedError, "final callback write"):
+                context.effective_batch()
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     def test_effective_path_is_bounded_terminal_content(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         updaters._ACTIVE_CONTEXTS[id(scene)] = context

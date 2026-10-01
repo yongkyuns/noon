@@ -927,6 +927,19 @@ def _become(
     if match_depth:
         raise NotImplementedError("depth matching requires the shared 2.5D family model")
 
+    from _manim_updaters import _canonical_phase_context, _canonical_provisional_context
+    provisional = _canonical_provisional_context(mobject)
+    if provisional is not None:
+        if any((match_height, match_width, match_center, stretch)):
+            raise NotImplementedError(
+                "callback provisional become does not support dimension matching"
+            )
+        context = _canonical_phase_context(self)
+        if context is None or context is not provisional[0]:
+            raise RuntimeError("callback provisional become requires a target in the same phase")
+        context.replace_effective_provisional(self, mobject)
+        return self
+
     if isinstance(self, _compat.Group) or isinstance(mobject, _compat.Group):
         if not isinstance(self, _compat.Group) or not isinstance(mobject, _compat.Group):
             raise NotImplementedError("become between an object and a family requires topology alignment")
