@@ -64,16 +64,22 @@ impl CompiledScene {
     ) -> Result<CompiledSceneCompactionStats, CompiledSceneCompactionError> {
         let slots_before = self.objects.len();
         if self.retired_object_indices.is_empty() {
+            let resource_entries_reclaimed = self.prune_unreferenced_resources(retained_contents);
+            self.clear_retired_graph_dependencies();
             return Ok(CompiledSceneCompactionStats {
                 object_slots_before: slots_before,
                 object_slots_after: slots_before,
-                resource_entries_reclaimed: self.prune_unreferenced_resources(retained_contents),
+                resource_entries_reclaimed,
                 ..CompiledSceneCompactionStats::default()
             });
         }
         if !self.family_animation_plans.is_empty()
             || !self.family_animations.is_empty()
-            || !self.graph_edge_dependencies.is_empty()
+            || !self.graph_dependency_indices.is_empty()
+            || self
+                .graph_edge_dependencies
+                .iter()
+                .any(|dependency| dependency.live)
             || !self.numeric_text_drivers.is_empty()
         {
             return Err(CompiledSceneCompactionError::DerivedStatePresent);
@@ -140,6 +146,7 @@ impl CompiledScene {
         self.family_ranks = family_ranks;
         self.painter_order = painter_order;
         self.painter_ranks = painter_ranks;
+        self.clear_retired_graph_dependencies();
         let resource_entries_reclaimed = self.prune_unreferenced_resources(retained_contents);
 
         Ok(CompiledSceneCompactionStats {
@@ -149,6 +156,26 @@ impl CompiledScene {
             track_rows_reindexed,
             resource_entries_reclaimed,
         })
+    }
+
+    /// A released graph retains reusable dependency slots until the explicit
+    /// maintenance barrier. They contain no live row references once the owner
+    /// index is empty, so they need no row remapping during object compaction.
+    fn clear_retired_graph_dependencies(&mut self) {
+        if !self.graph_dependency_indices.is_empty()
+            || self
+                .graph_edge_dependencies
+                .iter()
+                .any(|dependency| dependency.live)
+        {
+            return;
+        }
+        debug_assert!(self.graph_owner_dependencies.is_empty());
+        debug_assert!(self.graph_incident_dependencies.is_empty());
+        debug_assert!(self.graph_dirty_dependencies.is_empty());
+        debug_assert!(self.graph_authored_content.is_empty());
+        self.graph_edge_dependencies.clear();
+        self.free_graph_dependency_indices.clear();
     }
 
     /// Reclaim when every compiled resource owner is a live object, a track, or
@@ -337,6 +364,16 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         )
+    }
+
+    fn graph_line() -> CompiledGraphDependencyDefinition {
+        CompiledGraphDependencyDefinition {
+            edge: GraphEdgeId::new(10),
+            start_vertex: ObjectId::new(1),
+            end_vertex: ObjectId::new(2),
+            line: ObjectId::new(3),
+            kind: CompiledGraphDependencyKind::Line,
+        }
     }
 
     #[test]
@@ -616,13 +653,7 @@ mod tests {
         compiled
             .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
                 owner,
-                dependencies: vec![CompiledGraphDependencyDefinition {
-                    edge: GraphEdgeId::new(10),
-                    start_vertex: ObjectId::new(1),
-                    end_vertex: ObjectId::new(2),
-                    line: ObjectId::new(3),
-                    kind: CompiledGraphDependencyKind::Line,
-                }],
+                dependencies: vec![graph_line()],
             })
             .unwrap();
         let stats = compiled.compact_retired_object_slots().unwrap();
@@ -640,6 +671,73 @@ mod tests {
             compiled.objects[row as usize].content,
             GeometryRef::External(kept.id).into()
         );
+    }
+
+    #[test]
+    fn maintenance_reclaims_released_graph_slots_without_retired_object_rows() {
+        let mut compiled =
+            CompiledScene::compile_objects(vec![circle(1), circle(2), circle(3)], &[]).unwrap();
+        let owner = ObjectId::new(100);
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: vec![graph_line()],
+            })
+            .unwrap();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(compiled.graph_edge_dependencies.len(), 1);
+
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.object_slots_reclaimed, 0);
+        assert!(compiled.graph_edge_dependencies.is_empty());
+        assert!(compiled.free_graph_dependency_indices.is_empty());
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: vec![graph_line()],
+            })
+            .unwrap();
+        assert_eq!(compiled.graph_edge_dependencies.len(), 1);
+    }
+
+    #[test]
+    fn released_graph_allows_retired_object_compaction_but_live_graph_still_blocks_it() {
+        let mut compiled =
+            CompiledScene::compile_objects(vec![circle(1), circle(2), circle(3), circle(4)], &[])
+                .unwrap();
+        let owner = ObjectId::new(100);
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: vec![graph_line()],
+            })
+            .unwrap();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(4)))
+            .unwrap();
+        assert_eq!(
+            compiled.compact_retired_object_slots(),
+            Err(super::CompiledSceneCompactionError::DerivedStatePresent)
+        );
+        assert_eq!(compiled.objects.len(), 4);
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.object_slots_reclaimed, 1);
+        assert_eq!(compiled.objects.len(), 3);
+        assert!(compiled.graph_edge_dependencies.is_empty());
+        assert!(compiled.free_graph_dependency_indices.is_empty());
+        assert_eq!(compiled.object_index(ObjectId::new(3)), Some(2));
     }
 
     #[test]
