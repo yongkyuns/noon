@@ -1057,7 +1057,13 @@ mod tests {
         let mut lease = None;
         let mut resources = Vec::new();
 
-        for index in 0..8 {
+        // Keep a long-running producer bounded by invoking the documented
+        // maintenance barrier periodically. Each replacement introduces one
+        // text resource plus its font and vector dependency; only the current
+        // lease version should survive each barrier.
+        const REPLACEMENTS_PER_BARRIER: usize = 8;
+        const REPLACEMENTS: usize = 128;
+        for index in 0..REPLACEMENTS {
             let (text, font, geometry) = producer_text(
                 &format!("text-{index}"),
                 &mut texts,
@@ -1098,6 +1104,45 @@ mod tests {
             assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_some());
             assert!(FontResourceLookup::get(instance.font_resources(), font).is_some());
             assert!(GeometryResourceLookup::get(instance.geometry_resources(), geometry).is_some());
+
+            if (index + 1) % REPLACEMENTS_PER_BARRIER == 0 {
+                let stats = instance.reclaim_retired_object_slots().unwrap();
+                let replacements_retired = if index + 1 == REPLACEMENTS_PER_BARRIER {
+                    REPLACEMENTS_PER_BARRIER - 1
+                } else {
+                    REPLACEMENTS_PER_BARRIER
+                };
+                assert_eq!(
+                    stats.compiled.resource_entries_reclaimed,
+                    replacements_retired * 3,
+                    "{stats:?}"
+                );
+                assert_eq!(instance.compiled.resources().text_count(), 1);
+                assert_eq!(instance.compiled.resources().font_count(), 1);
+                assert_eq!(instance.compiled.resources().geometry_count(), 1);
+                for (old_text, old_font, old_geometry) in resources
+                    .iter()
+                    .copied()
+                    .take(index + 1 - REPLACEMENTS_PER_BARRIER)
+                {
+                    assert!(noon_core::TextResourceLookup::get(
+                        instance.text_resources(),
+                        old_text
+                    )
+                    .is_none());
+                    assert!(FontResourceLookup::get(instance.font_resources(), old_font).is_none());
+                    assert!(GeometryResourceLookup::get(
+                        instance.geometry_resources(),
+                        old_geometry
+                    )
+                    .is_none());
+                }
+                assert_eq!(
+                    instance.effective_content_lease(object),
+                    lease,
+                    "maintenance must preserve the active producer lease"
+                );
+            }
         }
 
         let current = *resources.last().unwrap();
@@ -1134,8 +1179,8 @@ mod tests {
         drop(publication);
 
         let stats = instance.reclaim_retired_object_slots().unwrap();
-        assert_eq!(stats.compiled.resource_entries_reclaimed, 21, "{stats:?}");
-        for (text, font, geometry) in resources.iter().copied().take(7) {
+        assert_eq!(stats.compiled.resource_entries_reclaimed, 0, "{stats:?}");
+        for (text, font, geometry) in resources.iter().copied().take(REPLACEMENTS - 1) {
             assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_none());
             assert!(FontResourceLookup::get(instance.font_resources(), font).is_none());
             assert!(GeometryResourceLookup::get(instance.geometry_resources(), geometry).is_none());
