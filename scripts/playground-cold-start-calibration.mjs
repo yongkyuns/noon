@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 
+export function resolvePageTargetCpuThrottleRate(profile, override) {
+  assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
+  if (override === undefined) return profile === "mobile-class" ? 4 : 1;
+  assert.ok(["1", "4"].includes(override), "page CPU throttle override must be 1 or 4");
+  return Number(override);
+}
+
 export function summarizePageTargetThrottleSamples(samples) {
   const median = (values, rate) => {
     assert.ok(values.length >= 2, `need at least two samples at ${rate}x`);

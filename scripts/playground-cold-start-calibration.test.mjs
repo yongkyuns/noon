@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizePageTargetThrottleSamples } from "./playground-cold-start-calibration.mjs";
+import {
+  resolvePageTargetCpuThrottleRate,
+  summarizePageTargetThrottleSamples,
+} from "./playground-cold-start-calibration.mjs";
+
+test("page CPU throttle override preserves profile defaults and accepts controlled rates", () => {
+  assert.equal(resolvePageTargetCpuThrottleRate("desktop", undefined), 1);
+  assert.equal(resolvePageTargetCpuThrottleRate("mobile-class", undefined), 4);
+  assert.equal(resolvePageTargetCpuThrottleRate("desktop", "4"), 4);
+  assert.equal(resolvePageTargetCpuThrottleRate("mobile-class", "1"), 1);
+  assert.throws(() => resolvePageTargetCpuThrottleRate("desktop", "2"), /must be 1 or 4/);
+  assert.throws(() => resolvePageTargetCpuThrottleRate("unknown", undefined), /unknown profile/);
+});
 
 test("page-target throttle summary averages the two middle samples", () => {
   const result = summarizePageTargetThrottleSamples([

@@ -7,7 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
-import { summarizePageTargetThrottleSamples } from "./playground-cold-start-calibration.mjs";
+import {
+  resolvePageTargetCpuThrottleRate,
+  summarizePageTargetThrottleSamples,
+} from "./playground-cold-start-calibration.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
 
@@ -32,6 +35,10 @@ if (runtimePackageSourceRevision !== null) {
 }
 const profile = process.env.NOON_COLD_START_PROFILE ?? "desktop";
 assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
+const startupPageCpuThrottleRate = resolvePageTargetCpuThrottleRate(
+  profile,
+  process.env.NOON_COLD_START_PAGE_CPU_RATE,
+);
 const preloadMode = process.env.NOON_COLD_START_PRELOAD ?? "on";
 assert.ok(["on", "off"].includes(preloadMode), `unknown preload mode: ${preloadMode}`);
 const preloadEnabled = preloadMode === "on";
@@ -97,7 +104,6 @@ try {
         ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
         : { viewport: { width: 1200, height: 900 } });
       const pageCpuThrottleSession = await page.context().newCDPSession(page);
-      const startupPageCpuThrottleRate = profile === "mobile-class" ? 4 : 1;
       await pageCpuThrottleSession.send("Emulation.setCPUThrottlingRate", {
         rate: startupPageCpuThrottleRate,
       });
@@ -653,7 +659,7 @@ try {
       backend,
       profile,
       pageTargetCpuThrottling: {
-        startupRate: profile === "mobile-class" ? 4 : 1,
+        startupRate: startupPageCpuThrottleRate,
         method: "CDP Emulation.setCPUThrottlingRate applied to the page target",
       },
       pythonWorkerCpuThrottling: {
