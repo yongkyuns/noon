@@ -23,7 +23,13 @@ const trace = [
   { id: "select-rectangle", point: () => shapeSurfaceCenter(SHAPES[1]) },
   { id: "clear-background", point: () => ({ x: VIEW.width - 20, y: VIEW.height - 20 }) },
 ];
-const report = { status: "running", scope: "static-filled-shape-selection", sourceSha256: hash(source), cases: [] };
+const report = {
+  status: "running",
+  scope: "static-filled-shape-selection",
+  pythonSourceSha256: hash(source),
+  rustFixture: "noon::example_scenes::pointer_selection::scene",
+  cases: [],
+};
 let server, browser;
 await mkdir(output, { recursive: true });
 
@@ -135,9 +141,11 @@ try {
       assert.equal(await pages.direct.evaluate(() => parity.renderer.objectCount()), 3);
       assert.equal((await pages.worker.evaluate(() => parity.execution.debugFrame())).present_object_count, 3);
 
-      let directPixels = await image(pages.direct, "baseline", backend, "direct");
-      let workerPixels = await image(pages.worker, "baseline", backend, "worker");
-      equalPixels(directPixels, workerPixels, `${backend} baseline`);
+      const directBaseline = await image(pages.direct, "baseline", backend, "direct");
+      const workerBaseline = await image(pages.worker, "baseline", backend, "worker");
+      equalPixels(directBaseline, workerBaseline, `${backend} baseline`);
+      let directPixels = directBaseline;
+      let workerPixels = workerBaseline;
       result.checkpoints.push({ id: "baseline", directSha256: hash(directPixels.data), workerSha256: hash(workerPixels.data) });
 
       for (const action of trace) {
@@ -150,8 +158,17 @@ try {
           await pages[pathName].mouse.click(bounds.x + point.x, bounds.y + point.y);
         }
         await Promise.all([settleDirect(directBefore), settleWorker(workerBefore)]);
+        const priorDirect = directPixels;
+        const priorWorker = workerPixels;
         directPixels = await image(pages.direct, action.id, backend, "direct");
         workerPixels = await image(pages.worker, action.id, backend, "worker");
+        if (action.id === "clear-background") {
+          assertExactPixels(directPixels, directBaseline, `${backend} direct clear returns to baseline`, VIEW);
+          assertExactPixels(workerPixels, workerBaseline, `${backend} worker clear returns to baseline`, VIEW);
+        } else {
+          assert.notDeepEqual(directPixels.data, priorDirect.data, `${backend} direct ${action.id} changes pixels`);
+          assert.notDeepEqual(workerPixels.data, priorWorker.data, `${backend} worker ${action.id} changes pixels`);
+        }
         equalPixels(directPixels, workerPixels, `${backend} ${action.id}`);
         result.checkpoints.push({ id: action.id, directSha256: hash(directPixels.data), workerSha256: hash(workerPixels.data) });
       }
