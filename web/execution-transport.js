@@ -15,6 +15,7 @@ const BACKPRESSURE_COUNTER = 5;
 const DEFAULT_SLOT_CAPACITY = 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const validatedDeltaJson = new WeakMap();
 
 export function selectExecutionTransportMode(scope = globalThis) {
   return scope.crossOriginIsolated === true && typeof scope.SharedArrayBuffer === "function"
@@ -23,6 +24,19 @@ export function selectExecutionTransportMode(scope = globalThis) {
 }
 
 export function executionDeltaMetadata(json) {
+  return parseExecutionDeltaMetadata(json);
+}
+
+// Prepare a one-shot producer handoff. Unlike the public metadata reader, this
+// temporarily ties an opaque result to its exact JSON so transport send can
+// skip a second producer parse. Send consumes the association immediately.
+export function prepareExecutionDeltaMetadataForSend(json) {
+  const metadata = parseExecutionDeltaMetadata(json);
+  validatedDeltaJson.set(metadata, json);
+  return metadata;
+}
+
+function parseExecutionDeltaMetadata(json) {
   if (typeof json !== "string") {
     throw new TypeError("execution delta must be a JSON string");
   }
@@ -49,14 +63,28 @@ export function executionDeltaMetadata(json) {
       !Number.isFinite(view.width) || !Number.isFinite(view.height) || view.width <= 0 || view.height <= 0)) {
     throw new Error("execution delta has an invalid pointer view");
   }
-  return {
+  const metadata = Object.freeze({
     session: delta.session,
     sequence: delta.sequence,
     snapshot: delta.snapshot,
     ...(view === undefined ? {} : { pointerView: Object.freeze({
       revision: view.revision, width: view.width, height: view.height,
     }) }),
-  };
+  });
+  return metadata;
+}
+
+function metadataForSend(json, validatedMetadata) {
+  // Consume the temporary exact-string association even when it mismatches,
+  // so a retained or misused handoff cannot pin a large delta indefinitely.
+  if (validatedMetadata !== null && typeof validatedMetadata === "object") {
+    const validatedJson = validatedDeltaJson.get(validatedMetadata);
+    if (validatedJson !== undefined) {
+      validatedDeltaJson.delete(validatedMetadata);
+      if (typeof json === "string" && validatedJson === json) return validatedMetadata;
+    }
+  }
+  return executionDeltaMetadata(json);
 }
 
 export function decodeTransferableExecutionDelta(message) {
@@ -108,8 +136,8 @@ export class SharedExecutionDeltaWriter {
     );
   }
 
-  send(json) {
-    executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    metadataForSend(json, validatedMetadata);
     const payload = encoder.encode(json);
     if (payload.byteLength > this.#slotCapacity) {
       throw new Error(
@@ -234,8 +262,8 @@ export class TransferableExecutionDeltaSender {
     return this.#inFlight < this.#maxInFlight;
   }
 
-  send(json) {
-    const metadata = executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    const metadata = metadataForSend(json, validatedMetadata);
     if (this.#inFlight >= this.#maxInFlight) {
       this.#backpressure += 1;
       return false;

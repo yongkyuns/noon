@@ -13,6 +13,7 @@ import {
   createSharedExecutionMailbox,
   decodeTransferableExecutionDelta,
   executionDeltaMetadata,
+  prepareExecutionDeltaMetadataForSend,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
 
@@ -208,4 +209,62 @@ test("metadata validates the current execution schema directly", () => {
     () => executionDeltaMetadata(JSON.stringify(unsafe)),
     /invalid sequence/,
   );
+});
+
+test("delta send reuses only metadata validated for the identical JSON payload", async () => {
+  const json = delta(0);
+  const metadata = prepareExecutionDeltaMetadataForSend(json);
+  const mailbox = createSharedExecutionMailbox(4096);
+  const shared = new SharedExecutionDeltaWriter(mailbox);
+  const sharedReader = new SharedExecutionDeltaReader(mailbox);
+  const { port1, port2 } = new MessageChannel();
+  const transferable = new TransferableExecutionDeltaSender(port1);
+  const transferableMetadata = prepareExecutionDeltaMetadataForSend(json);
+  const mismatchedMetadata = prepareExecutionDeltaMetadataForSend(delta(7));
+  const malformedMetadata = prepareExecutionDeltaMetadataForSend(json);
+  const originalParse = JSON.parse;
+  let parseCount = 0;
+  JSON.parse = function (...args) {
+    parseCount += 1;
+    return originalParse.apply(this, args);
+  };
+  try {
+    assert.equal(shared.send(json, metadata), true);
+    assert.equal(parseCount, 0, "the first send reuses the prepared exact-string metadata");
+    assert.equal(shared.send(json, metadata), true);
+    assert.equal(parseCount, 1, "a consumed handoff is reparsed when reused");
+    assert.equal(transferable.send(json, transferableMetadata), true);
+    assert.equal(parseCount, 1, "a fresh one-shot handoff avoids reparsing for transferable send");
+    assert.equal(sharedReader.drain(() => true), 2, "accept the first two deltas to free shared slots");
+
+    const parseCountBeforePublicSend = parseCount;
+    assert.equal(shared.send(delta(1)), true);
+    assert.equal(parseCount, parseCountBeforePublicSend + 1,
+      "send without an internal validated handoff still validates");
+    const parseCountBeforeMismatchedHandoff = parseCount;
+
+    assert.equal(shared.send(delta(2), mismatchedMetadata), true);
+    assert.equal(parseCount, parseCountBeforeMismatchedHandoff + 1,
+      "metadata from a different JSON payload is reparsed");
+    assert.equal(sharedReader.drain(() => true), 2, "accept deltas and free slots for the reuse regression");
+    const parseCountBeforeOneShotReuse = parseCount;
+    assert.equal(shared.send(json, malformedMetadata), true);
+    assert.equal(parseCount, parseCountBeforeOneShotReuse,
+      "the first send consumes a fresh exact-string handoff without parsing");
+    assert.throws(() => shared.send("not JSON", malformedMetadata), /invalid JSON/);
+    assert.equal(parseCount, parseCountBeforeOneShotReuse + 1,
+      "a consumed handoff cannot bypass malformed-payload rejection when reused");
+    assert.throws(() => shared.send(undefined), /execution delta must be a JSON string/);
+
+    const received = [];
+    assert.equal(sharedReader.drain((payload) => {
+      received.push(executionDeltaMetadata(payload).sequence);
+      return true;
+    }), 1);
+    assert.deepEqual(received, [0]);
+  } finally {
+    JSON.parse = originalParse;
+    port1.close();
+    port2.close();
+  }
 });
