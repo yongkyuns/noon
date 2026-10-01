@@ -547,6 +547,28 @@ test("publication stage metrics are opt-in, exact-publication keyed, and bounded
   }
 });
 
+test("renderer transition discards an old timing sample even when publication identity repeats", async () => {
+  const harness = await createManagedWakeHarness();
+  await vm.runInContext(`handleMainMessage({
+    channel:"noon.render", protocolVersion:1, type:"metrics", requestId:73,
+    profilePublicationStages:true,
+  });`, harness.context);
+  // Model a pending sample when transport/renderer state is reset. Rebuilds may
+  // replay the same logical publication identity, so identity matching alone
+  // cannot distinguish the old attempt from the new render attempt.
+  vm.runInContext(`renderer = null;
+    needsPresent = true;
+    pendingPresentationPublication = {session:53, sequence:44};
+    pendingPublicationStageSample = {session:53, sequence:44, receivedAtMs:0};
+    transitionMode = MODE_RETAINED;
+    transitionResourceBytes = new Uint8Array([1]);
+    transitionFrameLoopWasRunning = false;
+    commitRendererTransition("replacement", {session:53, sequence:44});`, harness.context);
+  await flushTasks();
+  const samples = vm.runInContext("currentMetrics().publicationStageSamples", harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(samples)), []);
+});
+
 test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
   const harness = await createManagedWakeHarness();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);

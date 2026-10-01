@@ -412,6 +412,7 @@ export function createAuthoringRenderController(host) {
     bootstrapQueue = [];
     bootstrapPromise = null;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
     lastPresentedPublication = null;
     lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
@@ -596,6 +597,7 @@ export function createAuthoringRenderController(host) {
     reconnectResourceBundlePending = false;
     needsPresent = false;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
     lastPresentedPublication = null;
     lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
@@ -627,6 +629,7 @@ export function createAuthoringRenderController(host) {
       renderer.resize(width, height);
       if (!drainGpuDiagnostics()) return;
       pendingPresentationPublication = publication;
+      pendingPublicationStageSample = null;
       needsPresent = true;
       while (!tryPresent()) {
         if (
@@ -708,7 +711,10 @@ export function createAuthoringRenderController(host) {
     presentedFrames += 1;
     firstPresentedAtMs ??= presentedAtMs;
     const publication = pendingPresentationPublication;
-    const stageSample = pendingPublicationStageSample;
+    const candidateStageSample = pendingPublicationStageSample;
+    const stageSample = samePublication(candidateStageSample, publication)
+      ? candidateStageSample
+      : null;
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
@@ -823,6 +829,7 @@ export function createAuthoringRenderController(host) {
       }
       armRendererObservation(publication);
       pendingPresentationPublication = publication;
+      pendingPublicationStageSample = null;
       needsPresent = true;
       if (!tryPresent()) {
         break;
@@ -1038,6 +1045,7 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
+    pendingPublicationStageSample = null;
     const retiredRenderer = renderer;
     renderer = null;
     lastDeltaApplyMs = null;
