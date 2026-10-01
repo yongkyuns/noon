@@ -317,6 +317,12 @@ function createRenderer(renderResults) {
     rendererBackend: () => "WebGPU",
     gpuGeneration: () => 1,
     time: () => 0,
+    objectCount: () => 0,
+    lastDrawCalls: () => 0,
+    lastInstancesDrawn: () => 0,
+    lastBytesUploaded: () => 0,
+    lastGeometryCacheMisses: () => 0,
+    lastOutlineCacheMisses: () => 0,
     preloadedGeometryCount: () => 1200,
     preloadBytesUploaded: () => 1024,
     free() { this.freed = true; },
@@ -515,6 +521,53 @@ async function createManagedWakeHarness(renderResults = [true]) {
   harness.context.clearTimeout = (id) => timers.delete(id);
   return { ...harness, timers, setClock(value) { clock = value; } };
 }
+
+test("publication stage metrics are opt-in, exact-publication keyed, and bounded", async () => {
+  const harness = await createManagedWakeHarness();
+  assert.equal(vm.runInContext("currentMetrics().publicationStageProfiling", harness.context), undefined);
+  const request = { channel: "noon.render", protocolVersion: 1, type: "metrics", requestId: 72,
+    profilePublicationStages: true };
+  await vm.runInContext(`handleMainMessage(${JSON.stringify(request)});`, harness.context);
+  const response = harness.mainMessages.find((message) => message.requestId === 72);
+  assert.equal(response.metrics.publicationStageProfiling, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(response.metrics.publicationStageSamples)), []);
+  for (let sequence = 0; sequence < 33; sequence += 1) {
+    harness.context.profileJson = JSON.stringify({ sequence });
+    vm.runInContext(`consumeDelta(profileJson, {session:53, sequence:${sequence}});`, harness.context);
+  }
+  const samples = vm.runInContext("currentMetrics().publicationStageSamples", harness.context);
+  assert.equal(samples.length, 32);
+  assert.deepEqual(JSON.parse(JSON.stringify(samples.map(({ session, sequence }) => [session, sequence]))),
+    Array.from({ length: 32 }, (_, index) => [53, index + 1]));
+  for (const sample of samples) {
+    assert.ok(Number.isFinite(sample.applyMs));
+    assert.ok(Number.isFinite(sample.renderMs));
+    assert.ok(Number.isFinite(sample.receiveToPresentMs));
+    assert.ok(Number.isFinite(sample.ackPostMs));
+  }
+});
+
+test("renderer transition discards an old timing sample even when publication identity repeats", async () => {
+  const harness = await createManagedWakeHarness();
+  await vm.runInContext(`handleMainMessage({
+    channel:"noon.render", protocolVersion:1, type:"metrics", requestId:73,
+    profilePublicationStages:true,
+  });`, harness.context);
+  // Model a pending sample when transport/renderer state is reset. Rebuilds may
+  // replay the same logical publication identity, so identity matching alone
+  // cannot distinguish the old attempt from the new render attempt.
+  vm.runInContext(`renderer = null;
+    needsPresent = true;
+    pendingPresentationPublication = {session:53, sequence:44};
+    pendingPublicationStageSample = {session:53, sequence:44, receivedAtMs:0};
+    transitionMode = MODE_RETAINED;
+    transitionResourceBytes = new Uint8Array([1]);
+    transitionFrameLoopWasRunning = false;
+    commitRendererTransition("replacement", {session:53, sequence:44});`, harness.context);
+  await flushTasks();
+  const samples = vm.runInContext("currentMetrics().publicationStageSamples", harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(samples)), []);
+});
 
 test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
   const harness = await createManagedWakeHarness();

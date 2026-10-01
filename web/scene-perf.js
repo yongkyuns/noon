@@ -1,7 +1,9 @@
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
 import { FrameMetrics } from "./frame-metrics.js";
+import { shouldSampleRendererStageFrame } from "./renderer-stage-sampling.js";
 
 const parameters = new URLSearchParams(location.search);
 const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
@@ -17,6 +19,9 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const rendererPublicationStageSamples = rendererSamples === null ? null : [];
+let rendererPublicationStageCursor = null;
+const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
@@ -30,6 +35,7 @@ let sourceError = null;
 let completedSource = null;
 let continuation = false;
 let sourceCompleted = false;
+let runtimeBuildIdentity = null;
 let lastSampleTime = 0;
 let firstMeasuredTime = null;
 let rejectSourceFailure;
@@ -44,8 +50,11 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = new PythonAuthoringClient();
-  await client.ready();
+  client = rendererSamples === null
+    ? new PythonAuthoringClient()
+    : new ProvenancedPythonAuthoringClient();
+  const readyIdentity = await client.ready();
+  if (rendererSamples !== null) runtimeBuildIdentity = readyIdentity;
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -102,7 +111,9 @@ try {
     await nextAnimationFrame();
     await advanceSample((frame + 1) / targetHz);
   }
-  const before = (await execution.metrics()).metrics;
+  const before = (await execution.metrics({
+    profilePublicationStages: rendererSamples !== null,
+  })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
   const measurementStart = performance.now();
@@ -128,7 +139,9 @@ try {
     }
     if (rendererSamples !== null) {
       const metricsStarted = performance.now();
-      const renderer = (await execution.metrics()).metrics;
+      const renderer = (await execution.metrics({
+        profilePublicationStages: rendererSamples !== null,
+      })).metrics;
       rendererSamples.push({
         sceneTime: lastSampleTime,
         metricsQueryMs: performance.now() - metricsStarted,
@@ -138,6 +151,26 @@ try {
         instances: renderer.instancesDrawn,
         uploadBytes: renderer.bytesUploaded,
       });
+      if (rendererPublicationStageSamples !== null) {
+        let latestNewPublicationStageSample = null;
+        for (const sample of renderer.publicationStageSamples ?? []) {
+          const isNew = rendererPublicationStageCursor === null ||
+            sample.session > rendererPublicationStageCursor.session ||
+            (sample.session === rendererPublicationStageCursor.session &&
+             sample.sequence > rendererPublicationStageCursor.sequence);
+          if (!isNew) continue;
+          rendererPublicationStageCursor = { session: sample.session, sequence: sample.sequence };
+          latestNewPublicationStageSample = sample;
+        }
+        if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES &&
+            shouldSampleRendererStageFrame(frame, measuredFrames) &&
+            latestNewPublicationStageSample !== null) {
+          rendererPublicationStageSamples.push({
+            ...latestNewPublicationStageSample,
+            measuredFrameIndex: frame,
+          });
+        }
+      }
     }
   }
   const measurementEnd = performance.now();
@@ -149,6 +182,16 @@ try {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
     ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererPublicationStageSamples === null ? {} : {
+      rendererPublicationStageSamples,
+      rendererPublicationStageNotes: {
+        applyMs: "render-worker WASM delta application for this exact session/sequence",
+        renderMs: "synchronous retained renderer render call; not GPU completion",
+        receiveToPresentMs: "render-worker consume entry through successful render return",
+        ackPostMs: "synchronous execution_presented MessagePort post duration",
+        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32",
+      },
+    }),
     ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
     ...(stageTimingSamples === null ? {} : {
       stageTimingNotes: {
@@ -166,6 +209,7 @@ try {
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
+    ...(runtimeBuildIdentity === null ? {} : { runtimeBuild: runtimeBuildIdentity }),
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,
