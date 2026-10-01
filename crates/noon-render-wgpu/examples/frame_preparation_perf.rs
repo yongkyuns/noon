@@ -349,7 +349,7 @@ fn build_path_frame(object_count: usize) -> FrameState {
 
 fn unique_path(index: usize) -> GeometryRef {
     let sides = 3 + index % 5;
-    let columns = (1_024usize as f64).sqrt().ceil() as usize;
+    let columns = 32;
     polygon_path(index, sides, 2.0 / columns as f32 * 0.28)
 }
 
