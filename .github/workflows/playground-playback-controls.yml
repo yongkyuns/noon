@@ -130,6 +130,7 @@ jobs:
           node scripts/browser-pointer-input-smoke.mjs
           node scripts/pointer-selection-qualification.mjs
           node scripts/pointer-selection-direct-qualification.mjs
+          node scripts/platform-interaction-parity.mjs
           node scripts/direct-pointer-presentation-qualification.mjs
           node scripts/direct-inspection-qualification.mjs
           node scripts/worker-inspection-qualification.mjs
