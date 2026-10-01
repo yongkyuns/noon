@@ -154,6 +154,11 @@ try {
     },
     renderer: {
       presentedFrames: metrics.presentedFrames - before.presentedFrames,
+      // Latest accepted WASM delta application; excludes host/engine worker time.
+      lastDeltaApplyMs: metrics.lastDeltaApplyMs,
+      // One successful render call near the end of the run, not a frame-time
+      // distribution or physical presentation latency.
+      lastRendererCallMs: metrics.lastRendererCallMs,
       drawCalls: metrics.drawCalls,
       instances: metrics.instancesDrawn,
       lastUploadBytes: metrics.bytesUploaded,
