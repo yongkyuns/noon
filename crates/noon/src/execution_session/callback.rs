@@ -1721,6 +1721,64 @@ impl ExecutionSession {
         Ok(lease)
     }
 
+    /// Commit a small set of producer-owned inline content rows with one
+    /// callback property batch and one publication. Every target is prepared
+    /// and lease-checked before the pending phase is consumed.
+    pub fn commit_required_callback_phase_with_owned_contents(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        replacements: Vec<(SemanticNodeId, ObjectContentRef)>,
+    ) -> Result<Vec<EffectiveContentLease>, ExecutionSessionCallbackError> {
+        let batch = self.complete_callback_batch_for_commit(batch)?;
+        let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
+        let mut seen = BTreeSet::new();
+        let mut prepared = Vec::with_capacity(replacements.len());
+        let mut targets = Vec::with_capacity(replacements.len());
+        for (target, content) in replacements {
+            if !seen.insert(target) {
+                return Err(ExecutionSessionCallbackError::Content(
+                    EffectiveContentError::DuplicateTarget(
+                        self.execution_index
+                            .execution_object_id(target)
+                            .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?,
+                    ),
+                ));
+            }
+            let object = self
+                .execution_index
+                .execution_object_id(target)
+                .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
+            let lease = self.callback_content_lease(target, object)?;
+            prepared.push(
+                self.runtime
+                    .prepare_effective_content_replacement(object, content, None, lease)
+                    .map_err(ExecutionSessionCallbackError::Content)?,
+            );
+            targets.push(target);
+        }
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .expect("completed phase remains pending");
+        self.runtime
+            .preflight_prepared_frame_with_contents(&pending.prepared, &effective, &prepared)
+            .map_err(ExecutionSessionCallbackError::ContentCommit)?;
+        let pending = self
+            .pending_callback
+            .take()
+            .expect("phase remained pending through preflight");
+        let (frame, completion) = pending.into_parts();
+        let leases = self
+            .runtime
+            .commit_prepared_frame_with_contents(frame, effective, prepared)
+            .expect("preflighted callback batch remains valid during synchronous commit");
+        for (target, lease) in targets.into_iter().zip(leases.iter().copied()) {
+            self.callback_content_leases.insert(target, lease);
+        }
+        self.finish_callback_publication(completion, receipt_domains);
+        Ok(leases)
+    }
+
     /// Commit callback-produced external geometry through the same session-owned
     /// effective-content lease used by analytic and text content results.
     pub fn commit_required_callback_phase_with_owned_geometry(

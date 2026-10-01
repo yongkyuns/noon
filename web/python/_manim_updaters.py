@@ -552,7 +552,8 @@ class _CanonicalCallbackContext:
         self._prefetch_errors: dict[tuple[int, int], Exception] = {}
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
-        self._content: dict[str, Any] | None = None
+        self._content: list[dict[str, Any]] = []
+        self._content_targets: set[tuple[int, int]] = set()
         self._content_write_count: int | None = None
         self._last_invocation = False
         # Python retains only delayed wrapper bookkeeping. The player owns the
@@ -926,6 +927,7 @@ class _CanonicalCallbackContext:
         # These are non-authoritative property deltas. Rust owns validation,
         # driver arbitration and application to the prepared effective row.
         old, new = before.to_wire(), row.transform.to_wire()
+        self._require_writes_open()
         for channel in ("translation", "rotation", "scale"):
             if old[channel] != new[channel]:
                 self._writes.append({"kind": channel, "object": _phase_node_json(key),
@@ -1033,6 +1035,7 @@ class _CanonicalCallbackContext:
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
     ) -> None:
         old, new = before.to_wire(), row.style.to_wire()
+        self._require_writes_open()
         for channel in ("fill", "stroke", "stroke_width", "opacity"):
             if old[channel] != new[channel]:
                 self._writes.append({"kind": channel, "object": _phase_node_json(key),
@@ -1044,55 +1047,47 @@ class _CanonicalCallbackContext:
                 "effective content replacement must be the final callback write"
             )
         batch = {"token": self.token, "region": self.region, "writes": self._writes}
-        if self._content is not None:
-            batch["content"] = self._content
+        if self._content:
+            batch["content"] = self._content[0] if len(self._content) == 1 else self._content
         return batch
 
+    def _require_writes_open(self) -> None:
+        if self._content_write_count is not None:
+            raise NotImplementedError("callback property writes must precede effective content")
+
+    def _append_content(self, key: tuple[int, int], row: _PhasePropertyRow, content: dict[str, Any]) -> None:
+        if key in self._content_targets:
+            raise ValueError("effective content batch cannot target one object more than once")
+        if self._content_write_count is None:
+            self._content_write_count = len(self._writes)
+        self._content.append(content)
+        self._content_targets.add(key)
+        row.invalidate_bounds()
+
     def replace_effective_circle(self, mobject: _base.Mobject, radius: float) -> None:
-        if not self._last_invocation:
-            raise NotImplementedError(
-                "effective circle replacement must be the final updater in this region"
-            )
-        if self._content is not None:
-            raise NotImplementedError("one effective content replacement per callback phase")
         key, row = self.row(mobject)
-        self._content = {
+        self._append_content(key, row, {
             "object": _phase_node_json(key),
             "geometry": {"kind": "circle", "radius": _phase_number("circle radius", radius)},
-        }
-        self._content_write_count = len(self._writes)
-        row.invalidate_bounds()
+        })
 
     def replace_effective_provisional(
         self, mobject: _base.Mobject, source: _base.Mobject
     ) -> None:
         """Use a callback-local constructor result as one effective visual snapshot."""
-        if not self._last_invocation:
-            raise NotImplementedError(
-                "effective visual replacement must be the final updater in this region"
-            )
-        if self._content is not None:
-            raise NotImplementedError("one effective content replacement per callback phase")
         resolved = _canonical_provisional_context(source)
         if resolved is None or resolved[0] is not self:
             raise RuntimeError("effective visual source must belong to this callback phase")
         key, row = self.row(mobject)
-        self._content = {
+        self._append_content(key, row, {
             "object": _phase_node_json(key),
             "provisional": self.provisional_membership_key(resolved[1]),
-        }
-        self._content_write_count = len(self._writes)
-        row.invalidate_bounds()
+        })
 
     def replace_effective_path(
         self, mobject: _base.Mobject, points: list[tuple[float, float]], closed: bool
     ) -> None:
-        if not self._last_invocation:
-            raise NotImplementedError(
-                "effective path replacement must be the final updater in this region"
-            )
-        if self._content is not None:
-            raise NotImplementedError("one effective content replacement per callback phase")
+
         if not 2 <= len(points) <= 4096:
             raise ValueError("effective path requires between 2 and 4096 points")
         checked = [
@@ -1100,21 +1095,14 @@ class _CanonicalCallbackContext:
             for point in points
         ]
         key, row = self.row(mobject)
-        self._content = {
+        self._append_content(key, row, {
             "object": _phase_node_json(key),
             "path": {"points": checked, "closed": bool(closed)},
-        }
-        self._content_write_count = len(self._writes)
-        row.invalidate_bounds()
+        })
 
     def replace_effective_text(self, mobject: _base.Mobject, source: _base.Mobject) -> None:
         """Use a prebuilt text resource as effective callback content."""
-        if not self._last_invocation:
-            raise NotImplementedError(
-                "effective text replacement must be the final updater in this region"
-            )
-        if self._content is not None:
-            raise NotImplementedError("one effective content replacement per callback phase")
+
         if not isinstance(source, _base.Mobject):
             raise TypeError("effective text source must be a prebuilt Text mobject")
         source_handle = getattr(source, "_semantic_handle", None)
@@ -1122,12 +1110,10 @@ class _CanonicalCallbackContext:
             raise NotImplementedError("effective text source requires a fresh semantic Text handle")
         source_key = _semantic_key(source)
         key, row = self.row(mobject)
-        self._content = {
+        self._append_content(key, row, {
             "object": _phase_node_json(key),
             "text_source": _phase_node_json(source_key),
-        }
-        self._content_write_count = len(self._writes)
-        row.invalidate_bounds()
+        })
 
 
 def set_effective_circle(mobject: _base.Mobject, radius: float) -> _base.Mobject:
