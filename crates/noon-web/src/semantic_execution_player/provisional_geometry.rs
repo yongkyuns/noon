@@ -206,7 +206,7 @@ impl SemanticExecutionPlayer {
     /// Read one local provisional geometry object through the callback's prepared semantic
     /// transaction. Retained paths deliberately use the typed path getters
     /// below: no provisional durable object state is fabricated for them.
-    #[cfg(test)]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn callback_provisional_object_state(
         &mut self,
         expected_token: CallbackPhaseToken,
@@ -217,6 +217,91 @@ impl SemanticExecutionPlayer {
                 AuthoringFailure::unclassified("callback.provisional_geometry_read", &error)
             })
         })
+    }
+
+    /// Convert one unadmitted inline constructor result into the same compact
+    /// visual values used by ordinary semantic lowering. This is a producer
+    /// snapshot, not a request to commit its temporary semantic node.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn callback_provisional_visual(
+        &mut self,
+        token: CallbackPhaseToken,
+        key: &str,
+    ) -> Result<(Transform2D, Style, CallbackContentResult), AuthoringFailure> {
+        use noon_core::{
+            SemanticMutation, SemanticObjectContent, SemanticObjectRole,
+            SemanticTransactionNodeRef, StoredGeometry,
+        };
+
+        let collector = self
+            .callback_membership_transaction
+            .as_ref()
+            .ok_or("callback visual producer has no provisional declaration")?;
+        if collector.token != token || !collector.admitted_provisionals.is_empty() {
+            return Err(
+                "callback visual producer cannot share an authored membership publication".into(),
+            );
+        }
+        let local = collector
+            .provisional_objects
+            .iter()
+            .copied()
+            .find(|local| callback_provisional_key(*local) == key)
+            .ok_or("callback visual producer token is unknown or stale")?;
+        // A producer may construct several temporary objects, but no authored
+        // membership or existing-object edit can be silently discarded when
+        // the temporary transaction is dropped after effective publication.
+        let is_provisional =
+            |node: &noon_core::SemanticLocalNodeToken| collector.provisional_objects.contains(node);
+        if collector
+            .transaction
+            .mutations()
+            .iter()
+            .any(|mutation| match mutation {
+                SemanticMutation::AddNode { token, .. } => !is_provisional(token),
+                SemanticMutation::SetProperty {
+                    object: SemanticTransactionNodeRef::Pending(local),
+                    ..
+                }
+                | SemanticMutation::ReplaceStyle {
+                    object: SemanticTransactionNodeRef::Pending(local),
+                    ..
+                } => !is_provisional(local),
+                _ => true,
+            })
+        {
+            return Err("callback visual producer cannot discard authored edits".into());
+        }
+        let state = self.callback_provisional_object_state(token, local)?;
+        if state.role() != SemanticObjectRole::Ordinary
+            || state.z_index() != 0.0
+            || state.decimal_number().is_some()
+            || state.bar_metadata().is_some()
+            || state.text_presentation_baseline().is_some()
+            || state.click_indicate().is_some()
+            || !state.signal_bindings().is_empty()
+        {
+            return Err(
+                "callback visual producer returned unsupported nonvisual declarations".into(),
+            );
+        }
+        let geometry = match state.content {
+            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
+                GeometryRef::circle(radius)
+            }
+            SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
+                GeometryRef::Rectangle { size }
+            }
+            SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) => {
+                GeometryRef::Line { start, end }
+            }
+            _ => return Err("callback visual producer currently requires inline circle, rectangle, or line geometry".into()),
+        };
+        let (transform, style) =
+            noon_compile::lower_semantic_visual_values(&state).map_err(|error| {
+                AuthoringFailure::unclassified("callback.provisional_visual", &error)
+            })?;
+        Ok((transform, style, CallbackContentResult::Geometry(geometry)))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

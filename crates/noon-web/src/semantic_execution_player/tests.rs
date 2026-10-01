@@ -1637,6 +1637,122 @@ fn required_callback_membership_publishes_one_existing_handle_edit() {
 }
 
 #[test]
+fn callback_provisional_visual_replaces_full_effective_state_without_authored_growth() {
+    let mut scene = noon::Scene::new();
+    let target = scene.circle(1.0).unwrap();
+    scene.add(&target).unwrap();
+    for _ in 1..600 {
+        let static_circle = scene.circle(0.25).unwrap();
+        scene.add(&static_circle).unwrap();
+    }
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(target.node_id(), HostCallbackId::new(7), 0.0, None);
+    callbacks
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        31,
+    )
+    .unwrap();
+    let phase: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let token = player.pending_callback_phase.unwrap().0;
+    let before = player.session.publication_context();
+    let before_nodes = scene.integration_store().borrow().len();
+    let source = player
+        .stage_required_callback_provisional_geometry(
+            token,
+            noon::ManimGeometryOptions::rectangle(2.0, 1.0).unwrap(),
+        )
+        .unwrap();
+    player
+        .stage_required_callback_provisional_shift(token, source, 2.0, -1.0)
+        .unwrap();
+    player
+        .stage_required_callback_provisional_fill(token, source, [0.2, 0.4, 0.8, 0.75], Some(0.6))
+        .unwrap();
+    let wrong_source = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": {"object": phase["objects"][0]["node"], "provisional": "stale"}
+    });
+    assert!(player
+        .commit_callback_phase_json(&wrong_source.to_string())
+        .is_err());
+    assert_eq!(player.session.publication_context(), before);
+    let batch = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": {"object": phase["objects"][0]["node"],
+            "provisional": callback_provisional_key(source)}
+    });
+    assert!(player
+        .commit_callback_phase_json(&batch.to_string())
+        .unwrap()
+        .is_none());
+    let frame = player.session.frame();
+    assert_eq!(frame.objects.len(), 600);
+    assert_eq!(
+        frame.objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::Rectangle {
+            size: noon_core::Vec2::new(2.0, 1.0),
+        })
+    );
+    assert_eq!(
+        frame.objects[0].transform.translation,
+        noon_core::Vec2::new(2.0, -1.0)
+    );
+    let fill = frame.objects[0].style.fill.unwrap();
+    assert_eq!((fill.red, fill.green, fill.blue), (0.2, 0.4, 0.8));
+    assert!((fill.alpha - 0.45).abs() < 1e-6);
+    assert!((frame.objects[0].style.opacity - 1.0).abs() < 1e-6);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes);
+    assert_eq!(
+        player.session.publication_context().scene_revision(),
+        before.scene_revision()
+    );
+    assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+    assert!(player.callback_membership_transaction.is_none());
+
+    for step in 1..=16 {
+        let phase: serde_json::Value = serde_json::from_str(
+            &player
+                .advance_to_callback_phase(f64::from(step) / 32.0)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let token = player.pending_callback_phase.unwrap().0;
+        let source = player
+            .stage_required_callback_provisional_geometry(
+                token,
+                noon::ManimGeometryOptions::circle(0.5 + f64::from(step) / 100.0).unwrap(),
+            )
+            .unwrap();
+        let batch = serde_json::json!({
+            "token": phase["token"], "region": phase["region"], "writes": [],
+            "content": {"object": phase["objects"][0]["node"],
+                "provisional": callback_provisional_key(source)}
+        });
+        assert!(player
+            .commit_callback_phase_json(&batch.to_string())
+            .unwrap()
+            .is_none());
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
+        assert_eq!(
+            player.session.publication_context().scene_revision(),
+            before.scene_revision()
+        );
+        assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+        assert!(player.callback_membership_transaction.is_none());
+    }
+}
+
+#[test]
 fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     let mut scene = noon::Scene::new();
     let callback_target = scene.circle(1.0).unwrap();

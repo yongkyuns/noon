@@ -356,6 +356,12 @@ impl SemanticExecutionPlayer {
                     return Err("callback text replacement requires the live semantic store".into());
                 }
             }
+            CallbackContentResult::Provisional(key) => {
+                return Err(format!(
+                    "callback provisional content {key} must be resolved before publication"
+                )
+                .into());
+            }
         }
         Ok(())
     }
@@ -3199,6 +3205,8 @@ struct CallbackContentWire {
     path: Option<CallbackPathWire>,
     #[serde(default)]
     text_source: Option<CallbackNodeWire>,
+    #[serde(default)]
+    provisional: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -3226,11 +3234,15 @@ impl CallbackContentWire {
     fn into_result(self) -> Result<CallbackContentResult, String> {
         let variant_count = usize::from(self.geometry.is_some())
             + usize::from(self.path.is_some())
-            + usize::from(self.text_source.is_some());
+            + usize::from(self.text_source.is_some())
+            + usize::from(self.provisional.is_some());
         if variant_count != 1 {
             return Err(
-                "callback content must name exactly one geometry, path, or text_source".into(),
+                "callback content must name exactly one geometry, path, text_source, or provisional".into(),
             );
+        }
+        if let Some(key) = self.provisional {
+            return Ok(CallbackContentResult::Provisional(key));
         }
         if let Some(path) = self.path {
             if path.points.len() < 2 || path.points.len() > 4096 {
@@ -3265,6 +3277,7 @@ enum CallbackContentResult {
     Geometry(GeometryRef),
     Path(VectorPath),
     TextSource(SemanticNodeId),
+    Provisional(String),
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -3515,9 +3528,30 @@ impl SemanticExecutionPlayer {
                     .map_err(AuthoringFailure::from)
             })
             .transpose()?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        let (batch, content, provisional_effective) = match content {
+            Some((target, CallbackContentResult::Provisional(key))) => {
+                let (transform, style, result) = self.callback_provisional_visual(token, &key)?;
+                let mut writes = batch.writes().to_vec();
+                writes.push(EffectiveSemanticPropertyWrite::Transform {
+                    object: target,
+                    transform,
+                });
+                writes.push(EffectiveSemanticPropertyWrite::Style {
+                    object: target,
+                    style,
+                });
+                (
+                    EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
+                    Some((target, result)),
+                    true,
+                )
+            }
+            other => (batch, other, false),
+        };
         if content.is_some() {
             #[cfg(any(target_arch = "wasm32", test))]
-            if self.callback_membership_transaction.is_some() {
+            if self.callback_membership_transaction.is_some() && !provisional_effective {
                 return Err("callback effective content and authored membership cannot share this publication yet".into());
             }
             self.session
@@ -3567,7 +3601,12 @@ impl SemanticExecutionPlayer {
         };
         #[cfg(any(target_arch = "wasm32", test))]
         {
-            if let Some(collector) = self.callback_membership_transaction.take() {
+            if provisional_effective {
+                let (target, content) =
+                    content.expect("validated producer supplies one effective result");
+                self.commit_callback_content(batch, target, content)?;
+                self.callback_membership_transaction = None;
+            } else if let Some(collector) = self.callback_membership_transaction.take() {
                 if collector.token != token {
                     self.callback_membership_transaction = Some(collector);
                     return Err("callback membership collector token is stale".into());
