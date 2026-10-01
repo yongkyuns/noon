@@ -10,6 +10,18 @@ use crate::{
     CompiledGraphEdgeKind, CompiledScene,
 };
 
+fn derived_rows(dependency: CompiledGraphEdgeDependency) -> impl Iterator<Item = u32> {
+    let tips = match dependency.kind() {
+        CompiledGraphEdgeKind::Line => [None, None],
+        CompiledGraphEdgeKind::Arrow {
+            end_tip_index,
+            start_tip_index,
+            ..
+        } => [Some(end_tip_index), start_tip_index],
+    };
+    std::iter::once(dependency.line_index()).chain(tips.into_iter().flatten())
+}
+
 impl CompiledScene {
     pub(super) fn graph_dependencies_patch_changes(
         &self,
@@ -76,16 +88,7 @@ impl CompiledScene {
             incident_rows.insert(dependency.end_vertex_index());
             dirty_rows.insert(dependency.start_vertex_index());
             dirty_rows.insert(dependency.end_vertex_index());
-            dirty_rows.insert(dependency.line_index());
-            if let CompiledGraphEdgeKind::Arrow {
-                end_tip_index,
-                start_tip_index,
-                ..
-            } = dependency.kind()
-            {
-                dirty_rows.insert(end_tip_index);
-                dirty_rows.extend(start_tip_index);
-            }
+            dirty_rows.extend(derived_rows(dependency));
         }
         Self::remove_dependency_indices_from_rows(
             &mut self.graph_incident_dependencies,
@@ -136,14 +139,7 @@ impl CompiledScene {
                 .or_default()
                 .push(index);
         }
-        for row in std::iter::once(dependency.line_index()).chain(match dependency.kind() {
-            CompiledGraphEdgeKind::Line => [None, None].into_iter().flatten(),
-            CompiledGraphEdgeKind::Arrow {
-                end_tip_index,
-                start_tip_index,
-                ..
-            } => [Some(end_tip_index), start_tip_index].into_iter().flatten(),
-        }) {
+        for row in derived_rows(dependency) {
             self.graph_dirty_dependencies
                 .entry(row)
                 .or_default()
@@ -169,6 +165,10 @@ impl CompiledScene {
         }
 
         let old_indices = self.graph_dependencies_for_owner(owner).to_vec();
+        let old_derived_rows = old_indices
+            .iter()
+            .flat_map(|&index| derived_rows(self.graph_edge_dependencies[index as usize]))
+            .collect::<HashSet<_>>();
         let old_index_set = old_indices.iter().copied().collect::<HashSet<_>>();
         self.unindex_graph_dependency_rows(&old_index_set);
         let keep = lowered
@@ -209,20 +209,36 @@ impl CompiledScene {
                 .entry(owner)
                 .or_default()
                 .push(index);
-            self.objects[dependency.line_index() as usize].content = graph_line_execution_content();
+            self.set_graph_derived_content(dependency.line_index(), graph_line_execution_content());
             if let CompiledGraphEdgeKind::Arrow {
                 end_tip_index,
                 start_tip_index,
                 ..
             } = dependency.kind()
             {
-                self.objects[end_tip_index as usize].content = graph_tip_execution_content();
+                self.set_graph_derived_content(end_tip_index, graph_tip_execution_content());
                 if let Some(start_tip_index) = start_tip_index {
-                    self.objects[start_tip_index as usize].content = graph_tip_execution_content();
+                    self.set_graph_derived_content(start_tip_index, graph_tip_execution_content());
+                }
+            }
+        }
+        for row in old_derived_rows {
+            if self.graph_execution_content_for_row(row).is_none() {
+                if let Some(authored) = self.graph_authored_content.remove(&row) {
+                    if self.objects[row as usize].live {
+                        self.objects[row as usize].content = authored;
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn set_graph_derived_content(&mut self, row: u32, derived: noon_core::ObjectContentRef) {
+        self.graph_authored_content
+            .entry(row)
+            .or_insert_with(|| self.objects[row as usize].content.clone());
+        self.objects[row as usize].content = derived;
     }
 }
 
@@ -306,6 +322,56 @@ mod tests {
             .incident_graph_dependencies(scene.object_index(ObjectId::new(1)).unwrap())
             .iter()
             .all(|&index| index != unrelated));
+    }
+
+    #[test]
+    fn graph_release_restores_the_latest_authored_content_after_shared_ownership() {
+        let mut scene = CompiledScene::compile_objects((1..=3).map(object).collect(), &[])
+            .expect("objects compile");
+        let first_owner = ObjectId::new(100);
+        let second_owner = ObjectId::new(200);
+        for (owner, edge) in [(first_owner, 10), (second_owner, 20)] {
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                    owner,
+                    dependencies: vec![line(edge, 1, 2, 3)],
+                })
+                .unwrap();
+        }
+        let row = scene.object_index(ObjectId::new(3)).unwrap();
+        assert_eq!(scene.graph_authored_content.len(), 1);
+        let replacement = ExecutionPatch::SetContent {
+            object: ObjectId::new(3),
+            content: GeometryRef::rectangle(2.0, 3.0).into(),
+            text_bounds: None,
+        };
+        assert!(scene.patch_changes_execution(&replacement));
+        scene.apply_execution_patch(&replacement).unwrap();
+        assert_eq!(
+            scene.objects[row as usize].content,
+            graph_line_execution_content()
+        );
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner: first_owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            scene.objects[row as usize].content,
+            graph_line_execution_content()
+        );
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner: second_owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            scene.objects[row as usize].content,
+            GeometryRef::rectangle(2.0, 3.0).into()
+        );
+        assert!(scene.graph_authored_content.is_empty());
     }
 
     #[test]

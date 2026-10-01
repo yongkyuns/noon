@@ -152,13 +152,12 @@ impl CompiledScene {
     }
 
     /// Reclaim when every compiled resource owner is a live object, a track, or
-    /// an explicit effective-content root. Family plans and graph derivation
-    /// retain their complete closure until their dependencies can be traversed
-    /// safely at this barrier. Numeric-text tokens are explicit text roots below.
+    /// an explicit effective-content root. Graph-derived rows and numeric-text
+    /// tokens are explicit roots below; family plans still retain their complete
+    /// closure until their dependencies can be traversed safely.
     fn prune_unreferenced_resources(&mut self, retained_contents: &[ObjectContentRef]) -> usize {
         if !self.family_animation_plans.is_empty()
             || !self.family_animations.is_empty()
-            || !self.graph_edge_dependencies.is_empty()
             || (self.resources.images.is_empty()
                 && self.resources.texts.is_empty()
                 && self.resources.fonts.is_empty()
@@ -188,6 +187,7 @@ impl CompiledScene {
             .iter()
             .filter(|object| object.live)
             .map(|object| &object.content)
+            .chain(self.graph_authored_content.values())
             .chain(retained_contents.iter())
             .chain(numeric_text_contents.iter())
         {
@@ -316,15 +316,19 @@ mod tests {
 
     use noon_core::{
         CompositionTimeMap, FontFaceIdentity, FontResource, FontResourceHandle, FontResourceId,
-        FontResourceKey, GeometryRef, GeometryResourceArena, GlyphRun, ObjectContentRef, ObjectId,
-        Property, RasterImageContentRef, RasterImageResource, RasterImageResourceHandle,
-        RasterImageResourceId, RateFunction, Rect, SemanticImageContent, Style,
-        TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceHandle,
-        TextResourceId, TextSourceKind, TextVectorItem, TextVectorStyle, TrackDefinition, TrackId,
-        TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+        FontResourceKey, GeometryRef, GeometryResourceArena, GlyphRun, GraphEdgeId,
+        ObjectContentRef, ObjectId, Property, RasterImageContentRef, RasterImageResource,
+        RasterImageResourceHandle, RasterImageResourceId, RateFunction, Rect, SemanticImageContent,
+        Style, TextAffineTransform, TextDirection, TextRenderItem, TextResource,
+        TextResourceHandle, TextResourceId, TextSourceKind, TextVectorItem, TextVectorStyle,
+        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+        Vec2, VectorPath,
     };
 
-    use crate::{CompiledObject, CompiledScene};
+    use crate::{
+        CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, CompiledObject,
+        CompiledScene, ExecutionPatch,
+    };
 
     fn circle(id: u64) -> CompiledObject {
         CompiledObject::new(
@@ -578,6 +582,64 @@ mod tests {
         assert_eq!(stats.resource_entries_reclaimed, 1);
         assert!(compiled.resources.texts.contains_key(&retained));
         assert!(!compiled.resources.texts.contains_key(&obsolete));
+    }
+
+    #[test]
+    fn graph_derived_row_keeps_its_authored_geometry_root_while_pruning_history() {
+        let mut compiled =
+            CompiledScene::compile_objects(vec![circle(1), circle(2), circle(3)], &[]).unwrap();
+        let mut source = GeometryResourceArena::new();
+        let kept = source.insert_path(VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE));
+        let obsolete = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 2.0)),
+        );
+        for handle in [kept, obsolete] {
+            compiled
+                .resources
+                .geometries
+                .insert(handle, source.get(handle).unwrap().clone());
+            compiled
+                .resources
+                .geometry_handles
+                .insert(handle.id, handle);
+        }
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetContent {
+                object: ObjectId::new(3),
+                content: GeometryRef::External(kept.id).into(),
+                text_bounds: None,
+            })
+            .unwrap();
+        let owner = ObjectId::new(100);
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: vec![CompiledGraphDependencyDefinition {
+                    edge: GraphEdgeId::new(10),
+                    start_vertex: ObjectId::new(1),
+                    end_vertex: ObjectId::new(2),
+                    line: ObjectId::new(3),
+                    kind: CompiledGraphDependencyKind::Line,
+                }],
+            })
+            .unwrap();
+        let stats = compiled.compact_retired_object_slots().unwrap();
+        assert_eq!(stats.resource_entries_reclaimed, 1);
+        assert!(compiled.resources.geometries.contains_key(&kept));
+        assert!(!compiled.resources.geometries.contains_key(&obsolete));
+        compiled
+            .apply_execution_patch(&ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies: Vec::new(),
+            })
+            .unwrap();
+        let row = compiled.object_index(ObjectId::new(3)).unwrap();
+        assert_eq!(
+            compiled.objects[row as usize].content,
+            GeometryRef::External(kept.id).into()
+        );
     }
 
     #[test]

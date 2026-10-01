@@ -842,6 +842,9 @@ pub struct CompiledScene {
     /// Any graph-owned row -> dependency indices that must be re-derived when
     /// that effective row changes. Includes vertices, designated Lines and tips.
     graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
+    /// Authored content for only the rows whose executable content is graph-derived.
+    /// Restored when the last graph owner releases a still-live row.
+    graph_authored_content: HashMap<u32, ObjectContentRef>,
     /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
     numeric_text_drivers: Vec<CompiledNumericTextDriver>,
     resources: CompiledResources,
@@ -1304,6 +1307,7 @@ impl CompiledScene {
             graph_owner_dependencies: HashMap::new(),
             graph_incident_dependencies: HashMap::new(),
             graph_dirty_dependencies: HashMap::new(),
+            graph_authored_content: HashMap::new(),
             numeric_text_drivers: Vec::new(),
             resources: CompiledResources::default(),
         })
@@ -1601,10 +1605,11 @@ impl CompiledScene {
                 text_bounds,
             } => self.object_index(*object).is_none_or(|index| {
                 let existing = &self.objects[index as usize];
-                let content = self
-                    .graph_execution_content_for_row(index)
-                    .unwrap_or_else(|| content.clone());
-                existing.content != content || existing.text_bounds != *text_bounds
+                let authored = self
+                    .graph_authored_content
+                    .get(&index)
+                    .unwrap_or(&existing.content);
+                authored != content || existing.text_bounds != *text_bounds
             }),
             ExecutionPatch::SetTransform { object, transform } => self
                 .object_index(*object)
@@ -1692,6 +1697,7 @@ impl CompiledScene {
                 let index = self
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
+                self.graph_authored_content.remove(&index);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
                     if let Some(removed) = self.tracks.remove(&channel) {
@@ -1797,9 +1803,13 @@ impl CompiledScene {
                         });
                     }
                 }
-                self.objects[index as usize].content = self
-                    .graph_execution_content_for_row(index)
-                    .unwrap_or_else(|| content.clone());
+                if let Some(derived) = self.graph_execution_content_for_row(index) {
+                    self.graph_authored_content.insert(index, content.clone());
+                    self.objects[index as usize].content = derived;
+                } else {
+                    self.graph_authored_content.remove(&index);
+                    self.objects[index as usize].content = content.clone();
+                }
                 self.objects[index as usize].text_bounds = *text_bounds;
             }
             ExecutionPatch::SetTransform { object, transform } => {

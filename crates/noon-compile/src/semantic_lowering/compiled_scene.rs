@@ -234,6 +234,7 @@ fn materialize_semantic_projection(
     let mut graph_edge_dependencies = Vec::with_capacity(projection.graph_edges().len());
     let mut graph_incident_dependencies = HashMap::<u32, Vec<u32>>::new();
     let mut graph_dirty_dependencies = HashMap::<u32, Vec<u32>>::new();
+    let mut graph_authored_content = HashMap::<u32, ObjectContentRef>::new();
     for dependency in projection.graph_edges() {
         let dependency_index = u32::try_from(graph_edge_dependencies.len()).map_err(|_| {
             SemanticCompiledSceneError::TooManyGraphDependencies(projection.graph_edges().len())
@@ -253,6 +254,9 @@ fn materialize_semantic_projection(
                 policy,
             },
         };
+        graph_authored_content
+            .entry(line_index)
+            .or_insert_with(|| objects[line_index as usize].content.clone());
         objects[line_index as usize].content = crate::graph_line_execution_content();
         if let CompiledGraphEdgeKind::Arrow {
             end_tip_index,
@@ -260,8 +264,14 @@ fn materialize_semantic_projection(
             ..
         } = kind
         {
+            graph_authored_content
+                .entry(end_tip_index)
+                .or_insert_with(|| objects[end_tip_index as usize].content.clone());
             objects[end_tip_index as usize].content = crate::graph_tip_execution_content();
             if let Some(start_tip_index) = start_tip_index {
+                graph_authored_content
+                    .entry(start_tip_index)
+                    .or_insert_with(|| objects[start_tip_index as usize].content.clone());
                 objects[start_tip_index as usize].content = crate::graph_tip_execution_content();
             }
         }
@@ -343,6 +353,7 @@ fn materialize_semantic_projection(
         graph_owner_dependencies,
         graph_incident_dependencies,
         graph_dirty_dependencies,
+        graph_authored_content,
         numeric_text_drivers,
         resources,
     })
