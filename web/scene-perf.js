@@ -1,7 +1,8 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
+import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
 import { FrameMetrics } from "./frame-metrics.js";
+import { shouldSampleRendererStageFrame } from "./renderer-stage-sampling.js";
 
 const parameters = new URLSearchParams(location.search);
 const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
@@ -19,6 +20,7 @@ const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
+let pendingRendererPublicationStageSample = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
@@ -33,6 +35,7 @@ let sourceError = null;
 let completedSource = null;
 let continuation = false;
 let sourceCompleted = false;
+let runtimeBuildIdentity = null;
 let lastSampleTime = 0;
 let firstMeasuredTime = null;
 let rejectSourceFailure;
@@ -47,8 +50,8 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = new PythonAuthoringClient();
-  await client.ready();
+  client = new ProvenancedPythonAuthoringClient();
+  runtimeBuildIdentity = await client.ready();
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -153,9 +156,16 @@ try {
              sample.sequence > rendererPublicationStageCursor.sequence);
           if (!isNew) continue;
           rendererPublicationStageCursor = { session: sample.session, sequence: sample.sequence };
-          if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES) {
-            rendererPublicationStageSamples.push(sample);
-          }
+          pendingRendererPublicationStageSample = sample;
+        }
+        if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES &&
+            shouldSampleRendererStageFrame(frame, measuredFrames) &&
+            pendingRendererPublicationStageSample !== null) {
+          rendererPublicationStageSamples.push({
+            ...pendingRendererPublicationStageSample,
+            measuredFrameIndex: frame,
+          });
+          pendingRendererPublicationStageSample = null;
         }
       }
     }
@@ -176,7 +186,7 @@ try {
         renderMs: "synchronous retained renderer render call; not GPU completion",
         receiveToPresentMs: "render-worker consume entry through successful render return",
         ackPostMs: "synchronous execution_presented MessagePort post duration",
-        capture: "unique new exact-session/sequence samples, capped at 32",
+        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32",
       },
     }),
     ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
@@ -196,6 +206,7 @@ try {
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
+    runtimeBuild: runtimeBuildIdentity,
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,

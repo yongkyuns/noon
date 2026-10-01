@@ -32,6 +32,8 @@ try {
       } else {
         assert.equal(result.state, "complete", result.status);
         assert.equal(result.report.schemaVersion, 2);
+        assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
+        assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
         assert.equal(result.report.execution.mode, "semantic");
         assert.equal(result.report.execution.sourceContinuation, spec.continuation);
         assert.equal(result.report.scene.objects, spec.objects);
@@ -53,6 +55,9 @@ try {
           assert.ok(stageSamples.length > 0);
           assert.ok(stageSamples.length <= 32);
           assert.equal(new Set(stageSamples.map(sample => `${sample.session}:${sample.sequence}`)).size, stageSamples.length);
+          assert.ok(stageSamples.every(sample => Number.isSafeInteger(sample.measuredFrameIndex)));
+          assert.deepEqual(stageSamples.map(sample => sample.measuredFrameIndex),
+            [...stageSamples.map(sample => sample.measuredFrameIndex)].sort((a, b) => a - b));
           assert.ok(stageSamples.every(sample =>
             Number.isFinite(sample.applyMs) && Number.isFinite(sample.renderMs) &&
             Number.isFinite(sample.receiveToPresentMs) && Number.isFinite(sample.ackPostMs)));
