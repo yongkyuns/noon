@@ -69,11 +69,11 @@ impl SceneInstance {
     ) -> Result<RuntimeCompactionStats, RuntimeCompactionError> {
         if self.compiled.retired_object_slot_count() == 0 {
             // Replay may retain an older resource projection that this local
-            // barrier cannot traverse. Active property/interaction drivers may
-            // depend on this execution revision. Effective content leases are
-            // explicit roots below, so they need not pin unrelated history.
+            // barrier cannot traverse. Active interactions and drag captures
+            // can retain execution context; ordinary property drivers address
+            // stable rows and survive a resource-only prune. Effective content
+            // leases are explicit roots below.
             if self.replay_history.is_some()
-                || !self.effective_driver_rows.is_empty()
                 || !self.translation_drag_rows.is_empty()
                 || self.interactions_active()
             {
