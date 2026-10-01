@@ -585,7 +585,7 @@ impl SceneInstance {
                     EffectiveContentError::BatchRequiresInlineGeometry(candidate.lease.object),
                 ));
             }
-            self.validate_content_prepared(&candidate)
+            self.validate_content_prepared(candidate)
                 .map_err(PreparedFrameContentCommitError::Content)?;
             if candidate.expected_version.is_none()
                 && candidate.lease.sequence != self.next_effective_content_sequence
