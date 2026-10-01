@@ -209,3 +209,49 @@ test("metadata validates the current execution schema directly", () => {
     /invalid sequence/,
   );
 });
+
+test("delta send reuses only metadata validated for the identical JSON payload", async () => {
+  const json = delta(0);
+  const metadata = executionDeltaMetadata(json);
+  const mailbox = createSharedExecutionMailbox(4096);
+  const shared = new SharedExecutionDeltaWriter(mailbox);
+  const sharedReader = new SharedExecutionDeltaReader(mailbox);
+  const { port1, port2 } = new MessageChannel();
+  const transferable = new TransferableExecutionDeltaSender(port1);
+  const mismatchedMetadata = executionDeltaMetadata(delta(7));
+  const originalParse = JSON.parse;
+  let parseCount = 0;
+  JSON.parse = function (...args) {
+    parseCount += 1;
+    return originalParse.apply(this, args);
+  };
+  try {
+    assert.equal(shared.send(json, metadata), true);
+    assert.equal(transferable.send(json, metadata), true);
+    assert.equal(parseCount, 0, "producer send reuses the previously validated identical payload");
+
+    assert.equal(shared.send(delta(1)), true);
+    assert.equal(parseCount, 1, "send without an internal validated handoff still validates");
+    assert.equal(sharedReader.drain(() => true), 2, "accept the first two deltas to free shared slots");
+    const parseCountBeforeMismatchedHandoff = parseCount;
+
+    assert.equal(shared.send(delta(2), mismatchedMetadata), true);
+    assert.equal(parseCount, parseCountBeforeMismatchedHandoff + 1,
+      "metadata from a different JSON payload is reparsed");
+    assert.throws(() => shared.send("not JSON", metadata), /invalid JSON/);
+    assert.equal(parseCount, parseCountBeforeMismatchedHandoff + 2,
+      "a mismatched handoff cannot bypass malformed-payload rejection");
+    assert.throws(() => shared.send(undefined), /execution delta must be a JSON string/);
+
+    const received = [];
+    assert.equal(sharedReader.drain((payload) => {
+      received.push(executionDeltaMetadata(payload).sequence);
+      return true;
+    }), 1);
+    assert.deepEqual(received, [2]);
+  } finally {
+    JSON.parse = originalParse;
+    port1.close();
+    port2.close();
+  }
+});

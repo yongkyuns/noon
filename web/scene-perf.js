@@ -16,6 +16,8 @@ if (!["transferable", "shared"].includes(transportMode)) throw new Error("unsupp
 const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
+const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -106,11 +108,34 @@ try {
     status.value = `Measuring ${frame + 1}/${measuredFrames} · ${sourcePath}…`;
     const timestamp = await nextAnimationFrame();
     const started = performance.now();
-    await advanceSample((warmupFrames + frame + 1) / targetHz);
+    const advanceResult = await advanceSample(
+      (warmupFrames + frame + 1) / targetHz,
+      stageTimingSamples !== null,
+    );
     firstMeasuredTime ??= lastSampleTime;
     const advanceRoundTripMs = performance.now() - started;
     cadence.record(timestamp, advanceRoundTripMs);
     samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
+    if (stageTimingSamples !== null) {
+      stageTimingSamples.push({
+        sceneTime: lastSampleTime,
+        advanceRoundTripMs,
+        ...advanceResult.sampleTiming,
+      });
+    }
+    if (rendererSamples !== null) {
+      const metricsStarted = performance.now();
+      const renderer = (await execution.metrics()).metrics;
+      rendererSamples.push({
+        sceneTime: lastSampleTime,
+        metricsQueryMs: performance.now() - metricsStarted,
+        lastDeltaApplyMs: renderer.lastDeltaApplyMs,
+        lastRendererCallMs: renderer.lastRendererCallMs,
+        drawCalls: renderer.drawCalls,
+        instances: renderer.instancesDrawn,
+        uploadBytes: renderer.bytesUploaded,
+      });
+    }
   }
   const measurementEnd = performance.now();
   jank.stop();
@@ -120,6 +145,21 @@ try {
   const report = {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
+    ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
+    ...(stageTimingSamples === null ? {} : {
+      stageTimingNotes: {
+        endpointMs: "sample endpoint handling through continuation completion, before response transport",
+        rustDriveMs: "synchronous authored-time drive call",
+        deltaDrainMs: "delta drain and JSON generation",
+        deltaMetadataMs: "producer-side retained delta metadata validation",
+        deltaSendMs: "transport encoding and publication send after metadata validation",
+        callbackPhaseMs: "required callback-phase service and commit",
+        presentationWaitMs: "render-worker presented acknowledgement wait; not GPU completion",
+        segmentHandoffMs: "segment completion and player lease return",
+        authoringBoundaryWaitMs: "wait for Python source continuation and next segment attachment",
+      },
+    }),
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
@@ -183,7 +223,7 @@ try {
   client?.terminate();
 }
 
-async function advanceSample(time) {
+async function advanceSample(time, collectTimings = false) {
   if (sourceError) throw sourceError;
   // Predeclared timelines have a finite replay interval. Static scenes (zero
   // duration) remain useful steady-state measurements and keep sampling.
@@ -191,7 +231,10 @@ async function advanceSample(time) {
     ? completedSource.duration : null;
   const sampleTime = replayEnd === null ? time : Math.min(time, replayEnd);
   const request = continuation
-    ? execution.sampleToAuthoredTime(sampleTime, { stopAtSourceCompletion: true })
+    ? execution.sampleToAuthoredTime(sampleTime, {
+      stopAtSourceCompletion: true,
+      collectTimings,
+    })
     : execution.advanceTo(sampleTime);
   const result = await Promise.race([request, sourceFailure]);
   if (sourceError) throw sourceError;

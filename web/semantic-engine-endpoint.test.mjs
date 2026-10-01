@@ -628,7 +628,9 @@ test("one external sample crosses continuation segments with the returned player
     acknowledge(await delta()); // first segment completion
     acknowledge(await delta()); // next segment authored/resume publication
     acknowledge(await delta()); // requested frame in the next segment
-    assert.equal((await sampled).time, 1.5);
+    const sampleResult = await sampled;
+    assert.equal(sampleResult.time, 1.5);
+    assert.equal(sampleResult.sampleTiming, undefined, "timing stays absent unless explicitly requested");
     assert.deepEqual(f.stats().authoredSampleTimes, [1.5, 1.5]);
     assert.equal(f.stats().created, 1);
     assert.equal(f.stats().resumed, 1);
@@ -667,7 +669,9 @@ for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]
       const ready = next(f.control.port2);
       endpoint = await f.attach();
       await ready;
-      const result = await request(f.control.port2, "sample_to_authored_time", 64, { time, stopAtSourceCompletion });
+      const result = await request(f.control.port2, "sample_to_authored_time", 64, {
+        time, stopAtSourceCompletion, collectTimings: true,
+      });
       if (time > 2 && !stopAtSourceCompletion) {
         assert.equal(result.type, "error");
         assert.match(result.message, /before external sample/);
@@ -675,6 +679,12 @@ for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]
       }
       assert.equal(result.sourceCompleted, true);
       assert.equal(result.type, "sample_to_authored_time");
+      assert.deepEqual(Object.keys(result.sampleTiming).sort(), [
+        "authoringBoundaryWaitMs", "callbackPhaseMs", "deltaDrainMs",
+        "deltaMetadataMs", "deltaSendMs", "endpointMs", "presentationWaitMs",
+        "rustDriveMs", "segmentHandoffMs",
+      ]);
+      assert.ok(Object.values(result.sampleTiming).every((value) => Number.isFinite(value) && value >= 0));
       assert.equal(result.time, 2);
       assert.equal(result.playing, false);
       assert.equal(f.stats().completedSegments, 2);

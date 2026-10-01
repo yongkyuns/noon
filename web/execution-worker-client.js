@@ -534,7 +534,7 @@ export class ExecutionWorkerClient {
     return result.debugFrame;
   }
 
-  async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false } = {}) {
+  async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false, collectTimings = false } = {}) {
     this.#requireStarted();
     if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
       throw new Error("external authored-time sampling requires external sample pacing");
@@ -543,7 +543,12 @@ export class ExecutionWorkerClient {
     if (typeof stopAtSourceCompletion !== "boolean") {
       throw new TypeError("stopAtSourceCompletion must be a boolean");
     }
-    const result = await this.#requestEngine("sample_to_authored_time", { time, stopAtSourceCompletion });
+    if (typeof collectTimings !== "boolean") {
+      throw new TypeError("collectTimings must be a boolean");
+    }
+    const result = await this.#requestEngine("sample_to_authored_time", {
+      time, stopAtSourceCompletion, ...(collectTimings ? { collectTimings: true } : {}),
+    });
     this.#rememberPlaying(result);
     return result;
   }

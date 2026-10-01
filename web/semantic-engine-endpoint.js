@@ -101,10 +101,16 @@ export async function attachSemanticEngine(
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
-  const send = (json) => {
+  const send = (json, timing = null) => {
     if (json == null) return null;
+    const metadataStartedAtMs = timing === null ? 0 : performance.now();
     const publication = executionDeltaMetadata(json);
-    if (!transport.send(json)) throw new Error("semantic transport became backpressured after admission");
+    if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
+    const transportStartedAtMs = timing === null ? 0 : performance.now();
+    if (!transport.send(json, publication)) {
+      throw new Error("semantic transport became backpressured after admission");
+    }
+    if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
     lastSentPublication = publication;
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
     return publication;
@@ -548,9 +554,13 @@ export async function attachSemanticEngine(
     }
   }
 
-  async function settleContinuationPublication(publication) {
+  async function settleContinuationPublication(publication, timing = null) {
     while (!stopped && player !== null && continuationActive) {
+      const presentationStartedAtMs = timing === null ? 0 : performance.now();
       await awaitPresentation(publication);
+      if (timing !== null) {
+        timing.presentationWaitMs += performance.now() - presentationStartedAtMs;
+      }
       if (stopped || player === null || !continuationActive) return false;
       if (applyPointerInvalidation()) {
         publication = send(player.drainDeltaJson());
@@ -650,7 +660,15 @@ export async function attachSemanticEngine(
     }
   }
 
-  async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion) {
+  const drainAndSendSampleDelta = (timing) => {
+    if (timing === null) return send(player.drainDeltaJson());
+    const drainStartedAtMs = performance.now();
+    const deltaJson = player.drainDeltaJson();
+    timing.deltaDrainMs += performance.now() - drainStartedAtMs;
+    return send(deltaJson, timing);
+  };
+
+  async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion, timing = null) {
     const phaseTokens = new Set();
     let phaseCount = 0;
     while (!stopped) {
@@ -658,7 +676,9 @@ export async function attachSemanticEngine(
         throw new Error("external authored-time sample has no active continuation segment");
       }
       while (!stopped && continuationActive && player !== null) {
+        const driveStartedAtMs = timing === null ? 0 : performance.now();
         const drive = player.driveLiveSegmentToAuthoredTime(targetTime);
+        if (timing !== null) timing.rustDriveMs += performance.now() - driveStartedAtMs;
         if (drive === null || typeof drive !== "object") {
           throw new Error("external semantic continuation drive returned an invalid result");
         }
@@ -667,6 +687,7 @@ export async function attachSemanticEngine(
         drive.free?.();
 
         if (phaseJson !== null && phaseJson !== undefined) {
+          const callbackStartedAtMs = timing === null ? 0 : performance.now();
           const result = await publishCallbackPhase(phaseJson, {
             emitDelta: false,
             onPhaseToken(token) {
@@ -680,32 +701,49 @@ export async function attachSemanticEngine(
               phaseCount += 1;
             },
           });
+          if (timing !== null) timing.callbackPhaseMs += performance.now() - callbackStartedAtMs;
           if (result.interrupted) return;
           continue;
         }
 
-        const readyPublication = send(player.drainDeltaJson());
+        const readyPublication = timing === null
+          ? send(player.drainDeltaJson())
+          : drainAndSendSampleDelta(timing);
         if (!reachedEndpoint) {
+          const presentationStartedAtMs = timing === null ? 0 : performance.now();
           await awaitPresentation(readyPublication);
+          if (timing !== null) {
+            timing.presentationWaitMs += performance.now() - presentationStartedAtMs;
+          }
           return;
         }
 
         emitExecutionWake("idle", null, true);
-        if (!await settleContinuationPublication(readyPublication)) return;
+        if (!await settleContinuationPublication(readyPublication, timing)) return;
+        const handoffStartedAtMs = timing === null ? 0 : performance.now();
         player.completeLiveSegment();
-        const completionPublication = send(player.drainDeltaJson());
-        if (!await settleContinuationPublication(completionPublication)) return;
+        if (timing !== null) timing.segmentHandoffMs += performance.now() - handoffStartedAtMs;
+        const completionPublication = timing === null
+          ? send(player.drainDeltaJson())
+          : drainAndSendSampleDelta(timing);
+        if (!await settleContinuationPublication(completionPublication, timing)) return;
         const completedPlayer = player;
         returnedPlaybackTime = completedPlayer.time();
         player = null;
         continuationActive = false;
+        const returnLeaseStartedAtMs = timing === null ? 0 : performance.now();
         context.returnExecutionPlayer(completedPlayer);
+        if (timing !== null) timing.segmentHandoffMs += performance.now() - returnLeaseStartedAtMs;
 
         const boundary = new Promise((resolve, reject) => {
           pendingExternalContinuation = { resolve, reject };
         });
+        const boundaryStartedAtMs = timing === null ? 0 : performance.now();
         continuation?.onComplete(continuationGeneration);
         const next = await boundary;
+        if (timing !== null) {
+          timing.authoringBoundaryWaitMs += performance.now() - boundaryStartedAtMs;
+        }
         if (stopped) return;
         if (next === null) {
           const authoredTime = context.liveHandoffDuration();
@@ -719,7 +757,7 @@ export async function attachSemanticEngine(
           }
           return true;
         }
-        if (!await settleContinuationPublication(next.publication)) return;
+        if (!await settleContinuationPublication(next.publication, timing)) return;
         // The same absolute request continues against the returned player. Rust
         // decides whether this is a same-time barrier, an interior sample, or the
         // next segment endpoint.
@@ -740,6 +778,7 @@ export async function attachSemanticEngine(
       let debugFrame;
       let sourceCompleted;
       let pointerInputAccepted;
+      let sampleTiming = null;
       try {
         switch (message.type) {
           case "pause": {
@@ -800,10 +839,29 @@ export async function attachSemanticEngine(
             break;
           case "sample_to_authored_time": {
             if (callbackFault !== null) throw callbackFault;
+            if (message.collectTimings !== undefined && typeof message.collectTimings !== "boolean") {
+              throw new Error("sample timing collection flag must be a boolean");
+            }
             latestTick = null;
+            const sampleStartedAtMs = message.collectTimings === true ? performance.now() : 0;
+            // Optional stage tracing is collected only for explicit perf runs;
+            // presentationWaitMs is a render-worker acknowledgement, not GPU time.
+            sampleTiming = message.collectTimings === true ? {
+              rustDriveMs: 0,
+              callbackPhaseMs: 0,
+              presentationWaitMs: 0,
+              deltaDrainMs: 0,
+              deltaMetadataMs: 0,
+              deltaSendMs: 0,
+              segmentHandoffMs: 0,
+              authoringBoundaryWaitMs: 0,
+            } : null;
             sourceCompleted = await sampleContinuationToAuthoredTime(
-              message.time, message.stopAtSourceCompletion === true,
+              message.time, message.stopAtSourceCompletion === true, sampleTiming,
             ) === true;
+            if (sampleTiming !== null) {
+              sampleTiming.endpointMs = performance.now() - sampleStartedAtMs;
+            }
             break;
           }
           case "native_state_input":
@@ -839,6 +897,7 @@ export async function attachSemanticEngine(
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
+          ...(sampleTiming === null ? {} : { sampleTiming }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         });

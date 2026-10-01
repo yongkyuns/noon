@@ -15,6 +15,7 @@ const BACKPRESSURE_COUNTER = 5;
 const DEFAULT_SLOT_CAPACITY = 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const validatedDeltaJson = new WeakMap();
 
 export function selectExecutionTransportMode(scope = globalThis) {
   return scope.crossOriginIsolated === true && typeof scope.SharedArrayBuffer === "function"
@@ -49,14 +50,26 @@ export function executionDeltaMetadata(json) {
       !Number.isFinite(view.width) || !Number.isFinite(view.height) || view.width <= 0 || view.height <= 0)) {
     throw new Error("execution delta has an invalid pointer view");
   }
-  return {
+  const metadata = Object.freeze({
     session: delta.session,
     sequence: delta.sequence,
     snapshot: delta.snapshot,
     ...(view === undefined ? {} : { pointerView: Object.freeze({
       revision: view.revision, width: view.width, height: view.height,
     }) }),
-  };
+  });
+  validatedDeltaJson.set(metadata, json);
+  return metadata;
+}
+
+function metadataForSend(json, validatedMetadata) {
+  // Reuse only the immutable result tied to this exact string; public send(json)
+  // callers and mismatched handoffs still run the full validation path.
+  if (typeof json === "string" && validatedMetadata !== null &&
+      typeof validatedMetadata === "object" && validatedDeltaJson.get(validatedMetadata) === json) {
+    return validatedMetadata;
+  }
+  return executionDeltaMetadata(json);
 }
 
 export function decodeTransferableExecutionDelta(message) {
@@ -108,8 +121,8 @@ export class SharedExecutionDeltaWriter {
     );
   }
 
-  send(json) {
-    executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    metadataForSend(json, validatedMetadata);
     const payload = encoder.encode(json);
     if (payload.byteLength > this.#slotCapacity) {
       throw new Error(
@@ -234,8 +247,8 @@ export class TransferableExecutionDeltaSender {
     return this.#inFlight < this.#maxInFlight;
   }
 
-  send(json) {
-    const metadata = executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    const metadata = metadataForSend(json, validatedMetadata);
     if (this.#inFlight >= this.#maxInFlight) {
       this.#backpressure += 1;
       return false;
