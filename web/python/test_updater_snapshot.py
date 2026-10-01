@@ -103,9 +103,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 "object": {"slot": 11, "generation": 3},
                 "path": {"points": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "closed": True},
             })
-            with self.assertRaisesRegex(ValueError, "at least two"):
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
                 context._content = None
                 mobject.set_effective_path([(0.0, 0.0)])
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
+                mobject.set_effective_path([(0.0, 0.0)] * 4097)
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 

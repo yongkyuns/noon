@@ -1066,8 +1066,8 @@ class _CanonicalCallbackContext:
             )
         if self._content is not None:
             raise NotImplementedError("one effective content replacement per callback phase")
-        if len(points) < 2:
-            raise ValueError("effective path requires at least two points")
+        if not 2 <= len(points) <= 4096:
+            raise ValueError("effective path requires between 2 and 4096 points")
         checked = [
             [_phase_number("path x", point[0]), _phase_number("path y", point[1])]
             for point in points
