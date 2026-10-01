@@ -126,6 +126,9 @@ impl WasmExecutionWake {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
+    /// Producer scratch for callback paths. Reusing its slot increments the bare
+    /// geometry ID generation, so two live callback leases cannot alias ID 0.
+    callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     /// Immutable text/font/vector dependencies transferred once at the genuine
@@ -300,13 +303,38 @@ impl SemanticExecutionPlayer {
     ) -> Result<(), AuthoringFailure> {
         match content {
             CallbackContentResult::Path(path) => {
-                let mut source = GeometryResourceArena::new();
-                let handle = source.insert_path(path);
-                self.session
+                let mut handle = self.callback_geometry_sources.insert_path(path);
+                // GeometryRef carries a bare ID, not the producer namespace. A
+                // newly constructed producer can otherwise claim the same ID as
+                // an authored path or another live callback target. Recycle the
+                // scratch slot to advance its generation until the ID is free.
+                while noon_core::GeometryResourceLookup::current_handle(
+                    self.session.geometry_resources(),
+                    handle.id,
+                )
+                .is_some()
+                {
+                    let resource = self
+                        .callback_geometry_sources
+                        .remove(handle.id)
+                        .expect("fresh callback geometry remains in its producer arena");
+                    handle = self.callback_geometry_sources.insert(resource);
+                }
+                let result = self
+                    .session
                     .commit_required_callback_phase_with_owned_geometry(
-                        batch, target, handle, &source,
-                    )
-                    .map_err(AuthoringFailure::from)?;
+                        batch,
+                        target,
+                        handle,
+                        &self.callback_geometry_sources,
+                    );
+                // The published lease owns an immutable copy of the resource.
+                // Reclaim the producer slot on both success and failure, while
+                // preserving its incremented generation for the next callback.
+                self.callback_geometry_sources
+                    .remove(handle.id)
+                    .expect("fresh callback geometry remains in its producer arena");
+                result.map_err(AuthoringFailure::from)?;
             }
             CallbackContentResult::Geometry(geometry) => {
                 self.session
@@ -436,6 +464,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
@@ -482,6 +511,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,

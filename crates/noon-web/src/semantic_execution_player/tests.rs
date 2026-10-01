@@ -384,6 +384,88 @@ fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
 }
 
 #[test]
+fn callback_paths_on_two_targets_keep_distinct_live_geometry_ids() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let foreign = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let first = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let second = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    for object in [foreign, first, second] {
+        store.add_semantic_family_member(root, object).unwrap();
+    }
+    let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+        1.0,
+        81,
+    )
+    .unwrap();
+    let mut other_source = GeometryResourceArena::new();
+    let other_handle = other_source.insert_path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close(),
+    );
+    let prepared = player
+        .session
+        .prepare_effective_geometry_replacement(foreign, other_handle, &other_source, None)
+        .unwrap();
+    player
+        .session
+        .commit_effective_content_replacement(prepared)
+        .unwrap();
+
+    for (target, x) in [(first, 2.0), (second, 3.0)] {
+        let phase = player
+            .session
+            .begin_required_callback_phase(0.0, [target])
+            .unwrap();
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(x, 0.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        player
+            .commit_callback_content(phase.finish(), target, CallbackContentResult::Path(path))
+            .unwrap();
+    }
+
+    let resources = player.session.geometry_resources();
+    let foreign_id = other_handle.id;
+    assert!(noon_core::GeometryResourceLookup::current_handle(resources, foreign_id).is_some());
+    let ids: Vec<_> = player
+        .session
+        .frame()
+        .objects
+        .iter()
+        .skip(1)
+        .map(|object| match object.content {
+            ObjectContentRef::Geometry(GeometryRef::External(id)) => id,
+            _ => panic!("callback target must retain an external path"),
+        })
+        .collect();
+    assert_ne!(ids[0], ids[1]);
+    assert_ne!(ids[0], foreign_id);
+    assert_ne!(ids[1], foreign_id);
+    for id in ids {
+        let handle = noon_core::GeometryResourceLookup::current_handle(resources, id).unwrap();
+        assert!(noon_core::GeometryResourceLookup::get(resources, handle).is_some());
+    }
+    assert_eq!(player.callback_geometry_sources.slot_capacity(), 1);
+    assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
+}
+
+#[test]
 fn callback_content_does_not_adopt_another_producers_lease() {
     let mut scene = noon::Scene::new();
     let source = scene.circle(1.0).unwrap();
