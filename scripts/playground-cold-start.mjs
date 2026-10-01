@@ -607,7 +607,7 @@ try {
     wasmLinearMemoryMeasurement: {
       enabled: wasmAccountingEnabled,
       scope: "Each exported WebAssembly.Memory belonging to a Noon wasm-bindgen instance in the instrumented authoring/render workers; observation begins immediately after successful instantiation and ends at the completed cold source run snapshot, before the warm rerun.",
-      meaning: "initialBytes and peakObservedBytes are WebAssembly.Memory.buffer.byteLength capacity, not live heap allocation, module bytes, process RSS, GPU memory, or total browser memory. The probe reads immediately and samples every 25 ms; WebAssembly linear memory can grow but cannot shrink, and the final snapshot rereads capacity, so it captures the high-water capacity at the run boundary even if synchronous WASM work delays interval callbacks. Missing exported memory, worker coverage, or sample errors are reported explicitly.",
+      meaning: "initialBytes and peakObservedBytes are WebAssembly.Memory.buffer.byteLength capacity, not live heap allocation, module bytes, process RSS, GPU memory, or total browser memory. Aggregate byte fields sum per-instance capacities and are not concurrent process peaks. The probe reads immediately and samples every 25 ms; WebAssembly linear memory can grow but cannot shrink, and the final snapshot rereads capacity, so it captures the high-water capacity at the run boundary even if synchronous WASM work delays interval callbacks. Missing exported memory, worker coverage, or sample errors are reported explicitly.",
       observerEffect: wasmAccountingEnabled
         ? "Same worker-entry rewriting and periodic capacity reads as WASM instance accounting; opt-in instrumentation is included in measured startup, so do not compare those timings with uninstrumented runs."
         : null,
@@ -975,10 +975,10 @@ function summarizeNoonWasmLinearMemory(instantiation) {
     const roleInstances = measured.filter((instance) => instance.role === role);
     return [role, {
       instanceCount: roleInstances.length,
-      initialBytes: complete
+      sumOfInstanceInitialBytes: complete
         ? roleInstances.reduce((total, { initialBytes }) => total + initialBytes, 0)
         : null,
-      peakObservedBytes: complete
+      sumOfInstancePeakBytes: complete
         ? roleInstances.reduce((total, { peakObservedBytes }) => total + peakObservedBytes, 0)
         : null,
     }];
@@ -990,10 +990,10 @@ function summarizeNoonWasmLinearMemory(instantiation) {
     complete,
     workerCount: new Set(measured.map(({ worker }) => worker)).size,
     instanceCount: instances.length,
-    initialBytesAcrossInstances: complete
+    sumOfInstanceInitialBytes: complete
       ? measured.reduce((total, { initialBytes }) => total + initialBytes, 0)
       : null,
-    peakObservedBytesAcrossInstances: complete
+    sumOfInstancePeakBytes: complete
       ? measured.reduce((total, { peakObservedBytes }) => total + peakObservedBytes, 0)
       : null,
     byRole,
@@ -1008,8 +1008,8 @@ function disabledNoonWasmLinearMemory() {
     workerCoverage: false,
     workerCount: null,
     instanceCount: null,
-    initialBytesAcrossInstances: null,
-    peakObservedBytesAcrossInstances: null,
+    sumOfInstanceInitialBytes: null,
+    sumOfInstancePeakBytes: null,
     byRole: null,
     instances: [],
   };
