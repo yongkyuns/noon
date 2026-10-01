@@ -211,7 +211,13 @@ impl RetainedFramePreparer {
                         };
                         match state.mode {
                             noon_core::FamilyAnimationMode::Reveal => {
-                                object.text().is_some() || object.geometry().is_some()
+                                // Rectangles still reveal through a progress-specific
+                                // temporary path, so only analytic Circle rows can stay resident.
+                                object.text().is_some()
+                                    || matches!(
+                                        object.geometry(),
+                                        Some(noon_core::GeometryRef::Circle { .. })
+                                    )
                             }
                             noon_core::FamilyAnimationMode::DrawBorderThenFill => {
                                 object.text().is_some()
@@ -870,6 +876,7 @@ fn selected_family_plan<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::{CircleInstance, PathInstance};
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId,
         RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
@@ -935,12 +942,26 @@ mod tests {
         let text_object = semantic_object(10, ObjectContentRef::Text(text));
         let circle_object =
             semantic_object(11, ObjectContentRef::Geometry(GeometryRef::circle(1.0)));
+        let geometry_family = (0..5)
+            .map(|index| {
+                semantic_object(
+                    12 + index,
+                    ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                )
+            })
+            .collect::<Vec<_>>();
         let mut semantics = SemanticStore::new();
         let text_leaf = semantics.insert_authoring_object();
         let circle_leaf = semantics.insert_authoring_object();
+        let geometry_leaves = (0..geometry_family.len())
+            .map(|_| semantics.insert_authoring_object())
+            .collect::<Vec<_>>();
         let family = semantics.insert_family();
         semantics.add_member(family, text_leaf).unwrap();
         semantics.add_member(family, circle_leaf).unwrap();
+        for &leaf in &geometry_leaves {
+            semantics.add_member(family, leaf).unwrap();
+        }
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, family).unwrap();
         builder
             .accept_leaf(text_leaf, text_object.id, &text_object.content, &texts)
@@ -953,9 +974,15 @@ mod tests {
                 &texts,
             )
             .unwrap();
+        for (&leaf, object) in geometry_leaves.iter().zip(&geometry_family) {
+            builder
+                .accept_leaf(leaf, object.id, &object.content, &texts)
+                .unwrap();
+        }
         let plan = builder.finish().unwrap();
 
         let mut objects = vec![text_object, circle_object];
+        objects.extend(geometry_family);
         objects.extend((0..STATIC_TAIL).map(|index| {
             semantic_object(
                 100 + index,
@@ -975,17 +1002,18 @@ mod tests {
             render_transforms: vec![None; object_count],
         };
         let mut plan_indices = vec![None; object_count];
-        plan_indices[..2].fill(Some(0));
+        plan_indices[..7].fill(Some(0));
         let family_states = vec![None; object_count];
-        let active_indices = [0, 1]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
+        let active_indices = (0..7).collect::<std::collections::BTreeSet<_>>();
         let plans = [plan];
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let expected_order = std::iter::once(ObjectId::new(10))
             .chain(std::iter::once(ObjectId::new(11)))
+            .chain((12..17).map(ObjectId::new))
             .chain((0..STATIC_TAIL).map(|index| ObjectId::new(100 + index)))
             .collect::<Vec<_>>();
         let mut active_path_ids = None;
@@ -998,7 +1026,7 @@ mod tests {
             retained.time = f64::from(progress);
             let state = family_state(progress);
             let mut animations = family_states.clone();
-            animations[..2].fill(Some(state));
+            animations[..7].fill(Some(state));
             let family_frame = RetainedPlannedFamilyFrame {
                 retained: &retained,
                 family_animations: &animations,
@@ -1007,9 +1035,16 @@ mod tests {
             let changes = if frame_index == 0 {
                 FrameChanges::all()
             } else {
-                FrameChanges::objects(vec![0, 1])
+                FrameChanges::objects((0..7).collect())
             };
-            let (item_order, path_ids, prepared_circle_ids, geometry_stats, instances) = {
+            let (
+                item_order,
+                path_ids,
+                prepared_circle_ids,
+                geometry_stats,
+                instances,
+                uploaded_geometry_bytes,
+            ) = {
                 let prepared = preparer
                     .prepare_active_family_plan_set_with_changes(
                         &device,
@@ -1024,6 +1059,7 @@ mod tests {
                         metrics,
                     )
                     .unwrap();
+                let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
                 (
                     semantic_order(prepared.render_items),
                     prepared.geometry.path_ids.to_vec(),
@@ -1033,6 +1069,7 @@ mod tests {
                         prepared.geometry.paths.to_vec(),
                         prepared.geometry.circles.to_vec(),
                     ),
+                    upload.geometry.bytes_uploaded,
                 )
             };
             let current_order_rebuilds = preparer.incremental_stats().mixed_order_rebuilds;
@@ -1041,7 +1078,7 @@ mod tests {
                 "family reveal preserves Text then Circle painter order at progress {progress}"
             );
             assert_eq!(path_ids.len(), 2, "AB glyph outlines use stable path rows");
-            assert_eq!(prepared_circle_ids.len(), 1 + STATIC_TAIL as usize);
+            assert_eq!(prepared_circle_ids.len(), 6 + STATIC_TAIL as usize);
 
             if frame_index == 0 {
                 active_path_ids = Some(path_ids);
@@ -1063,6 +1100,9 @@ mod tests {
                 assert_eq!(geometry_stats.path_indices_repacked, 0);
                 assert_eq!(geometry_stats.render_order_positions_visited, 0);
                 assert_eq!(geometry_stats.render_order_chunks_rebuilt, 0);
+                let affected_member_bytes = 2 * std::mem::size_of::<PathInstance>()
+                    + 6 * std::mem::size_of::<CircleInstance>();
+                assert_eq!(uploaded_geometry_bytes, affected_member_bytes);
                 if progress == 0.4 {
                     if let Some(expected) = &partial_instances {
                         assert_eq!(
@@ -1083,7 +1123,7 @@ mod tests {
             .prepare_with_image_resources(
                 &device,
                 &retained,
-                &FrameChanges::objects(vec![0, 1]),
+                &FrameChanges::objects((0..7).collect()),
                 &texts,
                 &fonts,
                 &geometries,

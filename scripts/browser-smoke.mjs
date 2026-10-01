@@ -60,6 +60,7 @@ const examples = [
   { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 1.0 },
   { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Create shapes", factory: "createDirectCreateShapesRenderer", objectCount: 4, duration: 3.2 },
+  { name: "Mixed Text-Circle Reveal", factory: "createDirectMixedFamilyRevealSmokeRenderer", objectCount: 2, duration: 3.2 },
   { name: "Morph stress · 1,000", factory: "createDirectMorphStressRenderer", objectCount: 1000, duration: 3.4 },
   { name: "Instanced field · 1,000", factory: "createDirectAnalyticProfileRenderer", args: [1000, "fit", 16 / 9, 3.4], objectCount: 1001, duration: 3.4 },
 ];
@@ -162,6 +163,26 @@ function visiblePixelStats(buffer, name) {
     }
   }
   return { changedPixels, bounds: { minX, minY, maxX, maxY } };
+}
+
+function visiblePixelsInRegion(buffer, region) {
+  const png = PNG.sync.read(buffer);
+  const background = [png.data[0], png.data[1], png.data[2]];
+  const minX = Math.floor(region.minX * png.width);
+  const maxX = Math.ceil(region.maxX * png.width);
+  const minY = Math.floor(region.minY * png.height);
+  const maxY = Math.ceil(region.maxY * png.height);
+  let visible = 0;
+  for (let y = minY; y < maxY; y += 1) {
+    for (let x = minX; x < maxX; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      const distance = Math.abs(png.data[offset] - background[0])
+        + Math.abs(png.data[offset + 1] - background[1])
+        + Math.abs(png.data[offset + 2] - background[2]);
+      if (distance >= 32) visible += 1;
+    }
+  }
+  return visible;
 }
 
 function markupTextColorStats(buffer) {
@@ -759,6 +780,20 @@ try {
         assert.ok(colors.orange > 10, `MarkupText: expected visible orange foreground span, got ${colors.orange}`);
         assert.ok(colors.upperInk > 20 && colors.lowerInk > 20,
           `MarkupText: expected ink on both multiline rows, got ${JSON.stringify(colors)}`);
+      }
+
+      if (
+        example.name === "Mixed Text-Circle Reveal"
+        && (Math.abs(time - latestEnd * 0.6) < 1e-6 || time === latestEnd)
+      ) {
+        const textPixels = visiblePixelsInRegion(screenshot, {
+          minX: 0.25, maxX: 0.49, minY: 0.2, maxY: 0.8,
+        });
+        const circlePixels = visiblePixelsInRegion(screenshot, {
+          minX: 0.51, maxX: 0.78, minY: 0.2, maxY: 0.8,
+        });
+        assert.ok(textPixels > 20, `${example.name}: Text was not visible at ${time}s`);
+        assert.ok(circlePixels > 20, `${example.name}: Circle was not visible at ${time}s`);
       }
 
       if (visiblePixels < 100) {

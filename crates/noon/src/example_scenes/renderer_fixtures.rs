@@ -225,6 +225,36 @@ pub fn create_shapes() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// Mixed Text and analytic Circle family Create used by renderer qualifications.
+pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let mut text = scene.text("AB").map_err(|error| error.to_string())?;
+    text.set_translation(-1.5, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut circle = scene.circle(0.9).map_err(|error| error.to_string())?;
+    circle
+        .set_translation(1.5, 0.0)
+        .map_err(|error| error.to_string())?;
+    paint(&mut circle, Some(BLUE), WHITE, 0.055)?;
+    let family = scene
+        .family(&[(&text).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    scene
+        .live(&mut session)
+        .declare_and_activate_family_reveal(
+            &family,
+            false,
+            AnimationOptions::new()
+                .run_time(3.2)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
 /// A bounded, repeated path-morph workload. Python uses 96 objects in the shared
 /// authoring gate; the native/WASM renderer gate uses 1,000 with the same semantics.
 /// Pair: `web/python/examples/ordinary_morph_stress.py`.
