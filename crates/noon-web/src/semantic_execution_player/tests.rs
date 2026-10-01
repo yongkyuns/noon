@@ -552,11 +552,7 @@ fn callback_text_source_uses_the_effective_text_resource_closure() {
         91,
     )
     .unwrap();
-    let text_resource_stats = scene
-        .integration_store()
-        .borrow()
-        .text_resources()
-        .stats();
+    let text_resource_stats = scene.integration_store().borrow().text_resources().stats();
     assert!(text_resource_stats.live_resources > 0);
     let before = player.session.publication_context();
     let phase: serde_json::Value =
