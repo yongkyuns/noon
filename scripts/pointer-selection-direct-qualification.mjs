@@ -420,19 +420,21 @@ try {
           "background click should publish its subscribed up event");
         assert.equal(final.time, 0);
 
-        // The shared Rust-authored Space state trace is admitted by the browser
-        // keyboard collector and native winit test. Ordered edge counts are
-        // asserted by the paired native test; this renderer path proves the
-        // key state drives the same paused scene signal.
+        // The shared Rust-authored Space state and ordered event counters are
+        // projected into scene properties read by both native and browser tests.
         const beforeKey = await state();
         await page.keyboard.down("Space"); await changed(beforeKey);
         const afterKeyPress = await state();
         assert.equal(afterKeyPress.frame.objects[1].present, true,
           "Space keydown publishes the shared key-state binding");
+        assert.equal(afterKeyPress.frame.objects[1].style_opacity, 1,
+          "one Rust keydown occurrence publishes the shared opacity counter");
         await page.keyboard.up("Space"); await changed(afterKeyPress);
         const afterKeyRelease = await state();
         assert.equal(afterKeyRelease.frame.objects[1].present, false,
           "Space keyup restores the shared key-state binding");
+        assert.equal(afterKeyRelease.frame.objects[1].stroke_width, 1,
+          "one Rust keyup occurrence publishes the shared stroke-width counter");
         assert.equal(afterKeyRelease.time, 0,
           "paused keyboard input must not advance authored time");
         result.steps.push({ name: "reactive-events-and-selection", status: "passed" },
