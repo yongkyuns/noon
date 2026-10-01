@@ -894,8 +894,8 @@ mod wasm {
             }
             if let Some(timings) = substage_timings {
                 self.render_substage_samples.push(RenderSubstageSample {
-                    session: self.mirror.session(),
-                    sequence: self.mirror.applied_sequence(),
+                    session: self.mirror.transport_mirror().session(),
+                    sequence: self.mirror.transport_mirror().applied_sequence(),
                     surface_acquire_cpu_wall_ms: timings.surface_acquire_cpu_wall_ms,
                     prepare_cpu_wall_ms: timings.prepare_cpu_wall_ms,
                     upload_cpu_wall_ms: timings.upload_cpu_wall_ms,
