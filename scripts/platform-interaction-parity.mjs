@@ -133,7 +133,7 @@ async function movingParity(backend) {
     assert.equal((await pages.worker.evaluate(async () => (await parity.execution.metrics()).metrics)).backend,
       expectedBackend);
     let selectedMidpoint;
-    for (const time of [0, 1, 1.5]) {
+    for (const time of [0, 1, 1.5, 1.8]) {
       await pages.direct.evaluate(async time => {
         const { renderer } = parity;
         let pending;
@@ -193,6 +193,43 @@ async function movingParity(backend) {
         equalPixels(clearedDirect, clearedWorker, `${backend} moving cleared`);
         checkpoints.push({ id: "moving-cleared-1.5", directSha256: hash(clearedDirect.data),
           workerSha256: hash(clearedWorker.data) });
+      }
+      if (time === 1.8) {
+        // The moving circle now overlaps the later painter-order rectangle.
+        // A shared hit test must pick the visible front target on both hosts.
+        const overlap = shapeSurfaceCenter({ x: 0.8, y: 0 });
+        const directRevision = await pages.direct.evaluate(() => String(parity.renderer.directSceneRevision()));
+        const workerFrame = await pages.worker.evaluate(() => parity.execution.debugFrame());
+        assert.ok(Math.abs(workerFrame.objects[0].center[0] - 0.02) < 1e-5);
+        const workerBefore = await pages.worker.evaluate(async () =>
+          (await parity.execution.metrics()).metrics.presentedFrames);
+        for (const pathName of ["direct", "worker"]) {
+          const bounds = await pages[pathName].locator("#scene").boundingBox();
+          assert.ok(bounds);
+          await pages[pathName].mouse.click(bounds.x + overlap.x, bounds.y + overlap.y);
+        }
+        await pages.direct.evaluate(async () => {
+          for (let attempt = 0; attempt < 60; attempt++) {
+            if (parity.renderer.render()) return;
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          throw new Error("direct overlap selection did not present after click");
+        });
+        await pages.worker.waitForFunction(async count => {
+          const { metrics } = await parity.execution.metrics();
+          return metrics.presentedFrames > count && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+        }, workerBefore);
+        await settlePaint();
+        const selectedDirect = await image(pages.direct, "moving-overlap-selected-1.8", backend, "direct");
+        const selectedWorker = await image(pages.worker, "moving-overlap-selected-1.8", backend, "worker");
+        assertSelectionPixels(direct, selectedDirect, SHAPES[1]);
+        assertSelectionPixels(worker, selectedWorker, SHAPES[1]);
+        equalPixels(selectedDirect, selectedWorker, `${backend} moving overlap selection`);
+        assert.equal(await pages.direct.evaluate(() => String(parity.renderer.directSceneRevision())), directRevision);
+        assert.equal((await pages.worker.evaluate(() => parity.execution.debugFrame())).publication.scene_revision,
+          workerFrame.publication.scene_revision);
+        checkpoints.push({ id: "moving-overlap-selected-1.8", directSha256: hash(selectedDirect.data),
+          workerSha256: hash(selectedWorker.data) });
       }
       if (time === 1) {
         const point = shapeSurfaceCenter({ ...SHAPES[0], x: SHAPES[0].x + 0.9 });
