@@ -426,7 +426,11 @@ try {
           "result = PythonComputeProbe()",
           "",
         ].join("\n");
-        await page.locator("#python-scene-source").fill(source);
+        await page.evaluate((replacement) => {
+          const editor = document.querySelector("#python-scene-source");
+          editor.value = replacement;
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }, source);
         await waitForCompletedRun(page, previousGeneration);
         const phases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
         assert.ok(phases?.runGeneration > previousGeneration,
@@ -475,7 +479,7 @@ try {
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
-        pythonComputeProbe,
+        ...(pythonComputeProbe === null ? {} : { pythonComputeProbe }),
         preloadEditRace,
         firstEditComparison: preloadEnabled ? {
           phase: preloadEditRaceEnabled
