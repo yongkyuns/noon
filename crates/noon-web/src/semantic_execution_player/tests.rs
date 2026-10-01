@@ -3,9 +3,9 @@ use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
     AnimationOptions, GeometryResourceLookup, HostCallbackId, NativeInputModifiers,
     NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
-    RateFunction, SemanticClickIndicate,
-    SemanticMutationTransaction, SemanticMutationTransactionError, SemanticObjectProperty,
-    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, TrackTiming,
+    RateFunction, SemanticClickIndicate, SemanticMutationTransaction,
+    SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
+    SemanticVec3, StoredGeometry, TrackTiming,
 };
 
 #[test]
