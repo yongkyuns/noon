@@ -1079,6 +1079,27 @@ class _CanonicalCallbackContext:
         }
         row.invalidate_bounds()
 
+    def replace_effective_text(self, mobject: _base.Mobject, source: _base.Mobject) -> None:
+        """Use a prebuilt text resource as effective callback content."""
+        if not self._last_invocation:
+            raise NotImplementedError(
+                "effective text replacement must be the final updater in this region"
+            )
+        if self._content is not None:
+            raise NotImplementedError("one effective content replacement per callback phase")
+        if not isinstance(source, _base.Mobject):
+            raise TypeError("effective text source must be a prebuilt Text mobject")
+        source_handle = getattr(source, "_semantic_handle", None)
+        if source_handle is None or not bool(getattr(source, "_semantic_handle_fresh", False)):
+            raise NotImplementedError("effective text source requires a fresh semantic Text handle")
+        source_key = _semantic_key(source)
+        key, row = self.row(mobject)
+        self._content = {
+            "object": _phase_node_json(key),
+            "text_source": _phase_node_json(source_key),
+        }
+        row.invalidate_bounds()
+
 
 def set_effective_circle(mobject: _base.Mobject, radius: float) -> _base.Mobject:
     context = _canonical_phase_context(mobject)
@@ -1098,6 +1119,14 @@ def set_effective_path(
     if context is None:
         raise RuntimeError("set_effective_path requires an active canonical callback phase")
     context.replace_effective_path(mobject, points, closed)
+    return mobject
+
+
+def set_effective_text(mobject: _base.Mobject, source: _base.Mobject) -> _base.Mobject:
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_text requires an active canonical callback phase")
+    context.replace_effective_text(mobject, source)
     return mobject
 
 

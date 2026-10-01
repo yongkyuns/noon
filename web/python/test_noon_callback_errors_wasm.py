@@ -22,11 +22,15 @@ from _noon_errors import (
 
 
 class CallbackFixture:
-    def __init__(self, with_tracker=False, with_families=False, bind_detached=False):
+    def __init__(self, with_tracker=False, with_families=False, bind_detached=False, with_text=False):
         self.store = wasm.WasmAuthoringStore.new()
         self.context = self.store.createSceneContext()
         self.target = self.store.createManimCircle(0.5)
         self.detached = self.store.createManimCircle(0.2)
+        self.text_source = (
+            self.store.createManimText("callback replacement", "DejaVu Sans Mono", 24.0, -1.0, None)
+            if with_text else None
+        )
         self.families = []
         if with_families:
             for handles in ((self.target, self.detached), (self.target,)):
@@ -50,6 +54,8 @@ class CallbackFixture:
         self.context.free()
         self.target.free()
         self.detached.free()
+        if self.text_source is not None:
+            self.text_source.free()
         if self.tracker is not None:
             self.tracker.free()
         for family in self.families:
@@ -120,6 +126,45 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         self.assertEqual(fixture.state(), before)
         self.assertIsNone(fixture.player.drainDeltaJson())
         return error
+
+    def test_python_callback_effective_text_crosses_wasm_and_keeps_one_lease(self):
+        import _manim_updaters as updaters
+
+        fixture = CallbackFixture(with_text=True)
+        self.addCleanup(fixture.close)
+        scene = updaters._base.Scene()
+        def wrapper(handle):
+            value = object.__new__(updaters._base.Mobject)
+            value.__dict__.update({
+                "_scene": scene, "_object": object(), "_semantic_handle": handle,
+                "_semantic_handle_fresh": True,
+            })
+            return value
+
+        target, source = wrapper(fixture.target), wrapper(fixture.text_source)
+        overlay = updaters._CanonicalCallbackContext(
+            fixture.phase, fixture.context, callback_player=fixture.player, scene=scene,
+        )
+        overlay._last_invocation = True
+        updaters._ACTIVE_CONTEXTS[id(scene)] = overlay
+        try:
+            before_bounds = json.loads(fixture.player.debugFrameJson())["objects"][0]["bounds"]
+            updaters.set_effective_text(target, source)
+            content = overlay.effective_batch()
+            self.assertEqual(content["content"]["text_source"], {
+                "slot": fixture.text_source.semanticSlot,
+                "generation": fixture.text_source.semanticGeneration,
+            })
+            engine_call(
+                fixture.player.commitCallbackPhaseJson, json.dumps(content),
+                operation="callback.commit",
+            )
+            frame = json.loads(fixture.player.debugFrameJson())
+            self.assertEqual(frame["time"], 0.0)
+            self.assertNotEqual(frame["objects"][0]["bounds"], before_bounds)
+            self.assertTrue(fixture.context.liveExecutionOwnership())
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
     def test_typed_callback_membership_stages_ordered_existing_handles_until_one_commit(self):
         fixture = CallbackFixture(bind_detached=True)
