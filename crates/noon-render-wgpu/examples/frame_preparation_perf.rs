@@ -5,7 +5,7 @@ use std::{
 };
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
-use noon_render_wgpu::{CircleInstance, FramePreparer};
+use noon_render_wgpu::{CircleInstance, FramePreparer, GpuRenderer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 
 const DEFAULT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -39,6 +39,171 @@ fn main() {
     for object_count in sizes {
         benchmark_size(object_count, config);
     }
+    benchmark_gpu_commands(config);
+}
+
+/// Attribute CPU-side command construction and submission on a real adapter.
+/// GPU completion is deliberately excluded: Queue::submit measures host enqueue
+/// cost, while GPU timestamps or explicit completion waits are a separate metric.
+fn benchmark_gpu_commands(config: Config) {
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        println!("\nGPU command measurements skipped: no WebGPU adapter available.");
+        return;
+    };
+    let adapter_info = adapter.get_info();
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+    else {
+        println!("\nGPU command measurements skipped: adapter device request failed.");
+        return;
+    };
+
+    println!(
+        "\nGPU command measurements ({:?} {:?}; {} warmups, {} samples)",
+        adapter_info.backend, adapter_info.device_type, config.warmups, config.samples
+    );
+    println!(
+        "| Objects | Operation | Median | p95 | p99 | Upload bytes | Draw calls | Instances |"
+    );
+    println!("|---:|---|---:|---:|---:|---:|---:|---:|");
+    for object_count in [10_000, 100] {
+        benchmark_gpu_size(&device, &queue, object_count, config);
+    }
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+}
+
+fn benchmark_gpu_size(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    object_count: usize,
+    config: Config,
+) {
+    let mut frame = build_gpu_frame(object_count);
+    let changes = FrameChanges::objects(vec![object_count / 2]);
+    let target = object_count / 2;
+    let base_x = frame.objects[target].transform.translation.x;
+    let mut preparer = FramePreparer::new();
+    let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(device, queue, 256, 256);
+    {
+        let initial = preparer.prepare(&frame);
+        renderer.upload(device, queue, &initial);
+    }
+    let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Noon command benchmark target"),
+        size: wgpu::Extent3d {
+            width: 256,
+            height: 256,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target_texture.create_view(&Default::default());
+
+    let mut update_times = Vec::with_capacity(config.samples);
+    let mut encode_times = Vec::with_capacity(config.samples);
+    let mut submit_times = Vec::with_capacity(config.samples);
+    let mut upload_bytes = 0;
+    let mut draws = noon_render_wgpu::DrawStats::default();
+    let total = config.warmups + config.samples;
+    for iteration in 0..total {
+        frame.objects[target].transform.translation.x = base_x + iteration as f32 * 0.001;
+        let update_started = Instant::now();
+        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let upload = renderer.upload(device, queue, &prepared);
+        let update_elapsed = update_started.elapsed();
+        let encode_started = Instant::now();
+        let command_buffer = {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Noon command benchmark encoder"),
+            });
+            let encoded = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+            if iteration >= config.warmups {
+                upload_bytes = upload.bytes_uploaded;
+                draws = encoded;
+            }
+            encoder.finish()
+        };
+        let encode_elapsed = encode_started.elapsed();
+        let submit_started = Instant::now();
+        queue.submit(Some(command_buffer));
+        let submit_elapsed = submit_started.elapsed();
+        if iteration >= config.warmups {
+            update_times.push(update_elapsed);
+            encode_times.push(encode_elapsed);
+            submit_times.push(submit_elapsed);
+        }
+    }
+
+    print_gpu_row(
+        object_count,
+        "transform prepare + upload",
+        summarize(&update_times),
+        upload_bytes,
+        draws,
+    );
+    print_gpu_row(
+        object_count,
+        "command encode + finish",
+        summarize(&encode_times),
+        upload_bytes,
+        draws,
+    );
+    print_gpu_row(
+        object_count,
+        "queue.submit host call",
+        summarize(&submit_times),
+        upload_bytes,
+        draws,
+    );
+}
+
+fn build_gpu_frame(object_count: usize) -> FrameState {
+    let mut frame = build_frame(object_count);
+    let columns = (object_count as f64).sqrt().ceil() as usize;
+    let spacing = 2.0 / columns as f32;
+    for (index, object) in frame.objects.iter_mut().enumerate() {
+        let column = index % columns;
+        let row = index / columns;
+        object.transform.translation = Vec2::new(
+            -1.0 + (column as f32 + 0.5) * spacing,
+            -1.0 + (row as f32 + 0.5) * spacing,
+        );
+        object.content = noon_core::ObjectContentRef::Geometry(GeometryRef::circle(spacing * 0.2));
+    }
+    frame
+}
+
+fn summarize(durations: &[Duration]) -> Timing {
+    let mut sorted = durations.to_vec();
+    sorted.sort_unstable();
+    Timing {
+        median: percentile(&sorted, 0.50),
+        p95: percentile(&sorted, 0.95),
+        p99: percentile(&sorted, 0.99),
+    }
+}
+
+fn print_gpu_row(
+    object_count: usize,
+    operation: &str,
+    timing: Timing,
+    upload_bytes: usize,
+    draws: noon_render_wgpu::DrawStats,
+) {
+    println!(
+        "| {object_count} | {operation} | {:.6} ms | {:.6} ms | {:.6} ms | {upload_bytes} | {} | {} |",
+        milliseconds(timing.median),
+        milliseconds(timing.p95),
+        milliseconds(timing.p99),
+        draws.draw_calls,
+        draws.instances_drawn,
+    );
 }
 
 fn benchmark_size(object_count: usize, config: Config) {
