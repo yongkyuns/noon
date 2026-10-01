@@ -43,6 +43,10 @@ const wasmAccountingMode = process.env.NOON_COLD_START_WASM_ACCOUNTING ?? "off";
 assert.ok(["on", "off"].includes(wasmAccountingMode),
   "NOON_COLD_START_WASM_ACCOUNTING must be on or off");
 const wasmAccountingEnabled = wasmAccountingMode === "on";
+const pythonComputeProbeMode = process.env.NOON_COLD_START_PYTHON_COMPUTE ?? "off";
+assert.ok(["on", "off"].includes(pythonComputeProbeMode),
+  "NOON_COLD_START_PYTHON_COMPUTE must be on or off");
+const pythonComputeProbeEnabled = pythonComputeProbeMode === "on";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const examples = parseExamples(
   process.env.NOON_COLD_START_EXAMPLES ??
@@ -407,6 +411,44 @@ try {
           uploadBytes: warmMetrics.metrics.uploadBytes,
         },
       };
+      let pythonComputeProbe = null;
+      if (pythonComputeProbeEnabled) {
+        const previousGeneration = await page.evaluate(() =>
+          window.__noonExampleGallery.generationDiagnostics.runGeneration);
+        const source = [
+          "from noon import Scene, Circle",
+          "checksum = 0",
+          "for index in range(300000):",
+          "    checksum += (index * index) % 97",
+          "class PythonComputeProbe(Scene):",
+          "    def construct(self):",
+          "        self.add(Circle(0.5))",
+          "result = PythonComputeProbe()",
+          "",
+        ].join("\n");
+        await page.locator("#python-scene-source").fill(source);
+        await waitForCompletedRun(page, previousGeneration);
+        const phases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
+        assert.ok(phases?.runGeneration > previousGeneration,
+          "compute probe timings must belong to a newly accepted run");
+        const worker = phases.pythonWorkerRunTiming;
+        assert.ok(Number.isFinite(worker?.startedAtMs) && Number.isFinite(worker?.completedAtMs) &&
+          worker.startedAtMs <= worker.completedAtMs,
+        "compute probe must record Python worker execution boundaries");
+        assert.ok(Array.isArray(phases.reconciliations),
+          "compute probe must record semantic reconciliation separately");
+        pythonComputeProbe = {
+          workload: "300000-iteration pure-Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
+          runGeneration: phases.runGeneration,
+          pythonWorkerExecutionMs: worker.completedAtMs - worker.startedAtMs,
+          pythonWorkerClock: "worker performance.now around runAuthoringSource; includes imports, compilation and interpreter/setup overhead; no awaited source continuation in this fixture",
+          finalReconciliationCalls: phases.reconciliations.map((call) => ({
+            phase: call.phase,
+            roundTripMs: call.completedAtMs - call.startedAtMs,
+          })),
+          meaning: "worker source interval and page-observed reconciliation are reported independently; neither is pure interpreter CPU time",
+        };
+      }
       const report = {
         label: example.label,
         exampleId: example.id,
@@ -433,6 +475,7 @@ try {
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
+        pythonComputeProbe,
         preloadEditRace,
         firstEditComparison: preloadEnabled ? {
           phase: preloadEditRaceEnabled
