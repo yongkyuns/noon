@@ -601,8 +601,8 @@ fn undecidable_fill_does_not_click_through_or_clear_an_existing_selection() {
         .insert_geometry_path(
             VectorPath::new()
                 .move_to(Vec2::new(-1.0, -1.0))
-                .line_to(Vec2::new(1.0, -1.0))
-                .line_to(Vec2::new(0.0, 1.0))
+                .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, -1.0))
+                .line_to(Vec2::new(-1.0, -1.0))
                 .close(),
         )
         .unwrap();
