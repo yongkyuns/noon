@@ -254,6 +254,7 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
         )
         .map_err(|error| error.to_string())?;
     scene
+        .live(&mut session)
         .add_many(&[crate::MobjectTarget::Family(&family)])
         .map_err(|error| error.to_string())?;
     Ok(session)
