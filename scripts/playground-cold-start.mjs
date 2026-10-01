@@ -107,6 +107,7 @@ try {
       const failures = [];
       const workers = [];
       const workerHandles = [];
+      const pythonComputeLoopSamplesNs = [];
       const workerRoleCounts = { authoring: 0, engine: 0, render: 0, probe: 0, other: 0 };
       let authoringWorker = null;
       const origin = monotonicNow();
@@ -130,7 +131,13 @@ try {
       });
       page.on("pageerror", (error) => failures.push(`pageerror: ${error}`));
       page.on("console", (message) => {
-        if (message.type() === "error") failures.push(`console: ${message.text()}`);
+        const text = message.text();
+        const computeLoop = text.match(/^NOON_COLD_START_PYTHON_LOOP_NS:(\d+)$/);
+        if (computeLoop) {
+          pythonComputeLoopSamplesNs.push(Number(computeLoop[1]));
+        } else if (message.type() === "error") {
+          failures.push(`console: ${text}`);
+        }
       });
 
       const navigationStart = monotonicNow();
@@ -417,9 +424,13 @@ try {
           window.__noonExampleGallery.generationDiagnostics.runGeneration);
         const source = [
           "from noon import Scene, Circle",
+          "from time import perf_counter_ns",
           "checksum = 0",
+          "__noon_compute_loop_started_ns = perf_counter_ns()",
           "for index in range(300000):",
           "    checksum += (index * index) % 97",
+          "__noon_compute_loop_elapsed_ns = perf_counter_ns() - __noon_compute_loop_started_ns",
+          "print('NOON_COLD_START_PYTHON_LOOP_NS:' + str(__noon_compute_loop_elapsed_ns))",
           "class PythonComputeProbe(Scene):",
           "    def construct(self):",
           "        self.add(Circle(0.5))",
@@ -441,16 +452,23 @@ try {
         "compute probe must record Python worker execution boundaries");
         assert.ok(Array.isArray(phases.reconciliations),
           "compute probe must record semantic reconciliation separately");
+        assert.equal(pythonComputeLoopSamplesNs.length, 1,
+          "compute probe must report exactly one Python-timed loop sample");
+        assert.ok(Number.isSafeInteger(pythonComputeLoopSamplesNs[0]) &&
+          pythonComputeLoopSamplesNs[0] > 0,
+        "compute probe Python loop sample must be a positive integer nanosecond duration");
         pythonComputeProbe = {
-          workload: "300000-iteration pure-Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
+          workload: "300000-iteration Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
           runGeneration: phases.runGeneration,
+          pythonLoopElapsedNs: pythonComputeLoopSamplesNs[0],
+          pythonLoopClock: "Python time.perf_counter_ns around only the integer loop body; excludes imports, source compilation, interpreter initialization and scene construction, but is elapsed time observed inside Pyodide rather than CPU-only time",
           pythonWorkerExecutionMs: worker.completedAtMs - worker.startedAtMs,
           pythonWorkerClock: "worker performance.now around runAuthoringSource; includes imports, compilation and interpreter/setup overhead; no awaited source continuation in this fixture",
           finalReconciliationCalls: phases.reconciliations.map((call) => ({
             phase: call.phase,
             roundTripMs: call.completedAtMs - call.startedAtMs,
           })),
-          meaning: "worker source interval and page-observed reconciliation are reported independently; neither is pure interpreter CPU time",
+          meaning: "the Python-timed loop duration is a narrower elapsed-time sample inside the full worker source interval; worker source interval and page-observed reconciliation remain independent, non-additive observations",
         };
       }
       const report = {
