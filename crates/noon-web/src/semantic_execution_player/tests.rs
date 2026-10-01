@@ -1665,6 +1665,7 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
     let token = player.pending_callback_phase.unwrap().0;
     let before = player.session.publication_context();
+    let before_frame = player.session.frame().clone();
     let before_nodes = scene.integration_store().borrow().len();
     let source = player
         .stage_required_callback_provisional_geometry(
@@ -1685,7 +1686,9 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         .stage_required_callback_provisional_fill(token, source, [0.2, 0.4, 0.8, 0.75], Some(0.6))
         .unwrap();
     let wrong_source = serde_json::json!({
-        "token": phase["token"], "region": phase["region"], "writes": [],
+        "token": phase["token"], "region": phase["region"],
+        "writes": [{"kind": "translation", "object": phase["objects"][0]["node"],
+            "translation": {"x": 99.0, "y": 99.0}}],
         "content": [
             {"object": phase["objects"][0]["node"], "provisional": callback_provisional_key(source)},
             {"object": phase["objects"][1]["node"], "provisional": "stale"}
@@ -1695,6 +1698,12 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         .commit_callback_phase_json(&wrong_source.to_string())
         .is_err());
     assert_eq!(player.session.publication_context(), before);
+    assert_eq!(
+        player.session.frame(),
+        &before_frame,
+        "a rejected content row must roll back the callback's effective property writes"
+    );
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes);
     let batch = serde_json::json!({
         "token": phase["token"], "region": phase["region"], "writes": [],
         "content": [
