@@ -214,6 +214,7 @@ try {
       rendererSubstageSamples,
       rendererSubstageNotes: {
         timing: "CPU wall time inside one successful render call, split at the existing renderer-host boundaries",
+        scope: "small observation and bookkeeping work between/after measured stages is omitted, so stage totals need not equal lastRendererCallMs",
         surfaceAcquireCpuWallMs: "surface texture acquisition call; does not measure later physical presentation",
         prepareCpuWallMs: "retained frame preparation and inset setup",
         uploadCpuWallMs: "synchronous renderer upload calls; not GPU transfer completion",
