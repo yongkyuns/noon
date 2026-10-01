@@ -1,6 +1,7 @@
 // Installed only by the cold-start browser probe after it rewrites worker entry
 // modules. Production workers never import this file.
 const ACCOUNTING_KEY = "__noonColdStartWasmAccounting";
+const MEMORY_SAMPLE_INTERVAL_MS = 25;
 
 export function installNoonWasmAccounting(workerGlobal, { role = "unknown" } = {}) {
   const wasm = workerGlobal.WebAssembly;
@@ -12,7 +13,13 @@ export function installNoonWasmAccounting(workerGlobal, { role = "unknown" } = {
   }
 
   const records = [];
-  const accounting = Object.freeze({ schemaVersion: 1, role, records });
+  const memoryStates = [];
+  const accounting = Object.freeze({
+    schemaVersion: 2,
+    role,
+    records,
+    snapshot: () => memoryStates.map(snapshotMemoryState),
+  });
   Object.defineProperty(workerGlobal, ACCOUNTING_KEY, {
     configurable: false,
     enumerable: false,
@@ -48,7 +55,68 @@ export function installNoonWasmAccounting(workerGlobal, { role = "unknown" } = {
       byteLengthSource: Number.isSafeInteger(inputBytes) ? byteLengthSource : null,
       identity: "wasm-bindgen exports __wbindgen_start, __wbindgen_malloc, __wbindgen_free",
     }));
+    const memory = exports.memory;
+    if (!(memory instanceof wasm.Memory)) {
+      memoryStates.push({
+        ordinal: records.length,
+        available: false,
+        reason: "Noon instance does not export its WebAssembly.Memory",
+      });
+      return;
+    }
+    const state = {
+      ordinal: records.length,
+      available: true,
+      memory,
+      initialBytes: null,
+      peakObservedBytes: 0,
+      latestBytes: 0,
+      sampleCount: 0,
+      firstSampleAtMs: null,
+      peakObservedAtMs: null,
+      lastSampleAtMs: null,
+      samplingError: null,
+    };
+    memoryStates.push(state);
+    sampleMemoryState(state);
+    state.firstSampleAtMs = state.lastSampleAtMs;
+    workerGlobal.setInterval(() => sampleMemoryState(state), MEMORY_SAMPLE_INTERVAL_MS);
   }
+}
+
+function sampleMemoryState(state) {
+  if (!state.available) return;
+  try {
+    const bytes = state.memory.buffer.byteLength;
+    const atMs = globalThis.performance?.now?.() ?? null;
+    if (state.initialBytes === null) state.initialBytes = bytes;
+    state.latestBytes = bytes;
+    state.sampleCount += 1;
+    state.lastSampleAtMs = atMs;
+    if (bytes > state.peakObservedBytes || state.peakObservedAtMs === null) {
+      state.peakObservedAtMs = atMs;
+    }
+    state.peakObservedBytes = Math.max(state.peakObservedBytes, bytes);
+  } catch (error) {
+    state.samplingError = String(error);
+  }
+}
+
+function snapshotMemoryState(state) {
+  sampleMemoryState(state);
+  return state.available ? {
+    ordinal: state.ordinal,
+    available: true,
+    initialBytes: state.initialBytes,
+    peakObservedBytes: state.peakObservedBytes,
+    latestBytes: state.latestBytes,
+    sampleCount: state.sampleCount,
+    samplingIntervalMs: MEMORY_SAMPLE_INTERVAL_MS,
+    firstSampleAtMs: state.firstSampleAtMs,
+    peakObservedAtMs: state.peakObservedAtMs,
+    lastSampleAtMs: state.lastSampleAtMs,
+    samplingError: state.samplingError,
+  } : { ordinal: state.ordinal, available: false, reason: state.reason };
 }
 
 function isNoonWasmBindgenExports(exports) {

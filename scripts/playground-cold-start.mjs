@@ -316,10 +316,6 @@ try {
       const resourceFootprint = summarizeResourceFootprint(resourceContexts, {
         noonWasmPackageBytes,
       });
-      const noonWasmInstantiation = wasmAccountingEnabled
-        ? await collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled })
-        : disabledNoonWasmInstantiation();
-
       const status = await page.locator("#status").evaluate((node) => ({
         ...node.dataset,
         text: node.textContent,
@@ -332,6 +328,12 @@ try {
       // The source edit travels through the normal debounce/authoring/reconcile
       // path. Completion is an explicit endpoint, not a claim about first pixels.
       await waitForCompletedRun(page);
+      const noonWasmInstantiation = wasmAccountingEnabled
+        ? await collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled })
+        : disabledNoonWasmInstantiation();
+      const noonWasmLinearMemory = wasmAccountingEnabled
+        ? summarizeNoonWasmLinearMemory(noonWasmInstantiation)
+        : disabledNoonWasmLinearMemory();
       const beforeEditMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
       const previousPresentationSession = beforeEditMetrics?.metrics?.presentedSession;
       assert.ok(Number.isSafeInteger(previousPresentationSession),
@@ -494,6 +496,7 @@ try {
         authoringStartup,
         resourceFootprint,
         noonWasmInstantiation,
+        noonWasmLinearMemory,
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
@@ -600,6 +603,14 @@ try {
         ? "Enabled runs rewrite only authoring/render worker entry responses to import the probe helper; worker network interception, helper parsing, and WebAssembly method wrappers are included in startup timings. Do not compare these startup timings directly with uninstrumented runs."
         : null,
       meaning: "When enabled, noonWasmInstantiation counts successful instances with the Noon wasm-bindgen __wbindgen_start/__wbindgen_malloc/__wbindgen_free export signature and reports exact input byte lengths for ArrayBuffer/view instantiation or identity-encoded streaming responses with Content-Length. It reports observed instance/input-byte counts, not WebAssembly.Memory capacity or physical/peak memory; missing or retired worker contexts make the result partial.",
+    },
+    wasmLinearMemoryMeasurement: {
+      enabled: wasmAccountingEnabled,
+      scope: "Each exported WebAssembly.Memory belonging to a Noon wasm-bindgen instance in the instrumented authoring/render workers; observation begins immediately after successful instantiation and ends at the completed cold source run snapshot, before the warm rerun.",
+      meaning: "initialBytes and peakObservedBytes are WebAssembly.Memory.buffer.byteLength capacity, not live heap allocation, module bytes, process RSS, GPU memory, or total browser memory. The probe reads immediately and samples every 25 ms; WebAssembly linear memory can grow but cannot shrink, and the final snapshot rereads capacity, so it captures the high-water capacity at the run boundary even if synchronous WASM work delays interval callbacks. Missing exported memory, worker coverage, or sample errors are reported explicitly.",
+      observerEffect: wasmAccountingEnabled
+        ? "Same worker-entry rewriting and periodic capacity reads as WASM instance accounting; opt-in instrumentation is included in measured startup, so do not compare those timings with uninstrumented runs."
+        : null,
     },
     note:
     "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling, not a physical iPhone measurement.",
@@ -868,7 +879,12 @@ async function collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEna
       const accounting = await handle.worker.evaluate(() => {
         const report = globalThis.__noonColdStartWasmAccounting;
         if (!report) return null;
-        return { schemaVersion: report.schemaVersion, role: report.role, records: [...report.records] };
+        return {
+          schemaVersion: report.schemaVersion,
+          role: report.role,
+          records: [...report.records],
+          linearMemory: report.snapshot(),
+        };
       });
       contexts.push({
         worker: handle.name,
@@ -927,6 +943,75 @@ function disabledNoonWasmInstantiation() {
     contexts: [],
     unavailable: [],
     records: [],
+  };
+}
+
+function summarizeNoonWasmLinearMemory(instantiation) {
+  const instances = instantiation.contexts.flatMap((context) => {
+    const records = context.report?.records ?? [];
+    const memory = context.report?.linearMemory ?? [];
+    return records.map((record) => ({
+      worker: context.worker,
+      role: context.role,
+      instanceOrdinal: record.ordinal,
+      ...(memory.find(({ ordinal }) => ordinal === record.ordinal) ?? {
+        available: false,
+        reason: "linear-memory snapshot missing for this Noon instance",
+      }),
+    }));
+  });
+  const measured = instances.filter(({ available }) => available);
+  const complete = instantiation.completeWorkerCoverage &&
+    instantiation.everyInstrumentedWorkerProducedNoonInstance &&
+    ["authoring", "render"].every((role) =>
+      instances.some((instance) => instance.role === role && instance.available)) &&
+    instances.length > 0 &&
+    measured.length === instances.length &&
+    measured.every(({ samplingError, initialBytes, peakObservedBytes, latestBytes, sampleCount }) =>
+      samplingError === null && Number.isSafeInteger(initialBytes) &&
+      Number.isSafeInteger(peakObservedBytes) && peakObservedBytes >= initialBytes &&
+      Number.isSafeInteger(latestBytes) && sampleCount > 0);
+  const byRole = Object.fromEntries(["authoring", "render"].map((role) => {
+    const roleInstances = measured.filter((instance) => instance.role === role);
+    return [role, {
+      instanceCount: roleInstances.length,
+      initialBytes: complete
+        ? roleInstances.reduce((total, { initialBytes }) => total + initialBytes, 0)
+        : null,
+      peakObservedBytes: complete
+        ? roleInstances.reduce((total, { peakObservedBytes }) => total + peakObservedBytes, 0)
+        : null,
+    }];
+  }));
+  return {
+    enabled: true,
+    measurement: "WebAssembly.Memory capacity at the completed cold source-run boundary, for each observed Noon wasm-bindgen instance",
+    workerCoverage: instantiation.completeWorkerCoverage,
+    complete,
+    workerCount: new Set(measured.map(({ worker }) => worker)).size,
+    instanceCount: instances.length,
+    initialBytesAcrossInstances: complete
+      ? measured.reduce((total, { initialBytes }) => total + initialBytes, 0)
+      : null,
+    peakObservedBytesAcrossInstances: complete
+      ? measured.reduce((total, { peakObservedBytes }) => total + peakObservedBytes, 0)
+      : null,
+    byRole,
+    instances,
+  };
+}
+
+function disabledNoonWasmLinearMemory() {
+  return {
+    enabled: false,
+    complete: false,
+    workerCoverage: false,
+    workerCount: null,
+    instanceCount: null,
+    initialBytesAcrossInstances: null,
+    peakObservedBytesAcrossInstances: null,
+    byRole: null,
+    instances: [],
   };
 }
 
