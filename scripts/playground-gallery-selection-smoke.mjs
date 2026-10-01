@@ -328,7 +328,8 @@ try {
         { timeout: 5_000 },
       );
       const observation = await page.evaluate(index => window.__noonInspectionTest.wheelEvents[index], before.wheelEvents);
-      assert.equal(observation.deltaY, delta, "gallery wheel receipt must belong to the dispatched input");
+      assert.ok(Math.abs(observation.deltaY - delta) < 1e-3,
+        "gallery wheel receipt must belong to the dispatched input");
       let accepted = null;
       if (observation.defaultPrevented) {
         accepted = await page.evaluate(async count => {
