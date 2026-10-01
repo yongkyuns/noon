@@ -298,16 +298,23 @@ impl RetainedFamilyExecutionDeltaEncoder {
             }
 
             if let Some(geometry) = object.render_geometry.take() {
+                // Resident GPU preloading is a one-time installation hint. A
+                // later version of the same render-geometry slot travels as an
+                // ordinary resource replacement and is tessellated into the
+                // renderer's reusable per-row ranges on its next frame.
+                let preload = envelope.retained.snapshot && staged.resource(&object.slot).is_none();
                 let resource = staged.publish(object.slot)?;
                 let (index, generation) =
                     crate::retained_resource_transport::render_geometry_parts(resource);
-                preparations.push(RenderGeometryPreparation {
-                    resource: index,
-                    style: object.style,
-                    transform: object
-                        .render_transform
-                        .expect("render geometry publication has a render transform"),
-                });
+                if preload {
+                    preparations.push(RenderGeometryPreparation {
+                        resource: index,
+                        style: object.style,
+                        transform: object
+                            .render_transform
+                            .expect("render geometry publication has a render transform"),
+                    });
+                }
                 updates.insert(index, (generation, Some(Arc::new(geometry))));
                 object.render_geometry_resource = Some(resource);
             } else if object.render_geometry_resource.is_none() {
@@ -847,6 +854,70 @@ mod tests {
     }
 
     #[test]
+    fn initial_render_geometry_snapshot_carries_one_residency_hint() {
+        let (_, mut frame, states) = fixture();
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::ONE),
+        )));
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let images = noon_core::RasterImageResourceArena::new();
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
+        let mut snapshot = encoder
+            .encode_snapshot(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut snapshot, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+
+        let resources = snapshot.resource_additions.unwrap();
+        assert_eq!(resources.render_geometry_count(), 1);
+        let addition = resources.render_geometry_addition().unwrap().unwrap();
+        assert_eq!(addition.session, 92);
+        assert_eq!(addition.geometries.len(), 1);
+        assert_eq!(addition.preparations.len(), 1);
+
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::new(2.0, 0.0))
+                .line_to(noon_core::Vec2::new(3.0, 1.0)),
+        )));
+        let mut resnapshot = encoder
+            .encode_snapshot(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut resnapshot, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+        assert!(resnapshot
+            .resource_additions
+            .as_ref()
+            .unwrap()
+            .render_geometry_addition()
+            .unwrap()
+            .unwrap()
+            .preparations
+            .is_empty());
+    }
+
+    #[test]
     fn unique_render_geometry_replacements_reuse_one_wire_slot() {
         let (_, mut frame, _) = fixture();
         let states = [None, None];
@@ -906,6 +977,15 @@ mod tests {
                     .render_geometry_count(),
                 1
             );
+            assert!(delta
+                .resource_additions
+                .as_ref()
+                .unwrap()
+                .render_geometry_addition()
+                .unwrap()
+                .unwrap()
+                .preparations
+                .is_empty());
             assert_eq!(encoder.next_render_geometry_resource, 1);
         }
 
