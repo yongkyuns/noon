@@ -923,7 +923,8 @@ mod tests {
 
     #[test]
     fn mixed_text_circle_reveal_reuses_glyph_paths_and_order_through_endpoints() {
-        const STATIC_TAIL: u64 = 256;
+        // Keep the active mixed family local inside a genuinely large static scene.
+        const STATIC_TAIL: u64 = 10_000;
         let mut artifact = compile_typst_resource(
             "#set text(font: \"DejaVu Sans Mono\")\nAB",
             TypstMode::Markup,
