@@ -3193,7 +3193,23 @@ struct CallbackBatchWire {
     region: u32,
     writes: Vec<CallbackWriteWire>,
     #[serde(default)]
-    content: Option<CallbackContentWire>,
+    content: Option<CallbackContentBatchWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+enum CallbackContentBatchWire {
+    One(CallbackContentWire),
+    Many(Vec<CallbackContentWire>),
+}
+
+impl CallbackContentBatchWire {
+    fn into_vec(self) -> Vec<CallbackContentWire> {
+        match self {
+            Self::One(content) => vec![content],
+            Self::Many(contents) => contents,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -3351,7 +3367,7 @@ fn decode_callback_batch(
 ) -> Result<
     (
         EffectivePropertyBatch,
-        Option<(SemanticNodeId, CallbackContentWire)>,
+        Vec<(SemanticNodeId, CallbackContentWire)>,
     ),
     String,
 > {
@@ -3420,10 +3436,12 @@ fn decode_callback_batch(
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let content = wire.content.map(|content| {
-        let target = content.object.clone().into();
-        (target, content)
-    });
+    let content = wire
+        .content
+        .map_or_else(Vec::new, CallbackContentBatchWire::into_vec)
+        .into_iter()
+        .map(|content| (content.object.clone().into(), content))
+        .collect();
     Ok((
         EffectivePropertyBatch::new(token, writes).with_region(wire.region),
         content,
@@ -3521,35 +3539,79 @@ impl SemanticExecutionPlayer {
             None => return Err(noon::ExecutionSessionCallbackError::NoPendingPhase.into()),
         };
         let content = content
+            .into_iter()
             .map(|(target, content)| {
                 content
                     .into_result()
                     .map(|result| (target, result))
                     .map_err(AuthoringFailure::from)
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>, _>>()?;
+        if content.len() > 1
+            && content.iter().any(|(_, content)| {
+                !matches!(
+                    content,
+                    CallbackContentResult::Provisional(_) | CallbackContentResult::Geometry(_)
+                )
+            })
+        {
+            return Err(
+                "multi-target callback content currently supports inline geometry only".into(),
+            );
+        }
         #[cfg(any(target_arch = "wasm32", test))]
         let (batch, content, provisional_effective) = match content {
-            Some((target, CallbackContentResult::Provisional(key))) => {
-                let (transform, style, result) = self.callback_provisional_visual(token, &key)?;
+            contents
+                if !contents.is_empty()
+                    && contents.iter().all(|(_, content)| {
+                        matches!(
+                            content,
+                            CallbackContentResult::Provisional(_)
+                                | CallbackContentResult::Geometry(_)
+                        )
+                    }) =>
+            {
                 let mut writes = batch.writes().to_vec();
-                writes.push(EffectiveSemanticPropertyWrite::Transform {
-                    object: target,
-                    transform,
-                });
-                writes.push(EffectiveSemanticPropertyWrite::Style {
-                    object: target,
-                    style,
-                });
+                let mut resolved = Vec::with_capacity(contents.len());
+                let mut has_provisional = false;
+                for (target, content) in contents {
+                    match content {
+                        CallbackContentResult::Provisional(key) => {
+                            has_provisional = true;
+                            let (transform, style, result) =
+                                self.callback_provisional_visual(token, &key)?;
+                            writes.push(EffectiveSemanticPropertyWrite::Transform {
+                                object: target,
+                                transform,
+                            });
+                            writes.push(EffectiveSemanticPropertyWrite::Style {
+                                object: target,
+                                style,
+                            });
+                            resolved.push((target, result));
+                        }
+                        CallbackContentResult::Geometry(geometry) => {
+                            resolved.push((target, CallbackContentResult::Geometry(geometry)))
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 (
                     EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
-                    Some((target, result)),
-                    true,
+                    resolved,
+                    has_provisional,
                 )
             }
             other => (batch, other, false),
         };
-        if content.is_some() {
+        if content.len() > 1
+            && content
+                .iter()
+                .any(|(_, content)| matches!(content, CallbackContentResult::Path(_)))
+        {
+            return Err("multi-target callback content currently requires inline geometry; retained paths remain supported for one target".into());
+        }
+        if !content.is_empty() {
             #[cfg(any(target_arch = "wasm32", test))]
             if self.callback_membership_transaction.is_some() && !provisional_effective {
                 return Err("callback effective content and authored membership cannot share this publication yet".into());
@@ -3559,10 +3621,12 @@ impl SemanticExecutionPlayer {
                 .map_err(AuthoringFailure::from)?;
         }
         #[cfg(any(target_arch = "wasm32", test))]
-        if let Some((_, CallbackContentResult::TextSource(source))) = &content {
-            // Resolve/validate the source before admitting this region, so a bad
-            // source leaves the exact callback region available for retry.
-            self.callback_text_source_handle(*source)?;
+        for (_, content) in &content {
+            if let CallbackContentResult::TextSource(source) = content {
+                // Resolve/validate the source before admitting this region, so a bad
+                // source leaves the exact callback region available for retry.
+                self.callback_text_source_handle(*source)?;
+            }
         }
         let advance = match self.session.submit_required_callback_region(batch) {
             Ok(advance) => advance,
@@ -3591,7 +3655,7 @@ impl SemanticExecutionPlayer {
                 invocations,
                 overlay,
             } => {
-                debug_assert!(content.is_none(), "content region was proven terminal");
+                debug_assert!(content.is_empty(), "content region was proven terminal");
                 return self
                     .retain_callback_phase(invocations, overlay)
                     .map(Some)
@@ -3601,11 +3665,31 @@ impl SemanticExecutionPlayer {
         };
         #[cfg(any(target_arch = "wasm32", test))]
         {
-            if provisional_effective {
-                let (target, content) =
-                    content.expect("validated producer supplies one effective result");
-                self.commit_callback_content(batch, target, content)?;
+            if content.len() > 1 {
+                let replacements = content
+                    .into_iter()
+                    .map(|(target, content)| match content {
+                        CallbackContentResult::Geometry(geometry) => {
+                            Ok((target, ObjectContentRef::Geometry(geometry)))
+                        }
+                        _ => Err(AuthoringFailure::from(
+                            "multi-target callback content requires inline geometry",
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.session
+                    .commit_required_callback_phase_with_owned_contents(batch, replacements)
+                    .map_err(AuthoringFailure::from)?;
                 self.callback_membership_transaction = None;
+            } else if provisional_effective {
+                if content.len() == 1 {
+                    let (target, content) = content.into_iter().next().expect("one item checked");
+                    self.commit_callback_content(batch, target, content)?;
+                }
+                self.callback_membership_transaction = None;
+            } else if content.len() == 1 {
+                let (target, content) = content.into_iter().next().expect("one item checked");
+                self.commit_callback_content(batch, target, content)?;
             } else if let Some(collector) = self.callback_membership_transaction.take() {
                 if collector.token != token {
                     self.callback_membership_transaction = Some(collector);
@@ -3691,7 +3775,7 @@ impl SemanticExecutionPlayer {
                         Some(CommittedCallbackProvisionals { token, nodes });
                 }
             } else {
-                if let Some((target, content)) = content {
+                if let Some((target, content)) = content.into_iter().next() {
                     self.commit_callback_content(batch, target, content)?;
                 } else {
                     self.session
@@ -3701,7 +3785,7 @@ impl SemanticExecutionPlayer {
             }
         }
         #[cfg(not(any(target_arch = "wasm32", test)))]
-        if let Some((target, content)) = content {
+        if let Some((target, content)) = content.into_iter().next() {
             self.commit_callback_content(batch, target, content)?;
         } else {
             self.session

@@ -1641,12 +1641,15 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
     let mut scene = noon::Scene::new();
     let target = scene.circle(1.0).unwrap();
     scene.add(&target).unwrap();
+    let mut second_target = None;
     for _ in 1..600 {
         let static_circle = scene.circle(0.25).unwrap();
         scene.add(&static_circle).unwrap();
+        second_target = Some(static_circle.node_id());
     }
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(target.node_id(), HostCallbackId::new(7), 0.0, None);
+    callbacks.add_updater(second_target.unwrap(), HostCallbackId::new(9), 0.0, None);
     callbacks
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
@@ -1669,6 +1672,12 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
             noon::ManimGeometryOptions::rectangle(2.0, 1.0).unwrap(),
         )
         .unwrap();
+    let second_source = player
+        .stage_required_callback_provisional_geometry(
+            token,
+            noon::ManimGeometryOptions::circle(0.75).unwrap(),
+        )
+        .unwrap();
     player
         .stage_required_callback_provisional_shift(token, source, 2.0, -1.0)
         .unwrap();
@@ -1677,7 +1686,10 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         .unwrap();
     let wrong_source = serde_json::json!({
         "token": phase["token"], "region": phase["region"], "writes": [],
-        "content": {"object": phase["objects"][0]["node"], "provisional": "stale"}
+        "content": [
+            {"object": phase["objects"][0]["node"], "provisional": callback_provisional_key(source)},
+            {"object": phase["objects"][1]["node"], "provisional": "stale"}
+        ]
     });
     assert!(player
         .commit_callback_phase_json(&wrong_source.to_string())
@@ -1685,8 +1697,12 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
     assert_eq!(player.session.publication_context(), before);
     let batch = serde_json::json!({
         "token": phase["token"], "region": phase["region"], "writes": [],
-        "content": {"object": phase["objects"][0]["node"],
-            "provisional": callback_provisional_key(source)}
+        "content": [
+            {"object": phase["objects"][0]["node"],
+                "provisional": callback_provisional_key(source)},
+            {"object": phase["objects"][1]["node"],
+                "provisional": callback_provisional_key(second_source)}
+        ]
     });
     assert!(player
         .commit_callback_phase_json(&batch.to_string())
@@ -1701,6 +1717,10 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         })
     );
     assert_eq!(
+        frame.objects[599].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(0.75))
+    );
+    assert_eq!(
         frame.objects[0].transform.translation,
         noon_core::Vec2::new(2.0, -1.0)
     );
@@ -1713,7 +1733,14 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         player.session.publication_context().scene_revision(),
         before.scene_revision()
     );
-    assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        player.session.publication_context().frame_epoch().get(),
+        before.frame_epoch().get() + 1
+    );
+    assert_eq!(
+        player.session.take_frame_changes().object_indices(),
+        &[0, 599]
+    );
     assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
     assert!(player.callback_membership_transaction.is_none());
 
@@ -1750,6 +1777,66 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
         assert!(player.callback_membership_transaction.is_none());
     }
+}
+
+#[test]
+fn callback_batch_accepts_mixed_direct_and_provisional_inline_geometry() {
+    let mut scene = noon::Scene::new();
+    let first = scene.circle(1.0).unwrap();
+    let second = scene.circle(0.5).unwrap();
+    scene.add(&first).unwrap();
+    scene.add(&second).unwrap();
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(first.node_id(), HostCallbackId::new(7), 0.0, None);
+    callbacks.add_updater(second.node_id(), HostCallbackId::new(9), 0.0, None);
+    callbacks
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        31,
+    )
+    .unwrap();
+    let phase: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let token = player.pending_callback_phase.unwrap().0;
+    let provisional = player
+        .stage_required_callback_provisional_geometry(
+            token,
+            noon::ManimGeometryOptions::circle(3.0).unwrap(),
+        )
+        .unwrap();
+    let before = player.session.publication_context();
+    let batch = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": [
+            {"object": phase["objects"][0]["node"], "geometry": {"kind": "circle", "radius": 2.0}},
+            {"object": phase["objects"][1]["node"], "provisional": callback_provisional_key(provisional)}
+        ]
+    });
+    assert!(player
+        .commit_callback_phase_json(&batch.to_string())
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.frame().objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(2.0))
+    );
+    assert_eq!(
+        player.session.frame().objects[1].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(3.0))
+    );
+    assert_eq!(
+        player.session.publication_context().frame_epoch().get(),
+        before.frame_epoch().get() + 1
+    );
+    assert_eq!(
+        player.session.take_frame_changes().object_indices(),
+        &[0, 1]
+    );
 }
 
 #[test]

@@ -70,6 +70,8 @@ pub enum EffectiveContentError {
         actual: PublicationContext,
     },
     StaleLease(ObjectId),
+    DuplicateTarget(ObjectId),
+    BatchRequiresInlineGeometry(ObjectId),
     SequenceExhausted,
     FrameEpochExhausted,
     ExecutionRevisionExhausted(ExecutionRevision),
@@ -141,6 +143,16 @@ impl std::fmt::Display for EffectiveContentError {
             Self::StaleLease(object) => write!(
                 formatter,
                 "effective content lease for object {} is stale",
+                object.get()
+            ),
+            Self::DuplicateTarget(object) => write!(
+                formatter,
+                "effective content batch targets object {} more than once",
+                object.get()
+            ),
+            Self::BatchRequiresInlineGeometry(object) => write!(
+                formatter,
+                "multi-target callback content for object {} requires inline geometry",
                 object.get()
             ),
             Self::SequenceExhausted => {
@@ -468,16 +480,41 @@ impl SceneInstance {
         effective: PreparedEffectivePropertyBatch,
         content: PreparedEffectiveContentReplacement,
     ) -> Result<EffectiveContentLease, PreparedFrameContentCommitError> {
-        self.preflight_prepared_frame_with_content(&frame, &effective, &content)?;
+        self.commit_prepared_frame_with_contents(frame, effective, vec![content])
+            .map(|mut leases| leases.remove(0))
+    }
+
+    /// Publish a callback frame and a bounded set of effective-content rows at
+    /// one publication boundary. New leases receive distinct sequences in input
+    /// order; duplicate targets are rejected during preflight.
+    pub fn commit_prepared_frame_with_contents(
+        &mut self,
+        frame: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+        mut contents: Vec<PreparedEffectiveContentReplacement>,
+    ) -> Result<Vec<EffectiveContentLease>, PreparedFrameContentCommitError> {
+        self.preflight_prepared_frame_with_contents(&frame, &effective, &contents)?;
+        let mut sequence = self.next_effective_content_sequence;
+        for content in &mut contents {
+            if content.expected_version.is_none() {
+                content.lease.sequence = sequence;
+                sequence += 1;
+            }
+        }
         let may_change = self.prepared_frame_may_change(&frame)
             || !effective.is_empty()
-            || self.content_replacement_changes(&content);
-        let next_execution = self.content_resource_projection_changes(&content).then(|| {
-            self.publication
-                .execution_revision()
-                .checked_next()
-                .expect("preflight reserved an execution revision")
-        });
+            || contents
+                .iter()
+                .any(|content| self.content_replacement_changes(content));
+        let next_execution = contents
+            .iter()
+            .any(|content| self.content_resource_projection_changes(content))
+            .then(|| {
+                self.publication
+                    .execution_revision()
+                    .checked_next()
+                    .expect("preflight reserved an execution revision")
+            });
         let next_epoch = may_change.then(|| {
             self.publication
                 .frame_epoch()
@@ -487,8 +524,11 @@ impl SceneInstance {
         let frame_changed = self
             .commit_prepared_frame_inner(frame, effective, false)
             .expect("preflighted frame remains valid during exclusive commit");
-        let lease = content.lease;
-        let content_changed = self.apply_prepared_effective_content_replacement(content);
+        let leases = contents.iter().map(|content| content.lease).collect();
+        let mut content_changed = false;
+        for content in contents {
+            content_changed |= self.apply_prepared_effective_content_replacement(content);
+        }
         if frame_changed || content_changed {
             let mut publication = self.publication;
             if let Some(execution) = next_execution {
@@ -497,14 +537,14 @@ impl SceneInstance {
             self.publication = publication
                 .with_frame_epoch(next_epoch.expect("changed callback reserved an epoch"));
         }
-        Ok(lease)
+        Ok(leases)
     }
 
-    pub fn preflight_prepared_frame_with_content(
+    pub fn preflight_prepared_frame_with_contents(
         &self,
         frame: &PreparedFrameEvaluation,
         effective: &PreparedEffectivePropertyBatch,
-        content: &PreparedEffectiveContentReplacement,
+        contents: &[PreparedEffectiveContentReplacement],
     ) -> Result<(), PreparedFrameContentCommitError> {
         self.preflight_prepared_frame_commit(frame, effective)
             .map_err(PreparedFrameContentCommitError::Frame)?;
@@ -513,21 +553,62 @@ impl SceneInstance {
                 EffectiveContentError::ReplaySealed,
             ));
         }
-        self.validate_content_prepared(content)
-            .map_err(PreparedFrameContentCommitError::Content)?;
-        if frame.staged_row(content.object_index).is_some_and(|row| {
-            row.render_geometry.is_some()
-                || row.render_transform.is_some()
-                || row.content_override.is_some()
-        }) {
-            return Err(PreparedFrameContentCommitError::Content(
-                EffectiveContentError::ActiveRenderOverride(content.lease.object),
-            ));
+        let mut seen = std::collections::BTreeSet::new();
+        let new_lease_count = u64::try_from(
+            contents
+                .iter()
+                .filter(|content| content.expected_version.is_none())
+                .count(),
+        )
+        .map_err(|_| {
+            PreparedFrameContentCommitError::Content(EffectiveContentError::SequenceExhausted)
+        })?;
+        self.next_effective_content_sequence
+            .checked_add(new_lease_count)
+            .ok_or(PreparedFrameContentCommitError::Content(
+                EffectiveContentError::SequenceExhausted,
+            ))?;
+        for content in contents {
+            if !seen.insert(content.lease.object) {
+                return Err(PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::DuplicateTarget(content.lease.object),
+                ));
+            }
+            let candidate = content;
+            if contents.len() > 1
+                && (!matches!(&candidate.content, ObjectContentRef::Geometry(geometry) if !matches!(geometry, GeometryRef::External(_)))
+                    || candidate.geometry_resource.is_some()
+                    || candidate.image_resource.is_some()
+                    || candidate.text_resource_additions.is_some())
+            {
+                return Err(PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::BatchRequiresInlineGeometry(candidate.lease.object),
+                ));
+            }
+            self.validate_content_prepared(candidate)
+                .map_err(PreparedFrameContentCommitError::Content)?;
+            if candidate.expected_version.is_none()
+                && candidate.lease.sequence != self.next_effective_content_sequence
+            {
+                return Err(PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::StaleLease(candidate.lease.object),
+                ));
+            }
+            if frame.staged_row(candidate.object_index).is_some_and(|row| {
+                row.render_geometry.is_some()
+                    || row.render_transform.is_some()
+                    || row.content_override.is_some()
+            }) {
+                return Err(PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::ActiveRenderOverride(candidate.lease.object),
+                ));
+            }
         }
-        // Content alone may change a frame that has no native/property writes.
         let may_change = self.prepared_frame_may_change(frame)
             || !effective.is_empty()
-            || self.content_replacement_changes(content);
+            || contents
+                .iter()
+                .any(|content| self.content_replacement_changes(content));
         if may_change {
             self.publication.frame_epoch().checked_next().ok_or(
                 PreparedFrameContentCommitError::Content(
@@ -535,7 +616,10 @@ impl SceneInstance {
                 ),
             )?;
         }
-        if self.content_resource_projection_changes(content) {
+        if contents
+            .iter()
+            .any(|content| self.content_resource_projection_changes(content))
+        {
             self.publication.execution_revision().checked_next().ok_or(
                 PreparedFrameContentCommitError::Content(
                     EffectiveContentError::ExecutionRevisionExhausted(
@@ -545,6 +629,15 @@ impl SceneInstance {
             )?;
         }
         Ok(())
+    }
+
+    pub fn preflight_prepared_frame_with_content(
+        &self,
+        frame: &PreparedFrameEvaluation,
+        effective: &PreparedEffectivePropertyBatch,
+        content: &PreparedEffectiveContentReplacement,
+    ) -> Result<(), PreparedFrameContentCommitError> {
+        self.preflight_prepared_frame_with_contents(frame, effective, std::slice::from_ref(content))
     }
 
     /// Applies only a previously validated version. This suffix has no fallible
@@ -1440,6 +1533,194 @@ mod tests {
         assert_eq!(
             instance.frame().objects[0].content,
             ObjectContentRef::Geometry(GeometryRef::circle(1.0))
+        );
+    }
+
+    #[test]
+    fn prepared_frame_with_multiple_content_rows_publishes_one_epoch() {
+        let mut instance = scene(2, false);
+        let before = instance.publication_context();
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+        let first = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(0),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let second = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 2.0)),
+                None,
+                None,
+            )
+            .unwrap();
+        let leases = instance
+            .commit_prepared_frame_with_contents(frame, writes, vec![first, second])
+            .unwrap();
+
+        assert_eq!(leases.len(), 2);
+        assert_ne!(leases[0], leases[1]);
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(0)),
+            Some(leases[0])
+        );
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(1)),
+            Some(leases[1])
+        );
+        assert_eq!(
+            instance.frame().objects[0].content,
+            ObjectContentRef::Geometry(GeometryRef::circle(2.0))
+        );
+        assert_eq!(
+            instance.frame().objects[1].content,
+            ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 2.0))
+        );
+        assert_eq!(
+            instance.publication_context().frame_epoch().get(),
+            before.frame_epoch().get() + 1
+        );
+    }
+
+    #[test]
+    fn stale_second_content_lease_rolls_back_entire_batch_and_duplicate_targets_reject() {
+        let mut instance = scene(2, false);
+        let initial = [ObjectId::new(0), ObjectId::new(1)].map(|object| {
+            let prepared = instance
+                .prepare_effective_content_replacement(
+                    object,
+                    ObjectContentRef::Geometry(GeometryRef::circle(1.5)),
+                    None,
+                    None,
+                )
+                .unwrap();
+            instance
+                .commit_effective_content_replacement(prepared)
+                .unwrap()
+        });
+        let first = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(0),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                Some(initial[0]),
+            )
+            .unwrap();
+        let stale_second = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                None,
+                Some(initial[1]),
+            )
+            .unwrap();
+        let superseding = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(1.75)),
+                None,
+                Some(initial[1]),
+            )
+            .unwrap();
+        let current_second = instance
+            .commit_effective_content_replacement(superseding)
+            .unwrap();
+
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+        let before = instance.publication_context();
+        let before_rows = instance
+            .frame()
+            .objects
+            .iter()
+            .map(|row| row.content.clone())
+            .collect::<Vec<_>>();
+        let before_sequence = instance.next_effective_content_sequence;
+        assert!(matches!(
+            instance.commit_prepared_frame_with_contents(frame, writes, vec![first, stale_second]),
+            Err(PreparedFrameContentCommitError::Content(EffectiveContentError::StaleLease(object))) if object == ObjectId::new(1)
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(
+            instance
+                .frame()
+                .objects
+                .iter()
+                .map(|row| row.content.clone())
+                .collect::<Vec<_>>(),
+            before_rows
+        );
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(0)),
+            Some(initial[0])
+        );
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(1)),
+            Some(current_second)
+        );
+        assert_eq!(instance.next_effective_content_sequence, before_sequence);
+
+        let foreign_runtime = scene(2, false);
+        let foreign = foreign_runtime
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.25)),
+                None,
+                None,
+            )
+            .unwrap();
+        let first = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(0),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.25)),
+                None,
+                Some(initial[0]),
+            )
+            .unwrap();
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+        let before = instance.publication_context();
+        let before_sequence = instance.next_effective_content_sequence;
+        assert!(matches!(
+            instance.commit_prepared_frame_with_contents(frame, writes, vec![first, foreign]),
+            Err(PreparedFrameContentCommitError::Content(
+                EffectiveContentError::ForeignRuntime
+            ))
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(0)),
+            Some(initial[0])
+        );
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(1)),
+            Some(current_second)
+        );
+        assert_eq!(instance.next_effective_content_sequence, before_sequence);
+
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+        let duplicate = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(0),
+                ObjectContentRef::Geometry(GeometryRef::circle(2.5)),
+                None,
+                Some(initial[0]),
+            )
+            .unwrap();
+        let before = instance.publication_context();
+        assert!(matches!(
+            instance.commit_prepared_frame_with_contents(frame, writes, vec![duplicate.clone(), duplicate]),
+            Err(PreparedFrameContentCommitError::Content(EffectiveContentError::DuplicateTarget(object))) if object == ObjectId::new(0)
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(
+            instance.effective_content_lease(ObjectId::new(0)),
+            Some(initial[0])
         );
     }
 

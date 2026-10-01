@@ -68,14 +68,10 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             explicit_style.to_wire()["stroke_width_mode"], "screen_space"
         )
 
-    def test_effective_circle_is_one_terminal_content_result(self) -> None:
+    def test_effective_circle_content_can_batch_once_per_target(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            with self.assertRaisesRegex(NotImplementedError, "final updater"):
-                mobject.set_effective_circle(2.5)
-            self.assertNotIn("content", context.effective_batch())
-            context._last_invocation = True
             self.assertIs(mobject.set_effective_circle(2.5), mobject)
             self.assertEqual(context.effective_batch()["content"], {
                 "object": {"slot": 11, "generation": 3},
@@ -83,8 +79,27 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             })
             with self.assertRaisesRegex(NotImplementedError, "bounds are unavailable"):
                 mobject.get_center()
-            with self.assertRaisesRegex(NotImplementedError, "one effective content"):
+            with self.assertRaisesRegex(ValueError, "more than once"):
                 mobject.set_effective_circle(3.0)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_effective_content_batch_serializes_multiple_unique_targets(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            mobject.set_effective_circle(2.5)
+            row = context.row(mobject)[1]
+            context._append_content((12, 4), row, {
+                "object": {"slot": 12, "generation": 4},
+                "geometry": {"kind": "circle", "radius": 1.25},
+            })
+            self.assertEqual(context.effective_batch()["content"], [
+                {"object": {"slot": 11, "generation": 3},
+                 "geometry": {"kind": "circle", "radius": 2.5}},
+                {"object": {"slot": 12, "generation": 4},
+                 "geometry": {"kind": "circle", "radius": 1.25}},
+            ])
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
@@ -96,10 +111,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(context)
         try:
-            with self.assertRaisesRegex(NotImplementedError, "final updater"):
-                target.become(source)
-            self.assertNotIn("content", context.effective_batch())
-            context._last_invocation = True
             with self.assertRaisesRegex(NotImplementedError, "dimension matching"):
                 target.become(source, match_width=True)
             self.assertIs(target.become(source), target)
@@ -107,11 +118,10 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 "object": {"slot": 11, "generation": 3},
                 "provisional": "callback-local:source",
             })
-            with self.assertRaisesRegex(NotImplementedError, "one effective content"):
+            with self.assertRaisesRegex(ValueError, "more than once"):
                 target.become(source)
-            context._writes.append({"kind": "opacity", "object": {"slot": 11, "generation": 3}, "opacity": 0.5})
-            with self.assertRaisesRegex(NotImplementedError, "final callback write"):
-                context.effective_batch()
+            with self.assertRaisesRegex(NotImplementedError, "must precede"):
+                context.style_changed((11, 3), context.row(target)[1].style, context.row(target)[1])
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
@@ -120,9 +130,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         scene, mobject, context = self._mobject_and_context()
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            with self.assertRaisesRegex(NotImplementedError, "final updater"):
-                mobject.set_effective_path([(0.0, 0.0), (1.0, 1.0)], closed=True)
-            context._last_invocation = True
             self.assertIs(
                 mobject.set_effective_path([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], closed=True),
                 mobject,
@@ -132,7 +139,8 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 "path": {"points": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "closed": True},
             })
             with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
-                context._content = None
+                context._content = []
+                context._content_targets.clear()
                 mobject.set_effective_path([(0.0, 0.0)])
             with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
                 mobject.set_effective_path([(0.0, 0.0)] * 4097)
@@ -148,7 +156,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         source._semantic_handle_fresh = True
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            context._last_invocation = True
             self.assertIs(updaters.set_effective_text(target, source), target)
             self.assertEqual(context.effective_batch()["content"], {
                 "object": {"slot": 11, "generation": 3},
