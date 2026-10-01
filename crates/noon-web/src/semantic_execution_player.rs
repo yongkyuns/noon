@@ -3548,13 +3548,15 @@ impl SemanticExecutionPlayer {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if content.len() > 1
-            && content
-                .iter()
-                .any(|(_, content)| !matches!(content, CallbackContentResult::Provisional(_)))
+            && content.iter().any(|(_, content)| {
+                !matches!(
+                    content,
+                    CallbackContentResult::Provisional(_) | CallbackContentResult::Geometry(_)
+                )
+            })
         {
             return Err(
-                "callback batches currently support multiple provisional inline visuals only"
-                    .into(),
+                "multi-target callback content currently supports inline geometry only".into(),
             );
         }
         #[cfg(any(target_arch = "wasm32", test))]
@@ -3562,35 +3564,53 @@ impl SemanticExecutionPlayer {
             contents
                 if !contents.is_empty()
                     && contents.iter().all(|(_, content)| {
-                        matches!(content, CallbackContentResult::Provisional(_))
+                        matches!(
+                            content,
+                            CallbackContentResult::Provisional(_)
+                                | CallbackContentResult::Geometry(_)
+                        )
                     }) =>
             {
                 let mut writes = batch.writes().to_vec();
                 let mut resolved = Vec::with_capacity(contents.len());
+                let mut has_provisional = false;
                 for (target, content) in contents {
-                    let CallbackContentResult::Provisional(key) = content else {
-                        unreachable!()
-                    };
-                    let (transform, style, result) =
-                        self.callback_provisional_visual(token, &key)?;
-                    writes.push(EffectiveSemanticPropertyWrite::Transform {
-                        object: target,
-                        transform,
-                    });
-                    writes.push(EffectiveSemanticPropertyWrite::Style {
-                        object: target,
-                        style,
-                    });
-                    resolved.push((target, result));
+                    match content {
+                        CallbackContentResult::Provisional(key) => {
+                            has_provisional = true;
+                            let (transform, style, result) =
+                                self.callback_provisional_visual(token, &key)?;
+                            writes.push(EffectiveSemanticPropertyWrite::Transform {
+                                object: target,
+                                transform,
+                            });
+                            writes.push(EffectiveSemanticPropertyWrite::Style {
+                                object: target,
+                                style,
+                            });
+                            resolved.push((target, result));
+                        }
+                        CallbackContentResult::Geometry(geometry) => {
+                            resolved.push((target, CallbackContentResult::Geometry(geometry)))
+                        }
+                        _ => unreachable!(),
+                    }
                 }
                 (
                     EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
                     resolved,
-                    true,
+                    has_provisional,
                 )
             }
             other => (batch, other, false),
         };
+        if content.len() > 1
+            && content
+                .iter()
+                .any(|(_, content)| matches!(content, CallbackContentResult::Path(_)))
+        {
+            return Err("multi-target callback content currently requires inline geometry; retained paths remain supported for one target".into());
+        }
         if !content.is_empty() {
             #[cfg(any(target_arch = "wasm32", test))]
             if self.callback_membership_transaction.is_some() && !provisional_effective {
@@ -3645,7 +3665,7 @@ impl SemanticExecutionPlayer {
         };
         #[cfg(any(target_arch = "wasm32", test))]
         {
-            if provisional_effective {
+            if content.len() > 1 {
                 let replacements = content
                     .into_iter()
                     .map(|(target, content)| match content {
@@ -3653,13 +3673,19 @@ impl SemanticExecutionPlayer {
                             Ok((target, ObjectContentRef::Geometry(geometry)))
                         }
                         _ => Err(AuthoringFailure::from(
-                            "only inline provisional geometry can be batched",
+                            "multi-target callback content requires inline geometry",
                         )),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 self.session
                     .commit_required_callback_phase_with_owned_contents(batch, replacements)
                     .map_err(AuthoringFailure::from)?;
+                self.callback_membership_transaction = None;
+            } else if provisional_effective {
+                if content.len() == 1 {
+                    let (target, content) = content.into_iter().next().expect("one item checked");
+                    self.commit_callback_content(batch, target, content)?;
+                }
                 self.callback_membership_transaction = None;
             } else if content.len() == 1 {
                 let (target, content) = content.into_iter().next().expect("one item checked");

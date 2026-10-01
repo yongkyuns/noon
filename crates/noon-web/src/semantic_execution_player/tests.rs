@@ -1780,6 +1780,59 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
 }
 
 #[test]
+fn callback_batch_accepts_multiple_direct_inline_geometries_atomically() {
+    let mut scene = noon::Scene::new();
+    let first = scene.circle(1.0).unwrap();
+    let second = scene.circle(0.5).unwrap();
+    scene.add(&first).unwrap();
+    scene.add(&second).unwrap();
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(first.node_id(), HostCallbackId::new(7), 0.0, None);
+    callbacks.add_updater(second.node_id(), HostCallbackId::new(9), 0.0, None);
+    callbacks
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        31,
+    )
+    .unwrap();
+    let phase: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let before = player.session.publication_context();
+    let batch = serde_json::json!({
+        "token": phase["token"], "region": phase["region"], "writes": [],
+        "content": [
+            {"object": phase["objects"][0]["node"], "geometry": {"kind": "circle", "radius": 2.0}},
+            {"object": phase["objects"][1]["node"], "geometry": {"kind": "circle", "radius": 3.0}}
+        ]
+    });
+    assert!(player
+        .commit_callback_phase_json(&batch.to_string())
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        player.session.frame().objects[0].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(2.0))
+    );
+    assert_eq!(
+        player.session.frame().objects[1].content,
+        ObjectContentRef::Geometry(GeometryRef::circle(3.0))
+    );
+    assert_eq!(
+        player.session.publication_context().frame_epoch().get(),
+        before.frame_epoch().get() + 1
+    );
+    assert_eq!(
+        player.session.take_frame_changes().object_indices(),
+        &[0, 1]
+    );
+}
+
+#[test]
 fn callback_provisional_retained_path_replaces_one_target_without_resource_growth() {
     let mut scene = noon::Scene::new();
     let target = scene.circle(1.0).unwrap();
