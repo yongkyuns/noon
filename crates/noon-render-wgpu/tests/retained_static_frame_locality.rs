@@ -2,7 +2,7 @@ use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2,
 };
-use noon_render_wgpu::text::TextDeviceMetrics;
+use noon_render_wgpu::text::{GlyphQuadInstance, TextDeviceMetrics};
 use noon_render_wgpu::{GpuRenderer, RetainedFrameIncrementalStats, RetainedFramePreparer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_typst::{compile_typst_resource, TypstMode};
@@ -432,7 +432,13 @@ fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
         renderer.upload_retained(&device, &queue, &prepared, &mut text_gpu)
     };
 
-    assert!(local_upload.text.bytes_uploaded > 0);
+    assert_eq!(local_upload.geometry.bytes_uploaded, 0);
+    assert_eq!(local_upload.images.pixel_bytes_uploaded, 0);
+    assert_eq!(local_upload.images.instance_bytes_uploaded, 0);
+    assert_eq!(
+        local_upload.bytes_uploaded(),
+        2 * std::mem::size_of::<GlyphQuadInstance>()
+    );
     assert!(local_upload.text.bytes_uploaded < cold_upload.text.bytes_uploaded);
     let mut expected_incremental = cold_incremental;
     expected_incremental.scratch_reuses += 1;
