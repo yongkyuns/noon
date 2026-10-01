@@ -385,6 +385,10 @@ try {
           "the subscribed down event should update the target rotation");
         assert.notDeepEqual(selectedFrame.frame.objects[1].transform, before.frame.objects[1].transform,
           "the subscribed up event should update the unrelated rotation");
+        assert.equal(selectedFrame.frame.objects[0].transform.rotation, 1,
+          "one admitted press must publish exactly one Rust down occurrence");
+        assert.equal(selectedFrame.frame.objects[1].transform.rotation, 1,
+          "one admitted release must publish exactly one Rust up occurrence");
         assert.equal(selectedFrame.time, 0, "paused native input must not advance authored time");
 
         // Retire a held contact through actual DOM cancellation; it must not
@@ -402,6 +406,8 @@ try {
         assert.equal(afterCancel.filter(kind => kind === "release").length, 1,
           "cancellation must not fabricate a second up event");
         const cancelledFrame = await state();
+        assert.equal(cancelledFrame.frame.objects[0].transform.rotation, 2,
+          "cancelling a second press must publish that down occurrence once");
         assert.deepEqual(cancelledFrame.frame.objects[1].transform, selectedFrame.frame.objects[1].transform,
           "cancellation must not publish an up event");
         assert.equal(cancelledFrame.time, 0);
@@ -414,6 +420,10 @@ try {
         assert.deepEqual(targetCenter(cleared), targetCenter(baseline),
           "background click should clear selection");
         const final = await state();
+        assert.equal(final.frame.objects[0].transform.rotation, 3,
+          "the background press must publish one additional down occurrence");
+        assert.equal(final.frame.objects[1].transform.rotation, 2,
+          "the background release must publish one additional up occurrence");
         assert.notDeepEqual(final.frame.objects[0].transform, selectedFrame.frame.objects[0].transform,
           "background click should publish its subscribed down event");
         assert.notDeepEqual(final.frame.objects[1].transform, selectedFrame.frame.objects[1].transform,
