@@ -226,6 +226,7 @@ pub fn create_shapes() -> Result<ExecutionSession, String> {
 }
 
 /// Mixed Text and analytic Circle family Create used by renderer qualifications.
+#[cfg(feature = "native-text")]
 pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let mut text = scene.text("AB").map_err(|error| error.to_string())?;
@@ -238,6 +239,9 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
     paint(&mut circle, Some(BLUE), WHITE, 0.055)?;
     let family = scene
         .family(&[(&text).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[crate::MobjectTarget::Family(&family)])
         .map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
