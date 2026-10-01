@@ -1,3 +1,26 @@
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct FamilyAdmission<T, E> {
+    pub(crate) outcome: crate::RetainedTransportApplyOutcome,
+    pub(crate) changes: noon_runtime::FrameChanges,
+    pub(crate) resident_preparation: Option<Result<T, E>>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn apply_family_then_resident_preparation<T, E>(
+    mirror: &mut crate::InstalledRetainedExecutionMirror,
+    delta: crate::RetainedFamilyExecutionDeltaEnvelope,
+    prepare_resident: impl FnOnce(&crate::InstalledRetainedExecutionMirror) -> Result<T, E>,
+) -> Result<FamilyAdmission<T, E>, crate::InstalledExecutionError> {
+    let applied = mirror.apply_family(delta)?;
+    let resident_preparation = (applied.0 == crate::RetainedTransportApplyOutcome::Applied)
+        .then(|| prepare_resident(mirror));
+    Ok(FamilyAdmission {
+        outcome: applied.0,
+        changes: applied.1,
+        resident_preparation,
+    })
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::Vec2;
@@ -10,6 +33,7 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
+    use super::{apply_family_then_resident_preparation, FamilyAdmission};
     use crate::{
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
@@ -298,7 +322,7 @@ mod wasm {
                     .transpose()
                     .map_err(js_error)?
             };
-            if !stale {
+            let resident_additions = if !stale {
                 if let Some(view) = delta.pointer_view {
                     view.validate().map_err(js_error)?;
                     if !view.drawable() {
@@ -313,61 +337,95 @@ mod wasm {
                                 "retained render geometry addition session does not match delta",
                             ));
                         }
-                        let next_render_geometry_count = self
-                            .mirror
-                            .resources()
-                            .render_geometries()
-                            .len()
-                            .saturating_add(addition.geometries.len());
-                        let next_preparation_count = self
-                            .mirror
-                            .resources()
-                            .render_geometry_preparation_count()
-                            .saturating_add(addition.preparations.len());
-                        self.preparer.set_scene_path_mesh_cache_budget(
-                            next_render_geometry_count.max(next_preparation_count),
-                            self.mirror
-                                .resources()
-                                .geometry_count()
-                                .saturating_add(bundle.geometry_count()),
-                        );
-                        if gpu_available {
-                            let requests = addition
+                        Some(
+                            addition
                                 .preparations
                                 .iter()
-                                .map(|preparation| PathMeshPreload {
-                                    geometry: addition.geometries[&preparation.resource],
-                                    style: preparation.style,
-                                    transform: preparation.transform,
+                                .map(|preparation| {
+                                    (
+                                        preparation.resource,
+                                        preparation.style,
+                                        preparation.transform,
+                                    )
                                 })
-                                .collect::<Vec<_>>();
-                            let preload = self
-                                .preparer
-                                .append_preload_path_meshes(
-                                    &self.device,
-                                    &self.queue,
-                                    &mut self.renderer,
-                                    &requests,
-                                )
-                                .map_err(js_error)?;
-                            self.preloaded_geometry_count = self
-                                .preloaded_geometry_count
-                                .saturating_add(preload.geometry.geometry_cache_misses);
-                            self.preload_bytes_uploaded = self
-                                .preload_bytes_uploaded
-                                .saturating_add(preload.upload.bytes_uploaded);
-                            // Queue writes from the admitted resource suffix precede any
-                            // first-frame uploads/draw submission that follows this call.
-                            if preload.upload.bytes_uploaded != 0 {
-                                self.queue.submit([]);
-                            }
-                        }
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        None
                     }
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
             let pointer_view = delta.pointer_view;
-            let (outcome, changes) = self.mirror.apply_family(delta).map_err(js_error)?;
+            let mirror = &mut self.mirror;
+            let preparer = &mut self.preparer;
+            let renderer = &mut self.renderer;
+            let device = &self.device;
+            let queue = &self.queue;
+            let preloaded_geometry_count = &mut self.preloaded_geometry_count;
+            let preload_bytes_uploaded = &mut self.preload_bytes_uploaded;
+            let FamilyAdmission {
+                outcome,
+                changes,
+                resident_preparation,
+            } = apply_family_then_resident_preparation(mirror, delta, |mirror| {
+                let Some(preparations) = resident_additions else {
+                    return Ok(());
+                };
+                let resources = mirror.resources();
+                preparer.set_scene_path_mesh_cache_budget(
+                    resources
+                        .render_geometries()
+                        .len()
+                        .max(resources.render_geometry_preparation_count()),
+                    resources.geometry_count(),
+                );
+                if !gpu_available {
+                    return Ok(());
+                }
+                let geometries = resources.render_geometries();
+                let requests =
+                    preparations
+                        .iter()
+                        .map(|(resource, style, transform)| {
+                            geometries.get(*resource as usize)?.geometry.as_deref().map(
+                                |geometry| PathMeshPreload {
+                                    geometry,
+                                    style: *style,
+                                    transform: *transform,
+                                },
+                            )
+                        })
+                        .collect::<Option<Vec<_>>>();
+                let Some(requests) = requests else {
+                    return Err("admitted geometry is missing".to_owned());
+                };
+                let preload = preparer
+                    .append_preload_path_meshes(device, queue, renderer, &requests)
+                    .map_err(|error| error.to_string())?;
+                *preloaded_geometry_count =
+                    preloaded_geometry_count.saturating_add(preload.geometry.geometry_cache_misses);
+                *preload_bytes_uploaded =
+                    preload_bytes_uploaded.saturating_add(preload.upload.bytes_uploaded);
+                // Queue writes from the admitted resource suffix precede any
+                // first-frame uploads/draw submission that follows.
+                if preload.upload.bytes_uploaded != 0 {
+                    queue.submit([]);
+                }
+                Ok(())
+            })
+            .map_err(js_error)?;
+            if let Some(Err(error)) = resident_preparation {
+                // Admission is authoritative. Preparation hints are opportunistic and
+                // accepted resources remain usable through ordinary lazy path preparation.
+                web_sys::console::warn_1(&js_sys::Error::new(&format!(
+                    "resident path preload skipped: {error}"
+                )));
+            }
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
                     self.selection_overlay = overlay;

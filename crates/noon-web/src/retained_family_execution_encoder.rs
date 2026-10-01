@@ -885,7 +885,6 @@ mod tests {
         assert_eq!(resources.render_geometry_count(), 1);
         let addition = resources.render_geometry_addition().unwrap().unwrap();
         assert_eq!(addition.session, 92);
-        assert_eq!(addition.geometries.len(), 1);
         assert_eq!(addition.preparations.len(), 1);
 
         frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(

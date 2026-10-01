@@ -43,6 +43,75 @@ fn image_handle(delta: &RetainedExecutionDeltaEnvelope) -> TransportImageResourc
         _ => panic!("image snapshot"),
     }
 }
+
+fn family_delta(retained: RetainedExecutionDeltaEnvelope) -> RetainedFamilyExecutionDeltaEnvelope {
+    RetainedFamilyExecutionDeltaEnvelope {
+        retained,
+        family_states: Vec::new(),
+        family_plans: Vec::new(),
+        resource_additions: None,
+        resource_retirements: RetainedResourceRetirements::default(),
+        transient_presentations: Vec::new(),
+        selection_overlay: None,
+        pointer_view: None,
+    }
+}
+
+#[test]
+fn rejected_family_delta_does_not_run_resident_preparation() {
+    let (bytes, initial) = initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+
+    let mut rejected = initial.clone();
+    rejected.snapshot = false;
+    rejected.sequence = 1;
+    rejected.objects.push(rejected.objects[0].clone());
+    let before = mirror.frame().unwrap().clone();
+    let mut resident_meshes = vec![0_u32];
+    let result = crate::retained_execution_canvas::apply_family_then_resident_preparation(
+        &mut mirror,
+        family_delta(rejected),
+        |_| {
+            resident_meshes.push(1);
+            Ok::<_, &'static str>(())
+        },
+    );
+
+    assert!(result.is_err());
+    assert_eq!(resident_meshes, [0]);
+    assert_eq!(mirror.frame().unwrap(), &before);
+}
+
+#[test]
+fn resident_preload_failure_does_not_reject_an_admitted_delta() {
+    let (bytes, initial) = initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+
+    let mut update = initial;
+    update.snapshot = false;
+    update.sequence = 1;
+    update.objects[0].transform.translation = noon_core::Vec2::new(3.0, 4.0);
+    let admission = crate::retained_execution_canvas::apply_family_then_resident_preparation(
+        &mut mirror,
+        family_delta(update),
+        |_| Err::<(), _>("forced preload failure"),
+    )
+    .unwrap();
+
+    assert_eq!(admission.outcome, RetainedTransportApplyOutcome::Applied);
+    assert_eq!(admission.changes.object_indices(), &[0]);
+    assert_eq!(
+        admission.resident_preparation,
+        Some(Err("forced preload failure"))
+    );
+    assert_eq!(
+        mirror.frame().unwrap().objects[0].transform.translation,
+        noon_core::Vec2::new(3.0, 4.0)
+    );
+}
+
 #[test]
 fn image_bundle_round_trip_remaps_provenance_and_keeps_pixels_out_of_deltas() {
     let (bytes, initial) = initial();

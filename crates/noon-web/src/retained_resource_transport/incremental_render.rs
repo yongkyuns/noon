@@ -11,7 +11,6 @@ use super::{
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) struct RenderGeometryAdditionView<'a> {
     pub(crate) session: u32,
-    pub(crate) geometries: std::collections::HashMap<u32, &'a GeometryRef>,
     pub(crate) preparations: &'a [RenderGeometryPreparation],
 }
 
@@ -48,16 +47,6 @@ impl RetainedResourceBundle {
         validate_render_geometry_resources(resources)?;
         Ok(Some(RenderGeometryAdditionView {
             session: resources.session,
-            geometries: resources
-                .updates
-                .iter()
-                .filter_map(|update| {
-                    update
-                        .geometry
-                        .as_ref()
-                        .map(|geometry| (update.slot, geometry))
-                })
-                .collect(),
             preparations: &resources.preparations,
         }))
     }
