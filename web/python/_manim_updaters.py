@@ -1057,12 +1057,47 @@ class _CanonicalCallbackContext:
         }
         row.invalidate_bounds()
 
+    def replace_effective_path(
+        self, mobject: _base.Mobject, points: list[tuple[float, float]], closed: bool
+    ) -> None:
+        if not self._last_invocation:
+            raise NotImplementedError(
+                "effective path replacement must be the final updater in this region"
+            )
+        if self._content is not None:
+            raise NotImplementedError("one effective content replacement per callback phase")
+        if len(points) < 2:
+            raise ValueError("effective path requires at least two points")
+        checked = [
+            [_phase_number("path x", point[0]), _phase_number("path y", point[1])]
+            for point in points
+        ]
+        key, row = self.row(mobject)
+        self._content = {
+            "object": _phase_node_json(key),
+            "path": {"points": checked, "closed": bool(closed)},
+        }
+        row.invalidate_bounds()
+
 
 def set_effective_circle(mobject: _base.Mobject, radius: float) -> _base.Mobject:
     context = _canonical_phase_context(mobject)
     if context is None:
         raise RuntimeError("set_effective_circle requires an active canonical callback phase")
     context.replace_effective_circle(mobject, radius)
+    return mobject
+
+
+def set_effective_path(
+    mobject: _base.Mobject,
+    points: list[tuple[float, float]],
+    closed: bool = False,
+) -> _base.Mobject:
+    """Publish a producer-owned polygonal path through the callback content lease."""
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_path requires an active canonical callback phase")
+    context.replace_effective_path(mobject, points, closed)
     return mobject
 
 

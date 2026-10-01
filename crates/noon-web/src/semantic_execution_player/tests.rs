@@ -1,8 +1,9 @@
 use super::*;
 use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
-    AnimationOptions, HostCallbackId, NativeInputModifiers, NativePointerId, NativePointerInput,
-    NativePointerInputKind, NativePointerPosition, RateFunction, SemanticClickIndicate,
+    AnimationOptions, GeometryResourceLookup, HostCallbackId, NativeInputModifiers,
+    NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
+    RateFunction, SemanticClickIndicate,
     SemanticMutationTransaction, SemanticMutationTransactionError, SemanticObjectProperty,
     SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, TrackTiming,
 };
@@ -289,6 +290,97 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
         ObjectContentRef::Geometry(GeometryRef::circle(3.0))
     );
     assert_eq!(player.session.frame().time, 1.0);
+}
+
+#[test]
+fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
+    let mut scene = noon::Scene::new();
+    let source = scene.circle(1.0).unwrap();
+    scene.add(&source).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        2.0,
+        80,
+    )
+    .unwrap();
+    let make_batch = |phase: &serde_json::Value, x: f32| {
+        serde_json::json!({
+            "token": phase["token"], "region": phase["region"], "writes": [],
+            "content": {"object": phase["objects"][0]["node"], "path": {
+                "points": [[0.0, 0.0], [x, 0.0], [0.0, 1.0]], "closed": true
+            }}
+        })
+        .to_string()
+    };
+    let first: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let invalid = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"], "path": {
+            "points": [[0.0, 0.0]], "closed": true
+        }}
+    });
+    assert!(player
+        .commit_callback_phase_json(&invalid.to_string())
+        .is_err());
+    assert!(player.session.pending_callback_token().is_some());
+    let missing_producer = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"]}
+    });
+    assert!(player
+        .commit_callback_phase_json(&missing_producer.to_string())
+        .is_err());
+    assert!(player.session.pending_callback_token().is_some());
+    player
+        .commit_callback_phase_json(&make_batch(&first, 2.0))
+        .unwrap();
+    let lease = player
+        .session
+        .effective_content_lease(source.node_id())
+        .unwrap();
+    let ObjectContentRef::Geometry(GeometryRef::External(first_id)) =
+        player.session.frame().objects[0].content
+    else {
+        panic!("expected external path")
+    };
+    let first_handle = player
+        .session
+        .geometry_resources()
+        .current_handle(first_id)
+        .unwrap();
+    assert!(player
+        .session
+        .geometry_resources()
+        .get(first_handle)
+        .is_some());
+
+    let second: serde_json::Value =
+        serde_json::from_str(&player.advance_to_callback_phase(0.5).unwrap().unwrap()).unwrap();
+    assert!(player
+        .commit_callback_phase_json(&make_batch(&first, 4.0))
+        .is_err());
+    player
+        .commit_callback_phase_json(&make_batch(&second, 3.0))
+        .unwrap();
+    assert_eq!(
+        player.session.effective_content_lease(source.node_id()),
+        Some(lease)
+    );
+    assert!(player
+        .session
+        .geometry_resources()
+        .get(first_handle)
+        .is_none());
+    assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+    assert!(player.session.last_spatial_update_stats().leaves_upserted <= 1);
 }
 
 #[test]
