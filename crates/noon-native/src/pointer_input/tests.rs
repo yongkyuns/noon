@@ -377,6 +377,82 @@ fn hidpi_changes_logical_units_not_scene_position_and_invalidates_old_binding() 
 }
 
 #[test]
+fn shared_rebind_trace_matches_after_mid_session_viewport_and_scale_change() {
+    let mut f = Fixture::new();
+    f.move_to(
+        f64::from(shared_trace::REBIND_OLD_POSITION.0),
+        f64::from(shared_trace::REBIND_OLD_POSITION.1),
+    );
+    f.edge(ElementState::Pressed);
+    let old = f.app.execution.native_pointer_input_token().unwrap();
+
+    let resized = PhysicalSize::new(1000, 600);
+    f.app.pointer_scale_changed(resized, 2.0).unwrap();
+    assert_eq!(
+        f.value(f.viewport),
+        &ReactiveValue::Vec2(Vec2::new(
+            shared_trace::REBIND_NEW_VIEWPORT.0,
+            shared_trace::REBIND_NEW_VIEWPORT.1,
+        ))
+    );
+    assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
+
+    let sequence = f.app.next_input_sequence;
+    let stale = NativePointerInput::new(
+        sequence,
+        old.pointer(),
+        old.context(),
+        NativeInputModifiers::default(),
+        NativePointerInputKind::Cancel(NativePointerCancellation::FocusLost),
+    );
+    assert!(f
+        .app
+        .execution
+        .submit_native_pointer_input(&old, stale)
+        .is_err());
+    assert_eq!(f.app.next_input_sequence, sequence);
+
+    model_presentation(&mut f.app, resized, 2.0);
+    f.app
+        .dispatch_pointer_position(
+            PhysicalPosition::new(
+                f64::from(shared_trace::REBIND_NEW_POSITION.0 * 2.0),
+                f64::from(shared_trace::REBIND_NEW_POSITION.1 * 2.0),
+            ),
+            resized,
+            2.0,
+        )
+        .unwrap();
+    assert_eq!(
+        f.value(f.position),
+        &ReactiveValue::Vec2(Vec2::new(
+            shared_trace::REBIND_EXPECTED_POSITION.0,
+            shared_trace::REBIND_EXPECTED_POSITION.1,
+        ))
+    );
+    for state in [ElementState::Pressed, ElementState::Released] {
+        model_presentation(&mut f.app, resized, 2.0);
+        f.app
+            .dispatch_pointer_button(MouseButton::Left, state, resized, 2.0)
+            .unwrap();
+    }
+
+    assert_eq!(
+        f.value(f.down),
+        &ReactiveValue::Scalar(shared_trace::REBIND_EXPECTED_DOWN_COUNT)
+    );
+    assert_eq!(
+        f.value(f.up),
+        &ReactiveValue::Scalar(shared_trace::REBIND_EXPECTED_UP_COUNT)
+    );
+    assert_eq!(f.app.next_input_sequence, 5);
+    assert_eq!(
+        f.app.session().frame().time,
+        shared_trace::REBIND_EXPECTED_FRAME_TIME
+    );
+}
+
+#[test]
 fn normalized_press_move_release_and_cancel_match_at_one_and_two_device_scale() {
     for scale in [1.0, 2.0] {
         let mut f = Fixture::new();
