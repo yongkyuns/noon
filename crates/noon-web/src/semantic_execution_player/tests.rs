@@ -638,6 +638,22 @@ fn callback_text_source_uses_the_effective_text_resource_closure() {
     );
 }
 
+#[test]
+fn callback_content_wire_rejects_missing_or_ambiguous_variants() {
+    let object = serde_json::json!({"slot": 1, "generation": 0});
+    let geometry = serde_json::json!({"kind": "circle", "radius": 1.0});
+    let path = serde_json::json!({"points": [[0.0, 0.0], [1.0, 0.0]]});
+    for content in [
+        serde_json::json!({"object": object}),
+        serde_json::json!({"object": object, "geometry": geometry, "path": path}),
+        serde_json::json!({"object": object, "path": path, "text_source": object}),
+        serde_json::json!({"object": object, "geometry": geometry, "text_source": object}),
+    ] {
+        let wire: CallbackContentWire = serde_json::from_value(content).unwrap();
+        assert!(wire.into_result().is_err());
+    }
+}
+
 struct NumericRuleBackend;
 
 impl noon::LatexBackend for NumericRuleBackend {
