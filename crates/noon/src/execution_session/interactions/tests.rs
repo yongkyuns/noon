@@ -133,6 +133,65 @@ fn click_indicate_is_local_and_does_not_change_authored_revisions() {
 }
 
 #[test]
+fn click_indicate_overlaps_an_authored_segment_and_restores_independently() {
+    let (mut store, root, target, scripted, mut session) = fixture(0);
+    let scripted_segment = session
+        .declare_and_activate_fade(
+            &mut store,
+            root,
+            scripted,
+            noon_core::SemanticFadeDirection::Out,
+            AnimationOptions::new().run_time(1.0),
+        )
+        .unwrap();
+    let scripted_object = session.execution_object_id(scripted).unwrap();
+    let scripted_index = session
+        .frame()
+        .objects
+        .iter()
+        .position(|row| row.id == scripted_object)
+        .unwrap();
+    let target_object = session.execution_object_id(target).unwrap();
+    let target_index = session
+        .frame()
+        .objects
+        .iter()
+        .position(|row| row.id == target_object)
+        .unwrap();
+    let target_baseline = session.frame().objects[target_index].clone();
+
+    session.advance_to(0.5).unwrap();
+    let scripted_midpoint = session.frame().objects[scripted_index].appearance;
+    assert!(scripted_midpoint > 0.0 && scripted_midpoint < 1.0);
+    click(&mut session, 1, 0.0);
+    session.advance_interactions(10.0).unwrap();
+    session.advance_interactions(10.2).unwrap();
+    assert!(
+        session.frame().objects[target_index].transform.scale.x > target_baseline.transform.scale.x
+    );
+    assert_eq!(
+        session.frame().objects[scripted_index].appearance,
+        scripted_midpoint
+    );
+    assert_eq!(session.frame().time, 0.5);
+
+    session.advance_to(0.75).unwrap();
+    assert!(session.frame().objects[scripted_index].appearance < scripted_midpoint);
+    assert!(session.interactions_active());
+    session.advance_interactions(10.4).unwrap();
+    assert_eq!(session.frame().objects[target_index], target_baseline);
+    assert_eq!(session.frame().time, 0.75);
+
+    session.advance_to(scripted_segment.end_time()).unwrap();
+    session
+        .complete_segment(&mut store, scripted_segment)
+        .unwrap();
+    assert!(session.segment_state(scripted_segment).is_complete());
+    assert_eq!(session.frame().time, scripted_segment.end_time());
+    assert!(!session.interactions_active());
+}
+
+#[test]
 fn binding_refreshes_through_replace_remove_detach_and_reattach() {
     let (mut store, root, target, _, mut session) = fixture(0);
     let mut replace = SemanticMutationTransaction::new();
