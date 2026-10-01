@@ -365,11 +365,9 @@ impl RetainedFramePreparer {
                     object_id,
                     scratch_id,
                 } => {
-                    let object_index = frame
-                        .retained
-                        .objects
-                        .iter()
-                        .position(|object| object.id == object_id)
+                    let object_index = *self
+                        .object_indices
+                        .get(&object_id)
                         .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
                     let Some((state, plan)) = selected_family_plan(frame, plans, object_index)?
                     else {

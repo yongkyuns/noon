@@ -221,11 +221,9 @@ impl RetainedFramePreparer {
                     object_id,
                     scratch_id,
                 } => {
-                    let object_index = frame
-                        .retained
-                        .objects
-                        .iter()
-                        .position(|object| object.id == object_id)
+                    let object_index = *self
+                        .object_indices
+                        .get(&object_id)
                         .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
                     if let Some(reveal) =
                         self.family_geometry_reveal(frame, plan, object_index, object_id)?

@@ -217,14 +217,9 @@ impl RetainedFramePreparer {
                     object_id,
                     scratch_id,
                 } => {
-                    let object_index = frame
-                        .retained
-                        .objects
-                        .iter()
-                        .position(|object| object.id == object_id)
-                        .ok_or(RetainedFamilyDrawBorderPrepareError::MissingSourceObject(
-                            object_id,
-                        ))?;
+                    let object_index = *self.object_indices.get(&object_id).ok_or(
+                        RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id),
+                    )?;
                     if let Some(mut members) =
                         retained_family_draw_border_then_fill_members_for_object(
                             frame,
