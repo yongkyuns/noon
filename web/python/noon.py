@@ -535,6 +535,10 @@ class Mobject:
         """
         return _callback_operations().set_effective_path(self, points, closed)
 
+    def set_effective_text(self, source: Mobject) -> Mobject:
+        """Replace callback-effective content with a prebuilt Text resource."""
+        return _callback_operations().set_effective_text(self, source)
+
     def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
         return _callback_operations().remove_updater(self, update_function)
 

@@ -1676,7 +1676,7 @@ impl ExecutionSession {
         let pending = self
             .pending_callback
             .take()
-            .expect("pending phase remained live throughout preflight");
+            .expect("pending phase remained live throughout content preflight");
         let (frame, completion) = pending.into_parts();
         let lease = self
             .runtime
@@ -1740,6 +1740,33 @@ impl ExecutionSession {
         let replacement = self
             .runtime
             .prepare_effective_geometry_replacement(object, handle, source, lease)
+            .map_err(ExecutionSessionCallbackError::Content)?;
+        let lease =
+            self.commit_prepared_callback_content(effective, receipt_domains, replacement)?;
+        self.callback_content_leases.insert(target, lease);
+        Ok(lease)
+    }
+
+    /// Publish prebuilt text through the same callback-owned content lease.
+    pub fn commit_required_callback_phase_with_owned_text(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        handle: noon_core::TextResourceHandle,
+        texts: &noon_core::TextResourceArena,
+        fonts: &noon_core::FontResourceArena,
+        geometries: &noon_core::GeometryResourceArena,
+    ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
+        let lease = self.callback_content_lease(target, object)?;
+        let batch = self.complete_callback_batch_for_commit(batch)?;
+        let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
+        let replacement = self
+            .runtime
+            .prepare_effective_text_replacement(object, handle, texts, fonts, geometries, lease)
             .map_err(ExecutionSessionCallbackError::Content)?;
         let lease =
             self.commit_prepared_callback_content(effective, receipt_domains, replacement)?;

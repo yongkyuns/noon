@@ -111,6 +111,24 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
+    def test_effective_text_names_a_prebuilt_text_resource(self) -> None:
+        scene, target, context = self._mobject_and_context()
+        source = identity_only_wrapper(compat.Mobject)
+        source._semantic_handle = type(
+            "SemanticHandle", (), {"semanticSlot": 21, "semanticGeneration": 2}
+        )()
+        source._semantic_handle_fresh = True
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            context._last_invocation = True
+            self.assertIs(updaters.set_effective_text(target, source), target)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "text_source": {"slot": 21, "generation": 2},
+            })
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
 
