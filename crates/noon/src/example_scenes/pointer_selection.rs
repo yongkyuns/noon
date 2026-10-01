@@ -63,7 +63,7 @@ fn build(animated: bool) -> Result<(Scene, Mobject), String> {
                 scene.on_click_indicate(
                     shape,
                     crate::IndicateOptions::default(),
-                    crate::AnimationOptions::new().run_time(0.4),
+                    crate::AnimationOptions::new().run_time(1.0),
                 )?;
             }
         }

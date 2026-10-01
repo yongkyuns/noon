@@ -97,6 +97,8 @@ export async function attachSemanticEngine(
   let executionWakeCadence = null;
   let pendingRendererObservation = null;
   let lastExternalSampleTime = null;
+  let externalInteractionWallTime = null;
+  let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
@@ -277,6 +279,29 @@ export async function attachSemanticEngine(
       throw new Error("semantic execution timer wake has an invalid delay");
     }
     emitExecutionWake(cadence, timerAfterMilliseconds, force);
+  };
+  const observeExternalInteractionWake = (force = false) => {
+    const active = continuationActive && player !== null && player.interactionsActive();
+    if (!active) {
+      externalInteractionWallTime = null;
+      externalInteractionTickTime = null;
+    }
+    emitExecutionWake(active ? "animation_frame" : "idle", null, force);
+  };
+  const advanceExternalInteractionClock = (wallTime) => {
+    // RAF can be throttled or suspended for seconds. Keep the transient clock
+    // monotonic while limiting each admitted step to one nominal frame, so a
+    // resumed tab cannot fast-forward an interaction in a single publication.
+    const maxStepMs = 1000 / 60;
+    if (externalInteractionWallTime === null || externalInteractionTickTime === null) {
+      externalInteractionWallTime = wallTime;
+      externalInteractionTickTime = wallTime;
+    } else {
+      const elapsed = Math.max(0, wallTime - externalInteractionWallTime);
+      externalInteractionWallTime = wallTime;
+      externalInteractionTickTime += Math.min(elapsed, maxStepMs);
+    }
+    return externalInteractionTickTime;
   };
   const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
     const wake = reanchor
@@ -880,11 +905,14 @@ export async function attachSemanticEngine(
             if (message.type === "browser_pointer_view" &&
                 message.view.width > 0 && message.view.height > 0) {
               await awaitPresentation(publication);
+            } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES &&
+                       player.interactionsActive() && publication !== null) {
+              await awaitPresentation(publication);
             }
             // Live driving pauses the ordinary playback clock. Native input
             // must retain the active segment's Rust-derived wake, including
             // pure-wait deadlines, rather than accidentally publishing idle.
-            if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
+            if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) observeExternalInteractionWake();
             else if (continuationActive) observeContinuationWake(performance.now());
             else observeExecutionWake(performance.now());
             break;
@@ -917,7 +945,18 @@ export async function attachSemanticEngine(
         // side effects while this player is retained for recovery.
         if (callbackFault === null) {
           try {
-            if (continuationActive) {
+            if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+              if (player.interactionsActive()) {
+                const publication = send(
+                  player.advanceInteractionsDeltaJson(advanceExternalInteractionClock(performance.now())),
+                );
+                if (publication !== null) await awaitPresentation(publication);
+              } else {
+                externalInteractionWallTime = null;
+                externalInteractionTickTime = null;
+              }
+              observeExternalInteractionWake();
+            } else if (continuationActive) {
               // A render-worker timestamp may use a different time origin.
               // Its tick is only a wake opportunity; Rust progression stays
               // anchored to this authoring worker's monotonic clock.
@@ -1087,6 +1126,11 @@ export async function attachSemanticEngine(
         // Replay admission cannot suppress an input effect's Rust-owned wake.
         // A paused authored clock still permits transient interaction animation.
         if (pacing === SEMANTIC_PACING_REALTIME && executionWakeCadence !== "idle") {
+          latestTick = message.timestamp;
+          void drain();
+        } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationActive &&
+                   player !== null && executionWakeCadence === "animation_frame" &&
+                   player.interactionsActive()) {
           latestTick = message.timestamp;
           void drain();
         }
