@@ -220,6 +220,41 @@ fn paired_trace_qualifies_reactive_edges_selection_and_cancellation() {
 }
 
 #[test]
+fn native_input_classifies_unrecorded_replay_without_blocking_forward_execution() {
+    let fixture = shared_trace::Fixture::signals_only();
+    let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+    let mut app = NativeApp::new(session, NativeViewportConfig::default());
+    app.static_session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
+
+    model_presentation(&mut app, SIZE, 1.0);
+    app.dispatch_pointer_position(PhysicalPosition::new(400.0, 200.0), SIZE, 1.0)
+        .unwrap();
+    model_presentation(&mut app, SIZE, 1.0);
+    app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0)
+        .unwrap();
+    assert_eq!(
+        app.session().effective_signal_value(fixture.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    assert_eq!(
+        app.static_session_mut()
+            .seal_replay()
+            .map_err(|error| error.to_string()),
+        Err("replay unavailable: UnrecordedInput".to_owned())
+    );
+
+    // Unsupported replay classification must not block ordinary execution.
+    app.static_session_mut().advance_to(1.0).unwrap();
+    assert_eq!(app.session().frame().time, 1.0);
+    assert_eq!(
+        app.session().effective_signal_value(fixture.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+}
+
+#[test]
 fn repeated_edges_and_nonpointer_events_share_sequence_without_coalescing() {
     let mut f = Fixture::new();
     f.move_to(400.0, 200.0);
