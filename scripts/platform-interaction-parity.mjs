@@ -401,6 +401,14 @@ async function dragParity(backend) {
 
 async function clickIndicateParity(backend) {
   const pages = {}, errors = { direct: [], worker: [] }, checkpoints = [];
+  const waitUntil = async (label, probe, timeoutMs = 90_000) => {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      if (await probe()) return;
+      await new Promise(resolve => setTimeout(resolve, 16));
+    } while (Date.now() < deadline);
+    throw new Error(`${label} did not settle before ${timeoutMs} ms`);
+  };
   try {
     await openParityPages(pages, errors);
     await pages.direct.evaluate(async () => {
@@ -448,10 +456,10 @@ async function clickIndicateParity(backend) {
     assert.equal((await pages.worker.evaluate(async () =>
       (await clickIndicateParity.execution.metrics()).metrics)).backend, expectedBackend);
     await pages.direct.waitForFunction(() => clickIndicateParity.driver.stats().idle);
-    await pages.worker.waitForFunction(async () => {
+    await waitUntil("worker baseline", () => pages.worker.evaluate(async () => {
       const { metrics } = await clickIndicateParity.execution.metrics();
       return metrics.ready && metrics.retained && metrics.presentedFrames > 0 && !metrics.needsPresent;
-    });
+    }));
     const capture = async (host, label) => image(pages[host], label, backend, `click-indicate-${host}`);
     const baseline = {
       direct: await capture("direct", "baseline"),
@@ -465,32 +473,38 @@ async function clickIndicateParity(backend) {
     assert.equal(initial.direct.time, 0); assert.equal(initial.worker.time, 0);
     const revision = {
       direct: String(initial.direct.publication.scene_revision),
-      worker: initial.worker.publication.scene_revision,
+      worker: String(initial.worker.publication.scene_revision),
     };
     const point = shapeSurfaceCenter(SHAPES[0]);
     const frameFor = host => pages[host].evaluate(host => host === "direct"
       ? JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson())
       : clickIndicateParity.execution.debugFrame(), host);
+    const activeFrameFor = async host => {
+      const deadline = Date.now() + 5000;
+      do {
+        const frame = await frameFor(host);
+        const object = frame.objects[0];
+        if (Math.abs(object.transform.scale.x) >
+            Math.abs(initial[host].objects[0].transform.scale.x) * 1.05 &&
+            object.fill?.red > 0.5 &&
+            object.fill?.green > 0.5 && object.fill?.blue < 0.5) return frame;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      } while (Date.now() < deadline);
+      throw new Error(`${host} click did not reach active Rust Indicate state`);
+    };
     const active = {};
     for (const host of ["direct", "worker"]) {
       const bounds = await pages[host].locator("#scene").boundingBox();
       assert.ok(bounds);
       await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
-      await pages[host].waitForFunction(async host => {
-        const frame = host === "direct"
-          ? JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson())
-          : await clickIndicateParity.execution.debugFrame();
-        const object = frame.objects[0];
-        return object.transform.scale.x > 1.05 && object.fill?.red > 0.5 &&
-          object.fill?.green > 0.5 && object.fill?.blue < 0.5;
-      }, host);
-      active[host] = await frameFor(host);
+      active[host] = await activeFrameFor(host);
+      const pixels = await capture(host, "active");
       assert.equal(active[host].time, 0, `${host} click action must leave authored time paused`);
       assert.equal(String(active[host].publication.scene_revision), revision[host],
         `${host} click action must not author a scene edit`);
-      assert.ok(active[host].objects[0].transform.scale.x > 1.05,
+      assert.ok(Math.abs(active[host].objects[0].transform.scale.x) >
+        Math.abs(initial[host].objects[0].transform.scale.x) * 1.05,
         `${host} Rust Indicate must visibly scale the target`);
-      const pixels = await capture(host, "active");
       assert.notDeepEqual(pixels.data, baseline[host].data, `${host} active Indicate changes pixels`);
       checkpoints.push({ id: `${host}-active`, authoredTime: active[host].time,
         sceneRevision: String(active[host].publication.scene_revision), scaleX: active[host].objects[0].transform.scale.x });
@@ -499,12 +513,12 @@ async function clickIndicateParity(backend) {
       if (host === "direct") {
         await pages.direct.waitForFunction(() => clickIndicateParity.driver.stats().idle);
       } else {
-        await pages.worker.waitForFunction(async () => {
+        await waitUntil("worker Indicate restoration", () => pages.worker.evaluate(async baseScaleX => {
           const frame = await clickIndicateParity.execution.debugFrame();
           const { metrics } = await clickIndicateParity.execution.metrics();
-          return Math.abs(frame.objects[0].transform.scale.x - 1) < 1e-5 &&
+          return Math.abs(frame.objects[0].transform.scale.x - baseScaleX) < 1e-5 &&
             !metrics.needsPresent && metrics.bufferedDeltas === 0;
-        });
+        }, initial.worker.objects[0].transform.scale.x));
       }
     }
     const restored = {
