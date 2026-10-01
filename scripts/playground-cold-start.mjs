@@ -830,7 +830,8 @@ async function collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEna
       role: context.role,
       ...record,
     })));
-  const allWorkersInstrumented = unavailable.length === 0 && contexts.length > 0 &&
+  const allWorkersInstrumented = unavailable.length === 0 &&
+    ["authoring", "render"].every((role) => contexts.some((context) => context.role === role)) &&
     contexts.every(({ instrumentationInstalled }) => instrumentationInstalled);
   const everyByteLengthExact = allRecords.every(({ instantiatedBytes }) => Number.isSafeInteger(instantiatedBytes));
   return {
@@ -969,8 +970,4 @@ function formatBytes(value) {
   if (bytes < 1024) return `${bytes.toFixed(0)} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
-}
-
-function formatOptionalBytes(value) {
-  return value == null ? "n/a" : formatBytes(value);
 }
