@@ -10,16 +10,19 @@ export const SHAPES = Object.freeze([
     scaleX: 1, scaleY: 1, rotation: -0.5, color: "GREEN" }),
 ]);
 
-export function selectionFixtureSource() {
+export function selectionFixtureSource({ moving = false } = {}) {
   const shapes = SHAPES.map((shape, index) => {
     const constructor = shape.kind === "circle" ? `Circle(radius=${shape.radius}` :
       `Rectangle(width=${shape.width}, height=${shape.height}`;
     return `        shape${index} = ${constructor}, color=${shape.color}, fill_opacity=1, stroke_width=0)\n` +
       `        shape${index}.stretch(${shape.scaleX}, 0).stretch(${shape.scaleY}, 1).rotate(${shape.rotation}).shift([${shape.x}, ${shape.y}, 0])`;
   });
-  return ["from noon import *", "", "class PointerSelectionFixture(Scene):", "    def construct(self):",
+  return ["from noon import *", "", "class PointerSelectionFixture(Scene):",
+    moving ? "    async def construct(self):" : "    def construct(self):",
     ...shapes, '        label = Text("Click a filled shape; background clears", font_size=24).shift(2.8 * UP)',
-    "        self.add(shape0, shape1, label)", ""].join("\n");
+    "        self.add(shape0, shape1, label)",
+    ...(moving ? ["        await self.play(shape0.animate.shift(1.8 * RIGHT), run_time=2.0, rate_func=linear)"] : []),
+    ""].join("\n");
 }
 
 export function shapeSurfaceCenter(shape, view = VIEW) {

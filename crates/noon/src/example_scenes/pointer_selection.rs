@@ -1,17 +1,39 @@
 //! Shared native/direct-WASM counterpart of the Python pointer selection fixture.
 //! Selection is an explicit host/session policy, never an authored color mutation.
-use crate::{ExecutionSession, Scene, BLUE, GREEN};
+use crate::{AnimationOptions, ExecutionSession, Mobject, RateFunction, Scene, BLUE, GREEN};
 
 pub fn scene() -> Result<Scene, String> {
-    build(false)
+    build(false).map(|(scene, _)| scene)
 }
 
 /// Same geometry with source-authored Rust click-to-Indicate declarations.
 pub fn click_indicate_scene() -> Result<Scene, String> {
-    build(true)
+    build(true).map(|(scene, _)| scene)
 }
 
-fn build(animated: bool) -> Result<Scene, String> {
+/// A moving version of the same fixture for paired displayed-state selection.
+pub fn moving_selection_session() -> Result<ExecutionSession, String> {
+    let (scene, circle) = build(false)?;
+    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
+    target.shift(1.8, 0.0).map_err(|error| error.to_string())?;
+    let animation = scene.declare_transform_to(
+        &circle,
+        &target,
+        AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear),
+    )?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    scene
+        .live(&mut session)
+        .play_animation(&animation)
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
+fn build(animated: bool) -> Result<(Scene, Mobject), String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut circle = scene.circle(0.9)?;
@@ -49,11 +71,26 @@ fn build(animated: bool) -> Result<Scene, String> {
             )?;
             scene.add_many(&[(&label).into()])?;
         }
-        Ok(scene)
+        Ok((scene, circle))
     };
     build().map_err(|e| e.to_string())
 }
 
 pub fn session() -> Result<ExecutionSession, String> {
     scene()?.execution_session().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn moving_fixture_exposes_the_effective_midpoint_for_selection() {
+        let mut session = super::moving_selection_session().unwrap();
+        let start = session.frame().objects[0].transform.translation.x;
+        session.seek(1.0).unwrap();
+        let middle = session.frame().objects[0].transform.translation.x;
+        assert!((middle - start - 0.9).abs() < 1e-5);
+        session.seek(1.5).unwrap();
+        let later = session.frame().objects[0].transform.translation.x;
+        assert!((later - start - 1.35).abs() < 1e-5);
+    }
 }
