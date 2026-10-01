@@ -16,6 +16,7 @@ import {
   preloadedColdStartMilestones,
   summarizeAuthoringStartup,
   summarizeResourceFootprint,
+  summarizeStartupPreparationOverlap,
   summarizeWorkers,
 } from "../web/playground-cold-start-metrics.js";
 
@@ -158,6 +159,7 @@ try {
       let firstPresented = null;
       let firstMetrics = null;
       let preloadStartedAtEpochMs = null;
+      let startupPreparationOverlap = null;
       let paintGateAtEpochMs = null;
       let coldFirstEdit = null;
       let preloadEditRace = null;
@@ -239,6 +241,51 @@ try {
             dataset: { ...node.dataset },
           }));
           throw new Error(`live authoring did not become ready: ${JSON.stringify({ startupState, failures })}`, { cause: error });
+        }
+        if (preloadEditRaceEnabled) {
+          startupPreparationOverlap = {
+            measured: false,
+            reason: "preload edit race replaces the first source run; use a preload run without edits for startup overlap attribution",
+          };
+        } else {
+          const initialRun = await page.evaluate(() => ({
+            pageTimeOriginMs: performance.timeOrigin,
+            phases: window.__noonExampleGallery.runPhaseMetrics,
+          }));
+          const phases = initialRun.phases;
+          assert.ok(Number.isSafeInteger(phases?.runGeneration),
+            "completed preload must expose the initial authored run generation");
+          assert.ok(Number.isFinite(phases?.sourceRunStartedAtMs) &&
+            Number.isFinite(phases?.sourceRunCompletedAtMs) &&
+            phases.sourceRunStartedAtMs <= phases.sourceRunCompletedAtMs,
+          "completed preload must expose ordered page-side source-run boundaries");
+          assert.ok(Number.isFinite(phases.renderPreparation?.startedAtMs) &&
+            Number.isFinite(phases.renderPreparation?.readyAtMs) &&
+            phases.renderPreparation.startedAtMs <= phases.renderPreparation.readyAtMs,
+          "completed preload must expose ordered render-preparation boundaries");
+          const workerRun = phases.pythonWorkerRunTiming;
+          assert.ok(Number.isFinite(workerRun?.performanceTimeOriginMs) &&
+            Number.isFinite(workerRun?.startedAtMs) &&
+            Number.isFinite(workerRun?.completedAtMs) &&
+            workerRun.startedAtMs <= workerRun.completedAtMs,
+          "completed preload must expose ordered Python worker source-run boundaries");
+          startupPreparationOverlap = {
+            runGeneration: phases.runGeneration,
+            ...summarizeStartupPreparationOverlap({
+              renderPreparation: {
+                startedAtEpochMs: initialRun.pageTimeOriginMs + phases.renderPreparation.startedAtMs,
+                completedAtEpochMs: initialRun.pageTimeOriginMs + phases.renderPreparation.readyAtMs,
+              },
+              pageSourceRun: {
+                startedAtEpochMs: initialRun.pageTimeOriginMs + phases.sourceRunStartedAtMs,
+                completedAtEpochMs: initialRun.pageTimeOriginMs + phases.sourceRunCompletedAtMs,
+              },
+              workerSourceRun: {
+                startedAtEpochMs: workerRun.performanceTimeOriginMs + workerRun.startedAtMs,
+                completedAtEpochMs: workerRun.performanceTimeOriginMs + workerRun.completedAtMs,
+              },
+            }),
+          };
         }
         await page.waitForFunction(
           () => {
@@ -514,6 +561,7 @@ try {
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
+        startupPreparationOverlap,
         workerThrottleCalibration,
         ...(pythonComputeProbe === null ? {} : { pythonComputeProbe }),
         preloadEditRace,
@@ -635,7 +683,7 @@ try {
         : null,
     },
     note:
-    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; each case records a paired JavaScript worker-loop response to page-target rates 1x and 4x, but no dedicated authoring-worker throttle is configured, the trace does not calibrate Python CPU time, and these results are not physical iPhone measurements.",
+    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. startupPreparationOverlap intersects the page-side render preparation interval with both the page-observed client.run and the Python worker run interval after converting each performance clock to epoch time. These are wall-clock intervals: required source continuations can await render preparation, so positive overlap does not prove independent CPU work ran concurrently or quantify saved startup time. The opt-in edit-race arm records the overlap measurement as unavailable because it supersedes the initial source run. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session's first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; each case records a paired JavaScript worker-loop response to page-target rates 1x and 4x, but no dedicated authoring-worker throttle is configured, the trace does not calibrate Python CPU time, and these results are not physical iPhone measurements.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });

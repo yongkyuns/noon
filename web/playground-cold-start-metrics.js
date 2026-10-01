@@ -31,6 +31,48 @@ export function preloadedColdStartMilestones(timestamps) {
   });
 }
 
+export function summarizeStartupPreparationOverlap({
+  renderPreparation,
+  pageSourceRun,
+  workerSourceRun,
+}) {
+  const checkedInterval = (interval, label) => {
+    if (!isRecord(interval) ||
+        !Number.isFinite(interval.startedAtEpochMs) ||
+        !Number.isFinite(interval.completedAtEpochMs) ||
+        interval.startedAtEpochMs < 0 ||
+        interval.completedAtEpochMs < interval.startedAtEpochMs) {
+      throw new TypeError(`${label} must contain an ordered finite epoch interval`);
+    }
+    return Object.freeze({
+      startedAtEpochMs: interval.startedAtEpochMs,
+      completedAtEpochMs: interval.completedAtEpochMs,
+    });
+  };
+  const preparation = checkedInterval(renderPreparation, "render preparation");
+  const pageRun = checkedInterval(pageSourceRun, "page source run");
+  const workerRun = checkedInterval(workerSourceRun, "worker source run");
+  const overlapMs = (left, right) => Math.max(0,
+    Math.min(left.completedAtEpochMs, right.completedAtEpochMs) -
+      Math.max(left.startedAtEpochMs, right.startedAtEpochMs));
+
+  return Object.freeze({
+    measured: true,
+    renderPreparation: preparation,
+    pageObservedSourceRun: {
+      ...pageRun,
+      overlapMs: overlapMs(preparation, pageRun),
+      meaning: "page interval around client.run, including worker transport and awaited semantic-continuation work",
+    },
+    authoringWorkerSourceRun: {
+      ...workerRun,
+      overlapMs: overlapMs(preparation, workerRun),
+      meaning: "worker interval around runAuthoringSource; includes work and any awaited source continuations",
+    },
+    caveat: "Wall-clock interval intersection only: required source continuations can await render preparation, so positive overlap does not prove independent CPU work ran concurrently or quantify saved startup time.",
+  });
+}
+
 export function validateAuthoringStartupMetrics(metrics) {
   if (!isRecord(metrics) || metrics.version !== 2) {
     throw new TypeError("authoring startup metrics must use schema version 2");

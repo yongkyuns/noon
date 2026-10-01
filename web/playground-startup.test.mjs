@@ -107,6 +107,21 @@ assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,
   "cold authored Run must kick render/WASM preparation before awaiting Python authoring",
 );
+assert.match(
+  runtimeReadyBody,
+  /await prepared\.ready;\s*if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
+  "cold authored Run must retain render-preparation boundaries alongside its source-run interval",
+);
+assert.match(
+  preparationBody,
+  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\);\s*const preparation = \{ candidate, ready, startedAtMs, readyAtMs: null \};/,
+  "render-preparation timestamps must bracket the actual candidate.prepare() call",
+);
+assert.match(
+  preparationBody,
+  /preparation\.readyAtMs = performance\.now\(\);/,
+  "render-preparation ready time must be recorded when candidate preparation resolves",
+);
 assert.ok(
   ensureRuntimeCall > authoringCall,
   "shared engine attachment must wait until authoring supplies its semantic descriptor",
