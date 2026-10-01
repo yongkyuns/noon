@@ -637,45 +637,7 @@ impl SceneInstance {
         effective: &PreparedEffectivePropertyBatch,
         content: &PreparedEffectiveContentReplacement,
     ) -> Result<(), PreparedFrameContentCommitError> {
-        self.preflight_prepared_frame_commit(frame, effective)
-            .map_err(PreparedFrameContentCommitError::Frame)?;
-        if self.replay_is_sealed() {
-            return Err(PreparedFrameContentCommitError::Content(
-                EffectiveContentError::ReplaySealed,
-            ));
-        }
-        self.validate_content_prepared(content)
-            .map_err(PreparedFrameContentCommitError::Content)?;
-        if frame.staged_row(content.object_index).is_some_and(|row| {
-            row.render_geometry.is_some()
-                || row.render_transform.is_some()
-                || row.content_override.is_some()
-        }) {
-            return Err(PreparedFrameContentCommitError::Content(
-                EffectiveContentError::ActiveRenderOverride(content.lease.object),
-            ));
-        }
-        // Content alone may change a frame that has no native/property writes.
-        let may_change = self.prepared_frame_may_change(frame)
-            || !effective.is_empty()
-            || self.content_replacement_changes(content);
-        if may_change {
-            self.publication.frame_epoch().checked_next().ok_or(
-                PreparedFrameContentCommitError::Content(
-                    EffectiveContentError::FrameEpochExhausted,
-                ),
-            )?;
-        }
-        if self.content_resource_projection_changes(content) {
-            self.publication.execution_revision().checked_next().ok_or(
-                PreparedFrameContentCommitError::Content(
-                    EffectiveContentError::ExecutionRevisionExhausted(
-                        self.publication.execution_revision(),
-                    ),
-                ),
-            )?;
-        }
-        Ok(())
+        self.preflight_prepared_frame_with_contents(frame, effective, std::slice::from_ref(content))
     }
 
     /// Applies only a previously validated version. This suffix has no fallible
