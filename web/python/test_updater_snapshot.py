@@ -88,6 +88,29 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
+    def test_effective_path_is_bounded_terminal_content(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "final updater"):
+                mobject.set_effective_path([(0.0, 0.0), (1.0, 1.0)], closed=True)
+            context._last_invocation = True
+            self.assertIs(
+                mobject.set_effective_path([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], closed=True),
+                mobject,
+            )
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "path": {"points": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "closed": True},
+            })
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
+                context._content = None
+                mobject.set_effective_path([(0.0, 0.0)])
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
+                mobject.set_effective_path([(0.0, 0.0)] * 4097)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
 

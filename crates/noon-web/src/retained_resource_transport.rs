@@ -1470,6 +1470,7 @@ pub enum RetainedResourceTransportError {
     InvalidChannel(String),
     UnsupportedVersion(u32),
     UnknownText(TransportTextResourceHandle),
+    UnknownGeometryId(noon_core::GeometryId),
     UnknownGeometry(TransportGeometryResourceHandle),
     DuplicateText(TransportTextResourceHandle),
     DuplicateGeometry(TransportGeometryResourceHandle),
@@ -1523,6 +1524,9 @@ impl fmt::Display for RetainedResourceTransportError {
                 "unknown retained text resource {}@{}",
                 handle.id, handle.version
             ),
+            Self::UnknownGeometryId(id) => {
+                write!(formatter, "unknown retained geometry resource {}", id.get())
+            }
             Self::UnknownGeometry(handle) => write!(
                 formatter,
                 "unknown retained geometry resource {}@{}",

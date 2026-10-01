@@ -1,6 +1,6 @@
 use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
-    Camera2DState, FontResourceLookup, GeometryRef, GeometryResourceLookup,
+    Camera2DState, FontResourceLookup, GeometryRef, GeometryResource, GeometryResourceLookup,
     RetainedFamilyAnimationPlan, TextResourceHandle, TextResourceLookup,
 };
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
@@ -241,6 +241,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
         fonts: &(impl FontResourceLookup + ?Sized),
         images: &(impl noon_core::RasterImageResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
+        // Effective content may borrow an external path from the producer's
+        // runtime lease. The receiver has a separate geometry arena, so encode
+        // only touched paths as self-contained immutable content. Unchanged
+        // objects are absent from an incremental delta.
+        for object in &mut envelope.retained.objects {
+            if let crate::TransportObjectContent::Geometry { geometry } = &mut object.content {
+                resolve_external_geometry(geometry, geometries)?;
+            }
+            if let Some(geometry) = &mut object.render_geometry {
+                resolve_external_geometry(geometry, geometries)?;
+            }
+        }
         let new_images = envelope
             .retained
             .objects
@@ -670,6 +682,23 @@ impl RetainedFamilyExecutionDeltaEncoder {
         self.observed_plan_count = plans.len();
         Ok(envelope)
     }
+}
+
+fn resolve_external_geometry(
+    geometry: &mut GeometryRef,
+    resources: &(impl GeometryResourceLookup + ?Sized),
+) -> Result<(), RetainedResourceTransportError> {
+    let GeometryRef::External(id) = geometry else {
+        return Ok(());
+    };
+    let handle = resources
+        .current_handle(*id)
+        .ok_or(RetainedResourceTransportError::UnknownGeometryId(*id))?;
+    let GeometryResource::VectorPath(path) = resources
+        .get(handle)
+        .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
+    *geometry = GeometryRef::VectorPath(path.as_ref().clone());
+    Ok(())
 }
 
 fn remap_family_state_indices(

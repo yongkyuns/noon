@@ -31,11 +31,11 @@ use noon::ExecutionSession;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
     stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
-    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction, Vec2,
+    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, GeometryRef, ObjectContentRef, PublicationContext, Rect,
-    SceneRevision, SemanticNodeId, Style, Transform2D,
+    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, ObjectContentRef,
+    PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +126,9 @@ impl WasmExecutionWake {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
+    /// Producer scratch for callback paths. Reusing its slot increments the bare
+    /// geometry ID generation, so two live callback leases cannot alias ID 0.
+    callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     /// Immutable text/font/vector dependencies transferred once at the genuine
@@ -292,6 +295,60 @@ pub(crate) struct ExecutionPlayerIdentity {
 }
 
 impl SemanticExecutionPlayer {
+    fn commit_callback_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        content: CallbackContentResult,
+    ) -> Result<(), AuthoringFailure> {
+        match content {
+            CallbackContentResult::Path(path) => {
+                let mut handle = self.callback_geometry_sources.insert_path(path);
+                // GeometryRef carries a bare ID, not the producer namespace. A
+                // newly constructed producer can otherwise claim the same ID as
+                // an authored path or another live callback target. Recycle the
+                // scratch slot to advance its generation until the ID is free.
+                while noon_core::GeometryResourceLookup::current_handle(
+                    self.session.geometry_resources(),
+                    handle.id,
+                )
+                .is_some()
+                {
+                    let resource = self
+                        .callback_geometry_sources
+                        .remove(handle.id)
+                        .expect("fresh callback geometry remains in its producer arena");
+                    handle = self.callback_geometry_sources.insert(resource);
+                }
+                let result = self
+                    .session
+                    .commit_required_callback_phase_with_owned_geometry(
+                        batch,
+                        target,
+                        handle,
+                        &self.callback_geometry_sources,
+                    );
+                // The published lease owns an immutable copy of the resource.
+                // Reclaim the producer slot on both success and failure, while
+                // preserving its incremented generation for the next callback.
+                self.callback_geometry_sources
+                    .remove(handle.id)
+                    .expect("fresh callback geometry remains in its producer arena");
+                result.map_err(AuthoringFailure::from)?;
+            }
+            CallbackContentResult::Geometry(geometry) => {
+                self.session
+                    .commit_required_callback_phase_with_owned_content(
+                        batch,
+                        target,
+                        ObjectContentRef::Geometry(geometry),
+                    )
+                    .map_err(AuthoringFailure::from)?;
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn ownership_identity(&self) -> ExecutionPlayerIdentity {
         ExecutionPlayerIdentity {
@@ -407,6 +464,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
@@ -453,6 +511,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
@@ -3079,7 +3138,17 @@ struct CallbackBatchWire {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 struct CallbackContentWire {
     object: CallbackNodeWire,
-    geometry: CallbackAnalyticGeometryWire,
+    #[serde(default)]
+    geometry: Option<CallbackAnalyticGeometryWire>,
+    #[serde(default)]
+    path: Option<CallbackPathWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackPathWire {
+    points: Vec<[f32; 2]>,
+    #[serde(default)]
+    closed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -3094,6 +3163,40 @@ impl CallbackAnalyticGeometryWire {
             Self::Circle { radius } => GeometryRef::circle(radius),
         }
     }
+}
+
+impl CallbackContentWire {
+    fn into_result(self) -> Result<CallbackContentResult, String> {
+        if let Some(path) = self.path {
+            if self.geometry.is_some() {
+                return Err("callback content cannot contain both geometry and path".into());
+            }
+            if path.points.len() < 2 || path.points.len() > 4096 {
+                return Err("callback path must contain between 2 and 4096 points".into());
+            }
+            if !path.points.iter().flatten().all(|value| value.is_finite()) {
+                return Err("callback path points must be finite".into());
+            }
+            let mut points = path.points.iter();
+            let first = points.next().expect("length checked");
+            let mut result = VectorPath::new().move_to(Vec2::new(first[0], first[1]));
+            for point in points {
+                result = result.line_to(Vec2::new(point[0], point[1]));
+            }
+            if path.closed {
+                result = result.close();
+            }
+            return Ok(CallbackContentResult::Path(result));
+        }
+        self.geometry
+            .map(|geometry| CallbackContentResult::Geometry(geometry.into_geometry()))
+            .ok_or_else(|| "callback content requires geometry or path".into())
+    }
+}
+
+enum CallbackContentResult {
+    Geometry(GeometryRef),
+    Path(VectorPath),
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -3167,7 +3270,7 @@ fn decode_callback_batch(
 ) -> Result<
     (
         EffectivePropertyBatch,
-        Option<(SemanticNodeId, ObjectContentRef)>,
+        Option<(SemanticNodeId, CallbackContentWire)>,
     ),
     String,
 > {
@@ -3237,10 +3340,8 @@ fn decode_callback_batch(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let content = wire.content.map(|content| {
-        (
-            content.object.into(),
-            ObjectContentRef::Geometry(content.geometry.into_geometry()),
-        )
+        let target = content.object.clone().into();
+        (target, content)
     });
     Ok((
         EffectivePropertyBatch::new(token, writes).with_region(wire.region),
@@ -3338,6 +3439,14 @@ impl SemanticExecutionPlayer {
             }
             None => return Err(noon::ExecutionSessionCallbackError::NoPendingPhase.into()),
         };
+        let content = content
+            .map(|(target, content)| {
+                content
+                    .into_result()
+                    .map(|result| (target, result))
+                    .map_err(AuthoringFailure::from)
+            })
+            .transpose()?;
         if content.is_some() {
             #[cfg(any(target_arch = "wasm32", test))]
             if self.callback_membership_transaction.is_some() {
@@ -3470,9 +3579,7 @@ impl SemanticExecutionPlayer {
                 }
             } else {
                 if let Some((target, content)) = content {
-                    self.session
-                        .commit_required_callback_phase_with_owned_content(batch, target, content)
-                        .map_err(AuthoringFailure::from)?;
+                    self.commit_callback_content(batch, target, content)?;
                 } else {
                     self.session
                         .commit_required_callback_phase(batch)
@@ -3482,9 +3589,7 @@ impl SemanticExecutionPlayer {
         }
         #[cfg(not(any(target_arch = "wasm32", test)))]
         if let Some((target, content)) = content {
-            self.session
-                .commit_required_callback_phase_with_owned_content(batch, target, content)
-                .map_err(AuthoringFailure::from)?;
+            self.commit_callback_content(batch, target, content)?;
         } else {
             self.session
                 .commit_required_callback_phase(batch)
