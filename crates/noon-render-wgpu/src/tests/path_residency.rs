@@ -305,6 +305,205 @@ fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
 }
 
 #[test]
+fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compact_buffers() {
+    const INITIAL_PATHS: usize = 64;
+    const LIVE_PATHS: usize = 2;
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let geometries = (0..INITIAL_PATHS).map(simple_path).collect::<Vec<_>>();
+    let style = styled_object(0, geometries[0].clone()).style;
+    let all_requests = geometries
+        .iter()
+        .map(|geometry| PathMeshPreload {
+            geometry,
+            style,
+            transform: Transform2D::IDENTITY,
+        })
+        .collect::<Vec<_>>();
+
+    let mut old_preparer = FramePreparer::for_individual_path_draws();
+    old_preparer.preload_paths(&all_requests).unwrap();
+    let resident = old_preparer.preloaded_frame();
+    renderer
+        .upload_preloaded_paths(&device, &queue, &resident)
+        .unwrap();
+    queue.submit([]);
+    let old_vertex_capacity = renderer.path_vertex_capacity_bytes();
+    let old_index_capacity = renderer.path_index_capacity_bytes();
+
+    let frame_a = frame(
+        geometries
+            .iter()
+            .enumerate()
+            .map(|(index, geometry)| styled_object(index as u64, geometry.clone()))
+            .collect(),
+    );
+    let target_a = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Frame A before path residency compaction"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view_a = target_a.create_view(&wgpu::TextureViewDescriptor::default());
+    {
+        let prepared_a = old_preparer.prepare(&frame_a);
+        renderer.upload(&device, &queue, &prepared_a);
+        let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Submit frame A before resident path compaction"),
+        });
+        let draw_a = renderer.encode(&mut encoder_a, &view_a, &prepared_a, wgpu::Color::BLACK);
+        assert!(draw_a.draw_calls > 0);
+        queue.submit(Some(encoder_a.finish()));
+    }
+
+    let compact_requests = all_requests[..LIVE_PATHS].to_vec();
+    let mut compacted_preparer = FramePreparer::for_individual_path_draws();
+    compacted_preparer.preload_paths(&compact_requests).unwrap();
+    let compacted_resident = compacted_preparer.preloaded_frame();
+    renderer
+        .replace_preloaded_path_buffers(&device, &queue, &compacted_resident)
+        .unwrap();
+    queue.submit([]);
+    assert!(renderer.path_vertex_capacity_bytes() < old_vertex_capacity);
+    assert!(renderer.path_index_capacity_bytes() < old_index_capacity);
+
+    let mut frame_b = frame(
+        geometries
+            .iter()
+            .take(LIVE_PATHS)
+            .enumerate()
+            .map(|(index, geometry)| styled_object(index as u64, geometry.clone()))
+            .collect(),
+    );
+    frame_b.morphs.fill(1.0);
+    let target_b = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Frame B after path residency compaction"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view_b = target_b.create_view(&wgpu::TextureViewDescriptor::default());
+    let prepared_b = compacted_preparer.prepare(&frame_b);
+    assert_eq!(prepared_b.stats.geometry_cache_misses, 0);
+    let upload_b = renderer.upload(&device, &queue, &prepared_b);
+    assert_eq!(upload_b.buffer_reallocations, 0);
+    let mut encoder_b = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Submit frame B using compact resident path buffers"),
+    });
+    let draw_b = renderer.encode(&mut encoder_b, &view_b, &prepared_b, wgpu::Color::BLACK);
+    assert!(draw_b.draw_calls > 0);
+    queue.submit(Some(encoder_b.finish()));
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+}
+
+#[test]
+fn explicit_residency_compaction_bounds_long_new_slot_churn() {
+    const CHURN: usize = 1_000;
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut preparer = RetainedFramePreparer::new();
+    let mut live_geometry = simple_path(0);
+    let style = styled_object(0, live_geometry.clone()).style;
+    let initial_request = PathMeshPreload {
+        geometry: &live_geometry,
+        style,
+        transform: Transform2D::IDENTITY,
+    };
+    preparer
+        .preload_path_meshes(
+            &device,
+            &queue,
+            &mut renderer,
+            std::slice::from_ref(&initial_request),
+        )
+        .unwrap();
+    queue.submit([]);
+
+    for slot in 1..CHURN {
+        let admitted = simple_path(slot);
+        let request = PathMeshPreload {
+            geometry: &admitted,
+            style,
+            transform: Transform2D::IDENTITY,
+        };
+        preparer
+            .append_preload_path_meshes(
+                &device,
+                &queue,
+                &mut renderer,
+                std::slice::from_ref(&request),
+            )
+            .unwrap();
+        queue.submit([]);
+        live_geometry = admitted;
+
+        let live_request = PathMeshPreload {
+            geometry: &live_geometry,
+            style,
+            transform: Transform2D::IDENTITY,
+        };
+        if preparer.resident_path_maintenance_due(1) {
+            preparer
+                .compact_path_meshes(
+                    &device,
+                    &queue,
+                    &mut renderer,
+                    std::slice::from_ref(&live_request),
+                )
+                .unwrap();
+            queue.submit([]);
+            assert_eq!(preparer.resident_path_mesh_count(), 1);
+        }
+        assert!(
+            preparer.resident_path_mesh_count() <= 1 + 64 + 1,
+            "newly admitted slot history must stay within the live set plus one high-water batch"
+        );
+    }
+    assert!(preparer.resident_path_mesh_count() <= 1 + 64);
+}
+
+#[test]
+fn large_scene_single_root_retirement_does_not_trigger_full_compaction() {
+    const ROOTS: usize = 100_000;
+    let geometry = simple_path(0);
+    let style = styled_object(0, geometry.clone()).style;
+    let requests = (0..ROOTS)
+        .map(|_| PathMeshPreload {
+            geometry: &geometry,
+            style,
+            transform: Transform2D::IDENTITY,
+        })
+        .collect::<Vec<_>>();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut preparer = RetainedFramePreparer::new();
+    preparer
+        .preload_path_meshes(&device, &queue, &mut renderer, &requests)
+        .unwrap();
+    queue.submit([]);
+
+    assert_eq!(preparer.resident_path_mesh_count(), 1);
+    assert!(!preparer.resident_path_maintenance_due(ROOTS - 1));
+    assert!(preparer.resident_path_maintenance_due(0));
+}
+
+#[test]
 fn native_preload_rejects_nonfinite_specializations_atomically() {
     let geometry = path(0);
     let base = PathMeshPreload {

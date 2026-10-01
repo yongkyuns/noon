@@ -847,19 +847,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedFrame<'_>,
     ) -> Result<UploadStats, PathPreloadUploadError> {
-        if !prepared.circles.is_empty()
-            || !prepared.rectangles.is_empty()
-            || !prepared.lines.is_empty()
-            || !prepared.paths.is_empty()
-            || !prepared.path_batches.is_empty()
-            || !prepared.render_batches.is_empty()
-            || prepared.ordered_render_chunks().next().is_some()
-            || !prepared.mega_path_indices.is_empty()
-            || !prepared.mega_path_vertex_instances.is_empty()
-            || !prepared.mega_path_batches.is_empty()
-        {
-            return Err(PathPreloadUploadError::NonEmptyDrawState);
-        }
+        validate_empty_preload_frame(prepared)?;
         let limit = device.limits().max_buffer_size;
         validate_preload_allocation(
             "path vertices",
@@ -874,6 +862,86 @@ impl GpuRenderer {
             limit,
         )?;
         Ok(self.upload(device, queue, prepared))
+    }
+
+    /// Replace the resident path buffers with exact-size buffers for a complete,
+    /// empty-draw preload frame. The replacements are staged before any active
+    /// renderer state changes; old submitted command buffers retain their old
+    /// buffer handles through wgpu's normal resource lifetime tracking.
+    pub(crate) fn replace_preloaded_path_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+    ) -> Result<UploadStats, PathPreloadUploadError> {
+        validate_empty_preload_frame(prepared)?;
+
+        let vertices = bytemuck::cast_slice(prepared.path_vertices);
+        let indices = bytemuck::cast_slice(prepared.path_indices);
+        let mut compact_vertices = Vec::new();
+        if !prepared.path_vertices.is_empty() {
+            let full_vertex_range = 0..prepared.path_vertices.len();
+            update_compact_path_vertices(
+                &mut compact_vertices,
+                prepared.path_vertices,
+                std::slice::from_ref(&full_vertex_range),
+            );
+        }
+        let compact_vertex_bytes = bytemuck::cast_slice(&compact_vertices);
+        let vertex_bytes_len = vertices.len();
+        let compact_vertex_bytes_len = compact_vertex_bytes.len();
+        let index_bytes_len = indices.len();
+        for (buffer, size) in [
+            ("path vertices", vertices.len()),
+            ("compact path vertices", compact_vertex_bytes.len()),
+            ("path indices", indices.len()),
+        ] {
+            if size > device.limits().max_buffer_size as usize {
+                return Err(PathPreloadUploadError::BufferLimit {
+                    buffer,
+                    requested: size,
+                    limit: device.limits().max_buffer_size,
+                });
+            }
+        }
+
+        let path_vertex_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon path vertices",
+            vertices,
+            wgpu::BufferUsages::VERTEX,
+        );
+        let compact_path_vertex_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon compact path vertices",
+            compact_vertex_bytes,
+            wgpu::BufferUsages::VERTEX,
+        );
+        let path_index_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon path indices",
+            indices,
+            wgpu::BufferUsages::INDEX,
+        );
+        let bytes_uploaded = vertex_bytes_len + compact_vertex_bytes_len + index_bytes_len;
+
+        self.path_vertex_buffer = path_vertex_buffer;
+        self.compact_path_vertex_buffer = compact_path_vertex_buffer;
+        self.path_index_buffer = path_index_buffer;
+        self.compact_path_vertices = compact_vertices;
+        self.path_vertex_capacity_bytes = vertex_bytes_len;
+        self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
+        self.path_index_capacity_bytes = index_bytes_len;
+        self.path_render_bundle = None;
+        self.path_render_bundle_batches.clear();
+
+        Ok(UploadStats {
+            bytes_uploaded,
+            buffer_reallocations: 3,
+        })
     }
 
     pub fn upload(
@@ -1948,6 +2016,39 @@ fn empty_buffer(device: &wgpu::Device, label: &str, usage: wgpu::BufferUsages) -
         usage,
         mapped_at_creation: false,
     })
+}
+
+fn replacement_path_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    if contents.is_empty() {
+        empty_buffer(device, label, usage | wgpu::BufferUsages::COPY_DST)
+    } else {
+        create_buffer_with_data(device, queue, Some(label), contents, usage)
+    }
+}
+
+fn validate_empty_preload_frame(
+    prepared: &PreparedFrame<'_>,
+) -> Result<(), PathPreloadUploadError> {
+    if !prepared.circles.is_empty()
+        || !prepared.rectangles.is_empty()
+        || !prepared.lines.is_empty()
+        || !prepared.paths.is_empty()
+        || !prepared.path_batches.is_empty()
+        || !prepared.render_batches.is_empty()
+        || prepared.ordered_render_chunks().next().is_some()
+        || !prepared.mega_path_indices.is_empty()
+        || !prepared.mega_path_vertex_instances.is_empty()
+        || !prepared.mega_path_batches.is_empty()
+    {
+        return Err(PathPreloadUploadError::NonEmptyDrawState);
+    }
+    Ok(())
 }
 
 fn create_path_msaa_target(

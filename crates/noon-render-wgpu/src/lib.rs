@@ -567,6 +567,7 @@ pub struct FramePreparer {
     individual_path_draws: bool,
     resident_vertex_count: usize,
     resident_index_count: usize,
+    resident_mesh_count: usize,
     mega_path_indices: Vec<u32>,
     mega_path_vertex_instances: Vec<PathInstance>,
     mega_path_batches: Vec<MegaPathBatch>,
