@@ -413,6 +413,127 @@ fn submitted_frame_survives_resident_prefix_compaction_and_next_draw_uses_compac
 }
 
 #[test]
+#[ignore = "requires software Vulkan; executed by Native Host Smoke"]
+fn software_vulkan_keeps_submitted_paths_alive_across_resident_compaction() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                force_fallback_adapter: true,
+                ..Default::default()
+            })
+            .await
+            .expect("physical resource-lifetime qualification requires software Vulkan");
+        eprintln!("path resource-lifetime adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        const INITIAL_PATHS: usize = 64;
+        const LIVE_PATHS: usize = 2;
+        let geometries = (0..INITIAL_PATHS).map(simple_path).collect::<Vec<_>>();
+        let style = styled_object(0, geometries[0].clone()).style;
+        let requests = geometries
+            .iter()
+            .map(|geometry| PathMeshPreload {
+                geometry,
+                style,
+                transform: Transform2D::IDENTITY,
+            })
+            .collect::<Vec<_>>();
+        let mut preparer_a = FramePreparer::for_individual_path_draws();
+        preparer_a.preload_paths(&requests).unwrap();
+        let resident_a = preparer_a.preloaded_frame();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer
+            .upload_preloaded_paths(&device, &queue, &resident_a)
+            .unwrap();
+        let old_vertex_capacity = renderer.path_vertex_capacity_bytes();
+        let old_index_capacity = renderer.path_index_capacity_bytes();
+
+        let frame_a = frame(
+            geometries
+                .iter()
+                .enumerate()
+                .map(|(index, geometry)| styled_object(index as u64, geometry.clone()))
+                .collect(),
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("physical path resource-lifetime target"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let prepared_a = preparer_a.prepare(&frame_a);
+        renderer.upload(&device, &queue, &prepared_a);
+        let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("physical submit A before resident compaction"),
+        });
+        let draw_a = renderer.encode(
+            &mut encoder_a,
+            &target_view,
+            &prepared_a,
+            wgpu::Color::BLACK,
+        );
+        assert!(draw_a.draw_calls > 0);
+        queue.submit([encoder_a.finish()]);
+
+        let compact_requests = requests[..LIVE_PATHS].to_vec();
+        let mut preparer_b = FramePreparer::for_individual_path_draws();
+        preparer_b.preload_paths(&compact_requests).unwrap();
+        let resident_b = preparer_b.preloaded_frame();
+        renderer
+            .replace_preloaded_path_buffers(&device, &queue, &resident_b)
+            .unwrap();
+        assert!(renderer.path_vertex_capacity_bytes() < old_vertex_capacity);
+        assert!(renderer.path_index_capacity_bytes() < old_index_capacity);
+
+        let frame_b = frame(
+            geometries
+                .iter()
+                .take(LIVE_PATHS)
+                .enumerate()
+                .map(|(index, geometry)| styled_object(index as u64, geometry.clone()))
+                .collect(),
+        );
+        let prepared_b = preparer_b.prepare(&frame_b);
+        renderer.upload(&device, &queue, &prepared_b);
+        let mut encoder_b = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("physical submit B after resident compaction"),
+        });
+        let draw_b = renderer.encode(
+            &mut encoder_b,
+            &target_view,
+            &prepared_b,
+            wgpu::Color::BLACK,
+        );
+        assert!(draw_b.draw_calls > 0);
+        queue.submit([encoder_b.finish()]);
+
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let validation_error = pollster::block_on(validation_scope.pop());
+        assert!(
+            validation_error.is_none(),
+            "physical submit/compact/submit raised validation: {validation_error:?}"
+        );
+    });
+}
+
+#[test]
 fn explicit_residency_compaction_bounds_long_new_slot_churn() {
     const CHURN: usize = 1_000;
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
