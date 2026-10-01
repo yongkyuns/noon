@@ -272,6 +272,44 @@ impl SemanticExecutionPlayer {
         {
             return Err("callback visual producer cannot discard authored edits".into());
         }
+        // A retained path lives in the transaction's pending resource table,
+        // not in `SemanticObjectState`. Read that payload directly so it stays
+        // callback-local until the effective-content commit admits it.
+        let pending_path = self.read_callback_provisional(token, local, |prepared| {
+            Ok(prepared.pending_geometry_path(local).cloned())
+        })?;
+        let path = match pending_path {
+            Ok(path) => Some(path),
+            Err(noon_core::SemanticTransactionReadError::NotPendingGeometry(_)) => None,
+            Err(error) => {
+                return Err(AuthoringFailure::unclassified(
+                    "callback.provisional_visual",
+                    &error,
+                ));
+            }
+        };
+        if let Some(path) = path {
+            let mut command_count = 0usize;
+            let mut current = Some(&path);
+            while let Some(candidate) = current {
+                if candidate.commands().len() < 2 {
+                    return Err(
+                        "callback provisional path chain member requires at least 2 commands"
+                            .into(),
+                    );
+                }
+                command_count = command_count
+                    .checked_add(candidate.commands().len())
+                    .ok_or("callback path command count overflow")?;
+                if command_count > 4096 {
+                    return Err("callback provisional path exceeds 4096 commands".into());
+                }
+                current = candidate.morph_target();
+            }
+            let (transform, style) = self.callback_provisional_path_visual(token, local)?;
+            return Ok((transform, style, CallbackContentResult::Path(path)));
+        }
+
         let state = self.callback_provisional_object_state(token, local)?;
         if state.role() != SemanticObjectRole::Ordinary
             || state.z_index() != 0.0
@@ -302,6 +340,33 @@ impl SemanticExecutionPlayer {
                 AuthoringFailure::unclassified("callback.provisional_visual", &error)
             })?;
         Ok((transform, style, CallbackContentResult::Geometry(geometry)))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn callback_provisional_path_visual(
+        &mut self,
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    ) -> Result<(Transform2D, Style), AuthoringFailure> {
+        let (transform, style) = self.read_callback_provisional(token, local, |prepared| {
+            Ok((
+                prepared.pending_path_transform(local).map_err(|error| {
+                    AuthoringFailure::unclassified("callback.provisional_visual", &error)
+                })?,
+                prepared.pending_path_style(local).map_err(|error| {
+                    AuthoringFailure::unclassified("callback.provisional_visual", &error)
+                })?,
+            ))
+        })?;
+        // Reuse the compiler's canonical lowering and validation for transform
+        // and style values. The inline placeholder has no durable identity and
+        // is discarded immediately; the actual path remains the result content.
+        let mut visual =
+            noon_core::SemanticObjectState::new(noon_core::StoredGeometry::Circle { radius: 0.0 });
+        visual.transform = transform;
+        visual.style = style;
+        noon_compile::lower_semantic_visual_values(&visual)
+            .map_err(|error| AuthoringFailure::unclassified("callback.provisional_visual", &error))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

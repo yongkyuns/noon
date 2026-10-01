@@ -1753,6 +1753,160 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
 }
 
 #[test]
+fn callback_provisional_retained_path_replaces_one_target_without_resource_growth() {
+    let mut scene = noon::Scene::new();
+    let target = scene.circle(1.0).unwrap();
+    scene.add(&target).unwrap();
+    for _ in 1..600 {
+        let static_circle = scene.circle(0.25).unwrap();
+        scene.add(&static_circle).unwrap();
+    }
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(target.node_id(), HostCallbackId::new(7), 0.0, None);
+    callbacks
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        31,
+    )
+    .unwrap();
+    let before_nodes = scene.integration_store().borrow().len();
+    let before_resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
+    let target_id = player
+        .session
+        .execution_object_id(target.node_id())
+        .unwrap();
+    let mut rejected_oversized_path = false;
+
+    for step in 0..8 {
+        let phase: serde_json::Value = serde_json::from_str(&if step == 0 {
+            player.initial_callback_phase_json().unwrap().unwrap()
+        } else {
+            player
+                .advance_to_callback_phase(f64::from(step) / 16.0)
+                .unwrap()
+                .unwrap()
+        })
+        .unwrap();
+        let token = player.pending_callback_phase.unwrap().0;
+        if step == 0 {
+            let mut oversized =
+                noon_core::VectorPath::new().move_to(noon_core::Vec2::new(0.0, 0.0));
+            for point in 0..4096 {
+                oversized = oversized.line_to(noon_core::Vec2::new(point as f32, 0.0));
+            }
+            let source = player
+                .stage_required_callback_provisional_geometry(
+                    token,
+                    noon::ManimGeometryOptions::path(oversized).unwrap(),
+                )
+                .unwrap();
+            let oversized_batch = serde_json::json!({
+                "token": phase["token"], "region": phase["region"], "writes": [],
+                "content": {"object": phase["objects"][0]["node"],
+                    "provisional": callback_provisional_key(source)}
+            });
+            let before_rejection = player.session.publication_context();
+            assert!(player
+                .commit_callback_phase_json(&oversized_batch.to_string())
+                .is_err());
+            assert_eq!(player.session.publication_context(), before_rejection);
+            assert_eq!(scene.integration_store().borrow().len(), before_nodes);
+            assert_eq!(
+                scene
+                    .integration_store()
+                    .borrow()
+                    .geometry_resources()
+                    .stats(),
+                before_resources
+            );
+            assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
+            rejected_oversized_path = true;
+        }
+        let width = 0.5 + step as f32 * 0.05;
+        let path = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-width, -0.25))
+            .cubic_to(
+                noon_core::Vec2::new(-width, 0.25),
+                noon_core::Vec2::new(width, 0.25),
+                noon_core::Vec2::new(width, -0.25),
+            );
+        let source = player
+            .stage_required_callback_provisional_geometry(
+                token,
+                noon::ManimGeometryOptions::path(path.clone()).unwrap(),
+            )
+            .unwrap();
+        player
+            .stage_required_callback_provisional_shift(token, source, 0.0, -0.7)
+            .unwrap();
+        player
+            .stage_required_callback_provisional_fill(
+                token,
+                source,
+                [0.2, 0.4, 0.8, 1.0],
+                Some(0.0),
+            )
+            .unwrap();
+        let batch = serde_json::json!({
+            "token": phase["token"], "region": phase["region"], "writes": [],
+            "content": {"object": phase["objects"][0]["node"],
+                "provisional": callback_provisional_key(source)}
+        });
+        assert!(player
+            .commit_callback_phase_json(&batch.to_string())
+            .unwrap()
+            .is_none());
+        let frame = player.session.frame();
+        assert_eq!(frame.objects.len(), 600);
+        assert_eq!(frame.objects[0].id, target_id);
+        assert!(matches!(
+            frame.objects[0].content,
+            ObjectContentRef::Geometry(GeometryRef::External(_))
+        ));
+        let resource = match frame.objects[0].geometry().unwrap() {
+            GeometryRef::External(id) => *id,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            frame.objects[0].transform.translation,
+            noon_core::Vec2::new(0.0, -0.7)
+        );
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .stats(),
+            before_resources
+        );
+        assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
+        assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+        assert!(player.callback_membership_transaction.is_none());
+        let handle = player
+            .session
+            .geometry_resources()
+            .current_handle(resource)
+            .unwrap();
+        let effective = player.session.geometry_resources().get(handle).unwrap();
+        assert!(
+            matches!(effective, noon_core::GeometryResource::VectorPath(value) if value.as_ref() == &path)
+        );
+    }
+    assert!(rejected_oversized_path);
+}
+
+#[test]
 fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     let mut scene = noon::Scene::new();
     let callback_target = scene.circle(1.0).unwrap();

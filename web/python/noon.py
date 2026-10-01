@@ -800,25 +800,26 @@ Object = Mobject
 def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
     """Refresh one stable inline shape from a callback-local visual producer.
 
-    The current bounded producer accepts Circle, Rectangle/Square, and Line.
+    The current bounded producer accepts Circle, Rectangle/Square, Line, and
+    retained Path content.
     Its result replaces effective geometry, transform, and style together;
     authored content and object identity stay fixed. The producer runs during
     construction and once per scheduled callback phase.
     """
     if not callable(producer):
         raise TypeError("always_redraw producer must be callable")
-    from _manim_compat import Circle, Rectangle, Line
+    from _manim_compat import Circle, Rectangle, Line, Path
     target = producer()
-    if not isinstance(target, (Circle, Rectangle, Line)):
+    if not isinstance(target, (Circle, Rectangle, Line, Path)):
         raise NotImplementedError(
-            "always_redraw currently requires Circle, Rectangle, Square, or Line"
+            "always_redraw currently requires Circle, Rectangle, Square, Line, or Path"
         )
 
     def refresh(mobject: Mobject, _dt: float) -> None:
         result = producer()
-        if not isinstance(result, (Circle, Rectangle, Line)):
+        if not isinstance(result, (Circle, Rectangle, Line, Path)):
             raise NotImplementedError(
-                "always_redraw producer must return Circle, Rectangle, Square, or Line"
+                "always_redraw producer must return Circle, Rectangle, Square, Line, or Path"
             )
         from _manim_updaters import _canonical_provisional_context
         if _canonical_provisional_context(result) is None:
