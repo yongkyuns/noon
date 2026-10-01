@@ -471,11 +471,11 @@ fn explicit_residency_compaction_bounds_long_new_slot_churn() {
             assert_eq!(preparer.resident_path_mesh_count(), 1);
         }
         assert!(
-            preparer.resident_path_mesh_count() <= 1 + 1_024,
-            "newly admitted slot history must stay within the live set plus one churn budget"
+            preparer.resident_path_mesh_count() <= 1 + 64 + 1,
+            "newly admitted slot history must stay within the live set plus one high-water batch"
         );
     }
-    assert!(preparer.resident_path_mesh_count() <= 1 + 1_024);
+    assert!(preparer.resident_path_mesh_count() <= 1 + 64);
 }
 
 #[test]
