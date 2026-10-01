@@ -579,6 +579,15 @@ test("first presentation timestamp latches only after renderer reports a success
   assert.equal(vm.runInContext("tryPresent()", harness.context), false);
   assert.equal(vm.runInContext("currentMetrics().presentedFrames", harness.context), 0);
   assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), null);
+  assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), null);
+  assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), null);
+
+  harness.context.advanceClock = () => { now += 5; };
+  vm.runInContext("renderer.applyDeltaJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
+  assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5);
+  vm.runInContext("renderer.applyDeltaJson = () => false; applyRendererDelta('{}')", harness.context);
+  assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5,
+    "a stale delta cannot replace the last successfully applied interval");
 
   now = 142;
   harness.context.shouldRender = true;
@@ -586,13 +595,20 @@ test("first presentation timestamp latches only after renderer reports a success
   const first = vm.runInContext("currentMetrics()", harness.context);
   assert.equal(first.presentedFrames, 1);
   assert.equal(first.firstPresentedAtMs, 142);
+  assert.equal(first.lastRendererCallMs, 0);
   assert.equal(first.presentedSession, null);
   assert.equal(first.firstPresentedSessionAtMs, null);
   assert.equal(first.performanceTimeOriginMs, 70_000);
 
   now = 250;
-  vm.runInContext("needsPresent = true; tryPresent()", harness.context);
+  harness.context.advanceClock = () => { now += 7; };
+  vm.runInContext("renderer.render = () => { advanceClock(); return true; }; needsPresent = true; tryPresent()", harness.context);
   assert.equal(vm.runInContext("currentMetrics().firstPresentedAtMs", harness.context), 142);
+  assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), 7);
+
+  vm.runInContext("renderer.render = () => false; needsPresent = true; tryPresent()", harness.context);
+  assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), 7,
+    "a failed present cannot replace the last successful render interval");
 });
 
 test("first successful present is attributed to the exact retained transport session", () => {

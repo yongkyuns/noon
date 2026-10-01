@@ -79,6 +79,8 @@ export function createAuthoringRenderController(host) {
   let scheduleTicket = 0;
   let presentedFrames = 0;
   let firstPresentedAtMs = null;
+  let lastDeltaApplyMs = null;
+  let lastRendererCallMs = null;
   let presentedSession = null;
   let firstPresentedSessionAtMs = null;
   let rendererReadyAtMs = null;
@@ -548,7 +550,7 @@ export function createAuthoringRenderController(host) {
     if (needsPresent) {
       return false;
     }
-    const applied = renderer.applyDeltaJson(json);
+    const applied = applyRendererDelta(json);
     if (!applied) {
       acknowledgeAlreadyPresented(publication);
       return true;
@@ -604,8 +606,10 @@ export function createAuthoringRenderController(host) {
         return;
       }
       renderer = createdRenderer;
+      lastDeltaApplyMs = null;
+      lastRendererCallMs = null;
       resourceBytes = null;
-      const applied = renderer.applyDeltaJson(initial);
+      const applied = applyRendererDelta(initial);
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
@@ -682,14 +686,17 @@ export function createAuthoringRenderController(host) {
     ) {
       return false;
     }
+    const renderStartedAtMs = performance.now();
     if (!renderer.render()) {
       invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
+    const presentedAtMs = performance.now();
+    lastRendererCallMs = Math.max(0, presentedAtMs - renderStartedAtMs);
     needsPresent = false;
     presentedFrames += 1;
-    firstPresentedAtMs ??= performance.now();
+    firstPresentedAtMs ??= presentedAtMs;
     const publication = pendingPresentationPublication;
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
@@ -717,6 +724,13 @@ export function createAuthoringRenderController(host) {
     } else lastPointerReceipt = null;
     acknowledgePresented(displayed);
     return drainGpuDiagnostics();
+  }
+
+  function applyRendererDelta(json) {
+    const startedAtMs = performance.now();
+    const applied = renderer.applyDeltaJson(json);
+    if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
+    return applied;
   }
 
   function samePublication(left, right) {
@@ -777,7 +791,7 @@ export function createAuthoringRenderController(host) {
     }
     while (!needsPresent && bootstrapQueue.length > 0) {
       const { json, publication } = bootstrapQueue.shift();
-      const applied = renderer.applyDeltaJson(json);
+      const applied = applyRendererDelta(json);
       if (!applied) {
         acknowledgeAlreadyPresented(publication);
         continue;
@@ -950,6 +964,8 @@ export function createAuthoringRenderController(host) {
       ...modeFlags(),
       transportMode,
       presentedFrames,
+      lastDeltaApplyMs,
+      lastRendererCallMs,
       modeSwitches,
       rendererRebuilds,
       sampledAtMs: performance.now(),
@@ -995,6 +1011,8 @@ export function createAuthoringRenderController(host) {
     }
     const retiredRenderer = renderer;
     renderer = null;
+    lastDeltaApplyMs = null;
+    lastRendererCallMs = null;
     if (webglRecoveryPromise !== null) {
       // An async WASM recovery holds a mutable borrow until it settles.
       void webglRecoveryPromise.then(
