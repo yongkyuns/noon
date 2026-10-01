@@ -31,11 +31,11 @@ use noon::ExecutionSession;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
     stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
-    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction, Vec2,
+    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, ObjectContentRef,
-    PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D, VectorPath,
+    PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
