@@ -127,7 +127,7 @@ fn empty_input_seek_does_not_require_a_reactive_runtime() {
 }
 
 #[test]
-fn changed_direct_input_invalidates_retention_without_changing_authored_time() {
+fn changed_signal_only_input_retains_history_without_dirtying_unrelated_rows() {
     let (mut runtime, signal, object) = fixture();
     runtime
         .begin_replay_retention(ReplayLimits::default())
@@ -144,13 +144,93 @@ fn changed_direct_input_invalidates_retention_without_changing_authored_time() {
     );
     assert_eq!(runtime.frame().time, 0.0);
     assert_eq!(runtime.frame().objects[0].transform.translation.x, 4.0);
-    expect_unrecorded(&mut runtime);
     runtime.advance_to(3.0).unwrap();
     assert_eq!(
         runtime.frame().time,
         3.0,
         "first execution remains available"
     );
+    runtime.seal_replay().unwrap();
+    runtime.seek(0.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(2.0))
+    );
+}
+
+#[test]
+fn signal_only_input_batches_replay_in_time_and_sequence_order() {
+    let (mut runtime, signal, _) = fixture();
+    runtime
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    runtime.advance_to(0.25).unwrap();
+    runtime.set_reactive_input(signal, 2.0_f32).unwrap();
+    runtime.advance_to(1.0).unwrap();
+    runtime.set_reactive_input(signal, 2.5_f32).unwrap();
+    runtime.set_reactive_input(signal, 3.0_f32).unwrap();
+    runtime.advance_to(2.0).unwrap();
+    runtime.seal_replay().unwrap();
+
+    assert_eq!(runtime.replay_stats().revisions_retained, 3);
+    runtime.seek(0.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    runtime.seek(0.25).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(2.0))
+    );
+    runtime.seek(1.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(3.0))
+    );
+    runtime.seek(2.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(3.0))
+    );
+    runtime.seek(0.0).unwrap();
+    runtime.advance_to(2.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(3.0))
+    );
+}
+
+#[test]
+fn signal_input_replay_uses_the_shared_finite_revision_budget() {
+    let (mut runtime, signal, _) = fixture();
+    runtime
+        .begin_replay_retention(ReplayLimits {
+            revisions: 1,
+            payloads: 2,
+        })
+        .unwrap();
+    runtime.set_reactive_input(signal, 2.0_f32).unwrap();
+    runtime.set_reactive_input(signal, 3.0_f32).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(3.0))
+    );
+    assert_eq!(runtime.seal_replay(), Err(ReplayError::RetentionLimit));
+}
+
+#[test]
+fn semantic_patch_after_recorded_input_invalidates_unqualified_causal_order() {
+    let (mut runtime, signal, object) = fixture();
+    runtime
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    runtime.set_reactive_input(signal, 2.0_f32).unwrap();
+    runtime
+        .apply_execution_patch(&translated(object, 4.0))
+        .unwrap();
+    assert_eq!(runtime.seal_replay(), Err(ReplayError::UnsupportedDomain));
+    assert_eq!(runtime.frame().objects[0].transform.translation.x, 4.0);
 }
 
 #[test]

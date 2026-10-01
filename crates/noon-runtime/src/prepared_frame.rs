@@ -633,6 +633,8 @@ impl SceneInstance {
             .is_some_and(|update| !update.is_empty());
         if reactive_changed && !prepared.authored_scalar_inputs {
             self.invalidate_replay_input();
+        } else if reactive_changed && self.has_recorded_replay_inputs() {
+            self.invalidate_replay_domain();
         } else if !effective.is_empty() || !self.effective_driver_rows.is_empty() {
             self.invalidate_replay_domain();
         }

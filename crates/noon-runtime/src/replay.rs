@@ -56,6 +56,20 @@ struct Revision {
     time: f64,
     inverse: Option<CompiledReplayRevision>,
 }
+
+#[derive(Clone, Debug)]
+struct RecordedInputChange {
+    signal: noon_core::SignalId,
+    previous: noon_core::ReactiveValue,
+    next: noon_core::ReactiveValue,
+}
+
+#[derive(Clone, Debug)]
+struct RecordedInputBatch {
+    sequence: u64,
+    time: f64,
+    changes: Vec<RecordedInputChange>,
+}
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayHistory {
     start: f64,
@@ -64,6 +78,8 @@ pub(crate) struct ReplayHistory {
     failure: Option<ReplayError>,
     revisions: Vec<Revision>,
     applied: usize,
+    inputs: Vec<RecordedInputBatch>,
+    inputs_applied: usize,
     stats: ReplayStats,
 }
 
@@ -85,6 +101,8 @@ impl SceneInstance {
             failure: unsupported.then_some(ReplayError::UnsupportedDomain),
             revisions: Vec::new(),
             applied: 0,
+            inputs: Vec::new(),
+            inputs_applied: 0,
             stats: ReplayStats::default(),
         });
         Ok(())
@@ -96,6 +114,11 @@ impl SceneInstance {
         self.replay_history
             .as_ref()
             .is_some_and(|history| history.failure.is_none())
+    }
+    pub(crate) fn has_recorded_replay_inputs(&self) -> bool {
+        self.replay_history
+            .as_ref()
+            .is_some_and(|history| !history.inputs.is_empty())
     }
     pub fn invalidate_replay_domain(&mut self) {
         self.invalidate_replay(ReplayError::UnsupportedDomain);
@@ -113,6 +136,8 @@ impl SceneInstance {
             history.failure.get_or_insert(reason);
             history.revisions.clear();
             history.applied = 0;
+            history.inputs.clear();
+            history.inputs_applied = 0;
             history.stats = ReplayStats::default();
         }
     }
@@ -135,6 +160,14 @@ impl SceneInstance {
             return;
         }
         if timeline.runtime != self.runtime_identity() || timeline.current != self.frame.time {
+            self.invalidate_replay_domain();
+            return;
+        }
+        if self
+            .replay_history
+            .as_ref()
+            .is_some_and(|history| !history.inputs.is_empty())
+        {
             self.invalidate_replay_domain();
             return;
         }
@@ -217,6 +250,17 @@ impl SceneInstance {
         self.compiled.prepare_replay_revision(patch)
     }
     pub(crate) fn retain_replay_change(&mut self, change: Option<CompiledReplayRevision>) {
+        if self
+            .replay_history
+            .as_ref()
+            .is_some_and(|history| !history.inputs.is_empty())
+        {
+            // A semantic patch can be causally downstream of a native signal
+            // read. Until those dependencies have a shared event order, do not
+            // claim that input and patch histories can be reconstructed together.
+            self.invalidate_replay_domain();
+            return;
+        }
         match change {
             Some(change) => {
                 let cost = change.retention_cost();
@@ -224,6 +268,81 @@ impl SceneInstance {
             }
             None => self.invalidate_replay_domain(),
         }
+    }
+
+    pub(crate) fn retain_replay_input(
+        &mut self,
+        time: f64,
+        changes: Vec<(
+            noon_core::SignalId,
+            noon_core::ReactiveValue,
+            noon_core::ReactiveValue,
+        )>,
+    ) {
+        if changes.is_empty() {
+            return;
+        }
+        if !self.effective_driver_rows.is_empty()
+            || !self.effective_content_drivers.is_empty()
+            || self.interactions_active()
+        {
+            self.invalidate_replay_domain();
+            return;
+        }
+        let Some(history) = self.replay_history.as_mut() else {
+            return;
+        };
+        if history.failure.is_some() || history.end.is_some() {
+            return;
+        }
+        let retained = history.revisions.len().saturating_add(history.inputs.len());
+        let payload_cost = changes.len().saturating_mul(2);
+        let error = if retained >= history.limits.revisions
+            || payload_cost
+                > history
+                    .limits
+                    .payloads
+                    .saturating_sub(history.stats.payloads_retained)
+        {
+            Some(ReplayError::RetentionLimit)
+        } else if !time.is_finite()
+            || time < history.start
+            || history.inputs.last().is_some_and(|input| input.time > time)
+            || history
+                .revisions
+                .last()
+                .is_some_and(|revision| revision.time > time)
+        {
+            Some(ReplayError::InvalidRange)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            self.invalidate_replay(error);
+            return;
+        }
+        let Some(sequence) = u64::try_from(history.inputs.len())
+            .ok()
+            .and_then(|n| n.checked_add(1))
+        else {
+            self.invalidate_replay(ReplayError::RetentionLimit);
+            return;
+        };
+        history.stats.payloads_retained += payload_cost;
+        history.inputs.push(RecordedInputBatch {
+            sequence,
+            time,
+            changes: changes
+                .into_iter()
+                .map(|(signal, previous, next)| RecordedInputChange {
+                    signal,
+                    previous,
+                    next,
+                })
+                .collect(),
+        });
+        history.inputs_applied = history.inputs.len();
+        history.stats.revisions_retained = retained + 1;
     }
 
     fn retain_supported_replay_change(
@@ -237,7 +356,8 @@ impl SceneInstance {
         if history.failure.is_some() || history.end.is_some() {
             return;
         }
-        let failure = if history.revisions.len() >= history.limits.revisions
+        let failure = if history.revisions.len().saturating_add(history.inputs.len())
+            >= history.limits.revisions
             || cost
                 > history
                     .limits
@@ -264,15 +384,23 @@ impl SceneInstance {
             inverse,
         });
         history.applied = history.revisions.len();
-        history.stats.revisions_retained = history.revisions.len();
+        history.stats.revisions_retained = history.revisions.len() + history.inputs.len();
     }
     pub(crate) fn next_replay_revision_time(&self) -> Option<f64> {
         let history = self.replay_history.as_ref()?;
         history.end?;
-        history
+        let revision_time = history
             .revisions
             .get(history.applied)
-            .map(|revision| revision.time)
+            .map(|revision| revision.time);
+        let input_time = history
+            .inputs
+            .get(history.inputs_applied)
+            .map(|input| input.time);
+        match (revision_time, input_time) {
+            (Some(revision), Some(input)) => Some(revision.min(input)),
+            (revision, input) => revision.or(input),
+        }
     }
     pub(crate) fn validate_replay_time(&self, time: f64) -> Result<(), EvaluationError> {
         if let Some(history) = self.replay_history.as_ref() {
@@ -301,10 +429,14 @@ impl SceneInstance {
         let target = history
             .revisions
             .partition_point(|revision| revision.time <= time);
-        history.stats.revisions_crossed = history.applied.abs_diff(target);
+        let input_target = history.inputs.partition_point(|input| input.time <= time);
+        history.stats.revisions_crossed = history
+            .applied
+            .abs_diff(target)
+            .saturating_add(history.inputs_applied.abs_diff(input_target));
         history.stats.objects_restored = 0;
         history.stats.channels_restored = 0;
-        if target == history.applied {
+        if target == history.applied && input_target == history.inputs_applied {
             self.replay_history = Some(history);
             return false;
         }
@@ -326,6 +458,42 @@ impl SceneInstance {
                 history.applied -= 1;
             } else {
                 history.applied += 1;
+            }
+        }
+        while history.inputs_applied != input_target {
+            let forward = history.inputs_applied < input_target;
+            let index = if forward {
+                history.inputs_applied
+            } else {
+                history.inputs_applied - 1
+            };
+            let batch = &history.inputs[index];
+            debug_assert_eq!(batch.sequence, index as u64 + 1);
+            let changes = batch
+                .changes
+                .iter()
+                .map(|change| {
+                    (
+                        change.signal,
+                        if forward {
+                            change.next.clone()
+                        } else {
+                            change.previous.clone()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let Some(reactive) = self.reactive.as_mut() {
+                let prepared = reactive
+                    .prepare_input_batch(&changes)
+                    .expect("retained replay inputs were validated against this runtime");
+                debug_assert!(prepared.property_changes().is_empty());
+                reactive.commit_prepared_input_batch(prepared);
+            }
+            if forward {
+                history.inputs_applied += 1;
+            } else {
+                history.inputs_applied -= 1;
             }
         }
         history.stats.objects_restored = rows.len();
