@@ -15,3 +15,6 @@ noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, fea
 pollster = "1.0"
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 winit = "0.30.13"
+
+[dev-dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }

@@ -1,4 +1,5 @@
-//! CPU-side native-host/renderer regressions included in the workspace library gate.
+//! Native-host/renderer regressions included in the workspace library gate.
+//! The no-op device checks upload and draw command construction, not physical GPU execution.
 
 use super::*;
 use noon::integration::PointerFillOutcome;
@@ -8,7 +9,8 @@ use noon_core::{
     NativePointerPosition, SemanticMutationTransaction, SemanticObjectProperty,
     SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
 };
-use noon_render_wgpu::{FramePreparer, RetainedFramePreparer};
+use noon_render_wgpu::text::TextDeviceMetrics;
+use noon_render_wgpu::{CircleInstance, FramePreparer, GpuRenderer, RetainedFramePreparer};
 
 fn viewport() -> Rect {
     Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0))
@@ -266,6 +268,27 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
     session.configure_native_pointer_input(POINTER, 1).unwrap();
     session.take_frame_changes();
     let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 400, 200);
+    let mut text_state = renderer.create_retained_text_state(&device, &queue);
+    let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Noon native locality test target"),
+        size: wgpu::Extent3d {
+            width: 400,
+            height: 200,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let target_view = target_texture.create_view(&Default::default());
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
 
     let mut previous = Vec2::ZERO;
     let mut sequence = 0;
@@ -316,6 +339,41 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
         assert_eq!(native.object_indices(), &[0]);
         assert_eq!(native.spatial_stats().full_scan_fallbacks, 0);
         assert!(native.spatial_stats().candidates_tested <= 16);
+        let publication = source.take_renderer_publication();
+        let prepared = preparer
+            .prepare_planned_publication_visible(
+                &device,
+                &publication,
+                native.object_indices(),
+                metrics,
+            )
+            .unwrap();
+        let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+        // Initial residency uploads every static circle once. Subsequent local
+        // changes update one instance even though the scene still has 100k rows.
+        assert_eq!(
+            upload.bytes_uploaded(),
+            if turn == 0 {
+                100_000 * std::mem::size_of::<CircleInstance>()
+            } else {
+                std::mem::size_of::<CircleInstance>()
+            },
+            "turn {turn} must upload only the expected retained rows"
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let draw = renderer
+            .encode_retained(
+                &mut encoder,
+                &target_view,
+                &prepared,
+                &text_state,
+                wgpu::Color::BLACK,
+                None,
+            )
+            .unwrap();
+        assert_eq!(draw.instances_drawn(), 1);
+        assert_eq!(draw.draw_calls(), 1);
+        queue.submit([encoder.finish()]);
         let pointer_token = source.native_pointer_input_token().unwrap();
         let picked = source
             .session
