@@ -26,6 +26,7 @@ if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
 const rendererSubstageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
+let rendererSubstageCursor = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
 const MAX_RENDERER_SUBSTAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
@@ -153,8 +154,17 @@ try {
       })).metrics;
       const renderSubstageWindow = renderer.renderSubstageSamples;
       const latestRenderSubstage = renderSubstageWindow?.[renderSubstageWindow.length - 1];
-      if (latestRenderSubstage !== undefined &&
-          rendererSubstageSamples.length < MAX_RENDERER_SUBSTAGE_SAMPLES) {
+      const hasSubstageIdentity = Number.isSafeInteger(latestRenderSubstage?.session) &&
+        Number.isSafeInteger(latestRenderSubstage?.sequence);
+      const isNewSubstage = hasSubstageIdentity && (rendererSubstageCursor === null ||
+        latestRenderSubstage.session > rendererSubstageCursor.session ||
+        (latestRenderSubstage.session === rendererSubstageCursor.session &&
+         latestRenderSubstage.sequence > rendererSubstageCursor.sequence));
+      if (isNewSubstage && rendererSubstageSamples.length < MAX_RENDERER_SUBSTAGE_SAMPLES) {
+        rendererSubstageCursor = {
+          session: latestRenderSubstage.session,
+          sequence: latestRenderSubstage.sequence,
+        };
         rendererSubstageSamples.push({
           ...latestRenderSubstage,
           measuredFrameIndex: frame,

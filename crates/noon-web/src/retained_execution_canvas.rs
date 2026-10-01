@@ -38,31 +38,42 @@ struct RenderSubstageSample {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-struct RenderSubstageSamples(std::collections::VecDeque<RenderSubstageSample>);
+struct RenderSubstageSamples(Option<std::collections::VecDeque<RenderSubstageSample>>);
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl RenderSubstageSamples {
     fn new() -> Self {
-        Self(std::collections::VecDeque::with_capacity(
-            RENDER_SUBSTAGE_SAMPLE_CAPACITY,
-        ))
+        Self(None)
     }
 
     fn push(&mut self, sample: RenderSubstageSample) {
-        if self.0.len() == RENDER_SUBSTAGE_SAMPLE_CAPACITY {
-            self.0.pop_front();
+        let samples = self.0.get_or_insert_with(|| {
+            std::collections::VecDeque::with_capacity(RENDER_SUBSTAGE_SAMPLE_CAPACITY)
+        });
+        if samples.len() == RENDER_SUBSTAGE_SAMPLE_CAPACITY {
+            samples.pop_front();
         }
-        self.0.push_back(sample);
+        samples.push_back(sample);
     }
 
     fn clear(&mut self) {
-        self.0.clear();
+        if let Some(samples) = &mut self.0 {
+            samples.clear();
+        }
     }
 
     fn take_json(&mut self) -> Result<String, serde_json::Error> {
-        let json = serde_json::to_string(&self.0)?;
-        self.0.clear();
+        let Some(samples) = &mut self.0 else {
+            return Ok("[]".to_owned());
+        };
+        let json = serde_json::to_string(samples)?;
+        samples.clear();
         Ok(json)
+    }
+
+    #[cfg(test)]
+    fn is_allocated(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -73,6 +84,10 @@ mod render_substage_tests {
     #[test]
     fn render_substage_samples_remain_bounded_and_drain_without_losing_capacity() {
         let mut samples = RenderSubstageSamples::new();
+        assert!(
+            !samples.is_allocated(),
+            "default diagnostics do not allocate a ring"
+        );
         for sequence in 0..(RENDER_SUBSTAGE_SAMPLE_CAPACITY as u64 + 1) {
             samples.push(RenderSubstageSample {
                 session: Some(7),
@@ -89,6 +104,10 @@ mod render_substage_tests {
         assert_eq!(drained.len(), RENDER_SUBSTAGE_SAMPLE_CAPACITY);
         assert_eq!(drained.first().and_then(|sample| sample.sequence), Some(1));
         assert_eq!(drained.last().and_then(|sample| sample.sequence), Some(32));
+        assert!(
+            samples.is_allocated(),
+            "draining preserves the opt-in ring allocation"
+        );
         assert_eq!(samples.take_json().unwrap(), "[]");
         samples.push(RenderSubstageSample {
             session: Some(7),
