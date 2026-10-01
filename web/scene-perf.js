@@ -24,8 +24,10 @@ if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
   throw new Error("unsupported renderer metrics sampling mode");
 }
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
+const rendererSubstageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
+const MAX_RENDERER_SUBSTAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
@@ -117,6 +119,7 @@ try {
   }
   const before = (await execution.metrics({
     profilePublicationStages: rendererSamples !== null,
+    profileRenderSubstages: rendererSamples !== null,
   })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
@@ -146,7 +149,17 @@ try {
       const metricsStarted = performance.now();
       const renderer = (await execution.metrics({
         profilePublicationStages: rendererSamples !== null,
+        profileRenderSubstages: rendererSamples !== null,
       })).metrics;
+      const renderSubstageWindow = renderer.renderSubstageSamples;
+      const latestRenderSubstage = renderSubstageWindow?.[renderSubstageWindow.length - 1];
+      if (latestRenderSubstage !== undefined &&
+          rendererSubstageSamples.length < MAX_RENDERER_SUBSTAGE_SAMPLES) {
+        rendererSubstageSamples.push({
+          ...latestRenderSubstage,
+          measuredFrameIndex: frame,
+        });
+      }
       rendererSamples.push({
         sceneTime: lastSampleTime,
         metricsQueryMs: performance.now() - metricsStarted,
@@ -187,6 +200,18 @@ try {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
     ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererSubstageSamples === null ? {} : {
+      rendererSubstageSamples,
+      rendererSubstageNotes: {
+        timing: "CPU wall time inside one successful render call, split at the existing renderer-host boundaries",
+        surfaceAcquireCpuWallMs: "surface texture acquisition call; does not measure later physical presentation",
+        prepareCpuWallMs: "retained frame preparation and inset setup",
+        uploadCpuWallMs: "synchronous renderer upload calls; not GPU transfer completion",
+        encodeCpuWallMs: "command encoder creation, retained draw encoding, and command-buffer finish",
+        submitPresentCpuWallMs: "host queue submit and present call duration; not GPU completion or scanout",
+        collection: "latest exact session/sequence sample at each renderer metrics poll, capped at 32; enabling diagnostics adds timing calls to every successful render",
+      },
+    }),
     ...(rendererSamples === null ? {} : { rendererMetricsSampling }),
     ...(rendererPublicationStageSamples === null ? {} : {
       rendererPublicationStageSamples,

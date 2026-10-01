@@ -89,6 +89,7 @@ export function createAuthoringRenderController(host) {
   // Profiling is enabled only by an explicit metrics request. Keep a small
   // rolling window so diagnostics cannot grow with a long-running session.
   let publicationStageProfiling = false;
+  let renderSubstageProfiling = false;
   const publicationStageSamples = [];
   let pendingPublicationStageSample = null;
   let webglRecoveryPromise = null;
@@ -138,6 +139,10 @@ export function createAuthoringRenderController(host) {
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
+          if (message.profileRenderSubstages === true) {
+            renderSubstageProfiling = true;
+            renderer?.setRenderSubstageProfiling(true);
+          }
           respond(message.requestId, { type: "metrics", metrics: currentMetrics() });
           return;
         case "stop":
@@ -611,6 +616,7 @@ export function createAuthoringRenderController(host) {
     surfaceCreationError = null;
     try {
       const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      if (renderSubstageProfiling) createdRenderer.setRenderSubstageProfiling(true);
       // create() resolves after GPU setup; keep this separate from first render.
       rendererReadyAtMs ??= performance.now();
       if (stopped) {
@@ -1012,8 +1018,14 @@ export function createAuthoringRenderController(host) {
       needsPresent,
       ...(publicationStageProfiling ? {
         publicationStageProfiling: true,
-        publicationStageSamples: publicationStageSamples.slice(),
-      } : {}),
+      publicationStageSamples: publicationStageSamples.slice(),
+    } : {}),
+    ...(renderSubstageProfiling ? {
+      renderSubstageProfiling: true,
+      renderSubstageSamples: renderer === null
+        ? []
+        : JSON.parse(renderer.takeRenderSubstageSamplesJson()),
+    } : {}),
     };
     if (renderer === null) {
       return {

@@ -52,6 +52,18 @@ try {
           assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
           assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
           assert.ok(result.report.rendererSamples.length > 0);
+          const substageSamples = result.report.rendererSubstageSamples;
+          assert.ok(substageSamples.length > 0);
+          assert.ok(substageSamples.length <= 32);
+          assert.equal(new Set(substageSamples.map(sample => `${sample.session}:${sample.sequence}`)).size,
+            substageSamples.length);
+          assert.ok(substageSamples.every(sample =>
+            Number.isInteger(sample.session) && Number.isSafeInteger(sample.sequence) &&
+            Number.isSafeInteger(sample.measuredFrameIndex) &&
+            [sample.surfaceAcquireCpuWallMs, sample.prepareCpuWallMs, sample.uploadCpuWallMs,
+              sample.encodeCpuWallMs, sample.submitPresentCpuWallMs].every(value =>
+              Number.isFinite(value) && value >= 0)));
+          assert.match(result.report.rendererSubstageNotes.submitPresentCpuWallMs, /not GPU completion/);
           assert.equal(result.report.rendererMetricsSampling, spec.rendererMetricsSampling ?? "dense");
           if (spec.rendererMetricsSampling === "sparse") {
             assert.ok(result.report.rendererSamples.length <= 32);

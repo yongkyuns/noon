@@ -21,6 +21,88 @@ pub(crate) fn apply_family_then_resident_preparation<T, E>(
     })
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+const RENDER_SUBSTAGE_SAMPLE_CAPACITY: usize = 32;
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderSubstageSample {
+    session: Option<u32>,
+    sequence: Option<u64>,
+    surface_acquire_cpu_wall_ms: f64,
+    prepare_cpu_wall_ms: f64,
+    upload_cpu_wall_ms: f64,
+    encode_cpu_wall_ms: f64,
+    submit_present_cpu_wall_ms: f64,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct RenderSubstageSamples(std::collections::VecDeque<RenderSubstageSample>);
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl RenderSubstageSamples {
+    fn new() -> Self {
+        Self(std::collections::VecDeque::with_capacity(
+            RENDER_SUBSTAGE_SAMPLE_CAPACITY,
+        ))
+    }
+
+    fn push(&mut self, sample: RenderSubstageSample) {
+        if self.0.len() == RENDER_SUBSTAGE_SAMPLE_CAPACITY {
+            self.0.pop_front();
+        }
+        self.0.push_back(sample);
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn take_json(&mut self) -> Result<String, serde_json::Error> {
+        let json = serde_json::to_string(&self.0)?;
+        self.0.clear();
+        Ok(json)
+    }
+}
+
+#[cfg(test)]
+mod render_substage_tests {
+    use super::{RenderSubstageSample, RenderSubstageSamples, RENDER_SUBSTAGE_SAMPLE_CAPACITY};
+
+    #[test]
+    fn render_substage_samples_remain_bounded_and_drain_without_losing_capacity() {
+        let mut samples = RenderSubstageSamples::new();
+        for sequence in 0..(RENDER_SUBSTAGE_SAMPLE_CAPACITY as u64 + 1) {
+            samples.push(RenderSubstageSample {
+                session: Some(7),
+                sequence: Some(sequence),
+                surface_acquire_cpu_wall_ms: 1.0,
+                prepare_cpu_wall_ms: 2.0,
+                upload_cpu_wall_ms: 3.0,
+                encode_cpu_wall_ms: 4.0,
+                submit_present_cpu_wall_ms: 5.0,
+            });
+        }
+        let drained: Vec<RenderSubstageSample> =
+            serde_json::from_str(&samples.take_json().unwrap()).unwrap();
+        assert_eq!(drained.len(), RENDER_SUBSTAGE_SAMPLE_CAPACITY);
+        assert_eq!(drained.first().and_then(|sample| sample.sequence), Some(1));
+        assert_eq!(drained.last().and_then(|sample| sample.sequence), Some(32));
+        assert_eq!(samples.take_json().unwrap(), "[]");
+        samples.push(RenderSubstageSample {
+            session: Some(7),
+            sequence: Some(33),
+            surface_acquire_cpu_wall_ms: 0.0,
+            prepare_cpu_wall_ms: 0.0,
+            upload_cpu_wall_ms: 0.0,
+            encode_cpu_wall_ms: 0.0,
+            submit_present_cpu_wall_ms: 0.0,
+        });
+        assert_eq!(samples.take_json().unwrap().matches("sequence").count(), 1);
+}
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::Vec2;
@@ -30,10 +112,35 @@ mod wasm {
         PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState, UploadWrite,
     };
     use noon_runtime::FrameChanges;
-    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
 
     use super::{apply_family_then_resident_preparation, FamilyAdmission};
+
+    #[derive(Default)]
+    struct RenderSubstageTimings {
+        surface_acquire_cpu_wall_ms: f64,
+        prepare_cpu_wall_ms: f64,
+        upload_cpu_wall_ms: f64,
+        encode_cpu_wall_ms: f64,
+        submit_present_cpu_wall_ms: f64,
+    }
+
+    fn performance_now_ms() -> f64 {
+        let global = js_sys::global();
+        let Ok(performance) = js_sys::Reflect::get(&global, &"performance".into()) else {
+            return js_sys::Date::now();
+        };
+        let Ok(now) = js_sys::Reflect::get(&performance, &"now".into()) else {
+            return js_sys::Date::now();
+        };
+        now.dyn_ref::<js_sys::Function>()
+            .and_then(|now| now.call0(&performance).ok())
+            .and_then(|value| value.as_f64())
+            .unwrap_or_else(js_sys::Date::now)
+    }
+
+    use super::{RenderSubstageSample, RenderSubstageSamples};
     use crate::{
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
@@ -120,6 +227,8 @@ mod wasm {
         pending_renderer_observation: Option<RendererObservationRequest>,
         last_renderer_observation: Option<RendererObservationOutcome>,
         presentation_sequence: u64,
+        render_substage_profiling: bool,
+        render_substage_samples: RenderSubstageSamples,
     }
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
@@ -283,6 +392,8 @@ mod wasm {
                 pending_renderer_observation: None,
                 last_renderer_observation: None,
                 presentation_sequence: 0,
+                render_substage_profiling: false,
+                render_substage_samples: RenderSubstageSamples::new(),
             };
             result.update_camera()?;
             Ok(result)
@@ -535,6 +646,22 @@ mod wasm {
                 .transpose()
         }
 
+        /// Enable bounded CPU wall-time diagnostics for the existing render stages.
+        /// GPU completion and physical scanout are not measured.
+        #[wasm_bindgen(js_name = setRenderSubstageProfiling)]
+        pub fn set_render_substage_profiling(&mut self, enabled: bool) {
+            if enabled && !self.render_substage_profiling {
+                self.render_substage_samples.clear();
+            }
+            self.render_substage_profiling = enabled;
+        }
+
+        /// Take and clear the bounded samples collected since the previous query.
+        #[wasm_bindgen(js_name = takeRenderSubstageSamplesJson)]
+        pub fn take_render_substage_samples_json(&mut self) -> Result<String, JsValue> {
+            self.render_substage_samples.take_json().map_err(js_error)
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
@@ -545,6 +672,8 @@ mod wasm {
                 return Ok(false);
             }
 
+            let profiling = self.render_substage_profiling;
+            let acquire_started = profiling.then(performance_now_ms);
             let (surface_texture, reconfigure_after_present, surface_status) =
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false, "success"),
@@ -568,6 +697,10 @@ mod wasm {
                     }
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
+            let mut substage_timings = profiling.then(RenderSubstageTimings::default);
+            if let (Some(started), Some(timings)) = (acquire_started, substage_timings.as_mut()) {
+                timings.surface_acquire_cpu_wall_ms = performance_now_ms() - started;
+            }
 
             let renderer_backend = renderer_backend_label(self.backend);
             let observation_target =
@@ -580,6 +713,7 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
+            let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             let camera = self.renderer.camera();
             let metrics = TextDeviceMetrics::new(Vec2::new(
@@ -656,6 +790,9 @@ mod wasm {
                     )
                     .map_err(js_error)?
             };
+            if let (Some(started), Some(timings)) = (prepare_started, substage_timings.as_mut()) {
+                timings.prepare_cpu_wall_ms = performance_now_ms() - started;
+            }
             self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
             self.last_outline_cache_misses = prepared.stats.outline_cache_misses;
             let prepared_observation = resolved_observation_target.as_ref().map(|target| {
@@ -665,6 +802,7 @@ mod wasm {
                 .as_ref()
                 .and_then(|observation| observation.as_ref().ok());
             let mut upload_writes = observed_prepared.map(|_| Vec::<UploadWrite>::new());
+            let upload_started = profiling.then(performance_now_ms);
             let upload = if let Some(observed) = observed_prepared {
                 self.renderer.upload_retained_with_trace(
                     &self.device,
@@ -696,7 +834,11 @@ mod wasm {
                 .bytes_uploaded()
                 .saturating_add(transient_upload.bytes_uploaded)
                 .saturating_add(overlay_upload.bytes_uploaded);
+            if let (Some(started), Some(timings)) = (upload_started, substage_timings.as_mut()) {
+                timings.upload_cpu_wall_ms = performance_now_ms() - started;
+            }
 
+            let encode_started = profiling.then(performance_now_ms);
             let view = surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -720,9 +862,28 @@ mod wasm {
                     None,
                 )
                 .map_err(js_error)?;
-            self.queue.submit(Some(encoder.finish()));
+            let command_buffer = encoder.finish();
+            if let (Some(started), Some(timings)) = (encode_started, substage_timings.as_mut()) {
+                timings.encode_cpu_wall_ms = performance_now_ms() - started;
+            }
+            let submit_started = profiling.then(performance_now_ms);
+            self.queue.submit(Some(command_buffer));
             self.queue.present(surface_texture);
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
+            if let (Some(started), Some(timings)) = (submit_started, substage_timings.as_mut()) {
+                timings.submit_present_cpu_wall_ms = performance_now_ms() - started;
+            }
+            if let Some(timings) = substage_timings {
+                self.render_substage_samples.push(RenderSubstageSample {
+                    session: self.mirror.session(),
+                    sequence: self.mirror.applied_sequence(),
+                    surface_acquire_cpu_wall_ms: timings.surface_acquire_cpu_wall_ms,
+                    prepare_cpu_wall_ms: timings.prepare_cpu_wall_ms,
+                    upload_cpu_wall_ms: timings.upload_cpu_wall_ms,
+                    encode_cpu_wall_ms: timings.encode_cpu_wall_ms,
+                    submit_present_cpu_wall_ms: timings.submit_present_cpu_wall_ms,
+                });
+            }
             self.last_draw_calls = draw.draw_calls();
             self.last_instances_drawn = draw.instances_drawn();
             if let Some(observation_target) = observation_target {
