@@ -11,6 +11,8 @@ const startupChanges = [
   "scripts/build-web-demo.sh",
   "scripts/cold-start-risk-classifier.mjs",
   "scripts/cold-start-risk-classifier.test.mjs",
+  "scripts/playground-cold-start-calibration.mjs",
+  "scripts/playground-cold-start-calibration.test.mjs",
   "scripts/playground-cold-start.mjs",
   "scripts/playground-cold-start-memory.mjs",
   "scripts/playground-cold-start-memory.test.mjs",

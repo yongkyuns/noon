@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { summarizePageTargetThrottleSamples } from "./playground-cold-start-calibration.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
 
@@ -94,15 +95,16 @@ try {
       const page = await browser.newPage(profile === "mobile-class"
         ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
         : { viewport: { width: 1200, height: 900 } });
+      const pageCpuThrottleSession = await page.context().newCDPSession(page);
+      const startupPageCpuThrottleRate = profile === "mobile-class" ? 4 : 1;
+      await pageCpuThrottleSession.send("Emulation.setCPUThrottlingRate", {
+        rate: startupPageCpuThrottleRate,
+      });
       if (wasmAccountingEnabled) await installColdStartWasmAccountingRoutes(page);
       if (!preloadEnabled) {
         await page.route("**/live-authoring-bootstrap.js", (route) =>
           route.fulfill({ status: 200, contentType: "text/javascript", body: "" }),
         );
-      }
-      if (profile === "mobile-class") {
-        const cdp = await page.context().newCDPSession(page);
-        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
       }
       const failures = [];
       const workers = [];
@@ -420,6 +422,12 @@ try {
           uploadBytes: warmMetrics.metrics.uploadBytes,
         },
       };
+      const workerThrottleCalibration = await calibratePageThrottleInAuthoringWorker(
+        pageCpuThrottleSession,
+        authoringWorker,
+        startupPageCpuThrottleRate,
+        browserVersion,
+      );
       let pythonComputeProbe = null;
       if (pythonComputeProbeEnabled) {
         const previousGeneration = await page.evaluate(() =>
@@ -461,7 +469,12 @@ try {
         "compute probe Python loop sample must be a positive integer nanosecond duration");
         pythonComputeProbe = {
           workload: "300000-iteration Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
-          workerCpuThrottle: "unverified; NOON_COLD_START_PROFILE throttles the Chromium page target only",
+          workerCpuThrottle: {
+            dedicatedWorkerTargetRate: null,
+            pageTargetStartupRate: startupPageCpuThrottleRate,
+            propagationCalibration: workerThrottleCalibration,
+            meaning: "Calibration measures a fixed JavaScript loop's wall time inside the authoring worker while the page-target CDP rate changes. It does not configure or certify Python interpreter CPU throttling.",
+          },
           runGeneration: phases.runGeneration,
           pythonLoopElapsedNs: pythonComputeLoopSamplesNs[0],
           pythonLoopClock: "Python time.perf_counter_ns around only the integer loop body; excludes imports, source compilation, interpreter initialization and scene construction, but is elapsed time observed inside Pyodide rather than CPU-only time",
@@ -501,6 +514,7 @@ try {
         unavailableResourceContexts,
         workers: workerSummary,
         warmRerun,
+        workerThrottleCalibration,
         ...(pythonComputeProbe === null ? {} : { pythonComputeProbe }),
         preloadEditRace,
         firstEditComparison: preloadEnabled ? {
@@ -567,7 +581,7 @@ try {
   }
 
   const artifact = {
-    schemaVersion: 7,
+    schemaVersion: 8,
     benchmark: "Noon public playground preloaded cold-start topology",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
@@ -590,8 +604,14 @@ try {
     configuration: {
       backend,
       profile,
-      pageCpuThrottlingRate: profile === "mobile-class" ? 4 : 1,
-      pythonWorkerCpuThrottle: "unconfigured-unverified",
+      pageTargetCpuThrottling: {
+        startupRate: profile === "mobile-class" ? 4 : 1,
+        method: "CDP Emulation.setCPUThrottlingRate applied to the page target",
+      },
+      pythonWorkerCpuThrottling: {
+        dedicatedWorkerTargetRate: null,
+        status: "not directly configured; per-case calibration records empirical worker-loop response to page-target rate changes",
+      },
       examples,
       freshBrowserProcessPerCase: true,
       automaticPreload: preloadEnabled,
@@ -615,7 +635,7 @@ try {
         : null,
     },
     note:
-    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; dedicated authoring-worker CPU throttling is not configured or calibrated, and these results are not physical iPhone measurements.",
+    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session’s first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; each case records a paired JavaScript worker-loop response to page-target rates 1x and 4x, but no dedicated authoring-worker throttle is configured, the trace does not calibrate Python CPU time, and these results are not physical iPhone measurements.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -623,6 +643,80 @@ try {
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
 } finally {
   server.kill("SIGTERM");
+}
+
+async function calibratePageThrottleInAuthoringWorker(cdp, worker, startupRate, browserVersion) {
+  const workloadId = "authoring-worker-js-fnv-2m-v1";
+  const iterations = 2_000_000;
+  const workloadDefinition = "checksum=0x811c9dc5; repeat count times: checksum=Math.imul(checksum^index,0x01000193)>>>0";
+  const workloadDefinitionSha256 = createHash("sha256").update(workloadDefinition).digest("hex");
+  assert.ok(worker !== null, "worker throttle calibration requires the authoring worker");
+
+  const runLoop = () => worker.evaluate((count) => {
+    let checksum = 0x811c9dc5;
+    const startedAtMs = performance.now();
+    for (let index = 0; index < count; index += 1) {
+      checksum = Math.imul(checksum ^ index, 0x01000193) >>> 0;
+    }
+    return {
+      elapsedMs: performance.now() - startedAtMs,
+      checksum,
+      timeOriginEpochMs: performance.timeOrigin,
+    };
+  }, iterations);
+
+  const samples = [];
+  try {
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+    const warmup = await runLoop();
+    assert.ok(Number.isFinite(warmup.elapsedMs) && warmup.elapsedMs > 0,
+      "worker throttle calibration warm-up must produce a positive duration");
+    for (const requestedPageTargetRate of [1, 4, 4, 1]) {
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: requestedPageTargetRate });
+      const sample = await runLoop();
+      assert.ok(Number.isFinite(sample.elapsedMs) && sample.elapsedMs > 0,
+        "worker throttle calibration sample must produce a positive duration");
+      assert.equal(sample.checksum, warmup.checksum,
+        "worker throttle calibration workload must produce a stable checksum");
+      samples.push({
+        requestedPageTargetRate,
+        elapsedMs: sample.elapsedMs,
+        workerTimeOriginEpochMs: sample.timeOriginEpochMs,
+      });
+    }
+  } finally {
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: startupRate });
+  }
+
+  const summary = summarizePageTargetThrottleSamples(samples);
+  return {
+    workloadId,
+    workloadDefinitionSha256,
+    workerRole: "authoring",
+    iterations,
+    order: "1x, 4x, 4x, 1x after one discarded 1x warm-up",
+    requestedPageTargetRateAtStartup: startupRate,
+    samples,
+    medianElapsedMsByRequestedPageTargetRate: summary.medianElapsedMsByRequestedPageTargetRate,
+    observedFourXToOneXRatio: summary.observedFourXToOneXRatio,
+    baselineTrace: {
+      commit: commitSha,
+      packageSourceRevision: runtimePackageSourceRevision,
+      browser: { name: "Chromium", version: browserVersion },
+      host: {
+        platform: os.platform(),
+        release: os.release(),
+        arch: os.arch(),
+        cpu: os.cpus()[0]?.model ?? null,
+        logicalCpuCount: os.cpus().length,
+      },
+      profile,
+      backend,
+      exampleSet: examples.map(({ id }) => id),
+      meaning: "paired measurements in one existing authoring worker and browser process; compare only with matching workload, browser, commit/package, backend, and host metadata",
+    },
+    meaning: "Empirical wall-time response of a fixed JavaScript loop inside the Python authoring worker when the page-target CDP rate changes. This is not a dedicated worker-target throttle setting, Python workload calibration, device CPU calibration, or mobile performance claim.",
+  };
 }
 
 function summarizeSessionPresentation(metrics, navigationStartEpochMs, observedAtEpochMs) {
