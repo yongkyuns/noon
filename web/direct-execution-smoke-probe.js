@@ -208,6 +208,7 @@ async function directNativeDragProof(expectedBackend) {
 
 async function directRetainedLocalityProof(expectedBackend) {
   const sustainedTicks = 64;
+  const tickIntervalMs = 15;
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectRetainedLocalityRenderer(canvas);
   try {
@@ -224,22 +225,18 @@ async function directRetainedLocalityProof(expectedBackend) {
     // Advance normal playback; inspection seek intentionally rebuilds its frame.
     renderer.directWakeDirectiveJson(0);
     const tickUploads = [];
+    const frameUploads = [];
     const frameDrawCalls = [];
     const advanceCpuMs = [];
     const renderSubmitCpuMs = [];
+    const renderRetryWaitMs = [];
     const rafIntervalsMs = [];
     let rafOrigin = null;
     let previousRafTimestamp = null;
     let pointerViewRevision = 0;
     let previousTime = renderer.time();
     for (let tick = 1; tick <= sustainedTicks; tick += 1) {
-      const rafTimestamp = await new Promise((resolve) => requestAnimationFrame(resolve));
-      if (rafOrigin === null) rafOrigin = rafTimestamp;
-      if (previousRafTimestamp !== null) {
-        rafIntervalsMs.push(rafTimestamp - previousRafTimestamp);
-      }
-      previousRafTimestamp = rafTimestamp;
-      const wallTimeMs = 15 + rafTimestamp - rafOrigin;
+      const wallTimeMs = tick * tickIntervalMs;
       // Keep one sparse-scene hit target centered while changing the presented
       // viewport and hovering it alongside the independent animated target.
       // This exercises the mixed browser path without adding a second fixture.
@@ -265,33 +262,66 @@ async function directRetainedLocalityProof(expectedBackend) {
       if (pointerAccepted === undefined || pointerAccepted === null) {
         throw new Error(`100k mixed locality pointer sample ${tick} was rejected`);
       }
+      if (!renderer.advanceDirectRealtime(wallTimeMs)) {
+        throw new Error(`100k locality tick ${tick} did not publish a changed frame`);
+      }
+      await presentDirectFrame(renderer);
+      const time = renderer.time();
+      const bytesUploaded = renderer.lastBytesUploaded();
+      if (!(time > previousTime)) {
+        throw new Error(`100k locality target stopped changing at tick ${tick}: ${time} <= ${previousTime}`);
+      }
+      if (bytesUploaded <= 0 || bytesUploaded > 256) {
+        throw new Error(`100k locality tick ${tick} uploaded non-local bytes: ${bytesUploaded}`);
+      }
+      tickUploads.push(bytesUploaded);
+      previousTime = time;
+    }
+
+    // Keep the synthetic-tick locality proof above unchanged. This second pass
+    // samples the same target at real browser cadence over a longer fixture
+    // duration, without pointer or viewport changes in the timed window.
+    for (let tick = 1; tick <= sustainedTicks; tick += 1) {
+      const rafTimestamp = await new Promise((resolve) => requestAnimationFrame(resolve));
+      if (rafOrigin === null) rafOrigin = rafTimestamp;
+      if (previousRafTimestamp !== null) {
+        rafIntervalsMs.push(rafTimestamp - previousRafTimestamp);
+      }
+      previousRafTimestamp = rafTimestamp;
+      const wallTimeMs = sustainedTicks * tickIntervalMs + tickIntervalMs + rafTimestamp - rafOrigin;
       const advanceStart = performance.now();
       const changed = renderer.advanceDirectRealtime(wallTimeMs);
       advanceCpuMs.push(performance.now() - advanceStart);
+      if (!changed) {
+        throw new Error(`100k RAF locality frame ${tick} did not publish a changed frame`);
+      }
       let renderCpuMs = 0;
+      let retryWaitMs = 0;
       let presented = false;
       for (let attempt = 0; attempt < 60; attempt += 1) {
         const renderStart = performance.now();
         presented = renderer.render();
         renderCpuMs += performance.now() - renderStart;
-        if (presented || (!changed && attempt === 0)) break;
+        if (presented) break;
+        const waitStart = performance.now();
         await sleep(10);
+        retryWaitMs += performance.now() - waitStart;
       }
       renderSubmitCpuMs.push(renderCpuMs);
-      if (changed && !presented) {
-        throw new Error(`100k locality tick ${tick} could not present its changed frame`);
+      renderRetryWaitMs.push(retryWaitMs);
+      if (!presented) {
+        throw new Error(`100k RAF locality frame ${tick} could not present its changed frame`);
       }
       const time = renderer.time();
-      const bytesUploaded = presented ? renderer.lastBytesUploaded() : 0;
-      const drawCalls = presented ? renderer.lastDrawCalls() : 0;
-      if (changed && !(time > previousTime)) {
-        throw new Error(`100k locality target stopped changing at tick ${tick}: ${time} <= ${previousTime}`);
+      const bytesUploaded = renderer.lastBytesUploaded();
+      if (!(time > previousTime)) {
+        throw new Error(`100k RAF locality target stopped changing at frame ${tick}: ${time} <= ${previousTime}`);
       }
-      if (bytesUploaded > 256 || (changed && bytesUploaded === 0)) {
-        throw new Error(`100k locality tick ${tick} uploaded non-local bytes: ${bytesUploaded}`);
+      if (bytesUploaded <= 0 || bytesUploaded > 256) {
+        throw new Error(`100k RAF locality frame ${tick} uploaded non-local bytes: ${bytesUploaded}`);
       }
-      tickUploads.push(bytesUploaded);
-      frameDrawCalls.push(drawCalls);
+      frameUploads.push(bytesUploaded);
+      frameDrawCalls.push(renderer.lastDrawCalls());
       previousTime = time;
     }
     if (rafIntervalsMs.length !== sustainedTicks - 1) {
@@ -320,7 +350,12 @@ async function directRetainedLocalityProof(expectedBackend) {
           p50: percentile(renderSubmitCpuMs, 0.50),
           p95: percentile(renderSubmitCpuMs, 0.95),
         },
-        workload: "64 RAF callbacks; one animated target, pointer input each frame, viewport resize every 8 frames",
+        renderRetryWaitMs: {
+          p50: percentile(renderRetryWaitMs, 0.50),
+          p95: percentile(renderRetryWaitMs, 0.95),
+          samplesWithWait: renderRetryWaitMs.filter((duration) => duration > 0).length,
+        },
+        workload: "64 RAF callbacks; one animated target among 100k objects, no pointer or viewport changes during timing",
         renderSubmitMeaning: "CPU time spent calling render and submitting/presenting; not GPU completion or physical scanout",
       },
       mixedInteraction: {
@@ -332,6 +367,7 @@ async function directRetainedLocalityProof(expectedBackend) {
           pointerPresentation.inspectionRevision === pointerPresentation.presentedInspectionRevision,
       },
       tickUploads,
+      frameUploads,
       frameDrawCalls,
       drawCalls: renderer.lastDrawCalls(),
     };

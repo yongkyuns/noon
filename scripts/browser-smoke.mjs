@@ -720,8 +720,10 @@ try {
   "100k locality proof did not report RAF interval percentiles");
   assert.equal(directMetrics.retainedLocality.frameDrawCalls?.length, 64,
     "100k locality proof did not capture draw calls for each RAF sample");
-  assert.equal(directMetrics.retainedLocality.tickUploads?.length, 64,
+  assert.equal(directMetrics.retainedLocality.frameUploads?.length, 64,
     "100k locality proof did not capture uploads for each RAF sample");
+  assert.equal(directMetrics.retainedLocality.tickUploads?.length, 64,
+    "100k locality proof did not preserve all synthetic locality samples");
 
   for (const [index, example] of examples.entries()) {
     const expectedObjects = example.objectCount;

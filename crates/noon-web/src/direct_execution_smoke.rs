@@ -46,9 +46,10 @@ pub async fn create_direct_retained_locality_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
-    let animation = noon::example_scenes::retained_locality::target_animation(
+    let animation = noon::example_scenes::retained_locality::target_animation_with_duration(
         &scene,
         &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
+        10.0,
     )
     .map_err(js_error)?;
     let session = scene
