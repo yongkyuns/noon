@@ -26,6 +26,7 @@ const clickIndicateSource = source
     "        self.on_click(shape1, Indicate(shape1, run_time=0.4))",
   ].join("\n"));
 const movingClickIndicateSource = selectionFixtureSource({ moving: true })
+  .replace("Click a filled shape; background clears", "Click a filled shape; it restores automatically")
   .replace("        self.add(shape0, shape1, label)", [
     "        self.add(shape0, shape1, label)",
     "        self.on_click(shape0, Indicate(shape0, run_time=0.4))",
