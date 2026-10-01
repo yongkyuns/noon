@@ -152,14 +152,13 @@ impl CompiledScene {
     }
 
     /// Reclaim when every compiled resource owner is a live object, a track, or
-    /// an explicit effective-content root. Family plans, graph derivation and
-    /// numeric text retain their complete closure until their dependencies can
-    /// be traversed safely at this barrier.
+    /// an explicit effective-content root. Family plans and graph derivation
+    /// retain their complete closure until their dependencies can be traversed
+    /// safely at this barrier. Numeric-text tokens are explicit text roots below.
     fn prune_unreferenced_resources(&mut self, retained_contents: &[ObjectContentRef]) -> usize {
         if !self.family_animation_plans.is_empty()
             || !self.family_animations.is_empty()
             || !self.graph_edge_dependencies.is_empty()
-            || !self.numeric_text_drivers.is_empty()
             || (self.resources.images.is_empty()
                 && self.resources.texts.is_empty()
                 && self.resources.fonts.is_empty()
@@ -174,12 +173,23 @@ impl CompiledScene {
         let mut font_keys = BTreeSet::new();
         let mut geometries = BTreeSet::new();
         let mut geometry_ids = BTreeSet::new();
+        // A numeric-text declaration can select any authored token at runtime,
+        // so all of its compiled token resources remain roots until the driver
+        // is removed. Treat them as ordinary text content here to reuse the
+        // same font and vector dependency traversal as live object content.
+        let numeric_text_contents = self
+            .numeric_text_drivers
+            .iter()
+            .flat_map(|driver| driver.token_resources.iter())
+            .map(|(_, handle)| ObjectContentRef::Text(*handle))
+            .collect::<Vec<_>>();
         for content in self
             .objects
             .iter()
             .filter(|object| object.live)
             .map(|object| &object.content)
             .chain(retained_contents.iter())
+            .chain(numeric_text_contents.iter())
         {
             match content {
                 ObjectContentRef::Image(image) => {
@@ -523,6 +533,51 @@ mod tests {
         assert_eq!(stats.resource_entries_reclaimed, 1);
         assert!(compiled.resources.geometries.is_empty());
         assert!(compiled.resources.geometry_handles.is_empty());
+    }
+
+    #[test]
+    fn numeric_text_tokens_root_their_text_while_unrelated_history_is_pruned() {
+        let mut compiled = CompiledScene::compile_objects(vec![circle(1)], &[]).unwrap();
+        let retained = TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(1),
+            version: 0,
+        };
+        let obsolete = TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(2),
+            version: 0,
+        };
+        let text = Arc::new(TextResource {
+            source: Arc::from("token"),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            baseline: 0.0,
+            layout_artifact: None,
+        });
+        compiled.resources.texts.insert(retained, text.clone());
+        compiled.resources.texts.insert(obsolete, text);
+        compiled
+            .numeric_text_drivers
+            .push(crate::CompiledNumericTextDriver {
+                signal: noon_core::SignalId::new(1),
+                object_index: 0,
+                format: noon_core::DecimalFormat::default(),
+                font_size: 12.0,
+                point_to_scene_scale: 1.0,
+                token_resources: Arc::from([(Arc::from("token"), retained)]),
+            });
+
+        let stats = compiled.compact_retired_object_slots().unwrap();
+
+        assert_eq!(stats.object_slots_reclaimed, 0);
+        assert_eq!(stats.resource_entries_reclaimed, 1);
+        assert!(compiled.resources.texts.contains_key(&retained));
+        assert!(!compiled.resources.texts.contains_key(&obsolete));
     }
 
     #[test]
