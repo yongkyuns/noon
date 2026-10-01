@@ -103,6 +103,19 @@ fn shared_space_key_trace_matches_native_state_and_ordered_edges_while_paused() 
             state == ElementState::Pressed,
             "the shared key state controls the bound object's presence"
         );
+        if state == ElementState::Pressed {
+            assert_eq!(
+                f.app.session().frame().objects[1].style.opacity,
+                1.0,
+                "the Rust key-press event counter drives the offscreen opacity channel"
+            );
+        } else {
+            assert_eq!(
+                f.app.session().frame().objects[1].style.stroke_width,
+                1.0,
+                "the Rust key-release event counter drives the offscreen stroke channel"
+            );
+        }
     }
     assert_eq!(f.value(f.key_pressed), &ReactiveValue::Bool(false));
     assert_eq!(f.value(f.key_press), &ReactiveValue::Scalar(1.0));

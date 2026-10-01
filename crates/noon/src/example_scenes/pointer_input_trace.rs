@@ -103,6 +103,13 @@ impl Fixture {
         let mut fixture = Self::signals_only();
         fixture
             .store
+            .node_mut(fixture.unrelated)
+            .and_then(|node| node.semantic_object_state_mut())
+            .expect("shared key projection target remains an authored object")
+            .style
+            .object_opacity = 0.0;
+        fixture
+            .store
             .bind_semantic_signal(
                 fixture.down,
                 fixture.target,
@@ -125,6 +132,24 @@ impl Fixture {
                 SemanticObjectProperty::RotationZ,
             )
             .unwrap();
+        // Project the ordered key event counters into otherwise-unused style
+        // channels on the offscreen unrelated object for paired host checks.
+        fixture
+            .store
+            .bind_semantic_signal(
+                fixture.key_press,
+                fixture.unrelated,
+                SemanticObjectProperty::ObjectOpacity,
+            )
+            .unwrap();
+        fixture
+            .store
+            .bind_semantic_signal(
+                fixture.key_release,
+                fixture.unrelated,
+                SemanticObjectProperty::StrokeWidth,
+            )
+            .unwrap();
         fixture
     }
 
@@ -137,7 +162,7 @@ impl Fixture {
                 radius: 0.5,
             }));
         let mut unrelated_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
-        unrelated_state.transform.translation = SemanticVec3::new(-5.0, -3.0, 0.0);
+        unrelated_state.transform.translation = SemanticVec3::new(-50.0, -30.0, 0.0);
         let unrelated = store.insert_semantic_object(unrelated_state);
         for object in [target, unrelated] {
             store.add_semantic_family_member(root, object).unwrap();
