@@ -231,8 +231,8 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.state());
   }
 
-  async metrics() {
-    const report = await this.#withStablePlayer((player) => player.metrics());
+  async metrics(options = {}) {
+    const report = await this.#withStablePlayer((player) => player.metrics(options));
     return {
       ...report,
       executionMode: this.#mode,

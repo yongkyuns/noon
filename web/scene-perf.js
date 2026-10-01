@@ -17,6 +17,9 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const rendererPublicationStageSamples = rendererSamples === null ? null : [];
+let rendererPublicationStageCursor = null;
+const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
@@ -102,7 +105,9 @@ try {
     await nextAnimationFrame();
     await advanceSample((frame + 1) / targetHz);
   }
-  const before = (await execution.metrics()).metrics;
+  const before = (await execution.metrics({
+    profilePublicationStages: rendererSamples !== null,
+  })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
   const measurementStart = performance.now();
@@ -128,7 +133,9 @@ try {
     }
     if (rendererSamples !== null) {
       const metricsStarted = performance.now();
-      const renderer = (await execution.metrics()).metrics;
+      const renderer = (await execution.metrics({
+        profilePublicationStages: rendererSamples !== null,
+      })).metrics;
       rendererSamples.push({
         sceneTime: lastSampleTime,
         metricsQueryMs: performance.now() - metricsStarted,
@@ -138,6 +145,19 @@ try {
         instances: renderer.instancesDrawn,
         uploadBytes: renderer.bytesUploaded,
       });
+      if (rendererPublicationStageSamples !== null) {
+        for (const sample of renderer.publicationStageSamples ?? []) {
+          const isNew = rendererPublicationStageCursor === null ||
+            sample.session > rendererPublicationStageCursor.session ||
+            (sample.session === rendererPublicationStageCursor.session &&
+             sample.sequence > rendererPublicationStageCursor.sequence);
+          if (!isNew) continue;
+          rendererPublicationStageCursor = { session: sample.session, sequence: sample.sequence };
+          if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES) {
+            rendererPublicationStageSamples.push(sample);
+          }
+        }
+      }
     }
   }
   const measurementEnd = performance.now();
@@ -149,6 +169,16 @@ try {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
     ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererPublicationStageSamples === null ? {} : {
+      rendererPublicationStageSamples,
+      rendererPublicationStageNotes: {
+        applyMs: "render-worker WASM delta application for this exact session/sequence",
+        renderMs: "synchronous retained renderer render call; not GPU completion",
+        receiveToPresentMs: "render-worker consume entry through successful render return",
+        ackPostMs: "synchronous execution_presented MessagePort post duration",
+        capture: "unique new exact-session/sequence samples, capped at 32",
+      },
+    }),
     ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
     ...(stageTimingSamples === null ? {} : {
       stageTimingNotes: {
