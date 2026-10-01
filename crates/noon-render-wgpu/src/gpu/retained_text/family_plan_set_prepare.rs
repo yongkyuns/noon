@@ -1009,29 +1009,32 @@ mod tests {
             } else {
                 FrameChanges::objects(vec![0, 1])
             };
-            let prepared = preparer
-                .prepare_active_family_plan_set_with_changes(
-                    &device,
-                    &family_frame,
-                    &plans,
-                    &active_indices,
-                    &changes,
-                    &texts,
-                    &fonts,
-                    &geometries,
-                    &images,
-                    metrics,
+            let (item_order, path_ids, prepared_circle_ids, geometry_stats, instances) = {
+                let prepared = preparer
+                    .prepare_active_family_plan_set_with_changes(
+                        &device,
+                        &family_frame,
+                        &plans,
+                        &active_indices,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                (
+                    semantic_order(prepared.render_items),
+                    prepared.geometry.path_ids.to_vec(),
+                    prepared.geometry.circle_ids.to_vec(),
+                    prepared.geometry_stats(),
+                    (
+                        prepared.geometry.paths.to_vec(),
+                        prepared.geometry.circles.to_vec(),
+                    ),
                 )
-                .unwrap();
-            let item_order = semantic_order(prepared.render_items);
-            let path_ids = prepared.geometry.path_ids.to_vec();
-            let prepared_circle_ids = prepared.geometry.circle_ids.to_vec();
-            let geometry_stats = prepared.geometry_stats();
-            let instances = (
-                prepared.geometry.paths.to_vec(),
-                prepared.geometry.circles.to_vec(),
-            );
-            drop(prepared);
+            };
             let current_order_rebuilds = preparer.incremental_stats().mixed_order_rebuilds;
             assert_eq!(
                 item_order, expected_order,
