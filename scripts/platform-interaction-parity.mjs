@@ -163,11 +163,15 @@ try {
         directPixels = await image(pages.direct, action.id, backend, "direct");
         workerPixels = await image(pages.worker, action.id, backend, "worker");
         if (action.id === "clear-background") {
+          assert.notDeepEqual(directPixels.data, priorDirect.data, `${backend} direct clear changes the selected image`);
+          assert.notDeepEqual(workerPixels.data, priorWorker.data, `${backend} worker clear changes the selected image`);
           assertExactPixels(directPixels, directBaseline, `${backend} direct clear returns to baseline`, VIEW);
           assertExactPixels(workerPixels, workerBaseline, `${backend} worker clear returns to baseline`, VIEW);
         } else {
           assert.notDeepEqual(directPixels.data, priorDirect.data, `${backend} direct ${action.id} changes pixels`);
           assert.notDeepEqual(workerPixels.data, priorWorker.data, `${backend} worker ${action.id} changes pixels`);
+          assert.notDeepEqual(directPixels.data, directBaseline.data, `${backend} direct ${action.id} is visibly selected`);
+          assert.notDeepEqual(workerPixels.data, workerBaseline.data, `${backend} worker ${action.id} is visibly selected`);
         }
         equalPixels(directPixels, workerPixels, `${backend} ${action.id}`);
         result.checkpoints.push({ id: action.id, directSha256: hash(directPixels.data), workerSha256: hash(workerPixels.data) });
