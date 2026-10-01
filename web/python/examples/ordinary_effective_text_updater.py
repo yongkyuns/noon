@@ -1,21 +1,20 @@
-"""One Python updater swaps prebuilt text as effective content."""
+"""always_redraw selects prebuilt text through effective content."""
 
-from noon import Scene, Text
+from noon import Scene, Text, always_redraw
 
 
 class OrdinaryEffectiveTextUpdater(Scene):
     async def construct(self):
-        label = Text("starting", font="DejaVu Sans Mono", font_size=36)
         first = Text("ready", font="DejaVu Sans Mono", font_size=36)
         second = Text("moving", font="DejaVu Sans Mono", font_size=36)
-        self.add(label)
         samples = 0
 
-        def redraw(mobject, _dt):
+        def produce():
             nonlocal samples
             samples += 1
-            mobject.set_effective_text(first if samples % 2 else second)
+            return first if samples % 2 else second
 
-        label.add_updater(redraw)
+        label = always_redraw(produce)
+        self.add(label)
         await self.wait(0.25)
         assert samples >= 2
