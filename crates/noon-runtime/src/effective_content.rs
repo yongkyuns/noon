@@ -912,6 +912,7 @@ mod tests {
     };
 
     use super::{EffectiveContentError, PreparedFrameContentCommitError, SceneInstance};
+    use crate::EffectivePropertyWrite;
 
     fn scene(count: usize, animate_last: bool) -> SceneInstance {
         let objects = (0..count)
@@ -1104,6 +1105,16 @@ mod tests {
             assert!(noon_core::TextResourceLookup::get(instance.text_resources(), text).is_some());
             assert!(FontResourceLookup::get(instance.font_resources(), font).is_some());
             assert!(GeometryResourceLookup::get(instance.geometry_resources(), geometry).is_some());
+            if index == 0 {
+                let frame = instance.prepare_advance_to(0.0).unwrap();
+                let writes = instance
+                    .prepare_effective_property_batch(&[EffectivePropertyWrite::Opacity {
+                        object,
+                        opacity: 0.4,
+                    }])
+                    .unwrap();
+                instance.commit_prepared_frame(frame, writes).unwrap();
+            }
 
             if (index + 1) % REPLACEMENTS_PER_BARRIER == 0 {
                 let stats = instance.reclaim_retired_object_slots().unwrap();
@@ -1120,6 +1131,11 @@ mod tests {
                 assert_eq!(instance.compiled.resources().text_count(), 1);
                 assert_eq!(instance.compiled.resources().font_count(), 1);
                 assert_eq!(instance.compiled.resources().geometry_count(), 1);
+                assert_eq!(
+                    instance.effective_object(object).unwrap().style.opacity,
+                    0.4
+                );
+                assert!(instance.effective_driver_rows.contains(&0));
                 for (old_text, old_font, old_geometry) in resources
                     .iter()
                     .copied()
