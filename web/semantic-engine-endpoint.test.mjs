@@ -116,7 +116,8 @@ function fixture(
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
     }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation,
-    callbackHooks.complete ?? null, callbackHooks.discard ?? null),
+    callbackHooks.complete ?? null, callbackHooks.discard ?? null,
+    callbackHooks.testOnlyTickTimestamp ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -317,6 +318,30 @@ test("renderer timestamps admit generic ticks without becoming the playback cloc
     const wakeTimes = f.stats().executionWakeTimes;
     assert.ok(wakeTimes.length >= 2);
     assert.ok(Math.abs(wakeTimes.at(-1) - driven[0]) < 1_000);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("test-only worker tick clock forwards explicit interaction timestamps", async () => {
+  const timestamps = [1_000, 1_200, 1_400];
+  const f = fixture("transferable", null, null, {}, {
+    testOnlyTickTimestamp: () => timestamps.shift(),
+  });
+  let endpoint;
+  const driven = [];
+  try {
+    f.player.tickCallbackPhaseJson = (timestamp) => { driven.push(timestamp); return null; };
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    for (const [index, timestamp] of [8, 16, 24].entries()) {
+      f.render.port2.postMessage({ type: "tick", timestamp });
+      for (let turnCount = 0; turnCount < 20 && driven.length < index + 1; turnCount++) {
+        await turn();
+      }
+      assert.equal(driven.length, index + 1, "each worker wake must produce exactly one explicit tick");
+    }
+    assert.deepEqual(driven, [1_000, 1_200, 1_400]);
+    assert.deepEqual(timestamps, []);
   } finally { endpoint?.stop(); f.close(); }
 });
 

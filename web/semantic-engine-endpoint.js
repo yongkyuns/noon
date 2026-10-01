@@ -37,6 +37,7 @@ export async function attachSemanticEngine(
   continuation = null,
   completeRequiredCallbackPhase = null,
   discardRequiredCallbackPhase = null,
+  testOnlyTickTimestamp = null,
 ) {
   const {
     controlPort,
@@ -65,6 +66,9 @@ export async function attachSemanticEngine(
   }
   if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuation === null) {
     throw new Error("external sample pacing requires a source-owned semantic continuation");
+  }
+  if (testOnlyTickTimestamp !== null && typeof testOnlyTickTimestamp !== "function") {
+    throw new Error("test tick timestamp must be a function");
   }
   let player = null;
   let replayUnavailable = null;
@@ -862,7 +866,11 @@ export async function attachSemanticEngine(
               // Renderer timestamps may use another worker's time origin. They
               // admit one drive only; the player samples this engine context's
               // monotonic clock for authored-time conversion and wake projection.
-              await publishCallbackPhase(player.tickCallbackPhaseJson(performance.now()));
+              // Qualification may supply deterministic worker tick timestamps
+              // without replacing the worker's global clock or its scheduler.
+              await publishCallbackPhase(player.tickCallbackPhaseJson(
+                testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp(),
+              ));
               observeExecutionWake(performance.now());
             }
           } catch (error) {

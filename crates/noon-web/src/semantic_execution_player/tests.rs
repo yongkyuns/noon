@@ -1,10 +1,92 @@
 use super::*;
 use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
-    AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-    SemanticVec3, StoredGeometry, TrackTiming,
+    AnimationOptions, HostCallbackId, NativeInputModifiers, NativePointerId, NativePointerInput,
+    NativePointerInputKind, NativePointerPosition, RateFunction, SemanticClickIndicate,
+    SemanticMutationTransaction, SemanticMutationTransactionError, SemanticObjectProperty,
+    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, TrackTiming,
 };
+
+#[test]
+fn worker_tick_timestamps_drive_actual_transient_click_indicate_samples() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let mut target_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.8 });
+    target_state.transform.translation = SemanticVec3::new(0.0, 0.0, 0.0);
+    let target = store.insert_semantic_object(target_state);
+    store.add_semantic_family_member(root, target).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_click_indicate(
+        target,
+        Some(SemanticClickIndicate::new(1.2, noon_core::YELLOW, 0.4)),
+    );
+    transaction.apply(&mut store).unwrap();
+
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.enable_pointer_fill_selection(5.0).unwrap();
+    session.disable_pointer_fill_selection().unwrap();
+    let pointer = NativePointerId {
+        source: 17,
+        pointer: 0,
+    };
+    let token = session.configure_native_pointer_input(pointer, 1).unwrap();
+    let position =
+        NativePointerPosition::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(300.0, 150.0))
+            .unwrap();
+    for (sequence, kind) in [
+        (
+            1,
+            NativePointerInputKind::Press {
+                position,
+                button: 0,
+            },
+        ),
+        (
+            2,
+            NativePointerInputKind::Release {
+                position,
+                button: 0,
+            },
+        ),
+    ] {
+        session
+            .submit_native_pointer_input(
+                &token,
+                NativePointerInput::new(
+                    sequence,
+                    token.pointer(),
+                    token.context(),
+                    NativeInputModifiers::default(),
+                    kind,
+                ),
+            )
+            .unwrap();
+    }
+    assert!(
+        session.interactions_active(),
+        "click must start the declared transient"
+    );
+    let store = std::rc::Rc::new(std::cell::RefCell::new(store));
+    let mut player =
+        SemanticExecutionPlayer::from_live_session(session, store, root, 1.0, 64).unwrap();
+
+    for timestamp_ms in [1_000.0, 1_200.0, 1_400.0] {
+        player.tick_callback_phase_json(timestamp_ms).unwrap();
+        let scale = player.session.frame().objects[0].transform.scale.x;
+        match timestamp_ms {
+            1_000.0 => assert!((scale - 1.0).abs() < 1e-5),
+            1_200.0 => assert!(
+                scale > 1.05,
+                "midpoint timestamp must show the transient effect"
+            ),
+            1_400.0 => assert!(
+                (scale - 1.0).abs() < 1e-5,
+                "endpoint timestamp must restore the source"
+            ),
+            _ => unreachable!(),
+        }
+    }
+}
 
 #[test]
 fn callback_json_regions_preserve_native_host_order_and_publish_once() {
