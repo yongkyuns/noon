@@ -78,6 +78,7 @@ pub(crate) struct ReplayHistory {
     failure: Option<ReplayError>,
     revisions: Vec<Revision>,
     applied: usize,
+    semantic_history: bool,
     inputs: Vec<RecordedInputBatch>,
     inputs_applied: usize,
     stats: ReplayStats,
@@ -101,6 +102,7 @@ impl SceneInstance {
             failure: unsupported.then_some(ReplayError::UnsupportedDomain),
             revisions: Vec::new(),
             applied: 0,
+            semantic_history: false,
             inputs: Vec::new(),
             inputs_applied: 0,
             stats: ReplayStats::default(),
@@ -119,6 +121,22 @@ impl SceneInstance {
         self.replay_history
             .as_ref()
             .is_some_and(|history| !history.inputs.is_empty())
+    }
+    pub(crate) fn replay_input_recording_active(&self) -> bool {
+        self.replay_history
+            .as_ref()
+            .is_some_and(|history| history.end.is_none() && history.failure.is_none())
+    }
+    pub(crate) fn can_record_signal_replay_input(&self) -> bool {
+        self.replay_history.as_ref().is_some_and(|history| {
+            history.end.is_none() && history.failure.is_none() && !history.semantic_history
+        }) && self.effective_driver_rows.is_empty()
+            && self.effective_content_drivers.is_empty()
+            && !self.interactions_active()
+            && self
+                .reactive
+                .as_ref()
+                .is_some_and(|reactive| !reactive.has_property_bindings())
     }
     pub fn invalidate_replay_domain(&mut self) {
         self.invalidate_replay(ReplayError::UnsupportedDomain);
@@ -170,6 +188,9 @@ impl SceneInstance {
         {
             self.invalidate_replay_domain();
             return;
+        }
+        if let Some(history) = self.replay_history.as_mut() {
+            history.semantic_history = true;
         }
         self.retain_supported_replay_change(None, timeline.entries.len());
     }
@@ -255,9 +276,8 @@ impl SceneInstance {
             .as_ref()
             .is_some_and(|history| !history.inputs.is_empty())
         {
-            // A semantic patch can be causally downstream of a native signal
-            // read. Until those dependencies have a shared event order, do not
-            // claim that input and patch histories can be reconstructed together.
+            // Input and compiled histories have separate cursors. Until they
+            // share one total order, do not claim a mixed range can be replayed.
             self.invalidate_replay_domain();
             return;
         }
@@ -282,17 +302,14 @@ impl SceneInstance {
         if changes.is_empty() {
             return;
         }
-        if !self.effective_driver_rows.is_empty()
-            || !self.effective_content_drivers.is_empty()
-            || self.interactions_active()
-        {
-            self.invalidate_replay_domain();
-            return;
-        }
         let Some(history) = self.replay_history.as_mut() else {
             return;
         };
         if history.failure.is_some() || history.end.is_some() {
+            return;
+        }
+        if history.semantic_history {
+            self.invalidate_replay_domain();
             return;
         }
         let retained = history.revisions.len().saturating_add(history.inputs.len());
@@ -379,6 +396,7 @@ impl SceneInstance {
             return;
         }
         history.stats.payloads_retained += cost;
+        history.semantic_history = true;
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse,

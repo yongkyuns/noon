@@ -128,14 +128,10 @@ fn empty_input_seek_does_not_require_a_reactive_runtime() {
 
 #[test]
 fn changed_signal_only_input_retains_history_without_dirtying_unrelated_rows() {
-    let (mut runtime, signal, object) = fixture();
+    let (mut runtime, signal, _) = fixture();
     runtime
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    runtime
-        .apply_execution_patch(&translated(object, 4.0))
-        .unwrap();
-    assert_eq!(runtime.replay_stats().revisions_retained, 1);
     runtime.take_frame_changes();
     runtime.set_reactive_input(signal, 2.0_f32).unwrap();
     assert!(
@@ -143,7 +139,7 @@ fn changed_signal_only_input_retains_history_without_dirtying_unrelated_rows() {
         "signal-only input does not dirty unrelated frame rows"
     );
     assert_eq!(runtime.frame().time, 0.0);
-    assert_eq!(runtime.frame().objects[0].transform.translation.x, 4.0);
+    assert_eq!(runtime.frame().objects[0].transform.translation.x, 0.0);
     runtime.advance_to(3.0).unwrap();
     assert_eq!(
         runtime.frame().time,
@@ -152,6 +148,36 @@ fn changed_signal_only_input_retains_history_without_dirtying_unrelated_rows() {
     );
     runtime.seal_replay().unwrap();
     runtime.seek(0.0).unwrap();
+    assert_eq!(
+        runtime.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(2.0))
+    );
+}
+
+#[test]
+fn ordinary_reactive_batches_do_not_capture_replay_payloads() {
+    let (mut runtime, signal, _) = fixture();
+    let prepared = runtime
+        .reactive
+        .as_mut()
+        .unwrap()
+        .prepare_input_batch(&[(signal, ReactiveValue::Scalar(2.0))])
+        .unwrap();
+    assert!(prepared.input_changes().is_none());
+}
+
+#[test]
+fn compiled_changes_before_inputs_remain_fail_closed_until_histories_share_order() {
+    let (mut runtime, signal, object) = fixture();
+    runtime
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    runtime
+        .apply_execution_patch(&translated(object, 4.0))
+        .unwrap();
+    runtime.set_reactive_input(signal, 2.0_f32).unwrap();
+    assert_eq!(runtime.seal_replay(), Err(ReplayError::UnrecordedInput));
+    assert_eq!(runtime.frame().objects[0].transform.translation.x, 4.0);
     assert_eq!(
         runtime.reactive_value(signal),
         Some(&ReactiveValue::Scalar(2.0))

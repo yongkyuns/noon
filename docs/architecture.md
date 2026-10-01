@@ -641,13 +641,14 @@ its current frontier. Historical projection changes advance execution/frame
 publication identity, not authored semantic revisions.
 
 The first native-input replay slice records changed signal-only updates admitted
-through the direct Rust `set_reactive_input` entry
-inside the same finite scope, ordered by a scope-local sequence and the authored
-time at admission. It restores their previous or next signal values through the
-existing reactive runtime when seeking. This does not qualify pointer occurrences,
-editor changes, property-bound reactive input, or a semantic patch published
-after a recorded input; those domains remain explicitly non-replayable until
-their shared ordering and dependencies are retained.
+through the direct Rust `set_reactive_input` entry inside the same finite scope,
+ordered by a scope-local sequence and authored time. It restores their previous
+or next values through the existing reactive runtime when seeking. This scope
+cannot mix input history with compiled semantic revisions or authored scalar
+timeline edits: any such revision makes replay unavailable whether it precedes
+or follows an input. Pointer occurrences, editor changes and property-bound
+reactive input also remain explicitly non-replayable until their shared ordering
+and dependencies are retained.
 
 History and necessary execution identity/resource pins have an explicit scope and
 retention budget. Removal from current membership cannot reclaim a pin still

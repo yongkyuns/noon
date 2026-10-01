@@ -41,7 +41,7 @@ pub(crate) struct ReactiveRuntime {
 pub(crate) struct PreparedReactiveRuntimeUpdate {
     compute: PreparedComputeInputBatch,
     property_changes: Vec<(usize, Property, ReactiveValue)>,
-    input_changes: Vec<(SignalId, ReactiveValue, ReactiveValue)>,
+    input_changes: Option<Vec<(SignalId, ReactiveValue, ReactiveValue)>>,
     stats: ReactiveRuntimeStats,
 }
 
@@ -67,8 +67,8 @@ impl PreparedReactiveRuntimeUpdate {
         self.compute.update().signal_changes()
     }
 
-    pub(crate) fn input_changes(&self) -> &[(SignalId, ReactiveValue, ReactiveValue)] {
-        &self.input_changes
+    pub(crate) fn input_changes(&self) -> Option<&[(SignalId, ReactiveValue, ReactiveValue)]> {
+        self.input_changes.as_deref()
     }
 
     pub(crate) const fn stats(&self) -> ReactiveRuntimeStats {
@@ -133,17 +133,38 @@ impl ReactiveRuntime {
         &mut self,
         inputs: &[(SignalId, ReactiveValue)],
     ) -> Result<PreparedReactiveRuntimeUpdate, ReactiveError> {
-        let mut final_inputs = BTreeMap::new();
-        for (signal, value) in inputs {
-            final_inputs.insert(*signal, value.clone());
-        }
-        let input_changes = final_inputs
-            .into_iter()
-            .filter_map(|(signal, next)| {
-                let previous = self.state.value(signal)?.clone();
-                (previous != next).then_some((signal, previous, next))
-            })
-            .collect();
+        self.prepare_input_batch_inner(inputs, false)
+    }
+
+    pub(crate) fn prepare_recorded_input_batch(
+        &mut self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedReactiveRuntimeUpdate, ReactiveError> {
+        self.prepare_input_batch_inner(inputs, true)
+    }
+
+    fn prepare_input_batch_inner(
+        &mut self,
+        inputs: &[(SignalId, ReactiveValue)],
+        record_inputs: bool,
+    ) -> Result<PreparedReactiveRuntimeUpdate, ReactiveError> {
+        let input_changes = if record_inputs {
+            let mut final_inputs = BTreeMap::new();
+            for (signal, value) in inputs {
+                final_inputs.insert(*signal, value.clone());
+            }
+            Some(
+                final_inputs
+                    .into_iter()
+                    .filter_map(|(signal, next)| {
+                        let previous = self.state.value(signal)?.clone();
+                        (previous != next).then_some((signal, previous, next))
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
         let compute = self.state.prepare_input_batch(inputs)?;
         let mut property_changes = Vec::new();
         let mut stats = ReactiveRuntimeStats::default();
@@ -445,8 +466,9 @@ impl SceneInstance {
 
     /// Change one native input and apply only its invalidated bindings to the
     /// already-compiled dense frame state. Sealed history is read-only; a changed
-    /// input during retention makes that range unavailable for deterministic
-    /// replay. Rejected and unchanged inputs preserve the retained capability.
+    /// direct signal-only input during retention can be replayed when no other
+    /// semantic history or property binding participates. Other inputs invalidate
+    /// the range. Rejected and unchanged inputs preserve the retained capability.
     pub fn set_reactive_input(
         &mut self,
         signal: SignalId,
@@ -455,20 +477,29 @@ impl SceneInstance {
         if self.replay_is_sealed() {
             return Err(crate::EvaluationError::ReplaySealed);
         }
-        let prepared = self
+        let recording_scope = self.replay_input_recording_active();
+        let record_input = self.can_record_signal_replay_input();
+        let value = value.into();
+        let reactive = self
             .reactive
             .as_mut()
             .ok_or(crate::EvaluationError::Reactive(
                 ReactiveError::UnknownSignal(signal),
-            ))?
-            .prepare_input_batch(&[(signal, value.into())])
-            .map_err(crate::EvaluationError::Reactive)?;
+            ))?;
+        let prepared = if record_input {
+            reactive.prepare_recorded_input_batch(&[(signal, value)])
+        } else {
+            reactive.prepare_input_batch(&[(signal, value)])
+        }
+        .map_err(crate::EvaluationError::Reactive)?;
         let numeric = self
             .prepare_changed_numeric_text(&prepared)
             .map_err(crate::EvaluationError::NumericText)?;
         let effective_changed = !prepared.is_empty();
-        let input_changes = prepared.input_changes().to_vec();
+        let input_changes = prepared.input_changes().map(|changes| changes.to_vec());
         if effective_changed && !prepared.property_changes().is_empty() {
+            self.invalidate_replay_input();
+        } else if effective_changed && recording_scope && !record_input {
             self.invalidate_replay_input();
         }
         let prepared_stats = prepared.stats();
@@ -478,7 +509,9 @@ impl SceneInstance {
             .as_mut()
             .expect("prepared reactive input retains its runtime")
             .commit_prepared_input_batch(prepared);
-        self.retain_replay_input(self.frame.time, input_changes);
+        if let Some(input_changes) = input_changes {
+            self.retain_replay_input(self.frame.time, input_changes);
+        }
         let mut applied_targets = 0;
         let mut changed_targets = 0;
 
