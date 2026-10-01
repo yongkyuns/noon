@@ -204,15 +204,47 @@ async function directRetainedLocalityProof(expectedBackend) {
   const renderer = await createDirectRetainedLocalityRenderer(canvas);
   try {
     renderer.resize(canvas.width, canvas.height);
+    if (!renderer.setPointerFillSelection(4)) {
+      throw new Error("100k mixed locality selection did not arm pointer input");
+    }
+    if (!renderer.setPointerView(0, canvas.width, canvas.height)) {
+      throw new Error("100k mixed locality initial viewport was rejected");
+    }
     await presentDirectFrame(renderer);
     const initialBytesUploaded = renderer.lastBytesUploaded();
     const objectCount = renderer.objectCount();
     // Advance normal playback; inspection seek intentionally rebuilds its frame.
     renderer.directWakeDirectiveJson(0);
     const tickUploads = [];
+    let pointerViewRevision = 0;
     let previousTime = renderer.time();
     for (let tick = 1; tick <= sustainedTicks; tick += 1) {
       const wallTimeMs = tick * tickIntervalMs;
+      // Keep one sparse-scene hit target centered while changing the presented
+      // viewport and hovering it alongside the independent animated target.
+      // This exercises the mixed browser path without adding a second fixture.
+      if (tick % 8 === 0) {
+        const width = canvas.width === 960 ? 912 : 960;
+        canvas.width = width;
+        renderer.resize(width, canvas.height);
+        pointerViewRevision += 1;
+        if (!renderer.setPointerView(pointerViewRevision, width, canvas.height)) {
+          throw new Error(`100k mixed locality viewport ${pointerViewRevision} was rejected`);
+        }
+        // Install the new receipt before sending pointer coordinates that name it.
+        await presentDirectFrame(renderer);
+      }
+      const pointerAccepted = renderer.nativePointerInput(
+        // A viewport revision retires the prior pointer source, so issue a
+        // monotonically newer source ID for the fresh post-resize sample.
+        "move", 41 + pointerViewRevision, 9, pointerViewRevision,
+        canvas.width / 2, canvas.height / 2,
+        canvas.width, canvas.height,
+        null, false, false, false, false,
+      );
+      if (pointerAccepted === undefined || pointerAccepted === null) {
+        throw new Error(`100k mixed locality pointer sample ${tick} was rejected`);
+      }
       if (!renderer.advanceDirectRealtime(wallTimeMs)) {
         throw new Error(`100k locality tick ${tick} did not publish a changed frame`);
       }
@@ -228,11 +260,20 @@ async function directRetainedLocalityProof(expectedBackend) {
       tickUploads.push(bytesUploaded);
       previousTime = time;
     }
+    const pointerPresentation = JSON.parse(renderer.debugPointerPresentationJson());
     const metrics = {
       backend: renderer.rendererBackend(),
       objectCount,
       initialBytesUploaded,
       sustainedTicks,
+      mixedInteraction: {
+        pointerSamples: sustainedTicks,
+        viewportChanges: pointerViewRevision,
+        presentedView: pointerPresentation.view,
+        presentationSettled: !pointerPresentation.refreshPending &&
+          pointerPresentation.current === pointerPresentation.presented &&
+          pointerPresentation.inspectionRevision === pointerPresentation.presentedInspectionRevision,
+      },
       tickUploads,
       drawCalls: renderer.lastDrawCalls(),
     };
@@ -241,6 +282,11 @@ async function directRetainedLocalityProof(expectedBackend) {
     }
     if (metrics.objectCount !== 100000) {
       throw new Error(`100k locality renderer exposed ${metrics.objectCount} objects`);
+    }
+    if (metrics.mixedInteraction.viewportChanges !== 8 ||
+        metrics.mixedInteraction.presentedView?.[0] !== canvas.width ||
+        !metrics.mixedInteraction.presentationSettled) {
+      throw new Error(`100k mixed pointer/viewport presentation did not settle: ${JSON.stringify(metrics.mixedInteraction)}`);
     }
     if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
       throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
