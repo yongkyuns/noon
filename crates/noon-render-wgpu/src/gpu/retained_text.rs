@@ -1035,6 +1035,8 @@ pub struct RetainedFramePreparer {
     // update only their target paths after the one structural transition.
     family_plan_active_signature: Vec<(usize, u32)>,
     family_plan_scratch_slots: HashMap<usize, HashMap<noon_core::TextAnimationGlyphRef, usize>>,
+    resident_path_maintenance_baseline_bytes: usize,
+    resident_path_maintenance_baseline_roots: usize,
 }
 
 impl Default for RetainedFramePreparer {
@@ -1091,11 +1093,31 @@ impl Default for RetainedFramePreparer {
             last_applied_publication: None,
             family_plan_active_signature: Vec::new(),
             family_plan_scratch_slots: HashMap::new(),
+            resident_path_maintenance_baseline_bytes: 0,
+            resident_path_maintenance_baseline_roots: 0,
         }
     }
 }
 
 impl RetainedFramePreparer {
+    pub fn resident_path_maintenance_due(&self, live_resource_roots: usize) -> bool {
+        const ROOT_HEADROOM: usize = 64;
+        const ROOT_SHRINK_FRACTION_DENOMINATOR: usize = 4;
+        const BYTE_HEADROOM: usize = 16 * 1024 * 1024;
+        let resident = self.resident_path_mesh_count();
+        let root_headroom = live_resource_roots.max(ROOT_HEADROOM);
+        let shrink_headroom =
+            (live_resource_roots / ROOT_SHRINK_FRACTION_DENOMINATOR).max(ROOT_HEADROOM);
+        (live_resource_roots == 0 && self.resident_path_maintenance_baseline_roots != 0)
+            || self.resident_path_maintenance_baseline_roots
+                > live_resource_roots.saturating_add(shrink_headroom)
+            || resident > live_resource_roots.saturating_add(root_headroom)
+            || self.geometry.resident_path_byte_count()
+                > self
+                    .resident_path_maintenance_baseline_bytes
+                    .saturating_add(BYTE_HEADROOM)
+    }
+
     /// Select mixed painter items while inset capture is active so displays can
     /// be excluded without splitting coalesced geometry batches.
     pub fn set_inset_views_active(&mut self, active: bool) {
@@ -1177,8 +1199,40 @@ impl RetainedFramePreparer {
         let mut replacement = Self::with_outline_cache_limits(self.outline_cache_limits());
         replacement.geometry = geometry;
         replacement.text_generation = self.text_generation;
+        replacement.resident_path_maintenance_baseline_bytes =
+            replacement.geometry.resident_path_byte_count();
+        replacement.resident_path_maintenance_baseline_roots = requests.len();
         *self = replacement;
         Ok(stats)
+    }
+
+    /// Compact the immutable resident prefix from the caller's current live
+    /// resource roots. This is an explicit maintenance operation; callers must
+    /// admit it only after the previous prepared frame has been submitted.
+    pub fn compact_path_meshes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut GpuRenderer,
+        requests: &[crate::PathMeshPreload<'_>],
+    ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
+        let mut geometry = FramePreparer::for_individual_path_draws();
+        geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
+        geometry.preload_paths(requests)?;
+        let frame = geometry.preloaded_frame();
+        let stats = crate::PathMeshPreloadStats {
+            geometry: frame.stats,
+            upload: renderer.replace_preloaded_path_buffers(device, queue, &frame)?,
+        };
+        let baseline_bytes = geometry.resident_path_byte_count();
+        self.geometry = geometry;
+        self.resident_path_maintenance_baseline_bytes = baseline_bytes;
+        self.resident_path_maintenance_baseline_roots = requests.len();
+        Ok(stats)
+    }
+
+    pub fn resident_path_mesh_count(&self) -> usize {
+        self.geometry.resident_path_mesh_count()
     }
 
     /// Budget the path cache for the currently installed immutable scene resources.
@@ -5139,6 +5193,171 @@ mod tests {
         assert_eq!(prepared.text.atlas.pending_upload_count(), 0);
         assert!(draw.geometry.draw_calls > 0);
         assert!(draw.text.draw_calls > 0);
+    }
+
+    #[test]
+    fn path_compaction_preserves_mixed_text_and_image_state() {
+        let (mut frame, texts, fonts, geometries) = mixed_text_frame();
+        let path = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.0))
+                .line_to(Vec2::new(0.5, 0.0)),
+        );
+        frame.objects[0].content = ObjectContentRef::Geometry(path.clone());
+        let mut images = noon_core::RasterImageResourceArena::new();
+        let image_handle = images.intern_rgba8(1, 1, vec![255, 64, 32, 255]).unwrap();
+        let image_resource = images.get(image_handle).unwrap();
+        let image = noon_core::RasterImageContentRef::from_resource(
+            noon_core::SemanticImageContent::new(image_handle),
+            image_resource,
+        );
+        frame.objects.push(FrameObjectState {
+            z_index: 0.0,
+            id: ObjectId::new(3),
+            content: ObjectContentRef::Image(image),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style {
+                fill: Some(Color::WHITE),
+                stroke_width: 0.0,
+                ..Style::default()
+            },
+            appearance: 1.0,
+        });
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, 64, 64);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let mut retained = RetainedFramePreparer::new();
+        retained.set_painter_order(&[0, 1, 2]);
+        let requests = [crate::PathMeshPreload {
+            geometry: &path,
+            style: frame.objects[0].style,
+            transform: Transform2D::IDENTITY,
+        }];
+        retained
+            .preload_path_meshes(&device, &queue, &mut renderer, &requests)
+            .unwrap();
+        queue.submit([]);
+
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (text_quads, text_items, image_items, upload_a) = {
+            let prepared = retained
+                .prepare_with_image_resources(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    metrics,
+                )
+                .unwrap();
+            assert!(prepared.stats.image_objects > 0);
+            let text_quads = prepared.text.mask_quads.to_vec();
+            let text_items = prepared.text.items.to_vec();
+            let image_items = prepared.image_draw.items.len();
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mixed resource frame before path compaction"),
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("encode mixed resource frame before path compaction"),
+            });
+            let draw = renderer
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &text_state,
+                    wgpu::Color::TRANSPARENT,
+                    None,
+                )
+                .unwrap();
+            assert!(draw.geometry.draw_calls > 0 && draw.text.draw_calls > 0);
+            assert_eq!(draw.images, 1);
+            queue.submit(Some(encoder.finish()));
+            (text_quads, text_items, image_items, upload)
+        };
+        assert!(image_items > 0);
+        assert!(upload_a.images.pixel_bytes_uploaded > 0);
+        assert!(upload_a.text.bytes_uploaded > 0);
+
+        let compacted = retained
+            .compact_path_meshes(&device, &queue, &mut renderer, &requests)
+            .unwrap();
+        queue.submit([]);
+        assert!(compacted.upload.bytes_uploaded > 0);
+
+        let prepared_b = retained
+            .prepare_with_image_resources(
+                &device,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                &images,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(prepared_b.text.mask_quads, text_quads);
+        assert_eq!(prepared_b.text.items, text_items);
+        assert_eq!(prepared_b.image_draw.items.len(), image_items);
+        assert!(prepared_b.stats.image_objects > 0);
+        let upload_b = renderer.upload_retained(&device, &queue, &prepared_b, &mut text_state);
+        assert_eq!(upload_b.images.pixel_bytes_uploaded, 0);
+        assert!(upload_b.text.bytes_uploaded > 0);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mixed resource frame after path compaction"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("encode mixed resource frame after path compaction"),
+        });
+        let draw = renderer
+            .encode_retained(
+                &mut encoder,
+                &view,
+                &prepared_b,
+                &text_state,
+                wgpu::Color::TRANSPARENT,
+                None,
+            )
+            .unwrap();
+        assert!(draw.geometry.draw_calls > 0 && draw.text.draw_calls > 0);
+        assert_eq!(draw.images, 1);
+        queue.submit(Some(encoder.finish()));
     }
 
     #[test]

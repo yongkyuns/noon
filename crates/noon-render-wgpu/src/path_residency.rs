@@ -75,6 +75,15 @@ impl PathMeshAppendPlan {
 }
 
 impl FramePreparer {
+    pub(crate) fn resident_path_mesh_count(&self) -> usize {
+        self.resident_mesh_count
+    }
+
+    pub(crate) fn resident_path_byte_count(&self) -> usize {
+        self.resident_vertex_count * std::mem::size_of::<PathVertex>()
+            + self.resident_index_count * std::mem::size_of::<u32>()
+    }
+
     pub(crate) fn preload_paths(
         &mut self,
         requests: &[PathMeshPreload<'_>],
@@ -111,6 +120,7 @@ impl FramePreparer {
                 &mut self.path_indices,
             );
             self.path_mesh_cache[index].resident = Some(ranges);
+            self.resident_mesh_count += 1;
         }
         self.resident_vertex_count = self.path_vertices.len();
         self.resident_index_count = self.path_indices.len();
@@ -219,6 +229,9 @@ impl FramePreparer {
         self.path_vertex_dirty_ranges.clear();
         self.path_index_dirty_ranges.clear();
 
+        self.resident_mesh_count = self
+            .resident_mesh_count
+            .saturating_add(plan.cache_indices.len());
         for index in plan.cache_indices {
             debug_assert!(self.path_mesh_cache[index].resident.is_none());
             let ranges = append_mesh(

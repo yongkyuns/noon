@@ -88,6 +88,7 @@ mod wasm {
         last_outline_cache_misses: u64,
         preloaded_geometry_count: usize,
         preload_bytes_uploaded: usize,
+        resident_path_maintenance_retry_deferred: bool,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
         gpu_validation_scope: Option<wgpu::ErrorScopeGuard>,
@@ -166,6 +167,7 @@ mod wasm {
             self.gpu_validation_scope = None;
             self.preloaded_geometry_count = preloaded_geometry_count;
             self.preload_bytes_uploaded = preload_bytes_uploaded;
+            self.resident_path_maintenance_retry_deferred = false;
             self.last_draw_calls = 0;
             self.last_instances_drawn = 0;
             self.last_bytes_uploaded = 0;
@@ -249,6 +251,7 @@ mod wasm {
                 last_outline_cache_misses: 0,
                 preloaded_geometry_count,
                 preload_bytes_uploaded,
+                resident_path_maintenance_retry_deferred: false,
                 gpu_generation,
                 gpu_diagnostics,
                 gpu_validation_scope,
@@ -381,6 +384,68 @@ mod wasm {
                     }
                     self.pending_changes = changes;
                     self.pending_frame = true;
+                    let defer_path_maintenance = self.resident_path_maintenance_retry_deferred;
+                    self.resident_path_maintenance_retry_deferred = false;
+                    if gpu_available
+                        && !defer_path_maintenance
+                        && self.preparer.resident_path_maintenance_due(
+                            self.mirror.resources().render_geometry_preparation_count(),
+                        )
+                    {
+                        let requests = {
+                            let resources = self.mirror.resources();
+                            let geometries = resources.render_geometries();
+                            resources
+                                .render_geometry_preparations()
+                                .map(|preparation| {
+                                    Some(PathMeshPreload {
+                                        geometry: geometries
+                                            .get(preparation.resource as usize)?
+                                            .geometry
+                                            .as_ref()?
+                                            .as_ref(),
+                                        style: preparation.style,
+                                        transform: preparation.transform,
+                                    })
+                                })
+                                .collect::<Option<Vec<_>>>()
+                        };
+                        let Some(requests) = requests else {
+                            web_sys::console::warn_1(&js_sys::Error::new(
+                                "resident path maintenance skipped: live geometry preparation is stale",
+                            ));
+                            self.resident_path_maintenance_retry_deferred = true;
+                            return Ok(true);
+                        };
+                        match self.preparer.compact_path_meshes(
+                            &self.device,
+                            &self.queue,
+                            &mut self.renderer,
+                            &requests,
+                        ) {
+                            Ok(compacted) => {
+                                if compacted.upload.bytes_uploaded != 0 {
+                                    self.queue.submit([]);
+                                }
+                                self.preloaded_geometry_count = self
+                                    .preloaded_geometry_count
+                                    .saturating_add(compacted.geometry.geometry_cache_misses);
+                                self.preload_bytes_uploaded = self
+                                    .preload_bytes_uploaded
+                                    .saturating_add(compacted.upload.bytes_uploaded);
+                                self.pending_changes = FrameChanges::all();
+                            }
+                            Err(error) => {
+                                // The delta has already been accepted. Maintenance is
+                                // opportunistic, so retain the old buffers and continue
+                                // to render the accepted mirror state normally.
+                                web_sys::console::warn_1(&js_sys::Error::new(&format!(
+                                    "resident path maintenance skipped: {error}"
+                                )));
+                                self.resident_path_maintenance_retry_deferred = true;
+                            }
+                        }
+                    }
                     Ok(true)
                 }
                 RetainedTransportApplyOutcome::DroppedStale => Ok(false),
