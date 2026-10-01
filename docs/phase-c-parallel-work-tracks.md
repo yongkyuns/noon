@@ -235,7 +235,7 @@ Shared selection, hover, click `Indicate`, drag ownership, and frame-qualified p
 
 ### C6 — startup and topology
 
-`scripts/playground-cold-start.mjs` measures source-ready, preload, worker execution, reconciliation, exact-session first renderer return, and a warm edit. A controlled preload comparison lowered first-edit latency by roughly 3.9–4.2 seconds on the measured Chromium package; instrumentation observed one authoring and one render WASM instance. See [#642](https://github.com/yongkyuns/noon/issues/642) for exact package hashes, raw artifacts, and caveats. The 4× page throttle did not establish a throttled Python worker, process-tree RSS is not true peak memory, and source-ready/renderer-return do not prove physical scanout. Worker calibration, true peak memory, and an un-overlapped startup reference remain open.
+`scripts/playground-cold-start.mjs` measures source-ready, preload, worker execution, reconciliation, exact-session first renderer return, and a warm edit. A controlled preload comparison lowered first-edit latency by roughly 3.9–4.2 seconds on the measured Chromium package; instrumentation observed one authoring and one render WASM instance. See [#642](https://github.com/yongkyuns/noon/issues/642) for exact package hashes, raw artifacts, and caveats. Artifacts label the 4× setting as page-target throttling and explicitly mark Python-worker throttling unconfigured and unverified; it cannot support mobile-worker CPU claims. Process-tree RSS is not true peak memory, and source-ready/renderer-return do not prove physical scanout. Worker calibration, true peak memory, and an un-overlapped startup reference remain open.
 
 ### C7 — measured specialization
 
