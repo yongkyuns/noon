@@ -1,3 +1,4 @@
+import { PythonAuthoringClient } from "./authoring-client.js";
 import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
@@ -20,7 +21,6 @@ const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
-let pendingRendererPublicationStageSample = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
@@ -50,8 +50,11 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = new ProvenancedPythonAuthoringClient();
-  runtimeBuildIdentity = await client.ready();
+  client = rendererSamples === null
+    ? new PythonAuthoringClient()
+    : new ProvenancedPythonAuthoringClient();
+  const readyIdentity = await client.ready();
+  if (rendererSamples !== null) runtimeBuildIdentity = readyIdentity;
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -149,6 +152,7 @@ try {
         uploadBytes: renderer.bytesUploaded,
       });
       if (rendererPublicationStageSamples !== null) {
+        let latestNewPublicationStageSample = null;
         for (const sample of renderer.publicationStageSamples ?? []) {
           const isNew = rendererPublicationStageCursor === null ||
             sample.session > rendererPublicationStageCursor.session ||
@@ -156,16 +160,15 @@ try {
              sample.sequence > rendererPublicationStageCursor.sequence);
           if (!isNew) continue;
           rendererPublicationStageCursor = { session: sample.session, sequence: sample.sequence };
-          pendingRendererPublicationStageSample = sample;
+          latestNewPublicationStageSample = sample;
         }
         if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES &&
             shouldSampleRendererStageFrame(frame, measuredFrames) &&
-            pendingRendererPublicationStageSample !== null) {
+            latestNewPublicationStageSample !== null) {
           rendererPublicationStageSamples.push({
-            ...pendingRendererPublicationStageSample,
+            ...latestNewPublicationStageSample,
             measuredFrameIndex: frame,
           });
-          pendingRendererPublicationStageSample = null;
         }
       }
     }
@@ -206,7 +209,7 @@ try {
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
-    runtimeBuild: runtimeBuildIdentity,
+    ...(runtimeBuildIdentity === null ? {} : { runtimeBuild: runtimeBuildIdentity }),
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,

@@ -32,8 +32,6 @@ try {
       } else {
         assert.equal(result.state, "complete", result.status);
         assert.equal(result.report.schemaVersion, 2);
-        assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
-        assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
         assert.equal(result.report.execution.mode, "semantic");
         assert.equal(result.report.execution.sourceContinuation, spec.continuation);
         assert.equal(result.report.scene.objects, spec.objects);
@@ -50,6 +48,8 @@ try {
           assert.ok(result.report.samples.every(sample => Number.isFinite(sample.advanceRoundTripMs)));
         } else assert.equal(result.report.samples, undefined);
         if (spec.includeRendererSamples) {
+          assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
+          assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
           assert.ok(result.report.rendererSamples.length > 0);
           const stageSamples = result.report.rendererPublicationStageSamples;
           assert.ok(stageSamples.length > 0);
