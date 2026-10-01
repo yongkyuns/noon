@@ -1653,6 +1653,15 @@ impl ExecutionSession {
             .runtime
             .prepare_effective_content_replacement(object, content, text_bounds, lease)
             .map_err(ExecutionSessionCallbackError::Content)?;
+        self.commit_prepared_callback_content(effective, receipt_domains, replacement)
+    }
+
+    fn commit_prepared_callback_content(
+        &mut self,
+        effective: noon_runtime::PreparedEffectivePropertyBatch,
+        receipt_domains: BTreeMap<SemanticNodeId, u8>,
+        replacement: noon_runtime::PreparedEffectiveContentReplacement,
+    ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
         self.runtime
             .preflight_prepared_frame_with_content(
                 &self
@@ -1677,6 +1686,22 @@ impl ExecutionSession {
         Ok(lease)
     }
 
+    fn callback_content_lease(
+        &self,
+        target: SemanticNodeId,
+        object: noon_core::ObjectId,
+    ) -> Result<Option<EffectiveContentLease>, ExecutionSessionCallbackError> {
+        let known = self.callback_content_leases.get(&target).copied();
+        let current = self.runtime.effective_content_lease(object);
+        match (known, current) {
+            (None, None) | (Some(_), None) => Ok(None),
+            (Some(known), Some(current)) if known == current => Ok(Some(current)),
+            _ => Err(ExecutionSessionCallbackError::Content(
+                EffectiveContentError::DriverConflict(object),
+            )),
+        }
+    }
+
     /// The callback session owns this producer lease across frames. A foreign
     /// effective-content owner remains a conflict rather than being adopted.
     pub fn commit_required_callback_phase_with_owned_content(
@@ -1689,19 +1714,35 @@ impl ExecutionSession {
             .execution_index
             .execution_object_id(target)
             .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
-        let known = self.callback_content_leases.get(&target).copied();
-        let current = self.runtime.effective_content_lease(object);
-        let lease = match (known, current) {
-            (None, None) | (Some(_), None) => None,
-            (Some(known), Some(current)) if known == current => Some(current),
-            _ => {
-                return Err(ExecutionSessionCallbackError::Content(
-                    EffectiveContentError::DriverConflict(object),
-                ));
-            }
-        };
+        let lease = self.callback_content_lease(target, object)?;
         let lease =
             self.commit_required_callback_phase_with_content(batch, target, content, None, lease)?;
+        self.callback_content_leases.insert(target, lease);
+        Ok(lease)
+    }
+
+    /// Commit callback-produced external geometry through the same session-owned
+    /// effective-content lease used by analytic and text content results.
+    pub fn commit_required_callback_phase_with_owned_geometry(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        handle: noon_core::GeometryResourceHandle,
+        source: &noon_core::GeometryResourceArena,
+    ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
+        let object = self
+            .execution_index
+            .execution_object_id(target)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
+        let lease = self.callback_content_lease(target, object)?;
+        let batch = self.complete_callback_batch_for_commit(batch)?;
+        let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
+        let replacement = self
+            .runtime
+            .prepare_effective_geometry_replacement(object, handle, source, lease)
+            .map_err(ExecutionSessionCallbackError::Content)?;
+        let lease =
+            self.commit_prepared_callback_content(effective, receipt_domains, replacement)?;
         self.callback_content_leases.insert(target, lease);
         Ok(lease)
     }

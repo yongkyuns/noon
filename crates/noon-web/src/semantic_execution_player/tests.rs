@@ -1,10 +1,11 @@
 use super::*;
 use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
-    AnimationOptions, HostCallbackId, NativeInputModifiers, NativePointerId, NativePointerInput,
-    NativePointerInputKind, NativePointerPosition, RateFunction, SemanticClickIndicate,
-    SemanticMutationTransaction, SemanticMutationTransactionError, SemanticObjectProperty,
-    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, TrackTiming,
+    AnimationOptions, GeometryResourceLookup, HostCallbackId, NativeInputModifiers,
+    NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
+    RateFunction, SemanticClickIndicate, SemanticMutationTransaction,
+    SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
+    SemanticVec3, StoredGeometry, TrackTiming,
 };
 
 #[test]
@@ -289,6 +290,193 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
         ObjectContentRef::Geometry(GeometryRef::circle(3.0))
     );
     assert_eq!(player.session.frame().time, 1.0);
+}
+
+#[test]
+fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
+    let mut scene = noon::Scene::new();
+    let source = scene.circle(1.0).unwrap();
+    scene.add(&source).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        2.0,
+        80,
+    )
+    .unwrap();
+    let make_batch = |phase: &serde_json::Value, x: f32| {
+        serde_json::json!({
+            "token": phase["token"], "region": phase["region"], "writes": [],
+            "content": {"object": phase["objects"][0]["node"], "path": {
+                "points": [[0.0, 0.0], [x, 0.0], [0.0, 1.0]], "closed": true
+            }}
+        })
+        .to_string()
+    };
+    let first: serde_json::Value =
+        serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
+    let invalid = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"], "path": {
+            "points": [[0.0, 0.0]], "closed": true
+        }}
+    });
+    assert!(player
+        .commit_callback_phase_json(&invalid.to_string())
+        .is_err());
+    assert!(player.session.pending_callback_token().is_some());
+    let missing_producer = serde_json::json!({
+        "token": first["token"], "region": first["region"], "writes": [],
+        "content": {"object": first["objects"][0]["node"]}
+    });
+    assert!(player
+        .commit_callback_phase_json(&missing_producer.to_string())
+        .is_err());
+    assert!(player.session.pending_callback_token().is_some());
+    player
+        .commit_callback_phase_json(&make_batch(&first, 2.0))
+        .unwrap();
+    let first_delta = player.delta(true).unwrap().unwrap();
+    assert!(matches!(
+        first_delta.retained.objects[0].content,
+        TransportObjectContent::Geometry {
+            geometry: GeometryRef::VectorPath(_)
+        }
+    ));
+    let lease = player
+        .session
+        .effective_content_lease(source.node_id())
+        .unwrap();
+    let ObjectContentRef::Geometry(GeometryRef::External(first_id)) =
+        player.session.frame().objects[0].content
+    else {
+        panic!("expected external path")
+    };
+    let first_handle = player
+        .session
+        .geometry_resources()
+        .current_handle(first_id)
+        .unwrap();
+    assert!(player
+        .session
+        .geometry_resources()
+        .get(first_handle)
+        .is_some());
+
+    let second: serde_json::Value =
+        serde_json::from_str(&player.advance_to_callback_phase(0.5).unwrap().unwrap()).unwrap();
+    assert!(player
+        .commit_callback_phase_json(&make_batch(&first, 4.0))
+        .is_err());
+    player
+        .commit_callback_phase_json(&make_batch(&second, 3.0))
+        .unwrap();
+    let second_delta = player.delta(false).unwrap().unwrap();
+    assert!(matches!(
+        second_delta.retained.objects[0].content,
+        TransportObjectContent::Geometry {
+            geometry: GeometryRef::VectorPath(_)
+        }
+    ));
+    assert_eq!(
+        player.session.effective_content_lease(source.node_id()),
+        Some(lease)
+    );
+    assert!(player
+        .session
+        .geometry_resources()
+        .get(first_handle)
+        .is_none());
+    assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
+    assert!(player.session.last_spatial_update_stats().leaves_upserted <= 1);
+}
+
+#[test]
+fn callback_paths_on_two_targets_keep_distinct_live_geometry_ids() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let foreign = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let first = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let second = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    for object in [foreign, first, second] {
+        store.add_semantic_family_member(root, object).unwrap();
+    }
+    let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+        1.0,
+        81,
+    )
+    .unwrap();
+    let mut other_source = GeometryResourceArena::new();
+    let other_handle = other_source.insert_path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close(),
+    );
+    let prepared = player
+        .session
+        .prepare_effective_geometry_replacement(foreign, other_handle, &other_source, None)
+        .unwrap();
+    player
+        .session
+        .commit_effective_content_replacement(prepared)
+        .unwrap();
+
+    for (target, x) in [(first, 2.0), (second, 3.0)] {
+        let phase = player
+            .session
+            .begin_required_callback_phase(0.0, [target])
+            .unwrap();
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(x, 0.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        player
+            .commit_callback_content(phase.finish(), target, CallbackContentResult::Path(path))
+            .unwrap();
+    }
+
+    let resources = player.session.geometry_resources();
+    let foreign_id = other_handle.id;
+    assert!(noon_core::GeometryResourceLookup::current_handle(resources, foreign_id).is_some());
+    let ids: Vec<_> = player
+        .session
+        .frame()
+        .objects
+        .iter()
+        .skip(1)
+        .map(|object| match object.content {
+            ObjectContentRef::Geometry(GeometryRef::External(id)) => id,
+            _ => panic!("callback target must retain an external path"),
+        })
+        .collect();
+    assert_ne!(ids[0], ids[1]);
+    assert_ne!(ids[0], foreign_id);
+    assert_ne!(ids[1], foreign_id);
+    for id in ids {
+        let handle = noon_core::GeometryResourceLookup::current_handle(resources, id).unwrap();
+        assert!(noon_core::GeometryResourceLookup::get(resources, handle).is_some());
+    }
+    assert_eq!(player.callback_geometry_sources.slot_capacity(), 1);
+    assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
 }
 
 #[test]

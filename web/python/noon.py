@@ -525,6 +525,16 @@ class Mobject:
         """
         return _callback_operations().set_effective_circle(self, radius)
 
+    def set_effective_path(
+        self, points: list[tuple[float, float]], closed: bool = False
+    ) -> Mobject:
+        """Replace this callback target's effective content with a polygonal path.
+
+        Path output is limited to a finite list of at least two points and must
+        be produced by the final updater in its callback phase.
+        """
+        return _callback_operations().set_effective_path(self, points, closed)
+
     def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
         return _callback_operations().remove_updater(self, update_function)
 
