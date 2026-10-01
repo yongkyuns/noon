@@ -131,6 +131,7 @@ jobs:
           changed_paths="$(git diff --name-only "$BASE_SHA" HEAD)"
           printf '%s\n' "$changed_paths"
           node --test scripts/cold-start-risk-classifier.test.mjs
+          node --test scripts/playground-cold-start-calibration.test.mjs
           printf '%s\n' "$changed_paths" | node scripts/pr-risk-classifier.mjs >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed_paths" | node scripts/cold-start-risk-classifier.mjs >> "$GITHUB_OUTPUT"
 
