@@ -16,7 +16,13 @@ pub struct Fixture {
     pub down: SemanticNodeId,
     pub up: SemanticNodeId,
     pub viewport: SemanticNodeId,
+    pub key_pressed: SemanticNodeId,
+    pub key_press: SemanticNodeId,
+    pub key_release: SemanticNodeId,
 }
+
+/// Paused Space key lifecycle, shared by native and browser/WASM qualification.
+pub const KEY_TRACE: &[&str] = &["press", "release"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Step {
@@ -106,6 +112,14 @@ impl Fixture {
         fixture
             .store
             .bind_semantic_signal(
+                fixture.key_pressed,
+                fixture.unrelated,
+                SemanticObjectProperty::Presence,
+            )
+            .unwrap();
+        fixture
+            .store
+            .bind_semantic_signal(
                 fixture.up,
                 fixture.unrelated,
                 SemanticObjectProperty::RotationZ,
@@ -158,6 +172,30 @@ impl Fixture {
             SemanticNativeInputSource::State(NativeStateSource::ViewportSize),
             SemanticSignalValue::Vec3(SemanticVec3::ZERO),
         );
+        let key_pressed = signal(
+            &mut store,
+            root,
+            SemanticNativeInputSource::State(NativeStateSource::Key {
+                code: "Space".to_owned(),
+            }),
+            SemanticSignalValue::Bool(false),
+        );
+        let key_press = signal(
+            &mut store,
+            root,
+            SemanticNativeInputSource::Event(NativeEventSource::KeyPress {
+                code: "Space".to_owned(),
+            }),
+            SemanticSignalValue::Scalar(0.0),
+        );
+        let key_release = signal(
+            &mut store,
+            root,
+            SemanticNativeInputSource::Event(NativeEventSource::KeyRelease {
+                code: "Space".to_owned(),
+            }),
+            SemanticSignalValue::Scalar(0.0),
+        );
         Self {
             store,
             root,
@@ -168,6 +206,9 @@ impl Fixture {
             down,
             up,
             viewport,
+            key_pressed,
+            key_press,
+            key_release,
         }
     }
 }

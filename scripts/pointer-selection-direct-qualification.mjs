@@ -419,11 +419,28 @@ try {
         assert.notDeepEqual(final.frame.objects[1].transform, selectedFrame.frame.objects[1].transform,
           "background click should publish its subscribed up event");
         assert.equal(final.time, 0);
+
+        // The shared Rust-authored Space state trace is admitted by the browser
+        // keyboard collector and native winit test. Ordered edge counts are
+        // asserted by the paired native test; this renderer path proves the
+        // key state drives the same paused scene signal.
+        const beforeKey = await state();
+        await page.keyboard.down("Space"); await changed(beforeKey);
+        const afterKeyPress = await state();
+        assert.equal(afterKeyPress.frame.objects[1].present, true,
+          "Space keydown publishes the shared key-state binding");
+        await page.keyboard.up("Space"); await changed(afterKeyPress);
+        const afterKeyRelease = await state();
+        assert.equal(afterKeyRelease.frame.objects[1].present, false,
+          "Space keyup restores the shared key-state binding");
+        assert.equal(afterKeyRelease.time, 0,
+          "paused keyboard input must not advance authored time");
         result.steps.push({ name: "reactive-events-and-selection", status: "passed" },
           { name: "cancel-without-release", status: "passed" },
-          { name: "background-clear", status: "passed" });
+          { name: "background-clear", status: "passed" },
+          { name: "shared-keyboard-state-parity", status: "passed" });
         result.status = "passed";
-        console.log(`[PASS] ${prefix}: shared Rust fixture, reactive edges, selection, and cancellation`);
+        console.log(`[PASS] ${prefix}: shared Rust fixture, reactive edges, selection, cancellation, and keyboard state`);
       } catch (error) {
         result.status = "failed"; result.error = String(error.stack ?? error); throw error;
       } finally {

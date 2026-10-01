@@ -6,6 +6,7 @@ use noon_core::{
     SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
     SemanticStore,
 };
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 const SIZE: PhysicalSize<u32> = PhysicalSize::new(800, 400);
 
@@ -20,6 +21,9 @@ struct Fixture {
     up: SemanticNodeId,
     viewport: SemanticNodeId,
     unrelated: SemanticNodeId,
+    key_pressed: SemanticNodeId,
+    key_press: SemanticNodeId,
+    key_release: SemanticNodeId,
 }
 
 fn signal(
@@ -50,6 +54,9 @@ impl Fixture {
             up: fixture.up,
             viewport: fixture.viewport,
             unrelated: fixture.unrelated,
+            key_pressed: fixture.key_pressed,
+            key_press: fixture.key_press,
+            key_release: fixture.key_release,
         }
     }
     fn value(&self, signal: SemanticNodeId) -> &ReactiveValue {
@@ -72,6 +79,39 @@ impl Fixture {
             .dispatch_pointer_button(MouseButton::Left, state, SIZE, 1.0)
             .unwrap();
     }
+}
+
+#[test]
+fn shared_space_key_trace_matches_native_state_and_ordered_edges_while_paused() {
+    let mut f = Fixture::new();
+    for step in shared_trace::KEY_TRACE {
+        let state = match *step {
+            "press" => ElementState::Pressed,
+            "release" => ElementState::Released,
+            other => panic!("unknown shared key trace step {other}"),
+        };
+        f.app
+            .dispatch_keyboard(PhysicalKey::Code(KeyCode::Space), state)
+            .unwrap();
+        f.present();
+        assert_eq!(
+            f.value(f.key_pressed),
+            &ReactiveValue::Bool(state == ElementState::Pressed)
+        );
+        assert_eq!(
+            f.app.session().frame().is_present(1),
+            state == ElementState::Pressed,
+            "the shared key state controls the bound object's presence"
+        );
+    }
+    assert_eq!(f.value(f.key_pressed), &ReactiveValue::Bool(false));
+    assert_eq!(f.value(f.key_press), &ReactiveValue::Scalar(1.0));
+    assert_eq!(f.value(f.key_release), &ReactiveValue::Scalar(1.0));
+    assert_eq!(
+        f.app.next_input_sequence,
+        shared_trace::KEY_TRACE.len() as u64
+    );
+    assert_eq!(f.app.session().frame().time, 0.0);
 }
 
 #[test]
