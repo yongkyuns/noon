@@ -4,6 +4,7 @@ import {
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
   createSharedExecutionMailbox, executionDeltaMetadata,
+  prepareExecutionDeltaMetadataForSend,
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
@@ -104,7 +105,7 @@ export async function attachSemanticEngine(
   const send = (json, timing = null) => {
     if (json == null) return null;
     const metadataStartedAtMs = timing === null ? 0 : performance.now();
-    const publication = executionDeltaMetadata(json);
+    const publication = prepareExecutionDeltaMetadataForSend(json);
     if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
     const transportStartedAtMs = timing === null ? 0 : performance.now();
     if (!transport.send(json, publication)) {

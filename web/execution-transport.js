@@ -24,6 +24,19 @@ export function selectExecutionTransportMode(scope = globalThis) {
 }
 
 export function executionDeltaMetadata(json) {
+  return parseExecutionDeltaMetadata(json);
+}
+
+// Prepare a one-shot producer handoff. Unlike the public metadata reader, this
+// temporarily ties an opaque result to its exact JSON so transport send can
+// skip a second producer parse. Send consumes the association immediately.
+export function prepareExecutionDeltaMetadataForSend(json) {
+  const metadata = parseExecutionDeltaMetadata(json);
+  validatedDeltaJson.set(metadata, json);
+  return metadata;
+}
+
+function parseExecutionDeltaMetadata(json) {
   if (typeof json !== "string") {
     throw new TypeError("execution delta must be a JSON string");
   }
@@ -58,16 +71,18 @@ export function executionDeltaMetadata(json) {
       revision: view.revision, width: view.width, height: view.height,
     }) }),
   });
-  validatedDeltaJson.set(metadata, json);
   return metadata;
 }
 
 function metadataForSend(json, validatedMetadata) {
-  // Reuse only the immutable result tied to this exact string; public send(json)
-  // callers and mismatched handoffs still run the full validation path.
-  if (typeof json === "string" && validatedMetadata !== null &&
-      typeof validatedMetadata === "object" && validatedDeltaJson.get(validatedMetadata) === json) {
-    return validatedMetadata;
+  // Consume the temporary exact-string association even when it mismatches,
+  // so a retained or misused handoff cannot pin a large delta indefinitely.
+  if (validatedMetadata !== null && typeof validatedMetadata === "object") {
+    const validatedJson = validatedDeltaJson.get(validatedMetadata);
+    if (validatedJson !== undefined) {
+      validatedDeltaJson.delete(validatedMetadata);
+      if (typeof json === "string" && validatedJson === json) return validatedMetadata;
+    }
   }
   return executionDeltaMetadata(json);
 }
