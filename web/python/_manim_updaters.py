@@ -1369,6 +1369,16 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
 
 
 def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        if args or kwargs:
+            raise NotImplementedError(
+                "callback move_to currently supports center point placement only"
+            )
+        context, local = provisional
+        offset = _base._as_vec2(point) - context.provisional_center(local)
+        context.provisional_shift(local, offset)
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._move_to(self, point, *args, **kwargs)
