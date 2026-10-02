@@ -30,3 +30,23 @@ export function summarizePageTargetThrottleSamples(samples) {
     observedFourXToOneXRatio: fourX / oneX,
   };
 }
+
+export function summarizePythonLoopSamples(samples) {
+  const median = (rate) => {
+    const values = samples.filter((sample) => sample.rate === rate).map((sample) => sample.elapsedNs);
+    assert.ok(values.length >= 2, `need at least two Python samples at ${rate}x`);
+    assert.ok(values.every((value) => Number.isSafeInteger(value) && value > 0),
+      `all Python samples at ${rate}x must be positive integer nanoseconds`);
+    values.sort((left, right) => left - right);
+    const middle = Math.floor(values.length / 2);
+    return values.length % 2 === 0
+      ? (values[middle - 1] + values[middle]) / 2
+      : values[middle];
+  };
+  const oneX = median(1);
+  const fourX = median(4);
+  return {
+    medianElapsedNsByPageTargetRate: { "1": oneX, "4": fourX },
+    observedFourXToOneXRatio: fourX / oneX,
+  };
+}

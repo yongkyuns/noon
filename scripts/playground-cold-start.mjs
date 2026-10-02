@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import {
   resolvePageTargetCpuThrottleRate,
+  summarizePythonLoopSamples,
   summarizePageTargetThrottleSamples,
 } from "./playground-cold-start-calibration.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
@@ -141,9 +142,9 @@ try {
       page.on("pageerror", (error) => failures.push(`pageerror: ${error}`));
       page.on("console", (message) => {
         const text = message.text();
-        const computeLoop = text.match(/^NOON_COLD_START_PYTHON_LOOP_NS:(\d+)$/);
+        const computeLoop = text.match(/^NOON_COLD_START_PYTHON_LOOP_NS:(1|4):(\d+)$/);
         if (computeLoop) {
-          pythonComputeLoopSamplesNs.push(Number(computeLoop[1]));
+          pythonComputeLoopSamplesNs.push({ rate: Number(computeLoop[1]), elapsedNs: Number(computeLoop[2]) });
         } else if (message.type() === "error") {
           failures.push(`console: ${text}`);
         }
@@ -483,53 +484,65 @@ try {
       );
       let pythonComputeProbe = null;
       if (pythonComputeProbeEnabled) {
-        const previousGeneration = await page.evaluate(() =>
-          window.__noonExampleGallery.generationDiagnostics.runGeneration);
-        const source = [
-          "from noon import Scene, Circle",
-          "from time import perf_counter_ns",
-          "checksum = 0",
-          "__noon_compute_loop_started_ns = perf_counter_ns()",
-          "for index in range(300000):",
-          "    checksum += (index * index) % 97",
-          "__noon_compute_loop_elapsed_ns = perf_counter_ns() - __noon_compute_loop_started_ns",
-          "print('NOON_COLD_START_PYTHON_LOOP_NS:' + str(__noon_compute_loop_elapsed_ns))",
-          "class PythonComputeProbe(Scene):",
-          "    def construct(self):",
-          "        self.add(Circle(0.5))",
-          "result = PythonComputeProbe()",
-          "",
-        ].join("\n");
-        await page.evaluate((replacement) => {
-          const editor = document.querySelector("#python-scene-source");
-          editor.value = replacement;
-          editor.dispatchEvent(new Event("input", { bubbles: true }));
-        }, source);
-        await waitForCompletedRun(page, previousGeneration);
-        const phases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
-        assert.ok(phases?.runGeneration > previousGeneration,
-          "compute probe timings must belong to a newly accepted run");
+        const phasesByRate = [];
+        for (const rate of [1, 4, 4, 1]) {
+          await pageCpuThrottleSession.send("Emulation.setCPUThrottlingRate", { rate });
+          const previousGeneration = await page.evaluate(() =>
+            window.__noonExampleGallery.generationDiagnostics.runGeneration);
+          const source = [
+            "from noon import Scene, Circle",
+            "from time import perf_counter_ns",
+            "checksum = 0",
+            "__noon_compute_loop_started_ns = perf_counter_ns()",
+            "for index in range(300000):",
+            "    checksum += (index * index) % 97",
+            "__noon_compute_loop_elapsed_ns = perf_counter_ns() - __noon_compute_loop_started_ns",
+            `print('NOON_COLD_START_PYTHON_LOOP_NS:${rate}:' + str(__noon_compute_loop_elapsed_ns))`,
+            "class PythonComputeProbe(Scene):",
+            "    def construct(self):",
+            "        self.add(Circle(0.5))",
+            "result = PythonComputeProbe()",
+            "",
+          ].join("\n");
+          await page.evaluate((replacement) => {
+            const editor = document.querySelector("#python-scene-source");
+            editor.value = replacement;
+            editor.dispatchEvent(new Event("input", { bubbles: true }));
+          }, source);
+          await waitForCompletedRun(page, previousGeneration);
+          phasesByRate.push(await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics));
+        }
+        await pageCpuThrottleSession.send("Emulation.setCPUThrottlingRate", {
+          rate: startupPageCpuThrottleRate,
+        });
+        const phases = phasesByRate.at(-1);
+        assert.ok(phasesByRate.every((phase, index) =>
+          Number.isSafeInteger(phase?.runGeneration) &&
+          (index === 0 || phase.runGeneration > phasesByRate[index - 1].runGeneration)),
+        "compute probe timings must belong to successive accepted runs");
         const worker = phases.pythonWorkerRunTiming;
         assert.ok(Number.isFinite(worker?.startedAtMs) && Number.isFinite(worker?.completedAtMs) &&
           worker.startedAtMs <= worker.completedAtMs,
         "compute probe must record Python worker execution boundaries");
         assert.ok(Array.isArray(phases.reconciliations),
           "compute probe must record semantic reconciliation separately");
-        assert.equal(pythonComputeLoopSamplesNs.length, 1,
-          "compute probe must report exactly one Python-timed loop sample");
-        assert.ok(Number.isSafeInteger(pythonComputeLoopSamplesNs[0]) &&
-          pythonComputeLoopSamplesNs[0] > 0,
-        "compute probe Python loop sample must be a positive integer nanosecond duration");
+        assert.equal(pythonComputeLoopSamplesNs.length, 4,
+          "compute probe must report four paired Python-timed loop samples");
+        assert.ok(pythonComputeLoopSamplesNs.every((sample) => Number.isSafeInteger(sample.elapsedNs) &&
+          sample.elapsedNs > 0), "compute probe Python loop samples must be positive integer nanosecond durations");
+        const pythonSummary = summarizePythonLoopSamples(pythonComputeLoopSamplesNs);
         pythonComputeProbe = {
-          workload: "300000-iteration Python integer arithmetic loop plus minimal one-circle scene; no play/wait continuation",
+          workload: "four 300000-iteration Python integer arithmetic loops plus minimal one-circle scene; no play/wait continuation",
           workerCpuThrottle: {
             dedicatedWorkerTargetRate: null,
             pageTargetStartupRate: startupPageCpuThrottleRate,
             propagationCalibration: workerThrottleCalibration,
-            meaning: "Calibration measures a fixed JavaScript loop's wall time inside the authoring worker while the page-target CDP rate changes. It does not configure or certify Python interpreter CPU throttling.",
+            meaning: "This paired calibration measures Python loop wall time while the page-target CDP rate changes. It does not configure a dedicated worker-target throttle or measure CPU-only time.",
           },
-          runGeneration: phases.runGeneration,
-          pythonLoopElapsedNs: pythonComputeLoopSamplesNs[0],
+          runGenerations: phasesByRate.map(({ runGeneration }) => runGeneration),
+          samples: pythonComputeLoopSamplesNs,
+          medianLoopElapsedNsByPageTargetRate: pythonSummary.medianElapsedNsByPageTargetRate,
+          observedFourXToOneXRatio: pythonSummary.observedFourXToOneXRatio,
           pythonLoopClock: "Python time.perf_counter_ns around only the integer loop body; excludes imports, source compilation, interpreter initialization and scene construction, but is elapsed time observed inside Pyodide rather than CPU-only time",
           pythonWorkerExecutionMs: worker.completedAtMs - worker.startedAtMs,
           pythonWorkerClock: "worker performance.now around runAuthoringSource; includes imports, compilation and interpreter/setup overhead; no awaited source continuation in this fixture",

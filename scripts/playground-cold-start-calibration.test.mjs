@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   resolvePageTargetCpuThrottleRate,
   summarizePageTargetThrottleSamples,
+  summarizePythonLoopSamples,
 } from "./playground-cold-start-calibration.mjs";
 
 test("page CPU throttle override preserves profile defaults and accepts controlled rates", () => {
@@ -42,4 +43,26 @@ test("page-target throttle summary rejects incomplete or invalid samples", () =>
     { requestedPageTargetRate: 4, elapsedMs: 0 },
     { requestedPageTargetRate: 4, elapsedMs: 40 },
   ]), /finite and positive/);
+});
+
+test("Python loop calibration summarizes paired nanosecond samples by page rate", () => {
+  assert.deepEqual(summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 4, elapsedNs: 40_000 },
+    { rate: 4, elapsedNs: 36_000 },
+    { rate: 1, elapsedNs: 12_000 },
+  ]), {
+    medianElapsedNsByPageTargetRate: { "1": 11_000, "4": 38_000 },
+    observedFourXToOneXRatio: 38_000 / 11_000,
+  });
+  assert.throws(() => summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 4, elapsedNs: 40_000 },
+  ]), /at least two Python samples at 1x/);
+  assert.throws(() => summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 1, elapsedNs: 0 },
+    { rate: 4, elapsedNs: 40_000 },
+    { rate: 4, elapsedNs: 41_000 },
+  ]), /positive integer nanoseconds/);
 });
