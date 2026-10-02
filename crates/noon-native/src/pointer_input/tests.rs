@@ -220,6 +220,41 @@ fn paired_trace_qualifies_reactive_edges_selection_and_cancellation() {
 }
 
 #[test]
+fn native_input_classifies_unrecorded_replay_without_blocking_forward_execution() {
+    let fixture = shared_trace::Fixture::signals_only();
+    let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+    let mut app = NativeApp::new(session, NativeViewportConfig::default());
+    app.static_session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
+
+    model_presentation(&mut app, SIZE, 1.0);
+    app.dispatch_pointer_position(PhysicalPosition::new(400.0, 200.0), SIZE, 1.0)
+        .unwrap();
+    model_presentation(&mut app, SIZE, 1.0);
+    app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0)
+        .unwrap();
+    assert_eq!(
+        app.session().effective_signal_value(fixture.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    assert_eq!(
+        app.static_session_mut()
+            .seal_replay()
+            .map_err(|error| error.to_string()),
+        Err("replay unavailable: UnrecordedInput".to_owned())
+    );
+
+    // Unsupported replay classification must not block ordinary execution.
+    app.static_session_mut().advance_to(1.0).unwrap();
+    assert_eq!(app.session().frame().time, 1.0);
+    assert_eq!(
+        app.session().effective_signal_value(fixture.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+}
+
+#[test]
 fn repeated_edges_and_nonpointer_events_share_sequence_without_coalescing() {
     let mut f = Fixture::new();
     f.move_to(400.0, 200.0);
@@ -338,6 +373,82 @@ fn hidpi_changes_logical_units_not_scene_position_and_invalidates_old_binding() 
             .context()
             .view_revision,
         old.context().view_revision + 1
+    );
+}
+
+#[test]
+fn shared_rebind_trace_matches_after_mid_session_viewport_and_scale_change() {
+    let mut f = Fixture::new();
+    f.move_to(
+        f64::from(shared_trace::REBIND_OLD_POSITION.0),
+        f64::from(shared_trace::REBIND_OLD_POSITION.1),
+    );
+    f.edge(ElementState::Pressed);
+    let old = f.app.execution.native_pointer_input_token().unwrap();
+
+    let resized = PhysicalSize::new(1000, 600);
+    f.app.pointer_scale_changed(resized, 2.0).unwrap();
+    assert_eq!(
+        f.value(f.viewport),
+        &ReactiveValue::Vec2(Vec2::new(
+            shared_trace::REBIND_NEW_VIEWPORT.0,
+            shared_trace::REBIND_NEW_VIEWPORT.1,
+        ))
+    );
+    assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
+
+    let sequence = f.app.next_input_sequence;
+    let stale = NativePointerInput::new(
+        sequence,
+        old.pointer(),
+        old.context(),
+        NativeInputModifiers::default(),
+        NativePointerInputKind::Cancel(NativePointerCancellation::FocusLost),
+    );
+    assert!(f
+        .app
+        .execution
+        .submit_native_pointer_input(&old, stale)
+        .is_err());
+    assert_eq!(f.app.next_input_sequence, sequence);
+
+    model_presentation(&mut f.app, resized, 2.0);
+    f.app
+        .dispatch_pointer_position(
+            PhysicalPosition::new(
+                f64::from(shared_trace::REBIND_NEW_POSITION.0 * 2.0),
+                f64::from(shared_trace::REBIND_NEW_POSITION.1 * 2.0),
+            ),
+            resized,
+            2.0,
+        )
+        .unwrap();
+    assert_eq!(
+        f.value(f.position),
+        &ReactiveValue::Vec2(Vec2::new(
+            shared_trace::REBIND_EXPECTED_POSITION.0,
+            shared_trace::REBIND_EXPECTED_POSITION.1,
+        ))
+    );
+    for state in [ElementState::Pressed, ElementState::Released] {
+        model_presentation(&mut f.app, resized, 2.0);
+        f.app
+            .dispatch_pointer_button(MouseButton::Left, state, resized, 2.0)
+            .unwrap();
+    }
+
+    assert_eq!(
+        f.value(f.down),
+        &ReactiveValue::Scalar(shared_trace::REBIND_EXPECTED_DOWN_COUNT)
+    );
+    assert_eq!(
+        f.value(f.up),
+        &ReactiveValue::Scalar(shared_trace::REBIND_EXPECTED_UP_COUNT)
+    );
+    assert_eq!(f.app.next_input_sequence, 5);
+    assert_eq!(
+        f.app.session().frame().time,
+        shared_trace::REBIND_EXPECTED_FRAME_TIME
     );
 }
 

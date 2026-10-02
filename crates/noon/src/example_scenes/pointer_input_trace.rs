@@ -92,6 +92,17 @@ pub const EXPECTED_SEQUENCE: u64 = TRACE.len() as u64;
 pub const EXPECTED_SELECTED: bool = false;
 pub const EXPECTED_FRAME_TIME: f64 = 0.0;
 
+/// Shared input sample before a mid-session device-scale/view-size change.
+pub const REBIND_OLD_VIEWPORT: (f32, f32) = (800.0, 400.0);
+pub const REBIND_OLD_POSITION: (f32, f32) = (200.0, 100.0);
+/// Logical/CSS dimensions after a 2x device-scale change from 1000x600 physical.
+pub const REBIND_NEW_VIEWPORT: (f32, f32) = (500.0, 300.0);
+pub const REBIND_NEW_POSITION: (f32, f32) = (250.0, 150.0);
+pub const REBIND_EXPECTED_POSITION: (f32, f32) = (0.0, 0.0);
+pub const REBIND_EXPECTED_DOWN_COUNT: f32 = 2.0;
+pub const REBIND_EXPECTED_UP_COUNT: f32 = 1.0;
+pub const REBIND_EXPECTED_FRAME_TIME: f64 = 0.0;
+
 impl Default for Fixture {
     fn default() -> Self {
         Self::new()

@@ -101,6 +101,86 @@ fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
 }
 
 #[test]
+fn shared_rebind_trace_matches_after_mid_session_viewport_change() {
+    let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
+    let send = |f: &mut PointerFixture,
+                kind: &str,
+                pos: Option<(f32, f32)>,
+                button: Option<u8>,
+                source: u64,
+                view: u64,
+                size: (f32, f32)| {
+        let json = serde_json::json!({
+            "kind": kind, "source_id": source, "pointer_id": 7,
+            "surface_x": pos.map(|p: (f32, f32)| p.0),
+            "surface_y": pos.map(|p: (f32, f32)| p.1),
+            "viewport_width": pos.map(|_| size.0),
+            "viewport_height": pos.map(|_| size.1),
+            "button": button, "view_revision": view,
+            "shift": true, "control": false, "alt": true, "meta": false
+        });
+        f.player.submit_test_frame_json(&json.to_string())
+    };
+    let old_size = shared_trace::REBIND_OLD_VIEWPORT;
+    let new_size = shared_trace::REBIND_NEW_VIEWPORT;
+    let old_pos = Some(shared_trace::REBIND_OLD_POSITION);
+    let new_pos = Some(shared_trace::REBIND_NEW_POSITION);
+    send(&mut f, "move", old_pos, None, 1, 0, old_size).unwrap();
+    send(&mut f, "press", old_pos, Some(0), 1, 0, old_size).unwrap();
+
+    let before_stale = f.player.session.publication_context();
+    let old_binding = f.player.browser_pointer_binding;
+    assert!(send(&mut f, "move", new_pos, None, 1, 0, new_size).is_err());
+    assert_eq!(f.player.browser_pointer_binding, old_binding);
+    assert_eq!(f.player.session.publication_context(), before_stale);
+    assert_eq!(f.player.next_native_event_sequence, 2);
+
+    send(&mut f, "focus_lost", None, None, 1, 0, old_size).unwrap();
+    send(&mut f, "move", new_pos, None, 2, 1, new_size).unwrap();
+    for kind in ["press", "release"] {
+        send(&mut f, kind, new_pos, Some(0), 2, 1, new_size).unwrap();
+    }
+
+    assert_eq!(
+        f.player.session.effective_signal_value(f.position),
+        Some(&ReactiveValue::Vec2(Vec2::new(
+            shared_trace::REBIND_EXPECTED_POSITION.0,
+            shared_trace::REBIND_EXPECTED_POSITION.1,
+        )))
+    );
+    assert_eq!(
+        f.player.session.effective_signal_value(f.down),
+        Some(&ReactiveValue::Scalar(
+            shared_trace::REBIND_EXPECTED_DOWN_COUNT
+        ))
+    );
+    assert_eq!(
+        f.player.session.effective_signal_value(f.up),
+        Some(&ReactiveValue::Scalar(
+            shared_trace::REBIND_EXPECTED_UP_COUNT
+        ))
+    );
+    assert_eq!(f.player.next_native_event_sequence, 6);
+    assert_eq!(
+        f.player.session.frame().time,
+        shared_trace::REBIND_EXPECTED_FRAME_TIME
+    );
+    let token = f.player.session.native_pointer_input_token().unwrap();
+    assert_eq!(token.context().view_revision, 1);
+    assert_eq!(
+        f.player
+            .browser_pointer_binding
+            .unwrap()
+            .identity_and_view()
+            .2,
+        Vec2::new(
+            shared_trace::REBIND_NEW_VIEWPORT.0,
+            shared_trace::REBIND_NEW_VIEWPORT.1,
+        )
+    );
+}
+
+#[test]
 fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
     let mut f = pointer_fixture();
     f.player
