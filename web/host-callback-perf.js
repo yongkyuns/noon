@@ -24,22 +24,15 @@ try {
   // sample. The endpoint, rather than this harness, remains the execution clock.
   const workloadDurationSeconds =
     (warmupFrames + measuredFrames) * SAMPLE_STEP_SECONDS + 2;
-  status.value = `Native timeline · ${activeCount}/${objectCount} active…`;
-  const nativeResult = await authorAndMeasure(
-    nativeSource(objectCount, activeCount, workloadDurationSeconds),
-    workloadDurationSeconds,
-    false,
-  );
   status.value = `Python updater · ${activeCount}/${objectCount} active…`;
   const hostResult = await authorAndMeasure(
     hostSource(objectCount, activeCount, workloadDurationSeconds),
     workloadDurationSeconds,
-    true,
   );
 
   const report = {
-    schemaVersion: 2,
-    benchmark: "Noon canonical native timeline versus Python callback advance round trip",
+    schemaVersion: 3,
+    benchmark: "Noon canonical Python callback advance round trip",
     generatedAt: new Date().toISOString(),
     workload: {
       objects: objectCount,
@@ -47,7 +40,7 @@ try {
       warmupFrames,
       measuredFrames,
       authoredSampleRateHz: SAMPLE_RATE_HZ,
-      semantics: "the first active objects translate right at 0.1 authored units per second",
+      semantics: "the first active objects translate right at 0.1 authored units per second; each callback uses its eagerly supplied target row",
       layout:
         "all objects remain coincident and visible, matching the previous benchmark workload",
     },
@@ -56,28 +49,12 @@ try {
       hardwareConcurrency: navigator.hardwareConcurrency ?? null,
       devicePixelRatio: window.devicePixelRatio || 1,
     },
-    native: nativeResult,
     host: hostResult,
-    overhead: {
-      advanceRoundTripP95Ms: difference(
-        hostResult.advanceRoundTripMs?.p95,
-        nativeResult.advanceRoundTripMs?.p95,
-      ),
-      cadenceP95Ms: difference(
-        hostResult.frameIntervalMs?.p95,
-        nativeResult.frameIntervalMs?.p95,
-      ),
-      lastPublicationUploadBytes: difference(
-        hostResult.locality.lastPublication.bytesUploaded,
-        nativeResult.locality.lastPublication.bytesUploaded,
-      ),
-    },
   };
   window.__NOON_HOST_CALLBACK_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
   status.value =
-    `Complete · native round trip p95 ${format(nativeResult.advanceRoundTripMs?.p95)} ms · ` +
-    `host ${format(hostResult.advanceRoundTripMs?.p95)} ms`;
+    `Complete · host round trip p95 ${format(hostResult.advanceRoundTripMs?.p95)} ms`;
   status.dataset.state = "complete";
   console.log("NOON_HOST_CALLBACK_PERF", report);
 } catch (error) {
@@ -96,17 +73,11 @@ async function author(source) {
   return result;
 }
 
-async function authorAndMeasure(source, workloadDurationSeconds, expectsCallbacks) {
+async function authorAndMeasure(source, workloadDurationSeconds) {
   const authored = await author(source);
   try {
-    const hasCallbacks = authored.semanticExecution.callbackSessionId !== undefined;
-    if (hasCallbacks !== expectsCallbacks) {
-      throw new Error(
-        expectsCallbacks
-          ? "host comparison scene did not register callbacks"
-          : "native comparison scene unexpectedly registered callbacks",
-      );
-    }
+    if (authored.semanticExecution.callbackSessionId === undefined)
+      throw new Error("host scene did not register callbacks");
     return await measureWorkload(authored, workloadDurationSeconds);
   } finally {
     await authoring.releaseSemanticExecution(authored.semanticExecution.contextId);
@@ -238,23 +209,6 @@ function rendererMetrics(report) {
   return report.metrics;
 }
 
-function nativeSource(objects, active, duration) {
-  return `
-from noon import Circle, RIGHT, Scene, linear
-scene = Scene()
-dots = [Circle(0.1) for _ in range(${objects})]
-for index, dot in enumerate(dots):
-    scene.add(dot, key=f"dot.{index}")
-progress = scene.value_tracker(0.0)
-for dot in dots[:${active}]:
-    scene.bind_position(dot, progress, direction=RIGHT * 0.1)
-scene.play(progress.animate(run_time=${duration}, rate_func=linear).set_value(${duration}))
-live = scene.live_execution(duration=${duration})
-live.evaluate(0.0)
-result = scene
-`;
-}
-
 function hostSource(objects, active, duration) {
   return `
 from noon import Circle, RIGHT, Scene
@@ -264,6 +218,7 @@ for index, dot in enumerate(dots):
     scene.add(dot, key=f"dot.{index}")
 
 def move(mobject, dt):
+    mobject.get_center()
     mobject.shift(RIGHT * (0.1 * dt))
 
 for dot in dots[:${active}]:
@@ -289,10 +244,6 @@ function positiveInteger(name, fallback) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
-}
-
-function difference(left, right) {
-  return Number.isFinite(left) && Number.isFinite(right) ? left - right : null;
 }
 
 function format(value) {
