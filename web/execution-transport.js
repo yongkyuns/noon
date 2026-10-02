@@ -206,6 +206,7 @@ export class SharedExecutionDeltaReader {
         throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
       }
       const offset = slot * this.#slotCapacity;
+      // TextDecoder cannot consume a SharedArrayBuffer-backed view in browsers.
       const json = decoder.decode(this.#bytes.slice(offset, offset + length));
       ready.push({ slot, stateIndex, json, metadata: executionDeltaMetadata(json) });
     }
@@ -271,10 +272,11 @@ export class TransferableExecutionDeltaSender {
       return false;
     }
     const payload = encoder.encode(json);
-    const buffer = payload.buffer.slice(
-      payload.byteOffset,
-      payload.byteOffset + payload.byteLength,
-    );
+    // TextEncoder normally returns an exact, standalone buffer. Transfer that
+    // allocation directly; retain the fallback for nonstandard typed-array views.
+    const buffer = payload.byteOffset === 0 && payload.byteLength === payload.buffer.byteLength
+      ? payload.buffer
+      : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
     this.#inFlight += 1;
     this.#port.postMessage(
       {

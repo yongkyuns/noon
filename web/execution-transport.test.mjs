@@ -139,6 +139,23 @@ test("transferable mailbox defers ack until consumer accepts", async () => {
   port2.close();
 });
 
+test("transferable transport preserves a large delta after buffer ownership moves", async () => {
+  const { port1, port2 } = new MessageChannel();
+  const first = JSON.stringify({
+    ...JSON.parse(delta(0)),
+    objects: [{ geometry: "●".repeat(450_000) }],
+  });
+  assert.ok(new TextEncoder().encode(first).byteLength > 1024 * 1024);
+  const received = [];
+  const sender = new TransferableExecutionDeltaSender(port1);
+  new TransferableExecutionDeltaReceiver(port2, (json) => { received.push(json); });
+  assert.equal(sender.send(first), true);
+  await turn();
+  assert.deepEqual(received, [first]);
+  port1.close();
+  port2.close();
+});
+
 test("transferable envelope metadata must match encoded payload", () => {
   const payload = new TextEncoder().encode(delta(0));
   const validBuffer = payload.buffer.slice(
