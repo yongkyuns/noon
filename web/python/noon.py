@@ -798,26 +798,37 @@ Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
 def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
-    """Refresh one stable inline shape from a callback-local visual producer.
+    """Refresh one stable inline Mobject from a bounded visual producer.
 
-    The current bounded producer accepts Circle, Rectangle/Square, Line, and
-    retained Path content.
-    Its result replaces effective geometry, transform, and style together;
-    authored content and object identity stay fixed. The producer runs during
+    The current bounded producer accepts Circle, Rectangle/Square, Line,
+    retained Path content, or prebuilt Text resources. Shape results replace
+    effective geometry, transform, and style together; Text results select an
+    existing text resource without shaping new text during the callback.
+    Authored content and object identity stay fixed. The producer runs during
     construction and once per scheduled callback phase.
     """
     if not callable(producer):
         raise TypeError("always_redraw producer must be callable")
     from _manim_compat import Circle, Rectangle, Line, Path
+    from _manim_typst import Text
     target = producer()
-    if not isinstance(target, (Circle, Rectangle, Line, Path)):
+    shape_types = (Circle, Rectangle, Line, Path)
+    text_producer = isinstance(target, Text)
+    if not (isinstance(target, shape_types) or text_producer):
         raise NotImplementedError(
-            "always_redraw currently requires Circle, Rectangle, Square, Line, or Path"
+            "always_redraw requires Circle, Rectangle, Square, Line, Path, or prebuilt Text"
         )
 
     def refresh(mobject: Mobject, _dt: float) -> None:
         result = producer()
-        if not isinstance(result, (Circle, Rectangle, Line, Path)):
+        if text_producer:
+            if not isinstance(result, Text):
+                raise NotImplementedError(
+                    "Text always_redraw producer must return a prebuilt Text resource"
+                )
+            mobject.set_effective_text(result)
+            return
+        if not isinstance(result, shape_types):
             raise NotImplementedError(
                 "always_redraw producer must return Circle, Rectangle, Square, Line, or Path"
             )

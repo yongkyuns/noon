@@ -1,6 +1,7 @@
 import math
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import _manim_compat as compat
 import _manim_typst as typst
@@ -30,6 +31,35 @@ def _object(index: int) -> dict:
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_always_redraw_selects_only_prebuilt_text_through_effective_content(self) -> None:
+        from noon import always_redraw
+
+        initial = identity_only_wrapper(typst.Text)
+        replacement = identity_only_wrapper(typst.Text)
+        initial.add_updater = Mock()
+        producer = Mock(side_effect=(initial, replacement))
+
+        with patch.object(updaters._base.Mobject, "set_effective_text") as set_text:
+            self.assertIs(always_redraw(producer), initial)
+            refresh = initial.add_updater.call_args.args[0]
+            refresh(initial, 0.25)
+
+        set_text.assert_called_once_with(replacement)
+        self.assertEqual(producer.call_count, 2)
+
+    def test_text_always_redraw_rejects_a_different_producer_category(self) -> None:
+        from noon import always_redraw
+
+        initial = identity_only_wrapper(typst.Text)
+        other = identity_only_wrapper(compat.Circle)
+        initial.add_updater = Mock()
+        producer = Mock(side_effect=(initial, other))
+        target = always_redraw(producer)
+        refresh = initial.add_updater.call_args.args[0]
+
+        with self.assertRaisesRegex(NotImplementedError, "prebuilt Text"):
+            refresh(target, 0.25)
+
     def test_geometry_adapter_keeps_coordinate_writes_in_callback_phase(self) -> None:
         import _manim_shared_geometry as geometry
 
