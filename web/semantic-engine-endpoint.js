@@ -242,7 +242,10 @@ export async function attachSemanticEngine(
       if (!Number.isFinite(time) || time < 0) {
         throw new Error("returned semantic continuation has no valid authored time");
       }
-      return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: null };
+      return {
+        type, time, playing: false, nextPatchSequence: "0", durationSeconds: null,
+        canUndoTranslationDrag: false,
+      };
     }
     return {
       type,
@@ -251,6 +254,7 @@ export async function attachSemanticEngine(
       time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
         ? player.playbackTimeAt(performance.now()) : player.time(),
       playing: player.isPlaying(), nextPatchSequence: "0",
+      canUndoTranslationDrag: player.canUndoTranslationDrag,
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
@@ -837,6 +841,15 @@ export async function attachSemanticEngine(
             send(player.seekDeltaJson(0));
             observeExecutionWake(performance.now());
             break;
+          case "undo_translation_drag": {
+            latestTick = null;
+            if (player.undoTranslationDrag()) {
+              const publication = send(player.drainDeltaJson());
+              await awaitPresentation(publication);
+            }
+            observeExecutionWake(performance.now());
+            break;
+          }
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
             if (player.isPlaying()) {
@@ -1016,6 +1029,7 @@ export async function attachSemanticEngine(
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
+      player.clearTranslationDragUndo();
       if (pendingPhaseJson !== null) {
         const interruption = new Error("canonical callback phase interrupted by endpoint stop");
         try {
@@ -1067,8 +1081,7 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
-        if (![
-          "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
+        if (!["pause", "resume", "seek", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {

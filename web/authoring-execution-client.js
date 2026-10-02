@@ -304,6 +304,10 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.restartPlayback());
   }
 
+  async undoTranslationDrag() {
+    return this.#withStablePlayer((player) => player.undoTranslationDrag());
+  }
+
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();

@@ -5,7 +5,7 @@ const initial = dom();
 globalThis.HTMLElement = Element;
 globalThis.document = initial.document;
 const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
-function fixture() {
+function fixture(withDragUndo = false) {
   const { document, preview } = dom();
   globalThis.document = document;
   const calls = [];
@@ -13,6 +13,7 @@ function fixture() {
   for (const name of ["pause", "resume", "seek", "restartPlayback"]) {
     player[name] = async (time = 0) => { calls.push(name); return { time, playing: false }; };
   }
+  if (withDragUndo) player.undoTranslationDrag = async () => ({ time: 0, playing: false, canUndoTranslationDrag: false });
   const errors = [];
   const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 2, onError: (error) => errors.push(error) });
   return { controls, player, preview, calls, errors, range: preview.querySelector(".playback-scrubber"), output: preview.querySelector(".playback-time") };
@@ -44,6 +45,24 @@ test("completed replay observes exact time and playing state without an interpol
   f.controls.observe({ time: 2, playing: false });
   assert.equal(f.output.value, "2.00 / 2.00 s");
   assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play");
+});
+
+test("Undo drag is a separate visible command enabled only by the semantic receipt", async () => {
+  const f = fixture(true);
+  let calls = 0;
+  f.player.undoTranslationDrag = async () => {
+    calls += 1;
+    return { time: 0, playing: false, canUndoTranslationDrag: false };
+  };
+  const undo = f.preview.querySelector(".playback-undo-drag");
+  assert.equal(undo.hidden, false);
+  assert.equal(undo.disabled, true);
+  f.controls.observe({ time: 0, playing: false, canUndoTranslationDrag: true });
+  assert.equal(undo.disabled, false);
+  undo.dispatchEvent(new Event("click"));
+  await flush();
+  assert.equal(calls, 1);
+  assert.equal(undo.disabled, true);
 });
 
 test("polling cannot override an in-flight user's seek", async () => {

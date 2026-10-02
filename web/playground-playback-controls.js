@@ -10,6 +10,7 @@ export class PlaygroundPlaybackControls {
   #root;
   #playButton;
   #restartButton;
+  #undoDragButton;
   #scrubber;
   #timeOutput;
   #liveStatus;
@@ -19,6 +20,8 @@ export class PlaygroundPlaybackControls {
   #externalBusy = false;
   #controllable = true;
   #unavailableReason = null;
+  #canUndoTranslationDrag = false;
+  #undoDragSupported = false;
   #commandPending = false;
   #seekActive = false;
   #desiredSeek = null;
@@ -38,6 +41,7 @@ export class PlaygroundPlaybackControls {
       throw new TypeError("playback controls onError must be a function");
     }
     this.#player = player;
+    this.#undoDragSupported = typeof player.undoTranslationDrag === "function";
     this.#onError = onError;
     this.#durationSeconds = validateDuration(durationSeconds);
 
@@ -50,6 +54,7 @@ export class PlaygroundPlaybackControls {
     }
     this.#root.className = "playback-controls";
     this.#root.setAttribute("aria-label", "Animation playback controls");
+    this.#root.dataset.undoSupport = String(this.#undoDragSupported);
     this.#root.replaceChildren();
 
     this.#playButton = document.createElement("button");
@@ -64,6 +69,14 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.setAttribute("aria-label", "Restart animation from the beginning");
     this.#restartButton.title = "Restart";
     this.#restartButton.addEventListener("click", this.#handleRestart);
+
+    this.#undoDragButton = document.createElement("button");
+    this.#undoDragButton.type = "button";
+    this.#undoDragButton.className = "playback-button playback-undo-drag";
+    this.#undoDragButton.textContent = "Undo drag";
+    this.#undoDragButton.setAttribute("aria-label", "Undo the most recent drag");
+    this.#undoDragButton.addEventListener("click", this.#handleUndoDrag);
+    this.#undoDragButton.hidden = !this.#undoDragSupported;
 
     const timeline = document.createElement("label");
     timeline.className = "playback-timeline";
@@ -87,7 +100,7 @@ export class PlaygroundPlaybackControls {
     this.#timeOutput.setAttribute("aria-live", "off");
     this.#timeOutput.setAttribute("aria-label", "Animation time");
 
-    this.#root.append(this.#playButton, this.#restartButton, timeline, this.#timeOutput);
+    this.#root.append(this.#playButton, this.#restartButton, this.#undoDragButton, timeline, this.#timeOutput);
     this.#render();
   }
 
@@ -127,7 +140,7 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed || this.#seekActive || this.#commandPending) return;
     // A continuation's current play/wait endpoint is not its full duration.
     // Only the completed source result may set the replay range via setDuration.
-    this.sync({ time: state.time, playing: state.playing });
+    this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag });
   }
 
   setBusy(busy) {
@@ -142,7 +155,7 @@ export class PlaygroundPlaybackControls {
     this.#desiredSeek = null;
   }
 
-  sync({ time, playing, durationSeconds = undefined }) {
+  sync({ time, playing, durationSeconds = undefined, canUndoTranslationDrag = undefined }) {
     if (this.#controllable && durationSeconds !== undefined) {
       this.#durationSeconds = validateDuration(durationSeconds);
     }
@@ -154,6 +167,12 @@ export class PlaygroundPlaybackControls {
     }
     this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#playing = playing;
+    if (canUndoTranslationDrag !== undefined) {
+      if (typeof canUndoTranslationDrag !== "boolean") {
+        throw new TypeError("canUndoTranslationDrag must be boolean when provided");
+      }
+      this.#canUndoTranslationDrag = canUndoTranslationDrag;
+    }
     this.#render();
   }
 
@@ -176,6 +195,7 @@ export class PlaygroundPlaybackControls {
     this.#destroyed = true;
     this.#playButton.removeEventListener("click", this.#handleToggle);
     this.#restartButton.removeEventListener("click", this.#handleRestart);
+    this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
     renderPlaybackPlaceholder(this.#root);
   }
@@ -190,6 +210,14 @@ export class PlaygroundPlaybackControls {
   #handleRestart = () => {
     void this.#runCommand(async (generation) => {
       const result = await this.#player.restartPlayback();
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
+    });
+  };
+
+  #handleUndoDrag = () => {
+    if (!this.#undoDragSupported) return;
+    void this.#runCommand(async (generation) => {
+      const result = await this.#player.undoTranslationDrag();
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   };
@@ -309,6 +337,7 @@ export class PlaygroundPlaybackControls {
     const blockCommands = !this.#controllable || busy;
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
+    this.#undoDragButton.disabled = blockCommands || !this.#canUndoTranslationDrag;
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#root.dataset.busy = String(busy);
     this.#root.dataset.playing = String(this.#playing);
@@ -390,6 +419,9 @@ function installStyles() {
       border-top: 1px solid var(--border);
       background: rgb(9 12 19 / 94%);
     }
+    .playback-controls[data-undo-support="true"] {
+      grid-template-columns: auto auto auto minmax(4rem, 1fr) auto;
+    }
     .playback-button {
       appearance: none;
       border: 1px solid var(--border-strong);
@@ -453,6 +485,9 @@ function installStyles() {
         gap: 0.32rem;
         min-height: 2.75rem;
         padding: 0.42rem 0.5rem;
+      }
+      .playback-controls[data-undo-support="true"] {
+        grid-template-columns: auto auto auto minmax(3rem, 1fr) auto;
       }
       .playback-button {
         padding: 0.36rem 0.45rem;

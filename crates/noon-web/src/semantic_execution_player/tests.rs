@@ -8,6 +8,61 @@ use noon_core::{
     SemanticVec3, StoredGeometry, TextResourceLookup, TrackTiming,
 };
 
+fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNodeId) {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.add_semantic_family_member(root, target).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.set_translation_drag_targets([target]).unwrap();
+    session
+        .configure_native_pointer_input(
+            NativePointerId {
+                source: 17,
+                pointer: 0,
+            },
+            1,
+        )
+        .unwrap();
+    let semantics = std::rc::Rc::new(std::cell::RefCell::new(store));
+    (
+        SemanticExecutionPlayer::from_live_session(session, semantics, root, 1.0, 64).unwrap(),
+        target,
+    )
+}
+
+fn submit_drag_input(
+    player: &mut SemanticExecutionPlayer,
+    sequence: u64,
+    kind: NativePointerInputKind,
+) {
+    let token = player.session.native_pointer_input_token().unwrap();
+    let input = NativePointerInput::new(
+        sequence,
+        token.pointer(),
+        token.context(),
+        NativeInputModifiers::default(),
+        kind,
+    );
+    let mut target = pointer_input::PlayerPointerTarget {
+        session: &mut player.session,
+        semantics: player.semantics.as_ref(),
+        translation_drag_undo: &mut player.translation_drag_undo,
+    };
+    crate::browser_pointer_input::BrowserPointerTarget::submit_pointer(&mut target, &token, input)
+        .unwrap();
+}
+
+fn drag_position(x: f32) -> NativePointerPosition {
+    NativePointerPosition::new(
+        noon_core::Vec2::new(x, 0.0),
+        noon_core::Vec2::new(x * 100.0, 100.0),
+    )
+    .unwrap()
+}
+
 fn clicked_indicate_live_player() -> SemanticExecutionPlayer {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
@@ -68,6 +123,181 @@ fn clicked_indicate_live_player() -> SemanticExecutionPlayer {
     );
     let store = std::rc::Rc::new(std::cell::RefCell::new(store));
     SemanticExecutionPlayer::from_live_session(session, store, root, 1.0, 64).unwrap()
+}
+
+#[test]
+fn browser_player_retains_one_drag_undo_and_publishes_one_shot_reversal() {
+    let (mut player, target) = translation_drag_player();
+    player.initial_delta_json().unwrap();
+    submit_drag_input(
+        &mut player,
+        1,
+        NativePointerInputKind::Press {
+            position: drag_position(0.0),
+            button: 0,
+        },
+    );
+    submit_drag_input(
+        &mut player,
+        2,
+        NativePointerInputKind::Move(drag_position(2.0)),
+    );
+    submit_drag_input(
+        &mut player,
+        3,
+        NativePointerInputKind::Release {
+            position: drag_position(2.0),
+            button: 0,
+        },
+    );
+    assert!(player.can_undo_translation_drag());
+    assert_eq!(
+        player
+            .semantics
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(2.0, 0.0, 0.0),
+    );
+
+    assert!(player.undo_translation_drag().unwrap());
+    assert!(!player.can_undo_translation_drag());
+    assert_eq!(
+        player
+            .semantics
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::ZERO,
+    );
+    assert!(player.drain_delta_json().unwrap().is_some());
+    assert!(
+        player.undo_translation_drag().is_err(),
+        "the receipt is one-shot"
+    );
+}
+
+#[test]
+fn active_drag_disables_and_preserves_the_previous_undo_receipt() {
+    let (mut player, target) = translation_drag_player();
+    submit_drag_input(
+        &mut player,
+        1,
+        NativePointerInputKind::Press {
+            position: drag_position(0.0),
+            button: 0,
+        },
+    );
+    submit_drag_input(
+        &mut player,
+        2,
+        NativePointerInputKind::Move(drag_position(2.0)),
+    );
+    submit_drag_input(
+        &mut player,
+        3,
+        NativePointerInputKind::Release {
+            position: drag_position(2.0),
+            button: 0,
+        },
+    );
+    assert!(player.can_undo_translation_drag());
+
+    submit_drag_input(
+        &mut player,
+        4,
+        NativePointerInputKind::Press {
+            position: drag_position(2.0),
+            button: 0,
+        },
+    );
+    submit_drag_input(
+        &mut player,
+        5,
+        NativePointerInputKind::Move(drag_position(3.0)),
+    );
+    assert!(player.session.translation_drag_active());
+    assert!(!player.can_undo_translation_drag());
+    assert!(!player.undo_translation_drag().unwrap());
+    assert!(player.session.translation_drag_active());
+    assert_eq!(
+        player
+            .semantics
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(2.0, 0.0, 0.0),
+        "a queued undo cannot apply during the next effective drag",
+    );
+
+    submit_drag_input(
+        &mut player,
+        6,
+        NativePointerInputKind::Release {
+            position: drag_position(3.0),
+            button: 0,
+        },
+    );
+    assert!(player.can_undo_translation_drag());
+}
+
+#[test]
+fn browser_player_stale_drag_undo_is_retired_without_overwriting_new_authorship() {
+    let (mut player, target) = translation_drag_player();
+    submit_drag_input(
+        &mut player,
+        1,
+        NativePointerInputKind::Press {
+            position: drag_position(0.0),
+            button: 0,
+        },
+    );
+    submit_drag_input(
+        &mut player,
+        2,
+        NativePointerInputKind::Move(drag_position(2.0)),
+    );
+    submit_drag_input(
+        &mut player,
+        3,
+        NativePointerInputKind::Release {
+            position: drag_position(2.0),
+            button: 0,
+        },
+    );
+    let store = std::rc::Rc::clone(player.semantics.as_ref().unwrap());
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(
+        target,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(8.0, 0.0, 0.0),
+    );
+    transaction.apply(&mut store.borrow_mut()).unwrap();
+
+    assert!(!player.can_undo_translation_drag());
+    assert!(!player.undo_translation_drag().unwrap());
+    assert!(!player.can_undo_translation_drag());
+    assert_eq!(
+        store
+            .borrow()
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(8.0, 0.0, 0.0),
+    );
 }
 
 #[test]

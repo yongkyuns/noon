@@ -159,6 +159,10 @@ pub struct SemanticExecutionPlayer {
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    /// Most recent drag release receipt. This is one semantic undo command,
+    /// not a scene mirror or a general history stack.
+    #[cfg(any(target_arch = "wasm32", test))]
+    translation_drag_undo: Option<noon::TranslationDragUndo>,
     #[cfg(any(target_arch = "wasm32", test))]
     semantic_root: Option<noon_core::SemanticNodeId>,
     /// Continuation metadata for this one session-owned runtime, never a
@@ -539,6 +543,8 @@ impl SemanticExecutionPlayer {
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
             #[cfg(any(target_arch = "wasm32", test))]
+            translation_drag_undo: None,
+            #[cfg(any(target_arch = "wasm32", test))]
             semantic_root: None,
             #[cfg(any(target_arch = "wasm32", test))]
             live_segment: None,
@@ -582,6 +588,7 @@ impl SemanticExecutionPlayer {
             callback_membership_transaction: None,
             committed_callback_provisionals: None,
             semantics: Some(semantics),
+            translation_drag_undo: None,
             semantic_root: Some(semantic_root),
             live_segment: None,
             live_wake_clock: BrowserExecutionWakeClock::default(),
@@ -4299,11 +4306,13 @@ impl SemanticExecutionPlayer {
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
+            translation_drag_undo,
             ..
         } = self;
         let mut target = pointer_input::PlayerPointerTarget {
             session,
             semantics: semantics.as_ref(),
+            translation_drag_undo,
         };
         worker_pointer_presentation.submit(
             &mut target,
@@ -4312,6 +4321,51 @@ impl SemanticExecutionPlayer {
             envelope.input,
             envelope.presentation,
         )
+    }
+
+    /// Whether the preview can undo its most recent authored translation drag.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = canUndoTranslationDrag))]
+    pub fn can_undo_translation_drag(&self) -> bool {
+        if self.session.translation_drag_active() {
+            return false;
+        }
+        let Some(undo) = self.translation_drag_undo.as_ref() else {
+            return false;
+        };
+        self.semantics
+            .as_ref()
+            .is_some_and(|store| undo.is_current(&self.session, &store.borrow()))
+    }
+
+    /// Apply the one retained drag receipt through its guarded semantic transaction.
+    /// Returns false and retires stale receipts so the UI cannot offer an impossible retry.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = undoTranslationDrag))]
+    pub fn undo_translation_drag(&mut self) -> Result<bool, String> {
+        if self.session.translation_drag_active() {
+            return Ok(false);
+        }
+        let undo = self
+            .translation_drag_undo
+            .take()
+            .ok_or_else(|| "there is no translation drag to undo".to_owned())?;
+        let semantics = self
+            .semantics
+            .as_ref()
+            .ok_or_else(|| "translation drag undo requires canonical semantics".to_owned())?;
+        match undo.undo(&mut self.session, &mut semantics.borrow_mut()) {
+            Ok(()) => Ok(true),
+            Err(noon::TranslationDragError::StaleUndo) => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = clearTranslationDragUndo))]
+    /// Retire the preview command when its execution player is torn down or rebased.
+    pub fn clear_translation_drag_undo(&mut self) {
+        self.translation_drag_undo = None;
     }
 
     /// Admit one collection-time inspection occurrence through the same owned
@@ -4324,6 +4378,7 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
+            translation_drag_undo,
             worker_pointer_presentation,
             browser_pointer_binding,
             ..
@@ -4331,6 +4386,7 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             session,
             semantics: semantics.as_ref(),
+            translation_drag_undo,
         };
         worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
     }
@@ -4343,6 +4399,7 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
+            translation_drag_undo,
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
@@ -4351,6 +4408,7 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             session,
             semantics: semantics.as_ref(),
+            translation_drag_undo,
         };
         worker_pointer_presentation.set_view(
             &mut target,
@@ -4377,6 +4435,7 @@ impl SemanticExecutionPlayer {
         let Self {
             session,
             semantics,
+            translation_drag_undo,
             worker_pointer_presentation,
             browser_pointer_binding,
             next_native_event_sequence,
@@ -4385,6 +4444,7 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             session,
             semantics: semantics.as_ref(),
+            translation_drag_undo,
         };
         worker_pointer_presentation.invalidate(
             &mut target,
@@ -4534,6 +4594,8 @@ impl SemanticExecutionPlayer {
         clock.seek(time).map_err(|e| e.to_string())?;
         self.session.seek(time).map_err(|e| e.to_string())?;
         self.clock = clock;
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.clear_translation_drag_undo();
         self.encoded_delta(false)
     }
 

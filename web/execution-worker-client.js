@@ -573,6 +573,11 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async undoTranslationDrag() {
+    this.#requireStarted();
+    return this.#requestEngine("undo_translation_drag", {});
+  }
+
   // Forward one normalized semantic native-state sample to the canonical session.
   async setNativeStateInput(source, value) {
     this.#requireStarted();
