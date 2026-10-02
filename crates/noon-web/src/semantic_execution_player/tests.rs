@@ -2760,6 +2760,44 @@ fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one(
 }
 
 #[test]
+fn callback_phase_json_keeps_a_sparse_working_set_in_a_600_object_scene() {
+    let mut scene = noon::Scene::new();
+    let target = scene.circle(1.0).unwrap();
+    scene.add(&target).unwrap();
+    for _ in 1..600 {
+        let unrelated = scene.circle(1.0).unwrap();
+        scene.add(&unrelated).unwrap();
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(1), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+
+    let session = scene.execution_session().unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        13,
+    )
+    .unwrap();
+    let phase: serde_json::Value = serde_json::from_str(
+        &player
+            .initial_callback_phase_json()
+            .unwrap()
+            .expect("time-zero callback requires one phase"),
+    )
+    .unwrap();
+
+    assert_eq!(player.session.frame().objects.len(), 600);
+    assert_eq!(phase["objects"].as_array().unwrap().len(), 1);
+    assert_eq!(phase["objects"][0]["node"]["slot"], target.node_id().slot());
+    assert_eq!(phase["invocations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn interrupted_callback_phase_stays_terminal_after_player_recovery() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(1.0).unwrap();
