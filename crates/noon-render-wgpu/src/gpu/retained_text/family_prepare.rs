@@ -254,6 +254,7 @@ impl RetainedFramePreparer {
                         object_index_usize,
                         object_id,
                         run_index,
+                        false,
                     )? {
                         self.push_family_glyph_run(
                             frame,
@@ -263,6 +264,7 @@ impl RetainedFramePreparer {
                             run_index,
                             texts,
                             fonts,
+                            false,
                         )?;
                     } else {
                         self.sources.push(SourceItem::FastGlyphRun {
@@ -312,6 +314,7 @@ impl RetainedFramePreparer {
         object_index: usize,
         object: ObjectId,
         run_index: u32,
+        stable_rows: bool,
     ) -> Result<bool, RetainedFamilyPrepareError> {
         let Some(members) = retained_family_reveal_members_for_object(frame, plan, object_index)?
         else {
@@ -320,7 +323,7 @@ impl RetainedFramePreparer {
         for member in members {
             match member? {
                 RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. }
-                    if glyph.run_index == run_index && reveal < 1.0 =>
+                    if glyph.run_index == run_index && (stable_rows || reveal < 1.0) =>
                 {
                     return Ok(true);
                 }
@@ -343,6 +346,7 @@ impl RetainedFramePreparer {
         run_index: u32,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyPrepareError> {
         let object = frame
             .retained
@@ -371,7 +375,7 @@ impl RetainedFramePreparer {
                 RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. }
                     if glyph.run_index == run_index =>
                 {
-                    if reveal <= 0.0 {
+                    if reveal <= 0.0 && !stable_rows {
                         continue;
                     }
                     let positioned = run.glyphs.get(glyph.glyph_index as usize).ok_or(
@@ -391,7 +395,7 @@ impl RetainedFramePreparer {
                         continue;
                     }
                     let fill = run.fill.or(object.style.fill).unwrap_or(Color::WHITE);
-                    self.push_geometry(
+                    let scratch_slot = self.push_geometry(
                         object_id,
                         GeometryRef::VectorPath(path),
                         object.transform,
@@ -408,6 +412,12 @@ impl RetainedFramePreparer {
                         reveal,
                         0.0,
                     );
+                    if stable_rows {
+                        self.family_plan_scratch_slots
+                            .entry(object_index)
+                            .or_default()
+                            .insert(glyph, scratch_slot);
+                    }
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {

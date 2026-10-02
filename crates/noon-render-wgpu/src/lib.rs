@@ -3712,7 +3712,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_create_uses_partial_geometry_then_returns_to_analytic_circle() {
+    fn circle_create_stays_analytic_while_reveal_progresses() {
         let mut state = object(7, GeometryRef::circle(1.25));
         state.style.fill = Some(Color::rgba(1.0, 0.0, 0.5, 0.5));
         state.style.stroke = Some(Color::WHITE);
@@ -3721,39 +3721,35 @@ mod tests {
         frame.reveals[0] = 0.25;
         let mut preparer = FramePreparer::new();
 
-        let (cold_vertices, cold_indices) = {
-            let cold = preparer.prepare(&frame);
-            assert!(cold.circles.is_empty());
-            assert_eq!(cold.paths.len(), 1);
-            assert!(cold.lines.is_empty());
-            assert_eq!(cold.paths[0].path_params, [1.0, 0.0]);
-            assert_eq!(cold.stats.geometry_cache_misses, 1);
-            assert!(cold.path_geometry_dirty);
-            (cold.path_vertices.to_vec(), cold.path_indices.to_vec())
-        };
+        let cold = preparer.prepare(&frame);
+        assert_eq!(cold.circles.len(), 1);
+        assert!(cold.paths.is_empty());
+        assert!(cold.lines.is_empty());
+        assert_eq!(cold.circles[0].padding[0], 0.25);
+        assert_eq!(cold.stats.geometry_cache_misses, 0);
+        assert!(!cold.path_geometry_dirty);
 
         frame.reveals[0] = 0.6;
         let steady = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-        assert!(steady.circles.is_empty());
-        assert_eq!(steady.paths.len(), 1);
-        assert_eq!(steady.paths[0].path_params, [1.0, 0.0]);
+        assert_eq!(steady.circles.len(), 1);
+        assert!(steady.paths.is_empty());
+        assert_eq!(steady.circles[0].padding[0], 0.6);
         assert!(steady.lines.is_empty());
-        assert_eq!(steady.stats.geometry_cache_misses, 1);
-        assert!(steady.path_geometry_dirty);
-        assert!(steady.stats.path_vertices_repacked > 0);
-        assert!(steady.stats.path_indices_repacked > 0);
-        assert!(steady.path_vertices != cold_vertices || steady.path_indices != cold_indices);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert!(!steady.path_geometry_dirty);
 
         frame.reveals[0] = 1.0;
         let complete = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(complete.circles.len(), 1);
         assert!(complete.paths.is_empty());
         assert_eq!(complete.circles[0].padding[0], 1.0);
+        assert_eq!(complete.stats.geometry_cache_misses, 0);
+        assert!(!complete.path_geometry_dirty);
         assert_eq!(complete.stats.instance_count, 1);
     }
 
     #[test]
-    fn closed_analytic_create_uses_partial_paths_while_line_stays_analytic() {
+    fn circle_create_and_line_stay_analytic_while_rectangle_uses_partial_path() {
         let mut circle = object(1, GeometryRef::circle(1.0));
         let mut rectangle = object(2, GeometryRef::rectangle(2.0, 1.0));
         let mut line = object(
@@ -3770,9 +3766,10 @@ mod tests {
         let mut preparer = FramePreparer::new();
 
         let prepared = preparer.prepare(&frame);
-        assert!(prepared.circles.is_empty());
+        assert_eq!(prepared.circles.len(), 1);
+        assert_eq!(prepared.circles[0].padding[0], 0.5);
         assert!(prepared.rectangles.is_empty());
-        assert_eq!(prepared.paths.len(), 2);
+        assert_eq!(prepared.paths.len(), 1);
         assert!(prepared
             .paths
             .iter()
@@ -3781,7 +3778,7 @@ mod tests {
         assert_eq!(prepared.lines[0].transform.padding, 0.5);
         assert_eq!(prepared.stats.instance_count, 3);
         assert_eq!(prepared.stats.unsupported_count, 0);
-        assert_eq!(prepared.stats.geometry_cache_misses, 2);
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
 
         frame.reveals[2] = 0.8;
         let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));

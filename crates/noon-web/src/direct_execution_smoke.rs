@@ -112,6 +112,16 @@ pub async fn create_direct_create_shapes_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Mixed Text and analytic Circle family Create used by renderer qualifications.
+#[wasm_bindgen(js_name = createDirectMixedFamilyRevealSmokeRenderer)]
+pub async fn create_direct_mixed_family_reveal_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::renderer_fixtures::mixed_family_reveal().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Repeated filled-path topology changes use the same typed workload as native.
 #[wasm_bindgen(js_name = createDirectMorphStressRenderer)]
 pub async fn create_direct_morph_stress_renderer(

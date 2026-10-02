@@ -34,7 +34,7 @@ fn retained_geometry_frame(
     }
 }
 
-fn assert_prepares_path(frame: &FrameState) {
+fn assert_prepares_path(frame: &FrameState, expect_path: bool) {
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
@@ -55,10 +55,18 @@ fn assert_prepares_path(frame: &FrameState) {
         )
         .unwrap();
 
-    assert!(prepared
+    let has_path = prepared
         .geometry_render_chunks()
         .flat_map(|chunk| chunk.render_batches.iter())
-        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. }));
+    assert_eq!(has_path, expect_path);
+    if !expect_path {
+        assert!(prepared
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches.iter())
+            .any(|batch| batch.primitive == RenderPrimitive::Circle));
+        assert_eq!(prepared.geometry_stats().geometry_cache_misses, 0);
+    }
     if frame.render_transforms[0].is_some() {
         assert_eq!(prepared.geometry_stats().geometry_cache_misses, 1);
         let mut next = frame.clone();
@@ -139,9 +147,9 @@ fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
 }
 
 #[test]
-fn retained_analytic_create_uses_prepared_path_primitive_in_painter_order() {
+fn retained_circle_create_uses_analytic_primitive_in_painter_order() {
     let frame = retained_geometry_frame(GeometryRef::circle(1.0), None, 0.5, 0.0);
-    assert_prepares_path(&frame);
+    assert_prepares_path(&frame, false);
 }
 
 #[test]
@@ -169,5 +177,5 @@ fn retained_transform_preserves_runtime_effective_render_geometry() {
     };
     frame.render_transforms[0] = Some(Transform2D::IDENTITY);
 
-    assert_prepares_path(&frame);
+    assert_prepares_path(&frame, true);
 }

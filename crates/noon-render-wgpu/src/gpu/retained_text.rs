@@ -5208,7 +5208,7 @@ mod tests {
     }
 
     #[test]
-    fn path_compaction_preserves_mixed_text_and_image_state() {
+    fn encoded_frame_keeps_retired_image_and_compacted_paths_alive_until_submit() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let path = GeometryRef::path(
             VectorPath::new()
@@ -5259,7 +5259,7 @@ mod tests {
         queue.submit([]);
 
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (text_quads, text_items, image_items, upload_a) = {
+        let (text_quads, text_items, image_items, upload_a, old_encoder) = {
             let prepared = retained
                 .prepare_with_image_resources(
                     &device,
@@ -5307,8 +5307,7 @@ mod tests {
                 .unwrap();
             assert!(draw.geometry.draw_calls > 0 && draw.text.draw_calls > 0);
             assert_eq!(draw.images, 1);
-            queue.submit(Some(encoder.finish()));
-            (text_quads, text_items, image_items, upload)
+            (text_quads, text_items, image_items, upload, encoder)
         };
         assert!(image_items > 0);
         assert!(upload_a.images.pixel_bytes_uploaded > 0);
@@ -5319,6 +5318,33 @@ mod tests {
             .unwrap();
         queue.submit([]);
         assert!(compacted.upload.bytes_uploaded > 0);
+
+        {
+            let prepared_compacted = retained
+                .prepare_with_image_resources(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    metrics,
+                )
+                .unwrap();
+            let upload =
+                renderer.upload_retained(&device, &queue, &prepared_compacted, &mut text_state);
+            assert_eq!(upload.images.pixel_bytes_uploaded, 0);
+        }
+
+        let next_image_handle = images.intern_rgba8(1, 1, vec![255, 192, 64, 255]).unwrap();
+        assert_ne!(image_handle, next_image_handle);
+        let next_image_resource = images.get(next_image_handle).unwrap();
+        frame.objects[2].content =
+            ObjectContentRef::Image(noon_core::RasterImageContentRef::from_resource(
+                noon_core::SemanticImageContent::new(next_image_handle),
+                next_image_resource,
+            ));
 
         let prepared_b = retained
             .prepare_with_image_resources(
@@ -5337,8 +5363,22 @@ mod tests {
         assert_eq!(prepared_b.image_draw.items.len(), image_items);
         assert!(prepared_b.stats.image_objects > 0);
         let upload_b = renderer.upload_retained(&device, &queue, &prepared_b, &mut text_state);
-        assert_eq!(upload_b.images.pixel_bytes_uploaded, 0);
+        assert_eq!(upload_b.images.textures_retired, 1);
+        assert_eq!(upload_b.images.textures_uploaded, 1);
+        assert_eq!(upload_b.images.pixel_bytes_uploaded, 4);
         assert!(upload_b.text.bytes_uploaded > 0);
+        assert_eq!(
+            renderer.image_residency_stats(),
+            RasterImageResidencyStats {
+                textures: 1,
+                objects: 1,
+                pixel_bytes: 4,
+            }
+        );
+        // The old command buffer still owns its dropped image/path handles through
+        // wgpu's tracked resource lifetime; it remains valid to submit after the
+        // renderer has installed the replacement resources.
+        queue.submit(Some(old_encoder.finish()));
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("mixed resource frame after path compaction"),
             size: wgpu::Extent3d {
