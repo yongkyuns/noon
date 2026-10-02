@@ -455,6 +455,10 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let head_angle = reveal * tau;
     let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
     let start_center = vec2<f32>(radius, 0.0);
+    let fill_chord_edge = head_center - start_center;
+    let fill_chord_side = fill_chord_edge.x * (input.local.y - start_center.y)
+        - fill_chord_edge.y * (input.local.x - start_center.x);
+    let fill_segment_coverage = fill_coverage * inside_coverage(fill_chord_side);
 
     if reveal >= 1.0 {
         return final_color;
@@ -474,10 +478,6 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         has_creation_stroke,
     );
 
-    let fill_chord_edge = head_center - start_center;
-    let fill_chord_side = fill_chord_edge.x * (input.local.y - start_center.y)
-        - fill_chord_edge.y * (input.local.x - start_center.x);
-    let fill_segment_coverage = fill_coverage * inside_coverage(fill_chord_side);
     let fill_layer = select(
         vec4<f32>(0.0),
         covered_color(input.fill, input.metrics.y, fill_segment_coverage),
