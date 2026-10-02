@@ -9,7 +9,7 @@ import playwright from "playwright";
 
 const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const cases = parseCases(process.env.NOON_HOST_CALLBACK_CASES ?? "1000:1,1000:100,10000:1,10000:100");
+const cases = parseCases(process.env.NOON_HOST_CALLBACK_CASES ?? "600:1,600:16,600:64");
 const frames = positiveInteger(process.env.NOON_HOST_CALLBACK_FRAMES ?? "300", "frames");
 const warmup = positiveInteger(process.env.NOON_HOST_CALLBACK_WARMUP ?? "30", "warmup");
 const port = positiveInteger(process.env.NOON_HOST_CALLBACK_PORT ?? "4184", "port");
@@ -58,27 +58,23 @@ try {
     const state = await page.locator("#status").getAttribute("data-state");
     if (state === "error") throw new Error(await page.locator("#status").textContent());
     const report = await page.evaluate(() => window.__NOON_HOST_CALLBACK_PERF__);
-    assert.equal(report.schemaVersion, 2);
+    assert.equal(report.schemaVersion, 3);
     assert.equal(report.workload.objects, testCase.objects);
     assert.equal(report.workload.active, testCase.active);
-    assert.equal(report.native.rendererBackend, "WebGL2");
     assert.equal(report.host.rendererBackend, "WebGL2");
-    assert.equal(report.native.locality.lastPublication.objectCount, testCase.objects);
     assert.equal(report.host.locality.lastPublication.objectCount, testCase.objects);
-    assert.equal(report.native.finalState.playing, false);
     assert.equal(report.host.finalState.playing, false);
     results.push(report);
     console.log(
-      `native ${fmt(report.native.advanceRoundTripMs?.p95)} ms, ` +
-        `host ${fmt(report.host.advanceRoundTripMs?.p95)} ms, ` +
+      `host ${fmt(report.host.advanceRoundTripMs?.p95)} ms, ` +
         `host upload ${fmt(report.host.locality.lastPublication.bytesUploaded)} B`,
     );
     await page.close();
   }
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
   const artifact = {
-    schemaVersion: 2,
-    benchmark: "Noon canonical native timeline versus Python callback matrix",
+    schemaVersion: 3,
+    benchmark: "Noon canonical Python callback active-set matrix",
     generatedAt: new Date().toISOString(),
     commit: commit.status === 0 ? commit.stdout.trim() : null,
     host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? null },

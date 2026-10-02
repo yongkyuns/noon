@@ -27,6 +27,7 @@ assert.ok(["software", "hardware"].includes(gpuMode), "unsupported GPU mode");
 const sampleHz = integer("SAMPLE_HZ", STRESS_SAMPLE_HZ);
 const loops = integer("WORKER_LOOPS", 2);
 const minimumEffectiveFps = optionalPositiveNumber("MIN_EFFECTIVE_FPS");
+const rendererSamples = process.env.NOON_RETAINED_STRESS_RENDERER_SAMPLES === "1";
 const transports = (process.env.NOON_RETAINED_STRESS_TRANSPORTS ?? "transferable,shared").split(",");
 assert.ok(transports.length > 0 && new Set(transports).size === transports.length
   && transports.every(mode => ["transferable", "shared"].includes(mode)), "invalid transports");
@@ -38,6 +39,7 @@ const report = {
   commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   generatedAt: new Date().toISOString(), sourcePath, sourceSha256, backend, gpuMode, sampleHz,
   loopsPerTransport: loops,
+  rendererSamples,
   minimumEffectiveFps,
   measurement: "Fresh source per loop; sample round trip includes source continuation, worker, runtime and rendering",
   performanceCases: STRESS_PERFORMANCE_CASES,
@@ -65,6 +67,8 @@ try {
         const params = new URLSearchParams({ source: "./python/examples/manim_parity_stress_grid.py",
           warmup: "0", frames: String(STRESS_DURATION_SECONDS * sampleHz + 1),
           targetHz: String(sampleHz), includeSamples: "1", transportMode,
+          includeRendererSamples: rendererSamples ? "1" : "0",
+          rendererMetricsSampling: "sparse",
           sharedSlotCapacity: String(32 * 1024 * 1024) });
         await page.goto(`${server.baseUrl}/web/scene-perf.html?${params}`);
         const adapterInfo = backend === "webgpu" ? await webGpuAdapterInfo(page) : null;
@@ -87,6 +91,8 @@ try {
           minimumEffectiveFps,
         });
         const cases = summarizeStressCases(result.profile.samples);
+        if (rendererSamples) assert.ok(result.profile.rendererSubstageSamples?.length > 0,
+          "requested renderer substage samples were not collected");
         report.runs.push({ transportMode, loop, adapterInfo, phases, cases, profile: result.profile });
         const effectiveFps = result.profile.cadence.effective?.effectiveFps;
         const adapter = adapterInfo ? `, adapter ${adapterSummary(adapterInfo)}` : "";
