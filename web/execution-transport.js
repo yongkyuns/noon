@@ -12,7 +12,9 @@ const SLOT_LENGTH_0 = 2;
 const SLOT_LENGTH_1 = 3;
 const WAKE_COUNTER = 4;
 const BACKPRESSURE_COUNTER = 5;
-const DEFAULT_SLOT_CAPACITY = 1024 * 1024;
+// Two slots reserve 4 MiB per isolated execution. This covers the gallery's
+// 600-object morph deltas without the 32 MiB slots used by stress experiments.
+export const DEFAULT_SHARED_SLOT_CAPACITY = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const validatedDeltaJson = new WeakMap();
@@ -102,7 +104,7 @@ export function decodeTransferableExecutionDelta(message) {
   return { json, metadata };
 }
 
-export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SLOT_CAPACITY) {
+export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SHARED_SLOT_CAPACITY) {
   if (!Number.isSafeInteger(slotCapacity) || slotCapacity <= 0) {
     throw new TypeError("shared execution mailbox capacity must be a positive integer");
   }

@@ -1,6 +1,7 @@
 // Runs an existing semantic session in its authoring worker. Rendering uses the
 // same mailbox and delta receiver as other execution producers.
 import {
+  DEFAULT_SHARED_SLOT_CAPACITY,
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
   createSharedExecutionMailbox, executionDeltaMetadata,
@@ -1184,7 +1185,7 @@ export async function attachSemanticEngine(
     // A shared mailbox may already contain its initial snapshot when setup is
     // received. Install resources before exposing that mailbox to the renderer.
     if (transportMode === EXECUTION_TRANSPORT_SHARED) {
-      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? 1024 * 1024);
+      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? DEFAULT_SHARED_SLOT_CAPACITY);
       transport = new SharedExecutionDeltaWriter(mailbox);
       renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
     } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });

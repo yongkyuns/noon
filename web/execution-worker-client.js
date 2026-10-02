@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SHARED_SLOT_CAPACITY,
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
@@ -20,7 +21,6 @@ const RENDER_MODE_RETAINED = "retained";
 const EXECUTION_MODE_SEMANTIC = "semantic";
 const SEMANTIC_PACING_REALTIME = "realtime";
 const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
-const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 // Producer reservations bound promises and messages even before ready() settles.
 // The engine retains its own bounded control queue; this is not another queue.
 export const MAX_IN_FLIGHT_NATIVE_INPUTS = 64;

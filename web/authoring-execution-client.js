@@ -1,12 +1,12 @@
 import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
 import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+import { DEFAULT_SHARED_SLOT_CAPACITY } from "./execution-transport.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
-const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "AuthoringExecutionClient was terminated during an asynchronous operation";
 const EMPTY_HOST_METRICS = Object.freeze({

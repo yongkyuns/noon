@@ -174,6 +174,16 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/gallery
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Test dense gallery scene with the default shared mailbox
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 5
+        env:
+          NOON_PLAYGROUND_BROWSER: chromium
+          NOON_PLAYGROUND_PROFILE: desktop-dpr1
+          NOON_GALLERY_COI: "1"
+          NOON_GALLERY_CASES: showcase-dynamic-scene
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/shared-dense-gallery
+        run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
       - name: Repeat WebKit optional-compiler cold starts
         if: matrix.browser == 'webkit'
         timeout-minutes: 10

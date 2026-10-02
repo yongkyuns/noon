@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
+import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,10 +58,12 @@ async function json(relative) {
 }
 try {
   if (!external) {
-    server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: 'ignore' });
+    server = process.env.NOON_GALLERY_COI === '1'
+      ? await serveRepository(root, port, { crossOriginIsolated: true })
+      : spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: 'ignore' });
     let ready = false;
     for (let i = 0; i < 100; i++) {
-      ready = await fetch(base).then(r => r.ok).catch(() => false);
+      ready = await fetch(new URL('index.html', base)).then(r => r.ok).catch(() => false);
       if (ready) break;
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -167,7 +170,8 @@ try {
     try {
       await Promise.race([
         (async () => {
-          await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await page.goto(new URL(`index.html?example=${encodeURIComponent(entry.id)}`, base).href,
+            { waitUntil: 'domcontentloaded', timeout: 30000 });
           await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
           let completed = false;
           // Longer authored examples can run materially slower than real time in Firefox CI.
@@ -183,6 +187,8 @@ try {
               }
               return { workerMessages: window.__galleryWorkerMessages ?? [],
                 selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
+                transportMode: gallery.transportMode,
+                crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
@@ -201,6 +207,10 @@ try {
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+          if (process.env.NOON_GALLERY_COI === '1') {
+            assert.equal(result.state.crossOriginIsolated, true, 'gallery COI test did not isolate the browser');
+            assert.equal(result.state.transportMode, 'shared', 'gallery COI test did not use the shared mailbox');
+          }
           if (noJspi) {
             assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true,
               'no-JSPI smoke did not wrap the production authoring worker');
@@ -279,5 +289,7 @@ try {
   const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };
   await writeFile(path.join(artifacts, 'runtime-resources.json'), stringify(runtimeResources));
   console.log('Gallery runtime resources:', stringify(runtimeResources));
-  await browser?.close(); server?.kill('SIGTERM');
+  await browser?.close();
+  if (typeof server?.close === 'function') await server.close();
+  else server?.kill('SIGTERM');
 }
