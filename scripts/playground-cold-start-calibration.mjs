@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 
+export function resolvePageTargetCpuThrottleRate(profile, override) {
+  assert.ok(["desktop", "mobile-class"].includes(profile), `unknown profile: ${profile}`);
+  if (override === undefined) return profile === "mobile-class" ? 4 : 1;
+  assert.ok(["1", "4"].includes(override), "page CPU throttle override must be 1 or 4");
+  return Number(override);
+}
+
 export function summarizePageTargetThrottleSamples(samples) {
   const median = (values, rate) => {
     assert.ok(values.length >= 2, `need at least two samples at ${rate}x`);
@@ -20,6 +27,26 @@ export function summarizePageTargetThrottleSamples(samples) {
   assert.ok(Number.isFinite(fourX) && fourX > 0, "4x median must be finite and positive");
   return {
     medianElapsedMsByRequestedPageTargetRate: { "1": oneX, "4": fourX },
+    observedFourXToOneXRatio: fourX / oneX,
+  };
+}
+
+export function summarizePythonLoopSamples(samples) {
+  const median = (rate) => {
+    const values = samples.filter((sample) => sample.rate === rate).map((sample) => sample.elapsedNs);
+    assert.ok(values.length >= 2, `need at least two Python samples at ${rate}x`);
+    assert.ok(values.every((value) => Number.isSafeInteger(value) && value > 0),
+      `all Python samples at ${rate}x must be positive integer nanoseconds`);
+    values.sort((left, right) => left - right);
+    const middle = Math.floor(values.length / 2);
+    return values.length % 2 === 0
+      ? (values[middle - 1] + values[middle]) / 2
+      : values[middle];
+  };
+  const oneX = median(1);
+  const fourX = median(4);
+  return {
+    medianElapsedNsByPageTargetRate: { "1": oneX, "4": fourX },
     observedFourXToOneXRatio: fourX / oneX,
   };
 }

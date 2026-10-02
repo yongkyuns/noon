@@ -1,7 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizePageTargetThrottleSamples } from "./playground-cold-start-calibration.mjs";
+import {
+  resolvePageTargetCpuThrottleRate,
+  summarizePageTargetThrottleSamples,
+  summarizePythonLoopSamples,
+} from "./playground-cold-start-calibration.mjs";
+
+test("page CPU throttle override preserves profile defaults and accepts controlled rates", () => {
+  assert.equal(resolvePageTargetCpuThrottleRate("desktop", undefined), 1);
+  assert.equal(resolvePageTargetCpuThrottleRate("mobile-class", undefined), 4);
+  assert.equal(resolvePageTargetCpuThrottleRate("desktop", "4"), 4);
+  assert.equal(resolvePageTargetCpuThrottleRate("mobile-class", "1"), 1);
+  assert.throws(() => resolvePageTargetCpuThrottleRate("desktop", "2"), /must be 1 or 4/);
+  assert.throws(() => resolvePageTargetCpuThrottleRate("unknown", undefined), /unknown profile/);
+});
 
 test("page-target throttle summary averages the two middle samples", () => {
   const result = summarizePageTargetThrottleSamples([
@@ -30,4 +43,26 @@ test("page-target throttle summary rejects incomplete or invalid samples", () =>
     { requestedPageTargetRate: 4, elapsedMs: 0 },
     { requestedPageTargetRate: 4, elapsedMs: 40 },
   ]), /finite and positive/);
+});
+
+test("Python loop calibration summarizes paired nanosecond samples by page rate", () => {
+  assert.deepEqual(summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 4, elapsedNs: 40_000 },
+    { rate: 4, elapsedNs: 36_000 },
+    { rate: 1, elapsedNs: 12_000 },
+  ]), {
+    medianElapsedNsByPageTargetRate: { "1": 11_000, "4": 38_000 },
+    observedFourXToOneXRatio: 38_000 / 11_000,
+  });
+  assert.throws(() => summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 4, elapsedNs: 40_000 },
+  ]), /at least two Python samples at 1x/);
+  assert.throws(() => summarizePythonLoopSamples([
+    { rate: 1, elapsedNs: 10_000 },
+    { rate: 1, elapsedNs: 0 },
+    { rate: 4, elapsedNs: 40_000 },
+    { rate: 4, elapsedNs: 41_000 },
+  ]), /positive integer nanoseconds/);
 });
