@@ -455,14 +455,6 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let head_angle = reveal * tau;
     let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
     let start_center = vec2<f32>(radius, 0.0);
-    let local_head_distance = length(input.local - head_center) - half_stroke_width;
-    let local_start_distance = length(input.local - start_center) - half_stroke_width;
-    let world_head_distance = length((input.local - head_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let world_start_distance = length((input.local - start_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let head_cap = inside_coverage(select(local_head_distance, world_head_distance, screen_space_stroke));
-    let start_cap = inside_coverage(select(local_start_distance, world_start_distance, screen_space_stroke));
 
     if reveal >= 1.0 {
         return final_color;
@@ -478,7 +470,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
     let stroke_coverage = select(
         0.0,
-        max(ring_coverage * body_reveal, max(head_cap, start_cap)),
+        ring_coverage * body_reveal,
         has_creation_stroke,
     );
 
