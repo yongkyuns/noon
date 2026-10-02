@@ -455,14 +455,10 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let head_angle = reveal * tau;
     let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
     let start_center = vec2<f32>(radius, 0.0);
-    let local_head_distance = length(input.local - head_center) - half_stroke_width;
-    let local_start_distance = length(input.local - start_center) - half_stroke_width;
-    let world_head_distance = length((input.local - head_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let world_start_distance = length((input.local - start_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let head_cap = inside_coverage(select(local_head_distance, world_head_distance, screen_space_stroke));
-    let start_cap = inside_coverage(select(local_start_distance, world_start_distance, screen_space_stroke));
+    let fill_chord_edge = head_center - start_center;
+    let fill_chord_side = fill_chord_edge.x * (input.local.y - start_center.y)
+        - fill_chord_edge.y * (input.local.x - start_center.x);
+    let fill_segment_coverage = fill_coverage * inside_coverage(fill_chord_side);
 
     if reveal >= 1.0 {
         return final_color;
@@ -471,21 +467,20 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // Circle Create remains entirely analytic. The SDF gives an exact circle;
-    // angular progress reveals its outline and an analytic disk supplies the
-    // moving round head, so there is no faceted temporary mesh or endpoint pop.
+    // Circle Create stays analytic: the outline uses angular progress, while
+    // the fill follows the revealed arc closed by its endpoint chord, as in
+    // Manim's partial closed path.
     let body_reveal = 1.0 - smoothstep(reveal, reveal + progress_edge, progress);
     let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
     let stroke_coverage = select(
         0.0,
-        max(ring_coverage * body_reveal, max(head_cap, start_cap)),
+        ring_coverage * body_reveal,
         has_creation_stroke,
     );
 
-    let fill_alpha = smoothstep(0.0, 1.0, reveal);
     let fill_layer = select(
         vec4<f32>(0.0),
-        covered_color(input.fill, input.metrics.y * fill_alpha, fill_coverage),
+        covered_color(input.fill, input.metrics.y, fill_segment_coverage),
         fill_enabled,
     );
     let derive_creation_stroke = fill_enabled && !stroke_enabled;
