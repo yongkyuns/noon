@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "crates/noon-render-wgpu/src/analytic.wgsl"
+      - "crates/noon-render-wgpu/src/reveal.rs"
       - "crates/noon/src/semantic_mobject.rs"
       - "crates/noon/src/semantic_mobject/bounds.rs"
       - "parity/manim-v0.21/manifest.json"
