@@ -471,9 +471,9 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // Circle Create remains entirely analytic. The SDF gives an exact circle;
-    // angular progress reveals its outline and an analytic disk supplies the
-    // moving round head, so there is no faceted temporary mesh or endpoint pop.
+    // Circle Create stays analytic: the outline uses angular progress, while
+    // the fill follows the revealed arc closed by its endpoint chord, as in
+    // Manim's partial closed path.
     let body_reveal = 1.0 - smoothstep(reveal, reveal + progress_edge, progress);
     let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
     let stroke_coverage = select(
@@ -482,10 +482,15 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         has_creation_stroke,
     );
 
-    let fill_alpha = smoothstep(0.0, 1.0, reveal);
+    let fill_segment_midpoint = head_angle * 0.5;
+    let fill_chord_distance = dot(
+        input.local,
+        vec2<f32>(cos(fill_segment_midpoint), sin(fill_segment_midpoint)),
+    ) - radius * cos(fill_segment_midpoint);
+    let fill_segment_coverage = fill_coverage * inside_coverage(-fill_chord_distance);
     let fill_layer = select(
         vec4<f32>(0.0),
-        covered_color(input.fill, input.metrics.y * fill_alpha, fill_coverage),
+        covered_color(input.fill, input.metrics.y, fill_segment_coverage),
         fill_enabled,
     );
     let derive_creation_stroke = fill_enabled && !stroke_enabled;
