@@ -3,7 +3,7 @@ from noon import *
 
 
 class AlwaysRedrawShowcase(Scene):
-    def construct(self):
+    async def construct(self):
         circle_x = ValueTracker(-2.2)
         circle_radius = ValueTracker(0.48)
         rectangle_x = ValueTracker(2.2)
@@ -32,21 +32,21 @@ class AlwaysRedrawShowcase(Scene):
         resolved = Text("Both shapes redraw as their values change.", font_size=21).shift(2.65 * UP)
 
         self.add(circle, rectangle)
-        self.play(
+        await self.play(
             FadeIn(title), FadeIn(subtitle), *[FadeIn(label) for label in labels],
             visibility.animate.set_value(1), run_time=0.8, rate_func=smooth,
         )
-        self.wait(0.4)
-        self.play(
+        await self.wait(0.4)
+        await self.play(
             circle_x.animate.set_value(-1.15), circle_radius.animate.set_value(0.82),
             rectangle_x.animate.set_value(1.15), rectangle_angle.animate.set_value(0.65),
             run_time=2.4, rate_func=smooth,
         )
-        self.wait(0.5)
-        self.play(
+        await self.wait(0.5)
+        await self.play(
             circle_x.animate.set_value(-2.2), circle_radius.animate.set_value(0.48),
             rectangle_x.animate.set_value(2.2), rectangle_angle.animate.set_value(-0.45),
             run_time=2.4, rate_func=smooth,
         )
-        self.play(FadeOut(subtitle), FadeIn(resolved), run_time=0.5)
-        self.wait(1.2)
+        await self.play(FadeOut(subtitle), FadeIn(resolved), run_time=0.5)
+        await self.wait(1.2)

@@ -762,7 +762,7 @@ class _CanonicalCallbackContext:
         return _phase_number("scalar callback read", result.get("value"))
 
     async def prefetch_captured_scalars(self, callbacks, tracker_type) -> None:
-        """Resolve direct Python captures, never invoke callbacks or user getters.
+        """Resolve direct and one-level producer captures without invoking Python code.
 
         These are optional phase-local read hints, not authored signal values or
         a callback dependency graph. Rust validates every read against the pinned
@@ -772,12 +772,17 @@ class _CanonicalCallbackContext:
         """
         from types import FunctionType, MethodType
 
-        seen_functions = set()
-        for callback in callbacks:
+        seen_functions: dict[int, int] = {}
+        pending = [(callback, 0) for callback in callbacks]
+        while pending:
+            callback, depth = pending.pop()
             function = callback.__func__ if isinstance(callback, MethodType) else callback
-            if not isinstance(function, FunctionType) or id(function) in seen_functions:
+            if not isinstance(function, FunctionType):
                 continue
-            seen_functions.add(id(function))
+            previous_depth = seen_functions.get(id(function))
+            if previous_depth is not None and previous_depth <= depth:
+                continue
+            seen_functions[id(function)] = depth
             values = list(function.__defaults__ or ())
             values.extend((function.__kwdefaults__ or {}).values())
             for cell in function.__closure__ or ():
@@ -785,6 +790,10 @@ class _CanonicalCallbackContext:
                     values.append(cell.cell_contents)
                 except ValueError:
                     pass
+            # Only functions explicitly captured by this callback can be
+            # producer helpers. Do not traverse arbitrary module globals.
+            if depth == 0:
+                pending.extend((value, 1) for value in values if isinstance(value, FunctionType))
             values.extend(function.__globals__[name] for name in function.__code__.co_names
                           if name in function.__globals__)
             for value in values:
