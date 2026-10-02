@@ -2084,6 +2084,7 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
         serde_json::from_str(&player.initial_callback_phase_json().unwrap().unwrap()).unwrap();
     let token = player.pending_callback_phase.unwrap().0;
     let before_nodes = scene.integration_store().borrow().len();
+    let before_revision = scene.revision();
     let mut options = noon::ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
     options.set_translation(3.0, -2.0).unwrap();
     options.set_z_index(4.0).unwrap();
@@ -2121,6 +2122,7 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
             if color == noon_core::Color::rgba(0.2, 0.4, 0.8, 0.75)
     ));
     assert_eq!(styled.style.fill_opacity, 0.6);
+    assert_eq!(scene.revision(), before_revision);
     let retained_path = player
         .stage_required_callback_provisional_geometry(
             token,

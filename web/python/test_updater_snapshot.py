@@ -865,3 +865,31 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
                 ('{"generation":9}', "center", "provisional"),
             ],
         )
+
+    def test_provisional_paint_and_move_to_chain_stays_in_callback_staging(self) -> None:
+        context = self.context()
+        provisional = context.stage_provisional_geometry("circle-options")
+        shape = identity_only_wrapper(
+            compat.Circle,
+            _callback_provisional_context=context,
+            _callback_provisional_handle=provisional,
+        )
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(context)
+        try:
+            color = updaters._base.Color(0.2, 0.4, 0.8, 0.75)
+            self.assertIs(shape.set_fill(color, opacity=0.6).move_to((5.0, 3.0)), shape)
+            with self.assertRaisesRegex(NotImplementedError, "center point placement only"):
+                shape.move_to((0.0, 0.0), aligned_edge=(1.0, 0.0))
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertEqual(
+            context._callback_player.staged,
+            [
+                ('{"generation":9}', "provisional_geometry", "circle-options"),
+                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                ('{"generation":9}', "center", "provisional"),
+                ('{"generation":9}', "shift", "provisional", 2.5, 4.0),
+            ],
+        )
