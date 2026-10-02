@@ -671,12 +671,13 @@ export class ExecutionWorkerClient {
     return this.#requestEngine("state", {});
   }
 
-  async metrics({ profilePublicationStages = false } = {}) {
-    if (typeof profilePublicationStages !== "boolean") {
-      throw new TypeError("profilePublicationStages must be a boolean");
+  async metrics({ profilePublicationStages = false, profileRenderSubstages = false } = {}) {
+    if (typeof profilePublicationStages !== "boolean" ||
+        typeof profileRenderSubstages !== "boolean") {
+      throw new TypeError("renderer profiling options must be booleans");
     }
     const [render, engine] = await Promise.all([
-      this.#requestRender("metrics", { profilePublicationStages }),
+      this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages }),
       this.#requestEngine("metrics", {}),
     ]);
     return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };

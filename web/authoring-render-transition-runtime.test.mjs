@@ -302,11 +302,19 @@ function createRenderer(renderResults) {
     renderCalls: 0,
     observationRequests: [],
     observationResult: null,
+    renderSubstageProfiling: false,
+    renderSubstageSamplesJson: "[]",
     applyDeltaJson: () => true,
     setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
     takeRendererObservationJson() {
       const result = this.observationResult;
       this.observationResult = null;
+      return result;
+    },
+    setRenderSubstageProfiling(enabled) { this.renderSubstageProfiling = enabled; },
+    takeRenderSubstageSamplesJson() {
+      const result = this.renderSubstageSamplesJson;
+      this.renderSubstageSamplesJson = "[]";
       return result;
     },
     resize() {},
@@ -545,6 +553,22 @@ test("publication stage metrics are opt-in, exact-publication keyed, and bounded
     assert.ok(Number.isFinite(sample.receiveToPresentMs));
     assert.ok(Number.isFinite(sample.ackPostMs));
   }
+});
+
+test("render substage timing is opt-in and drains bounded renderer samples", async () => {
+  const harness = await createManagedWakeHarness();
+  assert.equal(vm.runInContext("currentMetrics().renderSubstageProfiling", harness.context), undefined);
+  const first = { session: 53, sequence: 7, encodeCpuWallMs: 1.25 };
+  harness.createdRenderer.renderSubstageSamplesJson = JSON.stringify([first]);
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:74, profileRenderSubstages:true});`, harness.context);
+  const response = harness.mainMessages.find((message) => message.requestId === 74);
+  assert.equal(response.metrics.renderSubstageProfiling, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(response.metrics.renderSubstageSamples)), [first]);
+  assert.equal(harness.createdRenderer.renderSubstageProfiling, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
+    "currentMetrics().renderSubstageSamples", harness.context,
+  ))), [], "taking metrics drains samples instead of retaining an unbounded history");
 });
 
 test("renderer transition discards an old timing sample even when publication identity repeats", async () => {

@@ -19,9 +19,16 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const rendererMetricsSampling = parameters.get("rendererMetricsSampling") ?? "dense";
+if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
+  throw new Error("unsupported renderer metrics sampling mode");
+}
 const rendererPublicationStageSamples = rendererSamples === null ? null : [];
+const rendererSubstageSamples = rendererSamples === null ? null : [];
 let rendererPublicationStageCursor = null;
+let rendererSubstageCursor = null;
 const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
+const MAX_RENDERER_SUBSTAGE_SAMPLES = 32;
 const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
@@ -113,6 +120,7 @@ try {
   }
   const before = (await execution.metrics({
     profilePublicationStages: rendererSamples !== null,
+    profileRenderSubstages: rendererSamples !== null,
   })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
@@ -137,11 +145,31 @@ try {
         ...advanceResult.sampleTiming,
       });
     }
-    if (rendererSamples !== null) {
+    if (rendererSamples !== null && (rendererMetricsSampling === "dense" ||
+        shouldSampleRendererStageFrame(frame, measuredFrames))) {
       const metricsStarted = performance.now();
       const renderer = (await execution.metrics({
         profilePublicationStages: rendererSamples !== null,
+        profileRenderSubstages: rendererSamples !== null,
       })).metrics;
+      const renderSubstageWindow = renderer.renderSubstageSamples;
+      const latestRenderSubstage = renderSubstageWindow?.[renderSubstageWindow.length - 1];
+      const hasSubstageIdentity = Number.isSafeInteger(latestRenderSubstage?.session) &&
+        Number.isSafeInteger(latestRenderSubstage?.sequence);
+      const isNewSubstage = hasSubstageIdentity && (rendererSubstageCursor === null ||
+        latestRenderSubstage.session > rendererSubstageCursor.session ||
+        (latestRenderSubstage.session === rendererSubstageCursor.session &&
+         latestRenderSubstage.sequence > rendererSubstageCursor.sequence));
+      if (isNewSubstage && rendererSubstageSamples.length < MAX_RENDERER_SUBSTAGE_SAMPLES) {
+        rendererSubstageCursor = {
+          session: latestRenderSubstage.session,
+          sequence: latestRenderSubstage.sequence,
+        };
+        rendererSubstageSamples.push({
+          ...latestRenderSubstage,
+          measuredFrameIndex: frame,
+        });
+      }
       rendererSamples.push({
         sceneTime: lastSampleTime,
         metricsQueryMs: performance.now() - metricsStarted,
@@ -182,6 +210,20 @@ try {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
     ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererSubstageSamples === null ? {} : {
+      rendererSubstageSamples,
+      rendererSubstageNotes: {
+        timing: "CPU wall time inside one successful render call, split at the existing renderer-host boundaries",
+        scope: "small observation and bookkeeping work between/after measured stages is omitted, so stage totals need not equal lastRendererCallMs",
+        surfaceAcquireCpuWallMs: "surface texture acquisition call; does not measure later physical presentation",
+        prepareCpuWallMs: "retained frame preparation and inset setup",
+        uploadCpuWallMs: "synchronous renderer upload calls; not GPU transfer completion",
+        encodeCpuWallMs: "command encoder creation, retained draw encoding, and command-buffer finish",
+        submitPresentCpuWallMs: "host queue submit and present call duration; not GPU completion or scanout",
+        collection: "latest exact session/sequence sample at each renderer metrics poll, capped at 32; enabling diagnostics adds timing calls to every successful render",
+      },
+    }),
+    ...(rendererSamples === null ? {} : { rendererMetricsSampling }),
     ...(rendererPublicationStageSamples === null ? {} : {
       rendererPublicationStageSamples,
       rendererPublicationStageNotes: {
@@ -189,7 +231,7 @@ try {
         renderMs: "synchronous retained renderer render call; not GPU completion",
         receiveToPresentMs: "render-worker consume entry through successful render return",
         ackPostMs: "synchronous execution_presented MessagePort post duration",
-        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32",
+        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32; sparse mode polls renderer metrics only at those slots",
       },
     }),
     ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
