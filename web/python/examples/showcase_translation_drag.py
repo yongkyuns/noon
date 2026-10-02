@@ -11,5 +11,5 @@ class TranslationDrag(Scene):
         self.play(FadeIn(title), FadeIn(instructions), run_time=0.7)
         self.play(Create(circle), Create(rectangle), run_time=1.4, rate_func=smooth)
         self.wait(0.5)
-        self.on_click(circle, Indicate(circle, run_time=0.4))
+        self.on_click(circle, Indicate(circle, run_time=1.0))
         self.set_drag_targets(rectangle)

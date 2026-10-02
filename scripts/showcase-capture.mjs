@@ -214,13 +214,18 @@ async function captureSelection(context, entry, result) {
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
     stage = "select the circle";
-    await click(0.36, 0.5);
+    // Begin sampling with the click in flight. A software WebGL screenshot can
+    // take most of a short Indicate cycle, so waiting for click() to return
+    // before the first readback can miss every changed frame.
+    const clickResult = click(0.36, 0.5).then(() => null, error => error);
     let selected;
     for (let attempt = 0; attempt < 40; attempt++) {
       const bytes = await canvas.screenshot();
       if (!samePixels(before, bytes)) { selected = bytes; break; }
       await page.waitForTimeout(50);
     }
+    const clickError = await clickResult;
+    if (clickError) throw clickError;
     assert.ok(selected, "actual pointer click did not change the displayed image");
     const basePixels = PNG.sync.read(before).data;
     const indicationStrength = bytes => PNG.sync.read(bytes).data.reduce(
