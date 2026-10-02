@@ -638,6 +638,7 @@ async function ensureRuntimeReady({
         time: initialState.time,
         playing: initialState.playing,
         durationSeconds: loopDurationSeconds,
+        canUndoTranslationDrag: initialState.canUndoTranslationDrag ?? false,
       });
       startMetricsPolling();
       return {
@@ -686,6 +687,7 @@ async function ensureExecutionReady() {
     time: playbackState.time,
     playing: playbackState.playing,
     durationSeconds: playbackDurationSeconds,
+    canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
   });
 }
 
@@ -1142,6 +1144,7 @@ async function runScene() {
         time: result.time,
         playing: result.playing,
         durationSeconds: playbackDurationSeconds,
+        canUndoTranslationDrag: result.canUndoTranslationDrag ?? false,
       });
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);

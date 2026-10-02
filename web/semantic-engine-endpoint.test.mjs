@@ -29,7 +29,7 @@ function fixture(
 ) {
   const control = new MessageChannel();
   const render = new MessageChannel();
-  let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
+  let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0, canUndoDrag = false;
   let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let leased = false;
   let initialSnapshots = 0, resourceBundles = 0;
@@ -98,6 +98,10 @@ function fixture(
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
     time: () => time, playbackTimeAt: () => time, isPlaying: () => playing,
+    get canUndoTranslationDrag() { return canUndoDrag; },
+    setCanUndoTranslationDrag: (value) => { canUndoDrag = value; },
+    undoTranslationDrag: () => { canUndoDrag = false; return true; },
+    clearTranslationDragUndo: () => { canUndoDrag = false; },
   };
   const context = {
     createExecutionPlayer: () => { leased = true; created += 1; return player; },
@@ -1072,6 +1076,30 @@ test("stopping an incomplete semantic continuation never returns its player", as
     assert.equal(f.stats().stopped, 1);
     assert.deepEqual(failures, []);
   } finally { f.close(); }
+});
+
+test("undo-drag command publishes its Rust reversal and returns disabled state", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const first = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence });
+    f.player.setCanUndoTranslationDrag(true);
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(0);
+
+    const reply = request(f.control.port2, "undo_translation_drag", 81);
+    const reversal = await nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "execution_ack", session: reversal.session, sequence: reversal.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: reversal.session, sequence: reversal.sequence });
+    const state = await reply;
+    assert.equal(state.canUndoTranslationDrag, false);
+    assert.equal(f.player.canUndoTranslationDrag, false);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("native state and event controls reach the leased player in accepted order", async () => {

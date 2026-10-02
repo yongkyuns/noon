@@ -21,6 +21,7 @@ pub(super) struct WorkerPointerInput {
 pub(super) struct PlayerPointerTarget<'a> {
     pub(super) session: &'a mut ExecutionSession,
     pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
@@ -77,7 +78,12 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         };
         self.session
             .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
-            .map(|receipt| receipt.input)
+            .map(|receipt| {
+                if let Some(undo) = receipt.undo {
+                    *self.translation_drag_undo = Some(undo);
+                }
+                receipt.input
+            })
             .map_err(|error| error.to_string())
     }
 }

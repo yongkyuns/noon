@@ -106,21 +106,22 @@ pub struct TranslationDragUndo {
     after: SemanticVec3,
 }
 impl TranslationDragUndo {
+    /// Whether this receipt still names the unchanged authored drag result.
+    pub fn is_current(&self, session: &ExecutionSession, store: &SemanticStore) -> bool {
+        store.identity() == self.store
+            && session.runtime_identity() == self.runtime
+            && store.scene_revision() == self.scene_revision
+            && store
+                .semantic_object_state_checked(self.node)
+                .is_ok_and(|state| state.transform.translation == self.after)
+    }
+
     pub fn undo(
         self,
         session: &mut ExecutionSession,
         store: &mut SemanticStore,
     ) -> Result<(), TranslationDragError> {
-        if store.identity() != self.store
-            || session.runtime_identity() != self.runtime
-            || store.scene_revision() != self.scene_revision
-            || store
-                .semantic_object_state_checked(self.node)
-                .map_err(|_| TranslationDragError::StaleUndo)?
-                .transform
-                .translation
-                != self.after
-        {
+        if !self.is_current(session, store) {
             return Err(TranslationDragError::StaleUndo);
         }
         session.apply_drag_authored_translation(store, self.node, self.before)
