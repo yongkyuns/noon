@@ -397,16 +397,42 @@ impl RetainedFramePreparer {
 
                     match state.mode {
                         noon_core::FamilyAnimationMode::Reveal => {
+                            let scratch_index =
+                                usize::try_from(scratch_id.get()).map_err(|_| {
+                                    RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                                })?;
+                            let text_vector = self
+                                .text_vector_member_by_scratch_slot
+                                .get(&scratch_index)
+                                .copied()
+                                .filter(|(owner, _)| *owner == object_index);
+                            if let Some((_, vector_index)) = text_vector {
+                                if let Some(reveal) = self.family_text_vector_reveal(
+                                    &family_frame,
+                                    plan,
+                                    object_index,
+                                    object_id,
+                                    vector_index,
+                                    texts,
+                                )? {
+                                    *self.scratch.reveals.get_mut(scratch_index).ok_or(
+                                        RetainedFamilyPrepareError::MissingScratchObject(
+                                            scratch_id,
+                                        ),
+                                    )? = reveal;
+                                }
+                                self.sources.push(SourceItem::Geometry {
+                                    object_id,
+                                    scratch_id,
+                                });
+                                continue;
+                            }
                             if let Some(reveal) = self.family_geometry_reveal(
                                 &family_frame,
                                 plan,
                                 object_index,
                                 object_id,
                             )? {
-                                let scratch_index =
-                                    usize::try_from(scratch_id.get()).map_err(|_| {
-                                        RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
-                                    })?;
                                 let target = self.scratch.reveals.get_mut(scratch_index).ok_or(
                                     RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
                                 )?;
@@ -645,11 +671,6 @@ impl RetainedFramePreparer {
                     scratch_changes.push(scratch_slot);
                 }
                 (noon_core::FamilyAnimationMode::Reveal, Some(text)) => {
-                    let Some(slots) = self.family_plan_scratch_slots.get(&object_index) else {
-                        // An active Text whose glyph outlines are all empty has no geometry
-                        // rows to update, but still participates in the stable active set.
-                        continue;
-                    };
                     let resource = texts
                         .get(text)
                         .ok_or(RetainedPrepareError::MissingTextResource)?;
@@ -663,41 +684,63 @@ impl RetainedFramePreparer {
                         continue;
                     };
                     for member in members {
-                        let RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. } =
-                            member.map_err(RetainedFamilyPrepareError::from)?
-                        else {
-                            return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
-                                object.id,
-                            )
-                            .into());
-                        };
-                        let Some(&scratch_slot) = slots.get(&glyph) else {
-                            // Glyphs with empty outlines deliberately have no geometry row.
-                            continue;
-                        };
-                        let run = resource.runs.get(glyph.run_index as usize).ok_or(
-                            RetainedFamilyPrepareError::InvalidTextRun {
-                                object: object.id,
-                                run_index: glyph.run_index,
-                            },
-                        )?;
-                        let scratch = &mut self.scratch.objects[scratch_slot];
-                        scratch.transform = object.transform;
-                        scratch.style = Style {
-                            fill: Some(run.fill.or(object.style.fill).unwrap_or(Color::WHITE)),
-                            stroke: None,
-                            stroke_width: 0.0,
-                            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
-                            stroke_join: StrokeJoin::Round,
-                            stroke_cap: StrokeCap::Round,
-                            opacity: object.style.opacity,
-                        };
-                        scratch.appearance = object.appearance;
-                        self.scratch.presences[scratch_slot] = true;
-                        self.scratch.reveals[scratch_slot] = reveal;
-                        self.scratch.morphs[scratch_slot] = 0.0;
-                        self.scratch.render_transforms[scratch_slot] = None;
-                        scratch_changes.push(scratch_slot);
+                        match member.map_err(RetainedFamilyPrepareError::from)? {
+                            RetainedFamilyRevealMember::TextVector { vector, reveal, .. } => {
+                                let Some(&scratch_slot) = self
+                                    .text_vector_scratch_slots
+                                    .get(&(object_index, vector.vector_index))
+                                else {
+                                    return Err(RetainedFamilyPrepareError::InvalidTextVector {
+                                        object: object.id,
+                                        vector_index: vector.vector_index,
+                                    }
+                                    .into());
+                                };
+                                self.scratch.reveals[scratch_slot] = reveal;
+                                scratch_changes.push(scratch_slot);
+                            }
+                            RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. } => {
+                                let Some(&scratch_slot) = self
+                                    .family_plan_scratch_slots
+                                    .get(&object_index)
+                                    .and_then(|slots| slots.get(&glyph))
+                                else {
+                                    // Glyphs with empty outlines deliberately have no geometry row.
+                                    continue;
+                                };
+                                let run = resource.runs.get(glyph.run_index as usize).ok_or(
+                                    RetainedFamilyPrepareError::InvalidTextRun {
+                                        object: object.id,
+                                        run_index: glyph.run_index,
+                                    },
+                                )?;
+                                let scratch = &mut self.scratch.objects[scratch_slot];
+                                scratch.transform = object.transform;
+                                scratch.style = Style {
+                                    fill: Some(
+                                        run.fill.or(object.style.fill).unwrap_or(Color::WHITE),
+                                    ),
+                                    stroke: None,
+                                    stroke_width: 0.0,
+                                    stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+                                    stroke_join: StrokeJoin::Round,
+                                    stroke_cap: StrokeCap::Round,
+                                    opacity: object.style.opacity,
+                                };
+                                scratch.appearance = object.appearance;
+                                self.scratch.presences[scratch_slot] = true;
+                                self.scratch.reveals[scratch_slot] = reveal;
+                                self.scratch.morphs[scratch_slot] = 0.0;
+                                self.scratch.render_transforms[scratch_slot] = None;
+                                scratch_changes.push(scratch_slot);
+                            }
+                            RetainedFamilyRevealMember::Geometry { .. } => {
+                                return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
+                                    object.id,
+                                )
+                                .into());
+                            }
+                        }
                     }
                 }
                 (noon_core::FamilyAnimationMode::DrawBorderThenFill, Some(text)) => {

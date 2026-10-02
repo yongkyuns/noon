@@ -185,6 +185,10 @@ async function captureSelection(context, entry, result) {
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     const canvas = page.locator("#scene");
     await layoutReplayViewport(canvas, report.viewport);
+    // Source-declared input is attached when Run installs the scene. Give the
+    // canvas pointer eligibility before that installation, as the gallery
+    // selection smoke does for the same public UI path.
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
@@ -210,14 +214,18 @@ async function captureSelection(context, entry, result) {
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
     stage = "select the circle";
-    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
-    await click(0.36, 0.5);
+    // Begin sampling with the click in flight. A software WebGL screenshot can
+    // take most of a short Indicate cycle, so waiting for click() to return
+    // before the first readback can miss every changed frame.
+    const clickResult = click(0.36, 0.5).then(() => null, error => error);
     let selected;
     for (let attempt = 0; attempt < 40; attempt++) {
       const bytes = await canvas.screenshot();
       if (!samePixels(before, bytes)) { selected = bytes; break; }
       await page.waitForTimeout(50);
     }
+    const clickError = await clickResult;
+    if (clickError) throw clickError;
     assert.ok(selected, "actual pointer click did not change the displayed image");
     const basePixels = PNG.sync.read(before).data;
     const indicationStrength = bytes => PNG.sync.read(bytes).data.reduce(

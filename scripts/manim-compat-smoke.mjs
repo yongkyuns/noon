@@ -17,6 +17,10 @@ const matchingShapesSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_transform_matching_shapes.py"),
   "utf8",
 );
+const latexCreateSource = await readFile(
+  path.join(repoRoot, "web/python/examples/showcase_latex_create.py"),
+  "utf8",
+);
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -667,6 +671,14 @@ try {
     assert.ok(result.metrics.presentedFrames > 0, "shared Text composition must present");
   }
 
+  const latexCreate = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    latexCreateSource,
+  );
+  assert.equal(latexCreate.duration, 3.5, "MathTex Create must preserve authored timing");
+  assert.equal(latexCreate.metrics.objectCount, 1, "MathTex Create must retain its equation");
+  assert.ok(latexCreate.metrics.presentedFrames > 0, "MathTex Create must present");
+
   let zError = null;
   try {
     await page.evaluate(
@@ -680,7 +692,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, mixed Text/ordinary composition, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

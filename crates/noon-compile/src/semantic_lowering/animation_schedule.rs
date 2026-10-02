@@ -1007,15 +1007,20 @@ fn cached_family_animation_member_count(
                 ) => 1,
                 (_, noon_core::SemanticObjectContent::Text(handle)) => {
                     let resource = store.text_resources().get(handle)?;
-                    if resource.kind != noon_core::TextSourceKind::Plain {
-                        return None;
-                    }
-                    u32::try_from(
-                        noon_core::plain_text_animation_members(resource)
-                            .ok()?
-                            .len(),
-                    )
-                    .ok()?
+                    let members = match mode {
+                        noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                            if resource.kind != noon_core::TextSourceKind::Plain {
+                                return None;
+                            }
+                            noon_core::plain_text_animation_members(resource)
+                                .ok()?
+                                .len()
+                        }
+                        noon_core::FamilyAnimationMode::Reveal => {
+                            noon_core::text_animation_members(resource).ok()?.len()
+                        }
+                    };
+                    u32::try_from(members).ok()?
                 }
             };
             total = total.checked_add(count)?;
@@ -1254,12 +1259,17 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             return None;
         };
         let resource = self.store.text_resources().get(handle)?;
-        u32::try_from(
-            noon_core::plain_text_animation_members(resource)
-                .ok()?
-                .len(),
-        )
-        .ok()
+        let count = match mode {
+            noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                noon_core::plain_text_animation_members(resource)
+                    .ok()?
+                    .len()
+            }
+            noon_core::FamilyAnimationMode::Reveal => {
+                noon_core::text_animation_members(resource).ok()?.len()
+            }
+        };
+        u32::try_from(count).ok()
     }
 }
 
@@ -1640,12 +1650,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             return None;
         };
         let resource = self.prepared.store().text_resources().get(handle)?;
-        u32::try_from(
-            noon_core::plain_text_animation_members(resource)
-                .ok()?
-                .len(),
-        )
-        .ok()
+        let count = match mode {
+            noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                noon_core::plain_text_animation_members(resource)
+                    .ok()?
+                    .len()
+            }
+            noon_core::FamilyAnimationMode::Reveal => {
+                noon_core::text_animation_members(resource).ok()?.len()
+            }
+        };
+        u32::try_from(count).ok()
     }
 }
 

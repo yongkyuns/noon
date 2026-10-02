@@ -1304,7 +1304,7 @@ impl SemanticMutationTransaction {
         )
     }
 
-    /// Stage one plain Text Create/Uncreate through the shared glyph Reveal mode.
+    /// Stage one retained Text or TeX Create/Uncreate through the shared Reveal mode.
     pub fn create_text_reveal_animation(
         &mut self,
         target: SemanticNodeId,

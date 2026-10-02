@@ -1,30 +1,30 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "d6ec56ffc9238ea4cb17e8b80e8a4bb9dd0bdca6",
+  "captureRevision": "c5f822d8cd4815b9eb59ff5560d099828e0fa09c",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "d6ec56ffc9238ea4cb17e8b80e8a4bb9dd0bdca6",
+    "sourceRevision": "c5f822d8cd4815b9eb59ff5560d099828e0fa09c",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "c3467aa183e47ec8dcdde34f7702f24d50aa23a7f4c18f42c7dfba818ffe538d"
+        "sha256": "8821f5ea3005d2f29b990e05f8d9529f925df95e3b3b7c000c0299062e11935f"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "282246d38dfec7ebabdc508810fe302fb60bef30aa97c638bc52298b125342a6"
+        "sha256": "97e9f16d03be3137f303ddb478d56d8f03322d4e38ec7f4901ef8c428aa91547"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "d32217fbb35e4ae7e3b03e9a5e0480c5013039d906f8d3575101980973f33553"
+        "sha256": "3c12be0c917e3546312962a1a9d2a73a805f8ce01e6f0c514bc7d80fe185aa85"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "b870614491d4166a27e87da9fbeefcb6473123c510d10dd9271e54b3973018b3"
+    "buildId": "697a2e0d0d58547c48307470c98d4f9105c26b46a7e7a5a51eedc3f3b8d7f40f"
   },
   "posters": [
     {
@@ -212,6 +212,24 @@
       }
     },
     {
+      "id": "showcase-latex-create",
+      "sourceSha256": "37622701eedbabf49ad57e2016050ab0eb89f6c6ec0722a62450c06ab466beea",
+      "thumbnailTime": 3.1,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 1777,
+        "pngSha256": "b40264c19c91d36776bc7e0508bd09e085e36e5cd0cc71cdcedacf2a9536d797",
+        "pixelSha256": "4a70327faebb222414b1269986e718c06f89f177ed5dc8e3f09eca2eaf01fb4b"
+      },
+      "sample": {
+        "requestedTime": 3.1,
+        "publishedTime": 3.1,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    },
+    {
       "id": "showcase-coordinate-plotting",
       "sourceSha256": "c57bc27a8164d6ca0e576212c1b17233079b2d80d74d18cab34a287b4b16eae1",
       "thumbnailTime": 5.65,
@@ -285,14 +303,14 @@
     },
     {
       "id": "showcase-pointer-selection",
-      "sourceSha256": "c6c269439414d01f15e6dbe04744ac27aa2ea719200dac11054cb2be2dbc4c6a",
+      "sourceSha256": "98b599c22c9871165bcae52e2cbbbed192eb61dd86b30c2de660058e7ff2a15c",
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 40401,
-        "pngSha256": "66c8cbd723e7b15df6eb61e09d27ede62fcc1d930f3589c2652d0d07d54ef188",
-        "pixelSha256": "595d11507cb08d421b39c86498a11314cddaefb2203bf8107a0700e4587178e8"
+        "foregroundPixels": 39745,
+        "pngSha256": "4ca8adac66e8d65af4b6b20eb77b0b6f737f2231a738dc81669e11b80d04e3d0",
+        "pixelSha256": "b59399a0c6bda31289ef50982fcf4cee59d8ecf308cc277160d7ebcb2d161361"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -313,7 +331,7 @@
         "baseMetrics": {
           "channel": "noon.render",
           "protocolVersion": 1,
-          "requestId": 8,
+          "requestId": 10,
           "type": "metrics",
           "metrics": {
             "ready": true,
@@ -321,19 +339,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 12,
-            "lastDeltaApplyMs": 0.20000004768371582,
-            "lastRendererCallMs": 0.6000000238418579,
+            "presentedFrames": 23,
+            "lastDeltaApplyMs": 0.19999992847442627,
+            "lastRendererCallMs": 0.7000000476837158,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 9772.399999976158,
-            "performanceTimeOriginMs": 1790940790068.7,
-            "rendererReadyAtMs": 5841.399999976158,
-            "firstPresentedAtMs": 6012.299999952316,
+            "sampledAtMs": 7742.5,
+            "performanceTimeOriginMs": 1790962703614,
+            "rendererReadyAtMs": 4572.100000023842,
+            "firstPresentedAtMs": 4687,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 9714.399999976158,
+            "firstPresentedSessionAtMs": 7675.899999976158,
             "transitionMode": null,
-            "lastFrameTimestamp": 7959.199999928474,
+            "lastFrameTimestamp": 7293.299999952316,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -369,9 +387,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 40401,
-          "pngSha256": "66c8cbd723e7b15df6eb61e09d27ede62fcc1d930f3589c2652d0d07d54ef188",
-          "pixelSha256": "595d11507cb08d421b39c86498a11314cddaefb2203bf8107a0700e4587178e8"
+          "foregroundPixels": 39745,
+          "pngSha256": "4ca8adac66e8d65af4b6b20eb77b0b6f737f2231a738dc81669e11b80d04e3d0",
+          "pixelSha256": "b59399a0c6bda31289ef50982fcf4cee59d8ecf308cc277160d7ebcb2d161361"
         },
         "restoredImage": {
           "width": 960,
@@ -384,14 +402,14 @@
     },
     {
       "id": "showcase-translation-drag",
-      "sourceSha256": "7f5044f78e5925894216d19df464f4604b24be84950d09a61327edebecdbcebb",
+      "sourceSha256": "263b7762e09151e244f377bfd345302141c91ff65235dbc308487f75acde8817",
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 39124,
-        "pngSha256": "6178aaf7bc30a16aff10a29fcce510011e078432068359ee64f93c3178374ee7",
-        "pixelSha256": "399002122375ea74a891cc18cdbe82b9bf796b505209ff537382f2adabb03a49"
+        "foregroundPixels": 39235,
+        "pngSha256": "343d551b7dce7dc60c3d00fa0371bd8aa7d259cad0e0bc72872a8d4e578a2038",
+        "pixelSha256": "b9f776a93052e88873f767ca4a0af8242c01c6c25c16337a8e6963219c3c20ac"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -415,7 +433,7 @@
         "baseMetrics": {
           "channel": "noon.render",
           "protocolVersion": 1,
-          "requestId": 10,
+          "requestId": 9,
           "type": "metrics",
           "metrics": {
             "ready": true,
@@ -423,19 +441,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 23,
+            "presentedFrames": 14,
             "lastDeltaApplyMs": 0,
-            "lastRendererCallMs": 0.6000000238418579,
+            "lastRendererCallMs": 0.5,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 7107.800000071526,
-            "performanceTimeOriginMs": 1790940814150.4,
-            "rendererReadyAtMs": 3831.2000000476837,
-            "firstPresentedAtMs": 4016.4000000953674,
+            "sampledAtMs": 8263,
+            "performanceTimeOriginMs": 1790962730891.8,
+            "rendererReadyAtMs": 5323,
+            "firstPresentedAtMs": 5434.599999904633,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 7082.100000023842,
+            "firstPresentedSessionAtMs": 8230,
             "transitionMode": null,
-            "lastFrameTimestamp": 6820.800000071526,
+            "lastFrameTimestamp": 7486.5,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -471,9 +489,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 39124,
-          "pngSha256": "6178aaf7bc30a16aff10a29fcce510011e078432068359ee64f93c3178374ee7",
-          "pixelSha256": "399002122375ea74a891cc18cdbe82b9bf796b505209ff537382f2adabb03a49"
+          "foregroundPixels": 39235,
+          "pngSha256": "343d551b7dce7dc60c3d00fa0371bd8aa7d259cad0e0bc72872a8d4e578a2038",
+          "pixelSha256": "b9f776a93052e88873f767ca4a0af8242c01c6c25c16337a8e6963219c3c20ac"
         },
         "restoredImage": {
           "width": 960,

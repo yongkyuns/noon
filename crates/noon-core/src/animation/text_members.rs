@@ -17,10 +17,24 @@ pub struct TextAnimationGlyphRef {
 /// `Text` builds that family from rendered SVG glyph submobjects; whitespace/newlines
 /// are stripped, ligatures naturally collapse to one rendered glyph, and a shaped
 /// source cluster that emits multiple visible glyphs remains multiple family members.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextAnimationMember {
     pub source_span: TextSourceSpan,
     pub glyph: TextAnimationGlyphRef,
+}
+
+/// Identity for one non-glyph vector in a retained text resource's painter stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TextAnimationVectorRef {
+    pub vector_index: u32,
+    pub source_span: Option<TextSourceSpan>,
+}
+
+/// One glyph or vector member in retained painter order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextAnimationMemberKind {
+    Glyph(TextAnimationMember),
+    Vector(TextAnimationVectorRef),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +42,7 @@ pub enum TextAnimationMemberError {
     UnsupportedSourceKind(TextSourceKind),
     VectorContent,
     MissingRun(u32),
+    MissingVector(u32),
     InvalidSourceSpan(TextSourceSpan),
     TooManyGlyphs,
 }
@@ -49,6 +64,10 @@ impl std::fmt::Display for TextAnimationMemberError {
                     "text render stream references missing glyph run {index}"
                 )
             }
+            Self::MissingVector(index) => write!(
+                formatter,
+                "text render stream references missing vector item {index}"
+            ),
             Self::InvalidSourceSpan(span) => write!(
                 formatter,
                 "text animation glyph source span {}..{} is outside the UTF-8 source",
@@ -74,8 +93,8 @@ impl std::error::Error for TextAnimationMemberError {}
 /// Plain text and compiler-authored TeX part leaves use the same retained glyph
 /// member contract. A TeX leaf is already narrowed to one ordinary source part by
 /// authoring, so its glyph sequence needs no frontend-owned SVG decomposition.
-/// Vector-bearing leaves remain explicit unsupported cases until vector members
-/// participate in the same outline plan.
+/// Vector-bearing Tex/MathTex leaves are enumerated by [`text_animation_members`];
+/// this glyph-only helper retains its original behavior for existing callers.
 pub fn plain_text_animation_members(
     resource: &TextResource,
 ) -> Result<Vec<TextAnimationMember>, TextAnimationMemberError> {
@@ -87,36 +106,84 @@ pub fn plain_text_animation_members(
             resource.kind,
         ));
     }
-    if !resource.vector_items.is_empty() {
+    if !resource.vector_items.is_empty()
+        || resource
+            .render_items
+            .iter()
+            .any(|item| matches!(item, TextRenderItem::Vector(_)))
+    {
         return Err(TextAnimationMemberError::VectorContent);
     }
+    Ok(text_animation_members(resource)?
+        .into_iter()
+        .map(|member| match member {
+            TextAnimationMemberKind::Glyph(glyph) => glyph,
+            TextAnimationMemberKind::Vector(_) => unreachable!("vector items rejected above"),
+        })
+        .collect())
+}
 
-    let mut members = Vec::<TextAnimationMember>::new();
-    for item in resource.render_items.iter() {
-        let TextRenderItem::GlyphRun(run_index) = *item else {
-            return Err(TextAnimationMemberError::VectorContent);
-        };
-        let run = resource
-            .runs
-            .get(run_index as usize)
-            .ok_or(TextAnimationMemberError::MissingRun(run_index))?;
-        for (glyph_index, glyph) in run.glyphs.iter().enumerate() {
-            let span = glyph.cluster.source_span;
-            if source_span_is_whitespace(resource, span)? {
-                continue;
-            }
-            let glyph_index =
-                u32::try_from(glyph_index).map_err(|_| TextAnimationMemberError::TooManyGlyphs)?;
-            members.push(TextAnimationMember {
-                source_span: span,
-                glyph: TextAnimationGlyphRef {
-                    run_index,
-                    glyph_index,
-                },
-            });
-        }
+/// Derive every rendered glyph and vector member in the resource's painter order.
+/// Non-plain sources may contain backend vectors; plain `Text` continues to reject
+/// them because its established family contract consists of glyphs only.
+pub fn text_animation_members(
+    resource: &TextResource,
+) -> Result<Vec<TextAnimationMemberKind>, TextAnimationMemberError> {
+    if !matches!(
+        resource.kind,
+        TextSourceKind::Plain | TextSourceKind::Tex | TextSourceKind::MathTex
+    ) {
+        return Err(TextAnimationMemberError::UnsupportedSourceKind(
+            resource.kind,
+        ));
     }
 
+    let mut members = Vec::new();
+    for item in resource.render_items.iter() {
+        match *item {
+            TextRenderItem::GlyphRun(run_index) => {
+                let run = resource
+                    .runs
+                    .get(run_index as usize)
+                    .ok_or(TextAnimationMemberError::MissingRun(run_index))?;
+                for (glyph_index, glyph) in run.glyphs.iter().enumerate() {
+                    let span = glyph.cluster.source_span;
+                    if source_span_is_whitespace(resource, span)? {
+                        continue;
+                    }
+                    let glyph_index = u32::try_from(glyph_index)
+                        .map_err(|_| TextAnimationMemberError::TooManyGlyphs)?;
+                    members.push(TextAnimationMemberKind::Glyph(TextAnimationMember {
+                        source_span: span,
+                        glyph: TextAnimationGlyphRef {
+                            run_index,
+                            glyph_index,
+                        },
+                    }));
+                }
+            }
+            TextRenderItem::Vector(vector_index) => {
+                if resource.kind == TextSourceKind::Plain {
+                    return Err(TextAnimationMemberError::VectorContent);
+                }
+                let vector = resource
+                    .vector_items
+                    .get(vector_index as usize)
+                    .ok_or(TextAnimationMemberError::MissingVector(vector_index))?;
+                if let Some(span) = vector.source_span {
+                    let start = span.start as usize;
+                    let end = span.end as usize;
+                    if resource.source.get(start..end).is_none() {
+                        return Err(TextAnimationMemberError::InvalidSourceSpan(span));
+                    }
+                }
+                members.push(TextAnimationMemberKind::Vector(TextAnimationVectorRef {
+                    vector_index,
+                    source_span: vector.source_span,
+                }));
+            }
+        }
+    }
     Ok(members)
 }
 
@@ -139,9 +206,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        FontFaceIdentity, GlyphRun, PositionedGlyph, Rect, TextAffineTransform,
-        TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
-        TextLayoutBackendKind, Vec2,
+        FontFaceIdentity, GeometryId, GeometryResourceHandle, GlyphRun, PositionedGlyph, Rect,
+        TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact,
+        TextLayoutBackend, TextLayoutBackendKind, TextVectorItem, TextVectorStyle, Vec2,
     };
 
     fn glyph(span: TextSourceSpan, ordinal: u32, x: f32) -> PositionedGlyph {
@@ -338,6 +405,83 @@ mod tests {
         assert_eq!(
             plain_text_animation_members(&text),
             Err(TextAnimationMemberError::MissingRun(7))
+        );
+    }
+
+    #[test]
+    fn tex_members_preserve_interleaved_glyph_and_vector_painter_order() {
+        let mut text = resource(
+            "x+1",
+            vec![run(vec![glyph(TextSourceSpan::new(0, 1), 0, 0.0)])],
+            vec![
+                TextRenderItem::GlyphRun(0),
+                TextRenderItem::Vector(0),
+                TextRenderItem::GlyphRun(0),
+            ],
+        );
+        text.kind = TextSourceKind::MathTex;
+        text.vector_items = Arc::from([TextVectorItem {
+            geometry: GeometryResourceHandle {
+                arena: 0,
+                id: GeometryId::new(1),
+                version: 0,
+            },
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: Some(TextSourceSpan::new(1, 2)),
+            semantic_key: None,
+        }]);
+
+        assert_eq!(
+            text_animation_members(&text).unwrap(),
+            vec![
+                TextAnimationMemberKind::Glyph(TextAnimationMember {
+                    source_span: TextSourceSpan::new(0, 1),
+                    glyph: TextAnimationGlyphRef {
+                        run_index: 0,
+                        glyph_index: 0,
+                    },
+                }),
+                TextAnimationMemberKind::Vector(TextAnimationVectorRef {
+                    vector_index: 0,
+                    source_span: Some(TextSourceSpan::new(1, 2)),
+                }),
+                TextAnimationMemberKind::Glyph(TextAnimationMember {
+                    source_span: TextSourceSpan::new(0, 1),
+                    glyph: TextAnimationGlyphRef {
+                        run_index: 0,
+                        glyph_index: 0,
+                    },
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn tex_member_enumeration_rejects_missing_vector_and_malformed_vector_span() {
+        let mut text = resource("x", vec![], vec![TextRenderItem::Vector(0)]);
+        text.kind = TextSourceKind::Tex;
+        assert_eq!(
+            text_animation_members(&text),
+            Err(TextAnimationMemberError::MissingVector(0))
+        );
+
+        text.vector_items = Arc::from([TextVectorItem {
+            geometry: GeometryResourceHandle {
+                arena: 0,
+                id: GeometryId::new(1),
+                version: 0,
+            },
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: Some(TextSourceSpan::new(0, 2)),
+            semantic_key: None,
+        }]);
+        assert_eq!(
+            text_animation_members(&text),
+            Err(TextAnimationMemberError::InvalidSourceSpan(
+                TextSourceSpan::new(0, 2)
+            ))
         );
     }
 }
