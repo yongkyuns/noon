@@ -1133,8 +1133,12 @@ FIXTURES = [
     *[Fixture(f"riemann_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _riemann_probe(noon, c, scene)),
               lambda c=case: _riemann_probe(manim, c), tolerance=2e-5)
       for case in ("center", "right", "bounded", "blend", "unsigned")],
+    # Manim's per-glyph SVG styling perturbs the measured width by ~2.84e-5
+    # relative for this fixture, even though changing paint cannot change the
+    # shaped glyphs. Keep this tolerance local so meaningful layout drift still
+    # fails the default geometry comparison everywhere else.
     Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
-            lambda: _text_range_color_observation(manim)),
+            lambda: _text_range_color_observation(manim), tolerance=3e-5),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
     Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
     Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),
