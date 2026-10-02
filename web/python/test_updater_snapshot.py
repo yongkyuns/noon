@@ -740,6 +740,31 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [0.0])
         self.assertNotEqual(calls[0], tracker.authored_value)
 
+    async def test_nested_producer_capture_is_prefetched_without_running_producer(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 9)
+        calls, reads = [], []
+
+        def producer():
+            calls.append("producer")
+            return context.scalar((tracker._canonical_handle.semanticSlot, 3))
+
+        def callback(_mobject):
+            calls.append("callback")
+            return producer()
+
+        async def read(key):
+            reads.append(key)
+            return 2.5
+
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([callback], self.Tracker)
+        self.assertEqual(calls, [])
+        self.assertEqual(reads, [(9, 3)])
+        self.assertEqual(callback(None), 2.5)
+        self.assertEqual(calls, ["callback", "producer"])
+
     async def test_unused_invalid_capture_defers_failure_until_actual_read(self):
         owner = object()
         context = self.context(owner)

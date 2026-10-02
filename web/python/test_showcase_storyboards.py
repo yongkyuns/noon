@@ -21,7 +21,8 @@ def literal_timeline(source):
     scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
     if len(scenes) != 1:
         raise ValueError("expected one lesson Scene")
-    construct = next(node for node in scenes[0].body if isinstance(node, ast.FunctionDef) and node.name == "construct")
+    construct = next(node for node in scenes[0].body
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
 
     def timed_call(node):
         return (
@@ -30,10 +31,13 @@ def literal_timeline(source):
             and node.func.attr in {"play", "wait"}
         )
 
-    direct = [
-        node.value for node in construct.body
-        if isinstance(node, ast.Expr) and timed_call(node.value)
-    ]
+    direct = []
+    for node in construct.body:
+        if not isinstance(node, ast.Expr):
+            continue
+        value = node.value.value if isinstance(node.value, ast.Await) else node.value
+        if timed_call(value):
+            direct.append(value)
     if len(direct) != sum(timed_call(node) for node in ast.walk(construct)):
         raise ValueError("nested timed calls need an explicit storyboard instead")
     clock, holds, transitions = Decimal(0), [], []
@@ -95,6 +99,10 @@ class FeatureLessonStoryboards(unittest.TestCase):
         self.assertEqual(entry["playback_capability"], "nonreplayable-host-callbacks")
         source = (WEB / entry["path"]).read_text()
         tree = ast.parse(source)
+        scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+        construct = next(node for node in scene.body
+                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
+        self.assertIsInstance(construct, ast.AsyncFunctionDef)
         redraws = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                    and isinstance(node.func, ast.Name) and node.func.id == "always_redraw"]
         self.assertEqual(len(redraws), 2)
