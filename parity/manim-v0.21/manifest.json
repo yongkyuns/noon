@@ -833,14 +833,14 @@
       "scene": "MarkupTextExample",
       "source": "parity/manim-v0.21/core-examples/markup_text.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2. Exact DejaVu Sans Mono font bytes are pinned for the reference."
+      "notes": "Qualified against pinned ManimCE Cairo and ManimPango 0.6.1 with unchanged manifest tolerances on WebGPU and WebGL2. CI records fontconfig resolution and font-file hashes in the raster artifacts."
     },
     {
       "id": "text-range-colors",
       "scene": "TextRangeColors",
       "source": "parity/manim-v0.21/core-examples/text_range_colors.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2. Exact DejaVu Sans Mono font bytes are pinned for the reference."
+      "notes": "Qualified against pinned ManimCE Cairo and ManimPango 0.6.1 with unchanged manifest tolerances on WebGPU and WebGL2. CI records fontconfig resolution and font-file hashes in the raster artifacts."
     },
     {
       "id": "variable",
