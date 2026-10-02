@@ -53,6 +53,54 @@ function foreground(bytes) {
   return { count, width: maxX < minX ? 0 : maxX - minX + 1, centerDistance: distance(center) };
 }
 
+function brightPixelsIn(png, { left, top, right, bottom }) {
+  let count = 0;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      if (png.data[offset + 3] > 200 &&
+          png.data[offset] > 80 && png.data[offset + 1] > 80 && png.data[offset + 2] > 80) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+async function verifyStaticTextDuringCreate() {
+  const source = await readFile(path.join(root, "web/python/examples/showcase_first_scene.py"), "utf8");
+  const expectedBackend = activeBackend === "webgpu" ? "WebGPU" : "WebGL2";
+  const page = await pageReady();
+  const frameTimes = [0.75, 1.5, 2.5, 4];
+  let baseline;
+  try {
+    const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 8), source);
+    assert.equal(loaded.rendererBackend, expectedBackend);
+    for (let frameIndex = 0; frameIndex < frameTimes.length; frameIndex += 1) {
+      const sample = await page.evaluate(({ frameIndex, frameTimes }) =>
+        window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
+      assert.equal(sample.frameIndex, frameIndex);
+      assert.equal(sample.publishedTime, frameTimes[frameIndex]);
+      assert.equal(sample.rendererBackend, expectedBackend);
+      const png = PNG.sync.read(await page.locator("#scene").screenshot());
+      const title = brightPixelsIn(png, { left: 250, top: 55, right: 710, bottom: 125 });
+      const caption = brightPixelsIn(png, { left: 110, top: 405, right: 850, bottom: 465 });
+      if (baseline === undefined) {
+        assert.ok(title > 200 && caption > 300, "showcase text must appear before Create");
+        baseline = { title, caption };
+      } else {
+        assert.ok(title >= baseline.title * 0.9, `title disappeared at ${frameTimes[frameIndex]}s`);
+        assert.ok(caption >= baseline.caption * 0.9, `caption disappeared at ${frameTimes[frameIndex]}s`);
+      }
+      observations.push({ backend: activeBackend, fixture: "showcase_first_scene", time: frameTimes[frameIndex],
+        titlePixels: title, captionPixels: caption });
+    }
+    await page.evaluate(() => window.noonHostRaster.close());
+  } finally {
+    await page.close();
+  }
+}
+
 async function captureSquareToCircle(label) {
   const source = await readFile(path.join(root, "web/python/examples/manim_parity_square_to_circle.py"), "utf8");
   const expectedBackend = activeBackend === "webgpu" ? "WebGPU" : "WebGL2";
@@ -181,7 +229,8 @@ try {
       // Equality is required only within one backend/environment, never across GPUs.
       verifyFreshRun(before, after);
       await captureLateFamilyConstruction();
-      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation, identical fresh-run frames and late-family composition passed`);
+      await verifyStaticTextDuringCreate();
+      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation, identical fresh-run frames, late-family composition and stable showcase text passed`);
     } catch (error) {
       // Collect independent evidence from both backends, but keep either failure fatal.
       failures.push(new Error(`Semantic preview ${backend} failed`, { cause: error }));
