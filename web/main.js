@@ -1524,6 +1524,9 @@ try {
     get executionMode() {
       return player?.mode ?? null;
     },
+    get transportMode() {
+      return player?.transportMode ?? null;
+    },
     get runInFlight() {
       return sceneRunPromise !== null;
     },
