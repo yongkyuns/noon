@@ -1177,7 +1177,7 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 
 ## Phase A — architecture consolidation
 
-**Status: Phase A consolidation and the representative Phase B exit are complete.** [#953](https://github.com/yongkyuns/noon/issues/953) and [#954](https://github.com/yongkyuns/noon/issues/954) record their qualification evidence. Phase C is the next priority; correctness fixes and further curated examples continue under their owning issues.
+**Status: Phase A consolidation and the representative Phase B exit are complete.** [#953](https://github.com/yongkyuns/noon/issues/953) and [#954](https://github.com/yongkyuns/noon/issues/954) record their qualification evidence. The Phase C integration and exit evidence is tracked in [#955](https://github.com/yongkyuns/noon/issues/955); narrower compatibility, replay, editor, and performance follow-ons continue under their owning issues.
 
 The permanent Phase A result is already reflected in the normative sections above:
 
