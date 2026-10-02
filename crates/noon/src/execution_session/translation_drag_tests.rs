@@ -227,6 +227,79 @@ fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
 }
 
 #[test]
+fn same_target_opacity_animation_continues_during_translation_drag() {
+    use noon_core::{
+        AnimationOptions, CompositionTimeMap, RateFunction, SemanticMutationTransaction,
+        SemanticObjectTrackProperty, SemanticObjectTrackValues, TrackTiming,
+    };
+
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let target = store.insert_semantic_object(circle(0.0));
+    store.add_semantic_family_member(root, target).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let opacity_track = transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Opacity,
+        SemanticObjectTrackValues::Scalar {
+            from: 1.0,
+            to: 0.25,
+        },
+        TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let applied = transaction.apply(&mut store).unwrap();
+    let opacity_animation = applied.resolve(opacity_track).unwrap();
+    let animation = store
+        .insert_semantic_parallel_animation(&[opacity_animation], AnimationOptions::new())
+        .unwrap();
+    let mut session =
+        ExecutionSession::from_semantic_root_with_animation_root(&store, root, animation).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.set_translation_drag_targets([target]).unwrap();
+    session.take_frame_changes();
+    session.advance_to(0.5).unwrap();
+    let target_object = session.execution_object_id(target).unwrap();
+    let before = session
+        .frame()
+        .objects
+        .iter()
+        .find(|row| row.id == target_object)
+        .unwrap();
+    assert!((before.style.opacity - 0.8125).abs() < 1e-6);
+
+    submit(
+        &mut session,
+        &mut store,
+        1,
+        NativePointerInputKind::Press {
+            position: position(0.0),
+            button: 0,
+        },
+    )
+    .unwrap();
+    submit(
+        &mut session,
+        &mut store,
+        2,
+        NativePointerInputKind::Move(position(3.0)),
+    )
+    .unwrap();
+    assert_eq!(translation(&session, target), Vec2::new(3.0, 0.0));
+
+    session.advance_to(1.0).unwrap();
+    let after = session
+        .frame()
+        .objects
+        .iter()
+        .find(|row| row.id == target_object)
+        .unwrap();
+    assert_eq!(after.transform.translation, Vec2::new(3.0, 0.0));
+    assert!((after.style.opacity - 0.625).abs() < 1e-6);
+    assert!(session.translation_drag_active());
+}
+
+#[test]
 fn stale_release_is_rejected_without_losing_the_lease_or_authored_value() {
     let (mut store, target, _, mut session) = fixture();
     submit(
