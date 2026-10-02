@@ -45,6 +45,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Words and equations | Text, emphasis, real mathematics | Full LaTeX parity |
 | Functions and samples | Function/sample overlay and legend | Pretending samples are measured data |
 | Relationships that follow motion | ValueTracker-driven dots and their attached connector | dt-driven integrators and input callbacks |
+| Redraw from animated values | Two bounded `always_redraw` producers rebuild a circle and rectangle from animated values | Manually mutating existing objects with updaters |
 | Pixels in the scene | Recognizable array-backed raster | 2x2 alpha/resource-reuse fixture |
 | Select a shape | Animated introduction plus source-declared Rust-owned click Indicate | Legacy session-selection overlay behavior or wheel zoom |
 
@@ -65,7 +66,7 @@ The capture script uses the existing `manim-raster-host.html` / `SemanticPreview
 
 The additional live-review runner records a WebM of each exact source through the ordinary gallery Run path, without external time sampling, private scene mutation, or a separate renderer. Every lesson must complete ordinary execution. Deterministic lessons must also admit retained replay, pause at the authored endpoint, and reproduce the same pixels after restart/seek and at intermediate forward/backward samples. The arbitrary Python callback lesson explicitly declares non-replayable host callbacks: it must report the expected `UnsupportedDomain`, disable replay controls, and reproduce its endpoint through a fresh Run. This is reported as rerun qualification, never as a retained-replay pass. Videos and endpoint PNGs are retained under each backend's `live/` directory, including failure diagnostics. Video recording and software rendering perturb wall time; neither that time nor a smoothly sampled video is a peak-performance measurement.
 
-The four feature additions have external syntax-only storyboard checks: explicit play/wait durations must sum to the declared duration and still intervals must correspond to real authored waits. These reject ambiguous timing rather than guessing it. They do not validate runtime rendering or prove perceptual smoothness. The updater lesson also pairs each registered callback with its exact removal.
+The feature additions have external syntax-only storyboard checks: explicit play/wait durations must sum to the declared duration and still intervals must correspond to real authored waits. These reject ambiguous timing rather than guessing it. They do not validate runtime rendering or prove perceptual smoothness. The updater lesson also pairs each registered callback with its exact removal.
 
 Generated images are artifacts until reviewed. For publication, retain the reviewed PNGs under `web/thumbnails/showcase/`, verify every image loads on the deployed path, and review full animation playback, introduction, transitions, endpoint, replay/reset, pointer click/clear, desktop/mobile framing, and supported backends. A generated contact sheet alone is not proof that the complete animation is good.
 
@@ -75,6 +76,7 @@ The original review evidence exposed independent forward-rendering and replay fa
 
 - The transform lesson teaches public `copy()` plus ordinary `Transform`. It does not emulate or claim `ReplacementTransform` or `TransformFromCopy`.
 - The reactive lesson registers and scene-binds all callback targets before its first play, and removes each callback explicitly. Arbitrary host callbacks remain outside retained replay admission. Their declared capability is surfaced to the reader and checked independently of deterministic replay; unavailable replay in any other lesson remains a failure.
+- The `always_redraw` lesson uses two fresh-shape producers limited to the currently supported bounded types. Its Python callbacks follow authored trackers and are declared non-replayable; the lesson is distinct from manually mutating and removing updaters.
 - Family animation revisions and authored scalar timelines use the shared retained execution history. Their replay repairs must preserve current-master graph dependencies and numeric-text support; gallery examples do not introduce a second execution model.
 - Subpixel glyph packing must reflect the current frame, including empty/nonempty glyph transitions. Ordinary empty/nonempty and batch-topology transitions now reuse object-local glyph storage and stable run submission entries. Atlas-exhaustion generation replacement still rebuilds text packing and remains C4 locality debt. Gallery qualification does not close that architecture work or establish a device performance budget.
 - A live seek targets the actual authored endpoint, which may differ from the decimal storyboard duration by floating-point roundoff. Requested and published values remain recorded unchanged; deterministic sampling retains strict bounds.
