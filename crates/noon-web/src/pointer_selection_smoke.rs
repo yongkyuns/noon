@@ -47,6 +47,16 @@ pub async fn create_direct_moving_pointer_selection_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct-browser counterpart for click-Indicate during authored motion.
+#[wasm_bindgen(js_name = createDirectMovingClickIndicateRenderer)]
+pub async fn create_direct_moving_click_indicate_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::pointer_selection::moving_click_indicate_session()
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct-browser counterpart of the native collector's shared Rust-authored
 /// pointer fixture. It retains the fixture's pointer state/event subscriptions
 /// and enables the same paused-session selection policy used by qualification.

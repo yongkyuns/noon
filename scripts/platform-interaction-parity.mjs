@@ -22,8 +22,15 @@ const clickIndicateSource = source
   .replace("Click a filled shape; background clears", "Click a filled shape; it restores automatically")
   .replace("        self.add(shape0, shape1, label)", [
     "        self.add(shape0, shape1, label)",
-    "        self.on_click(shape0, Indicate(shape0, run_time=0.4))",
-    "        self.on_click(shape1, Indicate(shape1, run_time=0.4))",
+    "        self.on_click(shape0, Indicate(shape0, run_time=1.0))",
+    "        self.on_click(shape1, Indicate(shape1, run_time=1.0))",
+  ].join("\n"));
+const movingClickIndicateSource = selectionFixtureSource({ moving: true })
+  .replace("Click a filled shape; background clears", "Click a filled shape; it restores automatically")
+  .replace("        self.add(shape0, shape1, label)", [
+    "        self.add(shape0, shape1, label)",
+    "        self.on_click(shape0, Indicate(shape0, run_time=1.0))",
+    "        self.on_click(shape1, Indicate(shape1, run_time=1.0))",
   ].join("\n"));
 const dragSource = `from noon import *
 
@@ -42,10 +49,11 @@ const trace = [
 ];
 const report = {
   status: "running",
-  scope: "static-and-moving-selection-click-indicate-and-translation-drag",
+  scope: "static-and-authored-motion-click-indicate-moving-selection-and-translation-drag",
   pythonSourceSha256: hash(source),
   movingPythonSourceSha256: hash(movingSource),
   clickIndicatePythonSourceSha256: hash(clickIndicateSource),
+  movingClickIndicatePythonSourceSha256: hash(movingClickIndicateSource),
   dragPythonSourceSha256: hash(dragSource),
   rustFixture: "noon::example_scenes::pointer_selection::scene",
   movingRustFixture: "noon::example_scenes::pointer_selection::moving_selection_session",
@@ -59,6 +67,19 @@ await mkdir(output, { recursive: true });
 function equalPixels(left, right, label) {
   assert.deepEqual([left.width, left.height], [right.width, right.height], `${label}: dimensions`);
   assertExactPixels(left, right, label, VIEW);
+}
+
+function matchedVisibleObjectState(objects) {
+  const quantize = value => {
+    if (typeof value === "number") return Number(value.toFixed(5));
+    if (Array.isArray(value)) return value.map(quantize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, quantize(child)]));
+    }
+    return value;
+  };
+  return objects.map(({ appearance, bounds, center, fill, morph, present, reveal, transform }) =>
+    quantize({ appearance, bounds, center, fill, morph, present, reveal, transform }));
 }
 
 async function image(page, label, backend, pathName) {
@@ -399,7 +420,7 @@ async function dragParity(backend) {
   }
 }
 
-async function clickIndicateParity(backend) {
+async function clickIndicateParity(backend, { moving = false } = {}) {
   const pages = {}, errors = { direct: [], worker: [] }, checkpoints = [];
   const waitUntil = async (label, probe, timeoutMs = 90_000) => {
     const deadline = Date.now() + timeoutMs;
@@ -411,25 +432,28 @@ async function clickIndicateParity(backend) {
   };
   try {
     await openParityPages(pages, errors);
-    await pages.direct.evaluate(async () => {
+    await pages.direct.evaluate(async moving => {
       const nativeWorker = globalThis.Worker;
       globalThis.Worker = class { constructor() { throw new Error("direct click-Indicate path created a worker"); } };
       try {
-        const { default: init, createDirectPointerSelectionRenderer } = await import("./pkg/noon_web.js");
+        const { default: init, createDirectPointerSelectionRenderer,
+          createDirectMovingClickIndicateRenderer } = await import("./pkg/noon_web.js");
         await init();
         const { attachNativeInputs } = await import("./native-inputs.js");
         const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
         const canvas = document.querySelector("#scene"), errors = [];
         canvas.width = 640; canvas.height = 360;
-        const renderer = await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), false, true);
+        const renderer = moving
+          ? await createDirectMovingClickIndicateRenderer(canvas.transferControlToOffscreen())
+          : await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), false, true);
         const driver = createDirectExecutionWakeDriver(renderer);
         const detach = attachNativeInputs(renderer, canvas, {
           onInput: () => driver.wake(), onError: error => errors.push(String(error)),
         });
-        globalThis.clickIndicateParity = { renderer, driver, detach, errors };
+        globalThis.clickIndicateParity = { renderer, driver, detach, errors, moving };
       } finally { globalThis.Worker = nativeWorker; }
-    });
-    await pages.worker.evaluate(async source => {
+    }, moving);
+    await pages.worker.evaluate(async ({ source, moving }) => {
       const { PythonAuthoringClient } = await import("./authoring-client.js");
       const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
       const canvas = document.querySelector("#scene"), errors = [];
@@ -440,16 +464,59 @@ async function clickIndicateParity(backend) {
         onError: error => errors.push(String(error)),
         onRecoverableError: error => errors.push(String(error)),
       });
-      const authored = await authoring.run(source);
-      if (authored.duration !== 0 || authored.semanticExecution?.continuationGeneration != null) {
-        throw new Error("click-Indicate parity must remain paused at authored time zero");
+      let authored;
+      if (moving) {
+        let resolveAttached, rejectAttached;
+        const attached = new Promise((resolve, reject) => {
+          resolveAttached = resolve; rejectAttached = reject;
+        });
+        authored = authoring.run(source, {}, {
+          async onSemanticContinuation(registration) {
+            try {
+              await execution.startSemanticExecution(registration.semanticExecution, {
+                authoringClient: authoring, pacing: "external_samples", transportMode: "transferable",
+              });
+              resolveAttached();
+            } catch (error) { rejectAttached(error); }
+          },
+        });
+        authored.catch(rejectAttached);
+        await attached;
+      } else {
+        authored = await authoring.run(source);
       }
-      await execution.startSemanticExecution(authored.semanticExecution, {
-        authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+      if (!moving) {
+        if (authored.duration !== 0 || authored.semanticExecution?.continuationGeneration != null) {
+          throw new Error("click-Indicate parity must remain paused at authored time zero");
+        }
+        await execution.startSemanticExecution(authored.semanticExecution, {
+          authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+        });
+        await execution.advanceTo(0);
+      }
+      globalThis.clickIndicateParity = { authoring, execution, errors, moving };
+    }, { source: moving ? movingClickIndicateSource : clickIndicateSource, moving });
+
+    let matchedAuthoredTime = moving ? 1 : 0;
+    if (moving) {
+      await pages.direct.evaluate(async () => {
+        const { renderer } = clickIndicateParity;
+        if (!renderer.seekDirect(1)) throw new Error("direct moving Indicate fixture did not seek to midpoint");
+        for (let attempt = 0; attempt < 60; attempt++) {
+          if (renderer.render()) return;
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        throw new Error("direct moving Indicate fixture did not present its midpoint");
       });
-      await execution.advanceTo(0);
-      globalThis.clickIndicateParity = { authoring, execution, errors };
-    }, clickIndicateSource);
+      await pages.worker.evaluate(() => clickIndicateParity.execution.sampleToAuthoredTime(1));
+      await waitUntil("moving click-Indicate midpoint", () => pages.worker.evaluate(async () => {
+        const frame = await clickIndicateParity.execution.debugFrame();
+        const { metrics } = await clickIndicateParity.execution.metrics();
+        return frame.time === 1 && Math.abs(frame.objects[0].center[0] + 0.7) < 1e-5 &&
+          metrics.ready && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+      }));
+      await pages.direct.waitForFunction(() => clickIndicateParity.renderer.time() === 1);
+    }
 
     const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
     assert.equal(await pages.direct.evaluate(() => clickIndicateParity.renderer.rendererBackend()), expectedBackend);
@@ -470,36 +537,71 @@ async function clickIndicateParity(backend) {
       direct: await pages.direct.evaluate(() => JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson())),
       worker: await pages.worker.evaluate(() => clickIndicateParity.execution.debugFrame()),
     };
-    assert.equal(initial.direct.time, 0); assert.equal(initial.worker.time, 0);
+    const authoredTime = moving ? 1 : 0;
+    assert.equal(initial.direct.time, authoredTime); assert.equal(initial.worker.time, authoredTime);
     const revision = {
       direct: String(initial.direct.publication.scene_revision),
       worker: String(initial.worker.publication.scene_revision),
     };
-    const point = shapeSurfaceCenter(SHAPES[0]);
+    const completionRevision = { ...revision };
+    const point = shapeSurfaceCenter({ ...SHAPES[0], x: SHAPES[0].x + (moving ? 0.9 : 0) });
     const frameFor = host => pages[host].evaluate(host => host === "direct"
       ? JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson())
       : clickIndicateParity.execution.debugFrame(), host);
-    const activeFrameFor = async host => {
+    const activeFrameFor = async (host, presentedBefore) => {
       const deadline = Date.now() + 5000;
       do {
         const frame = await frameFor(host);
         const object = frame.objects[0];
-        if (Math.abs(object.transform.scale.x) >
+        const presented = host === "direct"
+          ? await pages.direct.evaluate(before =>
+            clickIndicateParity.driver.stats().presentedFrames > before, presentedBefore)
+          : await pages.worker.evaluate(async before => {
+            const { metrics } = await clickIndicateParity.execution.metrics();
+            return metrics.presentedFrames > before && !metrics.needsPresent &&
+              metrics.bufferedDeltas === 0;
+          }, presentedBefore);
+        if (presented && Math.abs(object.transform.scale.x) >
             Math.abs(initial[host].objects[0].transform.scale.x) * 1.05 &&
             object.fill?.red > 0.5 &&
             object.fill?.green > 0.5 && object.fill?.blue < 0.5) return frame;
         await new Promise(resolve => setTimeout(resolve, 10));
       } while (Date.now() < deadline);
-      throw new Error(`${host} click did not reach active Rust Indicate state`);
+      const diagnostics = await pages[host].evaluate(async host => ({
+        frame: host === "direct"
+          ? JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson())
+          : await clickIndicateParity.execution.debugFrame(),
+        ...(host === "worker"
+          ? { metrics: (await clickIndicateParity.execution.metrics()).metrics,
+            errors: clickIndicateParity.errors }
+          : {}),
+      }), host);
+      throw new Error(`${host} click did not reach active Rust Indicate state: ${JSON.stringify(diagnostics)}`);
     };
     const active = {};
     for (const host of ["direct", "worker"]) {
+      const presentedBefore = host === "direct"
+        ? await pages.direct.evaluate(() => clickIndicateParity.driver.stats().presentedFrames)
+        : (await pages.worker.evaluate(async () =>
+          (await clickIndicateParity.execution.metrics()).metrics.presentedFrames));
       const bounds = await pages[host].locator("#scene").boundingBox();
       assert.ok(bounds);
       await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
-      active[host] = await activeFrameFor(host);
+      active[host] = await activeFrameFor(host, presentedBefore);
+      if (host === "direct") {
+        // The direct driver and frame probe can observe the same RAF boundary
+        // in opposite order. Flush the already-active session frame before the
+        // screenshot so the pixel assertion measures that exact state.
+        await pages.direct.evaluate(() => clickIndicateParity.renderer.render());
+      }
       const pixels = await capture(host, "active");
-      assert.equal(active[host].time, 0, `${host} click action must leave authored time paused`);
+      if (moving && host === "direct") {
+        assert.ok(active[host].time >= 1 && active[host].time <= 2,
+          "direct click interaction leaves authored motion running within its segment");
+      } else {
+        assert.equal(active[host].time, authoredTime,
+          `${host} click action preserves its authored sample`);
+      }
       assert.equal(String(active[host].publication.scene_revision), revision[host],
         `${host} click action must not author a scene edit`);
       assert.ok(Math.abs(active[host].objects[0].transform.scale.x) >
@@ -521,29 +623,70 @@ async function clickIndicateParity(backend) {
         }, initial.worker.objects[0].transform.scale.x));
       }
     }
+    if (moving) {
+      const directFinal = await pages.direct.evaluate(() => ({
+        time: clickIndicateParity.renderer.time(),
+        frame: JSON.parse(clickIndicateParity.renderer.debugSelectionFrameJson()),
+        wakeDriver: clickIndicateParity.driver.stats(),
+      }));
+      assert.equal(directFinal.wakeDriver.idle, true, "direct authored driver settles before final comparison");
+      assert.ok(Number.isFinite(directFinal.time) && directFinal.time >= 2 && directFinal.time < 2 + 1 / 30,
+        `direct authored motion settles at its segment endpoint: ${JSON.stringify(directFinal)}`);
+      assert.ok(Number.isFinite(directFinal.frame.time) && directFinal.frame.time >= 2 &&
+        directFinal.frame.time < 2 + 1 / 30,
+      "direct authored frame settles within one RAF of the segment endpoint");
+      matchedAuthoredTime = 2;
+      await pages.worker.evaluate(time => clickIndicateParity.execution.sampleToAuthoredTime(time), matchedAuthoredTime);
+      await waitUntil("worker final authored sample", () => pages.worker.evaluate(async time => {
+        const frame = await clickIndicateParity.execution.debugFrame();
+        const { metrics } = await clickIndicateParity.execution.metrics();
+        return frame.time === time &&
+          metrics.ready && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+      }, matchedAuthoredTime));
+      const workerFinal = await pages.worker.evaluate(() => clickIndicateParity.execution.debugFrame());
+      assert.equal(workerFinal.time, matchedAuthoredTime, "worker is sampled to direct's canonical authored time");
+      // Source lowering assigns different node IDs, and zero-width stroke metadata
+      // differs even though it cannot affect display. Compare painter-ordered visible
+      // state at sub-pixel float precision; the following RGBA assertion stays exact.
+      assert.deepEqual(matchedVisibleObjectState(workerFinal.objects),
+        matchedVisibleObjectState(directFinal.frame.objects),
+        "matched authored samples have identical ordered visible object state");
+      completionRevision.direct = String(directFinal.frame.publication.scene_revision);
+      completionRevision.worker = String(workerFinal.publication.scene_revision);
+    }
     const restored = {
       direct: await capture("direct", "restored"),
       worker: await capture("worker", "restored"),
     };
     for (const host of ["direct", "worker"]) {
-      assertExactPixels(restored[host], baseline[host], `${backend} ${host} click-Indicate restoration`, VIEW);
+      if (!moving) {
+        assertExactPixels(restored[host], baseline[host], `${backend} ${host} click-Indicate restoration`, VIEW);
+      }
       const frame = await frameFor(host);
-      assert.equal(frame.time, 0, `${host} completion leaves authored time paused`);
-      assert.equal(String(frame.publication.scene_revision), revision[host],
-        `${host} completion leaves authored revision unchanged`);
+      if (moving && host === "direct") {
+        assert.ok(Number.isFinite(frame.time) && frame.time >= 2 && frame.time < 2 + 1 / 30,
+          "direct restored frame is at its bounded realtime endpoint");
+      } else {
+        assert.equal(frame.time, matchedAuthoredTime,
+          `${host} restored frame is at the matched authored sample`);
+      }
+      assert.equal(String(frame.publication.scene_revision), completionRevision[host],
+        `${host} completion leaves the matched authored revision unchanged`);
     }
     equalPixels(restored.direct, restored.worker, `${backend} restored click-Indicate`);
+    const workerFramesBeforeIdleCheck = await pages.worker.evaluate(async () =>
+      (await clickIndicateParity.execution.metrics()).metrics.presentedFrames);
+    await pages.worker.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const workerFramesAfterIdleCheck = await pages.worker.evaluate(async () =>
+      (await clickIndicateParity.execution.metrics()).metrics.presentedFrames);
+    assert.equal(workerFramesAfterIdleCheck, workerFramesBeforeIdleCheck,
+      "settled worker Indicate stays idle across two RAFs");
     const directIdle = await pages.direct.evaluate(() => ({
       idle: clickIndicateParity.driver.stats().idle,
       redrew: clickIndicateParity.renderer.render(),
     }));
-    const workerFrames = await pages.worker.evaluate(async () =>
-      (await clickIndicateParity.execution.metrics()).metrics.presentedFrames);
-    await pages.worker.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(directIdle.idle, true); assert.equal(directIdle.redrew, false);
-    assert.equal((await pages.worker.evaluate(async () =>
-      (await clickIndicateParity.execution.metrics()).metrics.presentedFrames)), workerFrames,
-    "settled worker click-Indicate must return to idle");
     checkpoints.push({ id: "restored-and-idle", directSha256: hash(restored.direct.data),
       workerSha256: hash(restored.worker.data) });
     assert.deepEqual(errors, { direct: [], worker: [] });
@@ -569,6 +712,8 @@ try {
     "build the patched web package with NOON_RENDERER_SMOKE=1 before this qualification");
   assert.match(declarations, /createDirectMovingPointerSelectionRenderer\(/,
     "build the moving-selection renderer-smoke package before this qualification");
+  assert.match(declarations, /createDirectMovingClickIndicateRenderer\(/,
+    "build the authored-motion click-Indicate renderer-smoke package before this qualification");
   assert.match(declarations, /createDirectNativeDragSmokeRenderer\(/,
     "build the native-drag renderer-smoke package before this qualification");
   report.wasmSha256 = hash(await readFile(wasmPath));
@@ -706,6 +851,7 @@ try {
       result.movingCheckpoints = await movingParity(backend);
       result.dragCheckpoints = await dragParity(backend);
       result.clickIndicateCheckpoints = await clickIndicateParity(backend);
+      result.movingClickIndicateCheckpoints = await clickIndicateParity(backend, { moving: true });
       result.status = "passed";
     } catch (error) {
       result.status = "failed"; result.error = String(error.stack ?? error); throw error;

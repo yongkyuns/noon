@@ -106,6 +106,8 @@ try {
           // values. This advances only Rust's transient click-Indicate driver.
           await page.evaluate(() => inspectionTest.driver.stop());
           await page.mouse.click(rect.x + b.x, rect.y + b.y);
+          // Anchor after DOM dispatch: on a loaded runner the click itself can
+          // take a significant part of the authored Indicate duration.
           const anchor = await page.evaluate(() => performance.now());
           const active = await page.evaluate(anchor => {
             const t = inspectionTest;
@@ -129,17 +131,20 @@ try {
           const status = await page.evaluate(() => JSON.parse(inspectionTest.renderer.debugPointerPresentationJson()));
           assert.ok(Math.abs(status.camera[2] - 4) < 1e-5);
           assert.equal(status.presentedInspectionRevision, status.inspectionRevision);
-          const restored = await page.evaluate(anchor => {
+          const indicationDurationMs = 1_000; // pointer_selection.rs authors run_time=1.0
+          const restoredAt = anchor + indicationDurationMs + 200;
+          const restored = await page.evaluate(timestamp => {
             const t = inspectionTest;
-            t.renderer.advanceDirectRealtime(anchor + 450); t.renderer.render();
+            t.renderer.advanceDirectRealtime(timestamp); t.renderer.render();
             return { frame: t.renderer.debugSelectionFrameJson(), time: t.renderer.time() };
-          }, anchor);
+          }, restoredAt);
           assert.equal(restored.time, 0);
-          await page.waitForFunction(anchor => performance.now() >= anchor + 450, anchor);
+          await page.waitForFunction(timestamp => performance.now() >= timestamp, restoredAt);
           const restoredImage = await shot("restored-click-indicate-zoom"), z = blue(restoredImage);
           assert.ok(Math.abs(z.n / b.n - 4) < 0.15, "completion restores the blue target without resetting inspection zoom");
           await page.mouse.click(rect.x + z.x, rect.y + z.y);
-          const retriggerAnchor = await page.evaluate(minimum => Math.max(performance.now(), minimum), anchor + 451);
+          // Re-anchor the second completion after the second real DOM click too.
+          const retriggerAnchor = await page.evaluate(() => performance.now());
           const retriggered = await page.evaluate(anchor => {
             const t = inspectionTest;
             t.renderer.advanceDirectRealtime(anchor); t.renderer.render();
@@ -148,10 +153,11 @@ try {
           }, retriggerAnchor);
           assert.notEqual(retriggered.frame, restored.frame, "a fresh composed-view pick retriggers click Indicate");
           assert.equal(retriggered.time, 0);
-          await page.evaluate(anchor => {
-            inspectionTest.renderer.advanceDirectRealtime(anchor + 450); inspectionTest.renderer.render();
-          }, retriggerAnchor);
-          await page.waitForFunction(anchor => performance.now() >= anchor + 450, retriggerAnchor);
+          const retriggerRestoredAt = retriggerAnchor + indicationDurationMs + 200;
+          await page.evaluate(timestamp => {
+            inspectionTest.renderer.advanceDirectRealtime(timestamp); inspectionTest.renderer.render();
+          }, retriggerRestoredAt);
+          await page.waitForFunction(timestamp => performance.now() >= timestamp, retriggerRestoredAt);
           assertExactPixels(await shot("retrigger-restored-click-indicate-zoom"), restoredImage,
             "retriggered click Indicate restores the per-mode zoomed baseline");
           assert.equal(await page.evaluate(() => {

@@ -8,8 +8,7 @@ use noon_core::{
     SemanticVec3, StoredGeometry, TextResourceLookup, TrackTiming,
 };
 
-#[test]
-fn worker_tick_timestamps_drive_actual_transient_click_indicate_samples() {
+fn clicked_indicate_live_player() -> SemanticExecutionPlayer {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let mut target_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.8 });
@@ -68,8 +67,12 @@ fn worker_tick_timestamps_drive_actual_transient_click_indicate_samples() {
         "click must start the declared transient"
     );
     let store = std::rc::Rc::new(std::cell::RefCell::new(store));
-    let mut player =
-        SemanticExecutionPlayer::from_live_session(session, store, root, 1.0, 64).unwrap();
+    SemanticExecutionPlayer::from_live_session(session, store, root, 1.0, 64).unwrap()
+}
+
+#[test]
+fn worker_tick_timestamps_drive_actual_transient_click_indicate_samples() {
+    let mut player = clicked_indicate_live_player();
 
     for timestamp_ms in [1_000.0, 1_200.0, 1_400.0] {
         player.tick_callback_phase_json(timestamp_ms).unwrap();
@@ -87,6 +90,57 @@ fn worker_tick_timestamps_drive_actual_transient_click_indicate_samples() {
             _ => unreachable!(),
         }
     }
+}
+
+#[test]
+fn external_sample_interaction_ticks_hold_authored_time_and_settle_idle() {
+    let mut player = clicked_indicate_live_player();
+    player.pause();
+    let authored_time = player.time();
+    let scene_revision = player.session.publication_context().scene_revision();
+
+    assert!(player.interactions_active_wasm());
+    assert_eq!(
+        player.execution_wake(1_000.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    let start = player.advance_interactions_delta_json(1_000.0).unwrap();
+    assert!(start.is_some());
+    assert_eq!(player.time(), authored_time);
+    assert_eq!(
+        player.session.publication_context().scene_revision(),
+        scene_revision
+    );
+
+    let active = player.advance_interactions_delta_json(1_200.0).unwrap();
+    assert!(active.is_some());
+    assert!(player.session.frame().objects[0].transform.scale.x > 1.05);
+    assert_eq!(player.time(), authored_time);
+    assert_eq!(
+        player.session.publication_context().scene_revision(),
+        scene_revision
+    );
+    assert_eq!(
+        player.execution_wake(1_200.0).unwrap().cadence(),
+        "animation_frame"
+    );
+
+    // Avoid relying on decimal-float subtraction landing exactly on the
+    // runtime's nominal endpoint.
+    let restored = player.advance_interactions_delta_json(1_401.0).unwrap();
+    assert!(restored.is_some());
+    assert!(!player.interactions_active_wasm());
+    assert_eq!(player.session.frame().objects[0].transform.scale.x, 1.0);
+    assert_eq!(player.time(), authored_time);
+    assert_eq!(
+        player.session.publication_context().scene_revision(),
+        scene_revision
+    );
+    assert_eq!(player.execution_wake(1_401.0).unwrap().cadence(), "idle");
+    assert_eq!(
+        player.advance_interactions_delta_json(1_416.0).unwrap(),
+        None
+    );
 }
 
 #[test]

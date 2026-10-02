@@ -13,7 +13,16 @@ pub fn click_indicate_scene() -> Result<Scene, String> {
 
 /// A moving version of the same fixture for paired displayed-state selection.
 pub fn moving_selection_session() -> Result<ExecutionSession, String> {
-    let (scene, circle) = build(false)?;
+    moving_session(false)
+}
+
+/// Moving counterpart with source-authored click-to-Indicate declarations.
+pub fn moving_click_indicate_session() -> Result<ExecutionSession, String> {
+    moving_session(true)
+}
+
+fn moving_session(animated: bool) -> Result<ExecutionSession, String> {
+    let (scene, circle) = build(animated)?;
     let mut target = circle.target_editor().map_err(|error| error.to_string())?;
     target.shift(1.8, 0.0).map_err(|error| error.to_string())?;
     let animation = scene.declare_transform_to(
@@ -54,7 +63,7 @@ fn build(animated: bool) -> Result<(Scene, Mobject), String> {
                 scene.on_click_indicate(
                     shape,
                     crate::IndicateOptions::default(),
-                    crate::AnimationOptions::new().run_time(0.4),
+                    crate::AnimationOptions::new().run_time(1.0),
                 )?;
             }
         }

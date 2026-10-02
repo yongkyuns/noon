@@ -63,6 +63,8 @@ function fixture(
     failCallbackPhaseJson: () => {},
     callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
+    interactionsActive: () => false,
+    advanceInteractionsDeltaJson: () => null,
     executionWake: (wallTime) => {
       executionWakeTimes.push(wallTime);
       return {
@@ -584,6 +586,116 @@ test("external sample pacing ignores render ticks and resolves after exact prese
     assert.match(backward.message, /must be monotonic/);
     assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
   } finally { endpoint?.stop(); f.close(); }
+});
+
+test("external samples wake only active interactions and serialize presented deltas", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, {
+    generation: 32, onComplete: () => {}, onError: (_generation, error) => { throw error; },
+  }, { pacing: "external_samples" });
+  let endpoint;
+  let interactionsActive = false;
+  const interactionTickTimes = [];
+  const ownPerformanceNow = Object.getOwnPropertyDescriptor(performance, "now");
+  let wallTime = 1_000;
+  f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+  f.player.interactionsActive = () => interactionsActive;
+  f.player.advanceInteractionsDeltaJson = (timestamp) => {
+    interactionTickTimes.push(timestamp);
+    interactionsActive = interactionTickTimes.length < 3;
+    return f.player.seekDeltaJson(f.player.time());
+  };
+  f.player.submitBrowserPointerInputJson = () => {
+    interactionsActive = true;
+    return true;
+  };
+  try {
+    Object.defineProperty(performance, "now", { configurable: true, value: () => wallTime });
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence });
+
+    const sampledDelta = nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== initialDelta.sequence);
+    const sampled = request(f.control.port2, "sample_to_authored_time", 320, { time: 0.5 });
+    const samplePublication = await sampledDelta;
+    f.render.port2.postMessage({ type: "execution_ack", session: samplePublication.session, sequence: samplePublication.sequence });
+    await turn();
+    f.render.port2.postMessage({ type: "execution_presented", session: samplePublication.session, sequence: samplePublication.sequence });
+    assert.equal((await sampled).time, 0.5);
+
+    const activeWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "animation_frame");
+    const inputPromise = request(f.control.port2, "browser_pointer_input", 321, { input: {} });
+    const inputPublication = await nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== samplePublication.sequence);
+    f.render.port2.postMessage({ type: "execution_ack", session: inputPublication.session, sequence: inputPublication.sequence });
+    await turn();
+    f.render.port2.postMessage({ type: "execution_presented", session: inputPublication.session, sequence: inputPublication.sequence });
+    const input = await inputPromise;
+    assert.equal(input.pointerInputAccepted, true);
+    await activeWake;
+    const firstTickDelta = nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== inputPublication.sequence);
+    f.render.port2.postMessage({ type: "tick", timestamp: 100 });
+    const firstPublication = await firstTickDelta;
+    wallTime = 10_000;
+    f.render.port2.postMessage({ type: "tick", timestamp: 101 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 102 });
+    await turn();
+    assert.deepEqual(interactionTickTimes.length, 1,
+      "a pending renderer presentation coalesces later platform ticks");
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+    assert.equal(f.player.time(), 0.5, "interaction-only ticks preserve the explicit authored sample");
+
+    const secondTickDelta = nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== firstPublication.sequence &&
+      message.sequence !== inputPublication.sequence);
+    f.render.port2.postMessage({ type: "execution_ack", session: firstPublication.session, sequence: firstPublication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: firstPublication.session, sequence: firstPublication.sequence });
+    const secondPublication = await secondTickDelta;
+    assert.equal(interactionTickTimes.length, 2);
+    assert.ok(interactionTickTimes[1] - interactionTickTimes[0] <= 100 + 1e-6,
+      "a suspended-tab wall-clock gap is capped to 100ms of interaction progress");
+    assert.equal(f.player.time(), 0.5);
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+
+    const thirdTickDelta = nextMatching(f.render.port2, message =>
+      message.type === "execution_delta" && message.sequence !== secondPublication.sequence &&
+      message.sequence !== firstPublication.sequence && message.sequence !== inputPublication.sequence);
+    const thirdActiveWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "animation_frame");
+    const idleWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "idle");
+    f.render.port2.postMessage({ type: "execution_ack", session: secondPublication.session, sequence: secondPublication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: secondPublication.session, sequence: secondPublication.sequence });
+    await thirdActiveWake;
+    wallTime += 1_000 / 30;
+    f.render.port2.postMessage({ type: "tick", timestamp: 103 });
+    const thirdPublication = await thirdTickDelta;
+    assert.equal(interactionTickTimes.length, 3);
+    assert.ok(Math.abs((interactionTickTimes[2] - interactionTickTimes[1]) - 1_000 / 30) < 1e-6,
+      "30 FPS RAF pacing advances the interaction clock at wall-clock speed");
+
+    f.render.port2.postMessage({ type: "execution_ack", session: thirdPublication.session, sequence: thirdPublication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: thirdPublication.session, sequence: thirdPublication.sequence });
+    await idleWake;
+    assert.equal(interactionTickTimes.length, 3);
+    assert.equal(f.player.time(), 0.5);
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 103 });
+    await turn();
+    assert.equal(interactionTickTimes.length, 3, "settled interactions stop requesting worker ticks");
+    assert.equal(f.player.time(), 0.5);
+  } finally {
+    if (ownPerformanceNow) Object.defineProperty(performance, "now", ownPerformanceNow);
+    else delete performance.now;
+    endpoint?.stop(); f.close();
+  }
 });
 
 test("one external sample crosses continuation segments with the returned player", async () => {

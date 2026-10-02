@@ -4493,6 +4493,35 @@ impl SemanticExecutionPlayer {
         self.encoded_delta(false)
     }
 
+    /// Advance only a transient native interaction for an externally sampled
+    /// continuation. Authored time is owned by `sampleToAuthoredTime` and must
+    /// not move when the browser wakes an active click effect.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = advanceInteractionsDeltaJson))]
+    pub fn advance_interactions_delta_json(
+        &mut self,
+        timestamp_ms: f64,
+    ) -> Result<Option<String>, String> {
+        if !timestamp_ms.is_finite() || timestamp_ms < 0.0 {
+            return Err("interaction tick requires a finite non-negative timestamp".into());
+        }
+        if !self.session.interactions_active() {
+            return Ok(None);
+        }
+        self.session
+            .advance_interactions(timestamp_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
+        self.encoded_delta(false)
+    }
+
+    /// Read the session-owned interaction state so external-sample hosts can
+    /// schedule transient ticks without consulting authored timeline cadence.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interactionsActive))]
+    pub fn interactions_active_wasm(&self) -> bool {
+        self.session.interactions_active()
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
         if self.session.has_required_callbacks() {

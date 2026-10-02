@@ -101,9 +101,15 @@ try {
           assert.notDeepEqual(middle.data, baseline.data, "source-bound click must animate the shape");
           assert.equal(await page.evaluate(() => receiptTest.renderer.time()), 0, "interaction must leave source time fixed");
           await trigger(); // Repeated contact must not capture the enlarged state.
-          await step(anchor + 450);
+          // The second DOM click can take longer than the animation horizon on
+          // a loaded runner; anchor its completion after input dispatch so this
+          // assertion samples restoration rather than a still-active effect.
+          const retriggerAnchor = await page.evaluate(() => performance.now());
+          const indicationDurationMs = 1_000; // pointer_selection.rs authors run_time=1.0
+          const restoredAt = retriggerAnchor + indicationDurationMs + 200;
+          await step(restoredAt);
           assertExactPixels(await image("indicate-restored"), baseline, "indication restores exact base pixels");
-          await page.waitForFunction(anchor => performance.now() >= anchor + 450, anchor);
+          await page.waitForFunction(timestamp => performance.now() >= timestamp, restoredAt);
           await page.evaluate(async () => {
             const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
             receiptTest.driver = createDirectExecutionWakeDriver(receiptTest.renderer);
