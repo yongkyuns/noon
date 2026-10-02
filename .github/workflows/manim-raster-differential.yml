@@ -75,7 +75,8 @@ jobs:
             dvisvgm
       - name: Install pinned ManimCE reference
         run: |
-          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "manimpango==0.6.1" "typst==0.15.0"
+          python -m pip show manimpango
           latex --version
           dvisvgm --version
       - name: Verify relocated manifests use repository-relative sources

@@ -22,9 +22,32 @@ const reference = manifest.reference;
 const referenceFontPaths = JSON.parse(process.env.NOON_MANIM_REFERENCE_FONTS ?? "[]");
 assert.ok(Array.isArray(referenceFontPaths) && referenceFontPaths.every(value => typeof value === "string"),
   "NOON_MANIM_REFERENCE_FONTS must be a JSON array of font paths");
-const referenceFonts = await Promise.all(referenceFontPaths.map(async font => ({
-  path: path.resolve(font), sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
-})));
+// These are the explicit family used by the Text fixtures and Pango's generic
+// family selected by the MarkupText fixture's <tt> run.
+const referenceFontFamilies = ["DejaVu Sans Mono", "monospace"];
+const referenceFonts = await Promise.all([
+  ...referenceFontFamilies.map(async requestedFamily => {
+    const result = spawnSync("fc-match", [
+      "--format", "%{family[0]}\n%{style[0]}\n%{file}\n%{index}\n", requestedFamily,
+    ], { encoding: "utf8" });
+    assert.equal(result.status, 0, `fc-match failed for ${requestedFamily}: ${result.stderr ?? ""}`);
+    const [resolvedFamily, style, font, index] = result.stdout.trimEnd().split("\n");
+    assert.ok(resolvedFamily && style && font && index !== undefined,
+      `fc-match returned incomplete metadata for ${requestedFamily}`);
+    return {
+      requestedFamily,
+      resolvedFamily,
+      style,
+      path: path.resolve(font),
+      index: Number(index),
+      sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
+    };
+  }),
+  ...referenceFontPaths.map(async font => ({
+    path: path.resolve(font),
+    sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
+  })),
+]);
 const fixtureSources = new Map();
 for (const fixture of manifest.fixtures) {
   const relativeSource = fixture.source ?? reference.source;
