@@ -540,6 +540,8 @@ pub enum RetainedPrepareError {
     InvalidGlyphId(u32),
     InvalidFontSize,
     InvalidVariation,
+    TextAnimationMembers(noon_core::TextAnimationMemberError),
+    TooManyTextAnimationMembers,
     Visibility(VisibleRenderError),
     Text(TextPrepareError),
 }
@@ -572,6 +574,15 @@ impl std::fmt::Display for RetainedPrepareError {
                 formatter.write_str("glyph outline font size must be finite and positive")
             }
             Self::InvalidVariation => formatter.write_str("glyph outline variation must be finite"),
+            Self::TextAnimationMembers(error) => {
+                write!(
+                    formatter,
+                    "retained text animation members are invalid: {error}"
+                )
+            }
+            Self::TooManyTextAnimationMembers => {
+                formatter.write_str("retained text has too many animation members")
+            }
             Self::Visibility(error) => error.fmt(formatter),
             Self::Text(error) => write!(formatter, "retained text preparation failed: {error}"),
         }
@@ -1035,6 +1046,9 @@ pub struct RetainedFramePreparer {
     // update only their target paths after the one structural transition.
     family_plan_active_signature: Vec<(usize, u32)>,
     family_plan_scratch_slots: HashMap<usize, HashMap<noon_core::TextAnimationGlyphRef, usize>>,
+    text_vector_scratch_slots: HashMap<(usize, u32), usize>,
+    text_vector_member_by_scratch_slot: HashMap<usize, (usize, u32)>,
+    text_vector_member_ordinals: HashMap<(usize, u32), u32>,
     resident_path_maintenance_baseline_bytes: usize,
     resident_path_maintenance_baseline_roots: usize,
     resident_path_maintenance_baseline_mesh_count: usize,
@@ -1094,6 +1108,9 @@ impl Default for RetainedFramePreparer {
             last_applied_publication: None,
             family_plan_active_signature: Vec::new(),
             family_plan_scratch_slots: HashMap::new(),
+            text_vector_scratch_slots: HashMap::new(),
+            text_vector_member_by_scratch_slot: HashMap::new(),
+            text_vector_member_ordinals: HashMap::new(),
             resident_path_maintenance_baseline_bytes: 0,
             resident_path_maintenance_baseline_roots: 0,
             resident_path_maintenance_baseline_mesh_count: 0,
@@ -1914,6 +1931,9 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), RetainedPrepareError> {
+        self.text_vector_scratch_slots.clear();
+        self.text_vector_member_by_scratch_slot.clear();
+        self.text_vector_member_ordinals.clear();
         // Family realization changes scratch geometry before its only preparation.
         // Preparing an unused canonical geometry frame here would consume dirty
         // mesh ranges before the final family frame can upload them.
@@ -2645,6 +2665,8 @@ impl RetainedFramePreparer {
                                 fast_text_only = false;
                                 let vector = &resource.vector_items[vector_index as usize];
                                 self.push_text_vector(
+                                    object_index,
+                                    vector_index,
                                     object.id,
                                     object.transform,
                                     object.style,
@@ -2709,6 +2731,8 @@ impl RetainedFramePreparer {
     #[allow(clippy::too_many_arguments)]
     fn push_text_vector(
         &mut self,
+        object_index: usize,
+        vector_index: u32,
         object_id: ObjectId,
         object_transform: Transform2D,
         object_style: Style,
@@ -2723,7 +2747,7 @@ impl RetainedFramePreparer {
             .ok_or(RetainedPrepareError::MissingGeometryResource)?;
         let path = transform_path(path, vector.transform, Vec2::ZERO);
         let style = resolved_text_vector_style(object_style, vector);
-        self.push_geometry(
+        let scratch_slot = self.push_geometry(
             object_id,
             GeometryRef::VectorPath(path),
             object_transform,
@@ -2732,6 +2756,10 @@ impl RetainedFramePreparer {
             reveal,
             morph,
         );
+        self.text_vector_scratch_slots
+            .insert((object_index, vector_index), scratch_slot);
+        self.text_vector_member_by_scratch_slot
+            .insert(scratch_slot, (object_index, vector_index));
         Ok(())
     }
 

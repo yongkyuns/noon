@@ -185,6 +185,10 @@ async function captureSelection(context, entry, result) {
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     const canvas = page.locator("#scene");
     await layoutReplayViewport(canvas, report.viewport);
+    // Source-declared input is attached when Run installs the scene. Give the
+    // canvas pointer eligibility before that installation, as the gallery
+    // selection smoke does for the same public UI path.
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
@@ -210,7 +214,6 @@ async function captureSelection(context, entry, result) {
     assert.ok(bounds);
     const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
     stage = "select the circle";
-    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
     await click(0.36, 0.5);
     let selected;
     for (let attempt = 0; attempt < 40; attempt++) {

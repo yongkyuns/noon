@@ -3252,21 +3252,24 @@ impl ExecutionSession {
                             "family glyph animation lost a Text resource".into(),
                         )
                     })?;
-                    if resource.kind != noon_core::TextSourceKind::Plain {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "family glyph animation supports plain Text and Reveal geometry".into(),
-                        ));
+                    let members = match operation {
+                        FamilyGlyphOperation::Write { .. } => {
+                            if resource.kind != noon_core::TextSourceKind::Plain {
+                                return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                    "family Write supports only plain Text leaves".into(),
+                                ));
+                            }
+                            noon_core::plain_text_animation_members(resource)
+                                .map(|members| members.len())
+                        }
+                        FamilyGlyphOperation::Reveal { .. } => {
+                            noon_core::text_animation_members(resource).map(|members| members.len())
+                        }
                     }
-                    u32::try_from(
-                        noon_core::plain_text_animation_members(resource)
-                            .map_err(|error| {
-                                ExecutionSessionAnimationError::InvalidComposition(
-                                    error.to_string(),
-                                )
-                            })?
-                            .len(),
-                    )
-                    .map_err(|_| {
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                    u32::try_from(members).map_err(|_| {
                         ExecutionSessionAnimationError::InvalidComposition(
                             "family glyph member count exceeds u32".into(),
                         )

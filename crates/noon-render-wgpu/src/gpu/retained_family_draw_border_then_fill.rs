@@ -167,6 +167,9 @@ impl Iterator for RetainedFamilyDrawBorderThenFillMembers<'_> {
             RetainedAnimationMember::Geometry => Err(
                 RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
             ),
+            RetainedAnimationMember::TextVector(_) => Err(
+                RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
+            ),
             RetainedAnimationMember::Text(member) => Ok(RetainedFamilyDrawBorderThenFillMember {
                 object,
                 glyph: member.glyph,

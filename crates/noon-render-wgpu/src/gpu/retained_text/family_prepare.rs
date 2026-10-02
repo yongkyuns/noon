@@ -23,6 +23,10 @@ pub enum RetainedFamilyPrepareError {
         object: ObjectId,
         glyph: TextAnimationGlyphRef,
     },
+    InvalidTextVector {
+        object: ObjectId,
+        vector_index: u32,
+    },
     UnexpectedGeometryMember(ObjectId),
     UnsupportedTextOutlineBaseline(ObjectId),
 }
@@ -52,6 +56,14 @@ impl std::fmt::Display for RetainedFamilyPrepareError {
                 "retained family preparation references missing Text glyph {}:{} on object {}",
                 glyph.run_index,
                 glyph.glyph_index,
+                object.get()
+            ),
+            Self::InvalidTextVector {
+                object,
+                vector_index,
+            } => write!(
+                formatter,
+                "retained Text object {} references missing vector item {vector_index}",
                 object.get()
             ),
             Self::UnexpectedGeometryMember(object) => write!(
@@ -225,12 +237,27 @@ impl RetainedFramePreparer {
                         .object_indices
                         .get(&object_id)
                         .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
-                    if let Some(reveal) =
+                    let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
+                        RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                    })?;
+                    let text_vector = self
+                        .text_vector_member_by_scratch_slot
+                        .get(&scratch_index)
+                        .copied()
+                        .filter(|(owner, _)| *owner == object_index);
+                    let reveal = if let Some((_, vector_index)) = text_vector {
+                        self.family_text_vector_reveal(
+                            frame,
+                            plan,
+                            object_index,
+                            object_id,
+                            vector_index,
+                            texts,
+                        )?
+                    } else {
                         self.family_geometry_reveal(frame, plan, object_index, object_id)?
-                    {
-                        let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
-                            RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
-                        })?;
+                    };
+                    if let Some(reveal) = reveal {
                         let target =
                             self.scratch.reveals.get_mut(scratch_index).ok_or(
                                 RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
@@ -304,7 +331,65 @@ impl RetainedFramePreparer {
             RetainedFamilyRevealMember::TextGlyph { .. } => Err(
                 RetainedFamilyPrepareError::UnsupportedTextOutlineBaseline(object),
             ),
+            RetainedFamilyRevealMember::TextVector { .. } => Err(
+                RetainedFamilyPrepareError::UnsupportedTextOutlineBaseline(object),
+            ),
         }
+    }
+
+    pub(super) fn family_text_vector_reveal(
+        &mut self,
+        frame: &RetainedFamilyFrame<'_>,
+        plan: &RetainedFamilyAnimationPlan,
+        object_index: usize,
+        object_id: ObjectId,
+        vector_index: u32,
+        texts: &(impl TextResourceLookup + ?Sized),
+    ) -> Result<Option<f32>, RetainedFamilyPrepareError> {
+        if !self
+            .text_vector_member_ordinals
+            .contains_key(&(object_index, vector_index))
+        {
+            let object = frame
+                .retained
+                .objects
+                .get(object_index)
+                .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
+            let handle = object
+                .text()
+                .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
+            let resource = texts
+                .get(handle)
+                .ok_or(RetainedPrepareError::MissingTextResource)?;
+            for (ordinal, member) in noon_core::text_animation_members(resource)
+                .map_err(RetainedPrepareError::TextAnimationMembers)?
+                .into_iter()
+                .enumerate()
+            {
+                if let noon_core::TextAnimationMemberKind::Vector(vector) = member {
+                    let ordinal = u32::try_from(ordinal)
+                        .map_err(|_| RetainedPrepareError::TooManyTextAnimationMembers)?;
+                    self.text_vector_member_ordinals
+                        .insert((object_index, vector.vector_index), ordinal);
+                }
+            }
+        }
+        let Some(ordinal) = self
+            .text_vector_member_ordinals
+            .get(&(object_index, vector_index))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let Some(leaf) = frame
+            .planned_family_leaf(plan, object_index)
+            .map_err(RetainedFamilyRevealError::FramePlan)?
+        else {
+            return Ok(None);
+        };
+        leaf.member_progress(ordinal)
+            .map(Some)
+            .map_err(|error| RetainedFamilyRevealError::Evaluation(error).into())
     }
 
     pub(super) fn family_text_run_needs_outline(
@@ -328,6 +413,7 @@ impl RetainedFramePreparer {
                     return Ok(true);
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
+                RetainedFamilyRevealMember::TextVector { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {
                     return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(object));
                 }
@@ -420,6 +506,7 @@ impl RetainedFramePreparer {
                     }
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
+                RetainedFamilyRevealMember::TextVector { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {
                     return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
                         object_id,

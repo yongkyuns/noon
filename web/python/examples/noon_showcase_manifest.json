@@ -121,6 +121,16 @@
       "beats": [{"time": 0.8, "label": "Write the heading"}, {"time": 3.5, "label": "Typeset mathematics"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
+      "id": "showcase-latex-create", "title": "Draw a LaTeX equation",
+      "lesson": "Draw compiled LaTeX glyphs and a vector fraction bar, then move the completed equation.",
+      "primary_feature": "latex-create", "category": "Text and mathematics",
+      "path": "python/examples/showcase_latex_create.py", "features": ["MathTex", "prepare_latex", "Create", "animate", "fraction"],
+      "duration": 3.5, "thumbnail_time": 3.1,
+      "thumbnail": "thumbnails/showcase/showcase-latex-create.png", "thumbnail_alt": "A blue LaTeX equation with its glyphs and fraction bar drawn before moving upward",
+      "still_intervals": [[2.8, 3.5]],
+      "beats": [{"time": 0.8, "label": "Draw the first glyphs"}, {"time": 1.6, "label": "Draw the fraction"}, {"time": 3.1, "label": "Move the completed equation"}]
+    },
+    {
       "id": "showcase-coordinate-plotting", "title": "Functions and samples",
       "lesson": "Draw a function and illustrative sampled observations on common axes.",
       "primary_feature": "coordinate-plotting", "category": "Data visualization",

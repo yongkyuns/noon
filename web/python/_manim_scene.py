@@ -23,6 +23,7 @@ import _manim_composition as _composition
 import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
 import _manim_indication as _indication
+import _manim_latex as _latex
 import _manim_lifecycle as _lifecycle
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
@@ -1955,24 +1956,23 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
 
 
 def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
-    """Classify one plain-Text Create/Uncreate without deriving glyph state."""
+    """Classify one retained glyph-text Create/Uncreate without deriving members."""
     if type(animation) not in (_base.Create, _base.Uncreate):
         return None
     target = getattr(animation, "target", None)
     if isinstance(target, _compat.Group):
         return None
     if isinstance(target, _typst._RetainedTextMobject) and not isinstance(
-        target, _typst.Text
+        target, (_typst.Text, _latex.MathTexPart)
     ):
         raise NotImplementedError(
-            "canonical Text Create/Uncreate supports plain Text; "
-            "Typst and MathTypst remain #959"
+            "canonical Text Create/Uncreate supports Text and compiled Tex/MathTex parts"
         )
-    if not isinstance(target, _typst.Text):
+    if not isinstance(target, (_typst.Text, _latex.MathTexPart)):
         return None
     if getattr(target, "_semantic_handle", None) is None:
         raise NotImplementedError(
-            "canonical Text Create/Uncreate requires a typed plain Text target"
+            "canonical Text Create/Uncreate requires a typed retained text target"
         )
     reverse = type(animation) is _base.Uncreate
     if not reverse and target._scene is not None:
@@ -1996,12 +1996,12 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
         raise ValueError("canonical family Create/Uncreate requires at least one leaf")
     if any(
         isinstance(member, _typst._RetainedTextMobject)
-        and not isinstance(member, _typst.Text)
+        and not isinstance(member, (_typst.Text, _latex.MathTexPart))
         for member in leaves
     ):
         raise NotImplementedError(
-            "canonical family Create/Uncreate supports plain Text and ordinary vector "
-            "leaves; Typst and MathTypst remain #959"
+            "canonical family Create/Uncreate supports Text, compiled Tex/MathTex, "
+            "and ordinary vector leaves"
         )
     if any(
         not isinstance(member, _base.Mobject)

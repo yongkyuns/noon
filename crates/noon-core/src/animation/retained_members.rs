@@ -1,7 +1,7 @@
 use crate::{
-    plain_text_animation_members, FamilyAnimationMemberPlanBuilder, FamilyAnimationMemberPlanError,
+    text_animation_members, FamilyAnimationMemberPlanBuilder, FamilyAnimationMemberPlanError,
     ObjectContentRef, ObjectId, SemanticNodeId, TextAnimationMember, TextAnimationMemberError,
-    TextResourceHandle, TextResourceLookup,
+    TextAnimationVectorRef, TextResourceHandle, TextResourceLookup,
 };
 
 /// Lightweight content-local identity for one Manim-visible animation member.
@@ -15,8 +15,10 @@ pub enum RetainedAnimationMember {
     Geometry,
     /// One immutable raster-image leaf, with no vector/glyph reveal members.
     Image,
-    /// One rendered plain-Text glyph member in retained painter order.
+    /// One rendered Text or TeX glyph member in retained painter order.
     Text(TextAnimationMember),
+    /// One rendered TeX vector item in retained painter order.
+    TextVector(TextAnimationVectorRef),
 }
 
 /// Ordered content-local animation members for one retained semantic leaf.
@@ -46,9 +48,16 @@ impl RetainedAnimationMembers {
                 let resource = texts
                     .get(*handle)
                     .ok_or(RetainedAnimationMemberError::MissingTextResource(*handle))?;
-                plain_text_animation_members(resource)?
+                text_animation_members(resource)?
                     .into_iter()
-                    .map(RetainedAnimationMember::Text)
+                    .map(|member| match member {
+                        crate::TextAnimationMemberKind::Glyph(glyph) => {
+                            RetainedAnimationMember::Text(glyph)
+                        }
+                        crate::TextAnimationMemberKind::Vector(vector) => {
+                            RetainedAnimationMember::TextVector(vector)
+                        }
+                    })
                     .collect()
             }
         };
@@ -165,10 +174,10 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, ObjectId, PositionedGlyph, Rect,
-        SemanticStore, TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem,
-        TextResource, TextResourceArena, TextResourceId, TextSourceKind, TextSourceSpan, Vec2,
-        VectorPath,
+        FontFaceIdentity, GeometryId, GeometryRef, GeometryResourceHandle, GlyphRun, ObjectId,
+        PositionedGlyph, Rect, SemanticStore, TextAffineTransform, TextClusterIdentity,
+        TextDirection, TextRenderItem, TextResource, TextResourceArena, TextResourceId,
+        TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
     };
 
     use super::*;
@@ -268,6 +277,43 @@ mod tests {
                     && member.glyph.run_index == 0
                     && member.glyph.glyph_index == 2
         ));
+    }
+
+    #[test]
+    fn mathtex_retained_members_include_vectors_in_painter_order() {
+        let mut texts = TextResourceArena::new();
+        let mut text = plain_resource("x+1", vec![glyph(TextSourceSpan::new(0, 1), 1, 0.0)]);
+        text.kind = TextSourceKind::MathTex;
+        text.vector_items = Arc::from([TextVectorItem {
+            geometry: GeometryResourceHandle {
+                arena: 0,
+                id: GeometryId::new(42),
+                version: 0,
+            },
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: Some(TextSourceSpan::new(1, 2)),
+            semantic_key: None,
+        }]);
+        text.render_items = Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+        let handle = texts.insert(text).unwrap();
+
+        let members =
+            RetainedAnimationMembers::resolve(&ObjectContentRef::Text(handle), &texts).unwrap();
+        assert_eq!(members.member_count(), 2);
+        assert!(matches!(
+            members.member(0),
+            Some(RetainedAnimationMember::Text(_))
+        ));
+        assert_eq!(
+            members.member(1),
+            Some(RetainedAnimationMember::TextVector(
+                TextAnimationVectorRef {
+                    vector_index: 0,
+                    source_span: Some(TextSourceSpan::new(1, 2)),
+                }
+            ))
+        );
     }
 
     #[test]
