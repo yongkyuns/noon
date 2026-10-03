@@ -61,6 +61,7 @@ mod tests {
                 style: Style::default(),
                 appearance: 1.0,
                 reveal: 1.0,
+                world_transform: None,
             },
             tracks: Vec::new(),
         };

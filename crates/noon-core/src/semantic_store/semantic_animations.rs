@@ -299,6 +299,12 @@ pub enum SemanticAnimationIntent {
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
     },
+    /// Animate an object's effective world pose to a typed spatial endpoint.
+    /// The source pose is captured from the current effective frame at activation.
+    WorldTransformTo {
+        target: SemanticNodeId,
+        transform: crate::SemanticWorldTransform3D,
+    },
     /// Transform one semantic family toward another through compiler-derived visual
     /// correspondence. The two family identities remain authored scene state;
     /// unequal padding occurrences never receive semantic identities.
@@ -389,6 +395,7 @@ impl SemanticAnimationIntent {
             Self::FamilyTransformTo { source, .. } => Some(*source),
             Self::ObjectPropertyTrack { target, .. }
             | Self::TransformTo { target, .. }
+            | Self::WorldTransformTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
@@ -408,6 +415,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { target_state, .. }
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
+            Self::WorldTransformTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
@@ -449,6 +457,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::WorldTransformTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -470,6 +479,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::WorldTransformTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -860,6 +870,34 @@ impl SemanticStore {
 
                     complete_priority,
                 },
+                options,
+            )),
+        )
+    }
+
+    /// Insert a typed world-pose animation. The endpoint is captured in the
+    /// authored declaration; activation captures the effective source pose.
+    pub fn insert_semantic_world_transform_animation(
+        &mut self,
+        target: SemanticNodeId,
+        transform: crate::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if crate::SemanticWorldTransform3D::new(
+            transform.translation,
+            transform.rotation,
+            transform.scale,
+        )
+        .is_none()
+        {
+            return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::WorldTransformTo { target, transform },
                 options,
             )),
         )

@@ -110,6 +110,16 @@ impl From<SemanticTransform2_5D> for SemanticTransform {
     }
 }
 
+impl From<SemanticWorldTransform3D> for SemanticTransform {
+    fn from(value: SemanticWorldTransform3D) -> Self {
+        Self {
+            translation: value.translation,
+            scale: value.scale,
+            orientation: SemanticOrientation::Spatial(value.rotation),
+        }
+    }
+}
+
 impl SemanticTransform {
     pub fn planar_rotation(self) -> Option<f64> {
         match self.orientation {

@@ -99,6 +99,8 @@ mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
+mod spatial_authoring;
+mod world_affine;
 pub use graph_authoring::{
     DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
     GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
@@ -254,6 +256,14 @@ pub use noon_core::{
     TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
     YELLOW_C, YELLOW_D, YELLOW_E,
 };
+pub use noon_core::{
+    MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+    SemanticSpatialMaterial, SemanticWorldTransform3D,
+};
+pub use noon_geometry::{
+    cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
+    SurfaceError, SurfaceGrid, SurfaceSample, UvSurfacePlan,
+};
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
@@ -279,6 +289,7 @@ pub use source_reconciliation::{
     SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
     SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
 };
+pub use spatial_authoring::MeshOptions;
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 #[cfg(feature = "latex")]
@@ -304,11 +315,19 @@ pub use text_part_authoring::TextPartAuthoringError;
 #[cfg(feature = "latex")]
 pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use world_affine::WorldAffineEdit;
 pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
+    pub use crate::WorldAffineEdit;
+    pub use crate::{
+        cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
+        MeshOptions, MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+        SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D, SurfaceGrid,
+        SurfaceSample, UvSurfacePlan,
+    };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
         BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,

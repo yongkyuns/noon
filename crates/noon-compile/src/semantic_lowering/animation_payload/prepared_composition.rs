@@ -189,6 +189,11 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
     },
+    MultipleWorldTransformDrivers {
+        first_animation: SemanticTransactionNodeRef,
+        next_animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+    },
     InvalidTargetValue {
         animation: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -320,6 +325,7 @@ where
             && matches!(
                 leaf.payload,
                 PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
+                    | PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. }
             );
         captures.begin_leaf(
             leaf,
@@ -341,6 +347,72 @@ where
                 error,
             }
         })?;
+        if let PreparedSemanticScheduledAnimationPayload::WorldTransformTo { transform } =
+            leaf.payload
+        {
+            if !super::super::projection::object_requires_spatial_lowering(source, prepared.store())
+            {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::InvalidEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let from = capture_effective(
+                leaf,
+                source,
+                admitted.contains(&leaf.target),
+                &mut captures,
+                &mut effective_properties,
+            )?;
+            let from = from.world_transform.ok_or(
+                PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                },
+            )?;
+            if let Some(first_animation) = super::affine::transform_driver_conflict(
+                &driven,
+                leaf.execution_object_id,
+                Property::WorldTransform,
+                leaf.animation,
+            ) {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::MultipleWorldTransformDrivers {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let key = driver_key(leaf.execution_object_id, Property::WorldTransform);
+            if let Some(first_animation) = driven.insert(key, leaf.animation) {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::MultipleWorldTransformDrivers {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let channel = super::affine::world_transform_channel(from, transform);
+            tracks.push(PreparedSemanticAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property: Property::WorldTransform,
+                completion: super::affine::completion_at_endpoint(
+                    channel.completion,
+                    leaf.timing.easing,
+                ),
+                values: channel.values,
+                timing: leaf.timing,
+                time_map: leaf.time_map.clone(),
+            });
+            continue;
+        }
         let channel = match leaf.payload {
             PreparedSemanticScheduledAnimationPayload::TransformTo {
                 target_state,
@@ -834,6 +906,9 @@ where
                     },
                 }
             }
+            PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. } => {
+                unreachable!("world transform payload was emitted directly as a typed track")
+            }
         };
         push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
@@ -881,6 +956,7 @@ where
             })?,
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         }
     } else {
         return Err(
@@ -1092,6 +1168,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         }
     }
 
@@ -1578,6 +1655,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         };
         let activation = lower_prepared_semantic_animation_composition(
             &prepared,

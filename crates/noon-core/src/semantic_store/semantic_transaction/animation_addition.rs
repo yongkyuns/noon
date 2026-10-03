@@ -36,6 +36,10 @@ pub enum SemanticTransactionAnimationIntent {
 
         complete_priority: bool,
     },
+    WorldTransformTo {
+        target: SemanticTransactionNodeRef,
+        transform: crate::SemanticWorldTransform3D,
+    },
     FamilyTransformTo {
         source: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -115,6 +119,7 @@ impl SemanticTransactionAnimationIntent {
                 target_state,
                 ..
             } => Some([Some(*target), Some(*target_state), None]),
+            Self::WorldTransformTo { target, .. } => Some([Some(*target), None, None]),
             Self::FamilyTransformTo {
                 source,
                 target_state,
@@ -145,6 +150,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Composition { children, .. } => children.as_slice(),
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::WorldTransformTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -218,6 +224,12 @@ impl SemanticTransactionAnimation {
 
                 complete_priority: *complete_priority,
             },
+            SemanticAnimationIntent::WorldTransformTo { target, transform } => {
+                SemanticTransactionAnimationIntent::WorldTransformTo {
+                    target: (*target).into(),
+                    transform: *transform,
+                }
+            }
             SemanticAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
@@ -360,6 +372,12 @@ impl SemanticTransactionAnimation {
 
                 complete_priority: *complete_priority,
             },
+            SemanticTransactionAnimationIntent::WorldTransformTo { target, transform } => {
+                SemanticAnimationIntent::WorldTransformTo {
+                    target: resolve_node_ref(*target, committed),
+                    transform: *transform,
+                }
+            }
             SemanticTransactionAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
@@ -620,6 +638,19 @@ pub(super) fn preflight_transaction_animation(
                         }
                     }
                 });
+            }
+        }
+        SemanticTransactionAnimationIntent::WorldTransformTo { target, transform } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if crate::SemanticWorldTransform3D::new(
+                transform.translation,
+                transform.rotation,
+                transform.scale,
+            )
+            .is_none()
+            {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
         }
         SemanticTransactionAnimationIntent::FamilyTransformTo {
@@ -883,6 +914,9 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::WorldTransformTo { target, transform } => store
+            .insert_semantic_world_transform_animation(*target, *transform, options)
+            .expect("preflighted world-pose animation insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::FamilyTransformTo {
             source,
             target_state,

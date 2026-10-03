@@ -8,8 +8,8 @@ use noon_core::{
     GeometryResourceLookup, MeshResource, Property, RateFunction, SemanticAnimationCompositionKind,
     SemanticMutationTransaction, SemanticObjectRole, SemanticObjectState,
     SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticProjection3D,
-    SemanticRotation3D, SemanticStore, SemanticTransform, SemanticVec3, SemanticWorldTransform3D,
-    StoredGeometry, TrackId, TrackTiming,
+    SemanticRotation3D, SemanticSpatialMaterial, SemanticStore, SemanticTransform, SemanticVec3,
+    SemanticWorldTransform3D, StoredGeometry, TrackId, TrackTiming,
 };
 use noon_runtime::SceneInstance;
 
@@ -401,6 +401,161 @@ fn camera3d_rejects_world_tracks_that_change_scale_atomically() {
     )
     .is_err());
     assert!(index.is_empty());
+}
+
+#[test]
+fn point_light_world_track_publishes_effective_spatial_state_without_authored_mutation() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let handle = store.insert_geometry_mesh(mesh());
+
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 100.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    surface.set_spatial_material(SemanticSpatialMaterial::PointLit);
+    let surface_id = store.insert_semantic_object(surface);
+    store.add_semantic_family_member(root, surface_id).unwrap();
+
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    light.transform.translation.z = 2.0;
+    let light_id = store.insert_semantic_object(light);
+    store.add_semantic_family_member(root, light_id).unwrap();
+
+    let world_pose = |x| {
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(x, 0.0, 2.0),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap()
+    };
+    let authored_light_pose = world_pose(0.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    let track = transaction.create_object_property_track(
+        light_id,
+        SemanticObjectTrackProperty::WorldTransform,
+        SemanticObjectTrackValues::WorldTransform {
+            from: authored_light_pose,
+            to: world_pose(2.0),
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let animation_root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [track],
+        AnimationOptions::new(),
+    );
+    let committed = transaction.apply(&mut store).unwrap();
+    let animation_root = committed.resolve(animation_root).unwrap();
+    let lowered = lower_semantic_execution_root_with_animation_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+        animation_root,
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut direct_seek = SceneInstance::from_semantic_execution(lowered);
+    let light_row = 2;
+    assert_eq!(
+        forward.frame().objects[light_row].world_transform(),
+        Some(authored_light_pose)
+    );
+    assert!(forward.frame().objects[light_row]
+        .spatial
+        .as_deref()
+        .is_some_and(|spatial| spatial.point_light));
+    forward.take_frame_changes();
+    let initial_epoch = forward.publication_context().frame_epoch();
+
+    forward.advance_to(0.5).unwrap();
+    direct_seek.seek(0.5).unwrap();
+    assert_eq!(forward.frame(), direct_seek.frame());
+    assert_ne!(forward.publication_context().frame_epoch(), initial_epoch);
+    assert_eq!(
+        forward.frame().objects[light_row]
+            .world_transform()
+            .unwrap()
+            .translation
+            .x,
+        1.0
+    );
+    assert_eq!(
+        store
+            .node(light_id)
+            .unwrap()
+            .semantic_object_state()
+            .unwrap()
+            .transform
+            .world_transform(),
+        Some(authored_light_pose)
+    );
+}
+
+#[test]
+fn point_light_and_point_lit_singular_pose_mutations_reject_atomically() {
+    let mut store = SemanticStore::new();
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    let light_id = store.insert_semantic_object(light);
+    store.attach_semantic_object(light_id).unwrap();
+    let original_revision = store.scene_revision();
+    let original = store
+        .semantic_object_state_checked(light_id)
+        .unwrap()
+        .clone();
+
+    let mut invalid_light_pose = SemanticMutationTransaction::new();
+    invalid_light_pose.set_object_transform(
+        light_id,
+        SemanticTransform {
+            scale: SemanticVec3::new(1.0, 2.0, 1.0),
+            ..SemanticTransform::default()
+        },
+    );
+    assert!(invalid_light_pose.apply(&mut store).is_err());
+    assert_eq!(store.scene_revision(), original_revision);
+    assert_eq!(
+        store.semantic_object_state_checked(light_id).unwrap(),
+        &original
+    );
+
+    let mut surface = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    surface.set_spatial_material(SemanticSpatialMaterial::PointLit);
+    let surface_id = store.insert_semantic_object(surface);
+    store.attach_semantic_object(surface_id).unwrap();
+    let before_surface = store
+        .semantic_object_state_checked(surface_id)
+        .unwrap()
+        .clone();
+    let revision_before_surface = store.scene_revision();
+    let mut singular_surface_pose = SemanticMutationTransaction::new();
+    singular_surface_pose.set_object_transform(
+        surface_id,
+        SemanticTransform {
+            scale: SemanticVec3::new(1.0, 0.0, 1.0),
+            ..SemanticTransform::default()
+        },
+    );
+    assert!(singular_surface_pose.apply(&mut store).is_err());
+    assert_eq!(store.scene_revision(), revision_before_surface);
+    assert_eq!(
+        store.semantic_object_state_checked(surface_id).unwrap(),
+        &before_surface
+    );
 }
 
 #[test]

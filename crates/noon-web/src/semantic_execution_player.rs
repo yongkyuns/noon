@@ -14,6 +14,8 @@ mod pointer_input;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
+#[cfg(any(target_arch = "wasm32", test))]
+mod spatial;
 #[cfg(target_arch = "wasm32")]
 mod table;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -36,8 +38,9 @@ use noon_core::{
     NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, ObjectContentRef,
-    PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D, Vec2, VectorPath,
+    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, GeometryResourceLookup,
+    ObjectContentRef, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D,
+    Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2842,15 +2845,33 @@ impl SemanticExecutionPlayer {
     }
 
     fn resource_bundle_for(session: &ExecutionSession) -> Result<RetainedResourceBundle, String> {
-        RetainedResourceBundle::capture(
+        let geometry_handles = session
+            .frame()
+            .objects
+            .iter()
+            .filter_map(|object| object.content.geometry())
+            .filter_map(|geometry| match geometry {
+                noon_core::GeometryRef::External(id) => Some(*id),
+                _ => None,
+            })
+            .map(|id| {
+                session
+                    .geometry_resources()
+                    .current_handle(id)
+                    .ok_or_else(|| format!("missing live geometry resource {id:?}"))
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        RetainedResourceBundle::capture_additions_with_geometries(
             session
                 .frame()
                 .objects
                 .iter()
                 .filter_map(|object| object.text()),
+            geometry_handles,
             session.text_resources(),
             session.geometry_resources(),
             session.font_resources(),
+            &crate::RetainedResourceInventory::default(),
         )
         .and_then(|bundle| {
             bundle.with_images(
@@ -2896,6 +2917,7 @@ impl SemanticExecutionPlayer {
             changes = noon_runtime::FrameChanges::presentation_redraw();
         }
         let frame = publication.frame();
+        let publication_context = publication.context();
         let planned = publication.planned_family_frame();
         let plans = publication.family_animation_plans();
         let painter_order = publication.painter_order();
@@ -2911,7 +2933,13 @@ impl SemanticExecutionPlayer {
                 .collect::<Vec<_>>();
             let mut delta = self
                 .encoder
-                .encode_planned_snapshot_indices(&planned, plans, camera, indices)
+                .encode_planned_snapshot_indices_with_context(
+                    &planned,
+                    plans,
+                    camera,
+                    publication_context,
+                    indices,
+                )
                 .map_err(|e| e.to_string())?;
             self.encoder
                 .attach_resource_additions(
@@ -2933,11 +2961,12 @@ impl SemanticExecutionPlayer {
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
-                .encode_planned_incremental_with_painter_order(
+                .encode_planned_incremental_with_painter_order_and_context(
                     &planned,
                     plans,
                     &changes,
                     camera,
+                    publication_context,
                     painter_order,
                 )
                 .map_err(|e| e.to_string())?
@@ -2963,7 +2992,13 @@ impl SemanticExecutionPlayer {
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
-                .encode_planned_incremental(&planned, plans, &changes, camera)
+                .encode_planned_incremental_with_context(
+                    &planned,
+                    plans,
+                    &changes,
+                    camera,
+                    publication_context,
+                )
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
@@ -2980,6 +3015,7 @@ impl SemanticExecutionPlayer {
                 .map_err(|error| error.to_string())?;
             delta
         };
+        debug_assert_eq!(delta.retained.publication_context, publication_context);
         delta.retained.inset_2d_views = inset_2d_views;
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())

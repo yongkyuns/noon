@@ -171,6 +171,15 @@ impl PreparedRetainedResourceAdditionsWithRender {
         self.ordinary.text_handle_remap()
     }
 
+    pub(crate) fn geometry_handle_remap(
+        &self,
+    ) -> std::collections::HashMap<
+        crate::TransportGeometryResourceHandle,
+        noon_core::GeometryResourceHandle,
+    > {
+        self.ordinary.geometry_handle_remap()
+    }
+
     pub(crate) fn superseded_text_handles(&self) -> &[crate::TransportTextResourceHandle] {
         self.ordinary.superseded_text_handles()
     }

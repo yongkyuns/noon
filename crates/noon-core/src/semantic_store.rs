@@ -837,18 +837,13 @@ impl SemanticStore {
     where
         E: From<crate::GeometryResourceError>,
     {
-        let handle = self.insert_geometry_mesh(mesh);
-        let result = publish(self, handle);
-        if result.is_err() {
-            self.geometry_resources
-                .remove(handle.id)
-                .expect("an unpublished fresh mesh remains removable");
-        }
-        result
+        self.with_geometry_resources(
+            [crate::GeometryResource::Mesh(std::sync::Arc::new(mesh))],
+            |store, handles| publish(store, handles[0]),
+        )
     }
 
-    /// Admit a local batch of immutable paths for one atomic transaction. Any
-    /// allocation or publication error releases every unpublished batch resource.
+    /// Admit a local batch of immutable paths for one atomic transaction.
     pub fn with_geometry_paths<T, E>(
         &mut self,
         paths: impl IntoIterator<Item = crate::VectorPath>,
@@ -857,10 +852,34 @@ impl SemanticStore {
     where
         E: From<crate::GeometryResourceError>,
     {
+        self.with_geometry_resources(
+            paths
+                .into_iter()
+                .map(|path| crate::GeometryResource::VectorPath(std::sync::Arc::new(path))),
+            publish,
+        )
+    }
+
+    /// Admit immutable path/mesh resources inside one semantic publication.
+    /// Any validation or publication error releases only this unpublished batch.
+    /// Mesh payloads have already passed their checked resource constructor.
+    pub fn with_geometry_resources<T, E>(
+        &mut self,
+        resources: impl IntoIterator<Item = crate::GeometryResource>,
+        publish: impl FnOnce(&mut Self, &[crate::GeometryResourceHandle]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
         let mut handles = Vec::new();
         let result = (|| {
-            for path in paths {
-                handles.push(self.insert_geometry_path(path).map_err(E::from)?);
+            for resource in resources {
+                if let crate::GeometryResource::VectorPath(path) = &resource {
+                    if !path.is_finite() {
+                        return Err(E::from(crate::GeometryResourceError::NonFinitePath));
+                    }
+                }
+                handles.push(self.geometry_resources.insert(resource));
             }
             publish(self, &handles)
         })();
@@ -868,7 +887,7 @@ impl SemanticStore {
             for handle in handles {
                 self.geometry_resources
                     .remove(handle.id)
-                    .expect("an unpublished fresh path remains removable");
+                    .expect("an unpublished fresh resource remains removable");
             }
         }
         result

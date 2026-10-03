@@ -127,6 +127,8 @@ pub struct CompiledObject {
 pub struct CompiledSpatialState {
     pub world: noon_core::SemanticWorldTransform3D,
     pub camera_projection: Option<noon_core::SemanticProjection3D>,
+    pub material: noon_core::SemanticSpatialMaterial,
+    pub point_light: bool,
 }
 
 /// One sparse tracker-to-effective-text execution declaration.
@@ -2376,31 +2378,39 @@ fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
             .camera_projection
             .is_none_or(noon_core::SemanticProjection3D::is_valid)
         && (spatial.camera_projection.is_none() || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+        && (!spatial.point_light || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || [world.scale.x, world.scale.y, world.scale.z]
+                .into_iter()
+                .all(|value| value.is_finite() && value != 0.0))
 }
 
 fn valid_track_for_spatial(
     track: &TrackDefinition,
     spatial: Option<&CompiledSpatialState>,
 ) -> bool {
-    if spatial.is_some() {
-        if matches!(
-            track.property,
-            Property::Transform
-                | Property::Position
-                | Property::Rotation
-                | Property::Scale
-                | Property::Morph
-        ) {
-            return false;
-        }
-    } else if track.property == Property::WorldTransform {
+    let Some(spatial) = spatial else {
+        return track.property != Property::WorldTransform;
+    };
+    if track.property == Property::WorldTransform {
+        return valid_world_track_for_spatial(&track.values, Some(spatial));
+    }
+    if spatial.camera_projection.is_some() {
         return false;
     }
-    if track.property == Property::WorldTransform {
-        valid_world_track_for_spatial(&track.values, spatial)
-    } else {
-        true
+    // Point lights use ordinary color and opacity as color/intensity channels.
+    if spatial.point_light {
+        return matches!(track.property, Property::Fill | Property::Opacity);
     }
+    // Meshes require opaque color endpoints. Planar stroke, reveal, appearance,
+    // and opacity effects must fail before activation rather than during drawing.
+    matches!(
+        (&track.property, &track.values),
+        (
+            Property::Fill,
+            TrackValues::Color { from: Some(from), to: Some(to) }
+        ) if from.alpha == 1.0 && to.alpha == 1.0
+    )
 }
 
 fn valid_world_track_for_spatial(
@@ -2416,9 +2426,19 @@ fn valid_world_track_for_spatial(
     let (Some(from), Some(to)) = (from.world(), to.world()) else {
         return false;
     };
-    spatial.camera_projection.is_none()
+    ((spatial.camera_projection.is_none() && !spatial.point_light)
         || (from.scale == SemanticVec3::new(1.0, 1.0, 1.0)
-            && to.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+            && to.scale == SemanticVec3::new(1.0, 1.0, 1.0)))
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || [
+                (from.scale.x, to.scale.x),
+                (from.scale.y, to.scale.y),
+                (from.scale.z, to.scale.z),
+            ]
+            .into_iter()
+            .all(|(from, to)| {
+                from != 0.0 && to != 0.0 && from.is_sign_positive() == to.is_sign_positive()
+            }))
 }
 
 fn lower_semantic_transform_patch(
@@ -2430,16 +2450,26 @@ fn lower_semantic_transform_patch(
         return None;
     }
     if let Some(spatial) = spatial {
-        if spatial.camera_projection.is_some()
+        if (spatial.camera_projection.is_some() || spatial.point_light)
             && transform.scale != SemanticVec3::new(1.0, 1.0, 1.0)
+        {
+            return None;
+        }
+        let world = transform.world_transform()?;
+        if spatial.material == noon_core::SemanticSpatialMaterial::PointLit
+            && [world.scale.x, world.scale.y, world.scale.z]
+                .into_iter()
+                .any(|value| value == 0.0)
         {
             return None;
         }
         return Some((
             Transform2D::IDENTITY,
             Some(CompiledSpatialState {
-                world: transform.world_transform()?,
+                world,
                 camera_projection: spatial.camera_projection,
+                material: spatial.material,
+                point_light: spatial.point_light,
             }),
         ));
     }
@@ -3876,6 +3906,8 @@ mod tests {
                     near: 0.1,
                     far: 100.0,
                 }),
+                material: noon_core::SemanticSpatialMaterial::Unlit,
+                point_light: false,
             })),
             ..CompiledObject::new(
                 id,
@@ -3927,6 +3959,8 @@ mod tests {
                     near: 2.0,
                     far: 1.0,
                 }),
+                material: noon_core::SemanticSpatialMaterial::Unlit,
+                point_light: false,
             })),
             ..camera
         };
@@ -3936,5 +3970,49 @@ mod tests {
                 noon_core::TimelineError::InvalidWorldTransformValues
             ))
         ));
+    }
+
+    #[test]
+    fn spatial_track_capabilities_preserve_opaque_mesh_color_and_point_light_channels() {
+        let mesh = CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+        };
+        let light = CompiledSpatialState {
+            point_light: true,
+            ..mesh
+        };
+        let track = |property, values| TrackDefinition {
+            id: TrackId::new(1),
+            object: ObjectId::new(1),
+            property,
+            values,
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let opaque_fill = track(
+            Property::Fill,
+            TrackValues::Color {
+                from: Some(noon_core::Color::WHITE),
+                to: Some(noon_core::Color::BLUE),
+            },
+        );
+        assert!(valid_track_for_spatial(&opaque_fill, Some(&mesh)));
+        let translucent_fill = track(
+            Property::Fill,
+            TrackValues::Color {
+                from: Some(noon_core::Color::WHITE),
+                to: Some(noon_core::Color::rgba(0.0, 0.0, 1.0, 0.99)),
+            },
+        );
+        assert!(!valid_track_for_spatial(&translucent_fill, Some(&mesh)));
+        let opacity = track(
+            Property::Opacity,
+            TrackValues::Scalar { from: 1.0, to: 0.0 },
+        );
+        assert!(!valid_track_for_spatial(&opacity, Some(&mesh)));
+        assert!(valid_track_for_spatial(&opacity, Some(&light)));
     }
 }

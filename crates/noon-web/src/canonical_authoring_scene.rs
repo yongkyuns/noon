@@ -10,6 +10,8 @@ mod graph;
 mod matrix;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
+#[cfg(any(target_arch = "wasm32", test))]
+mod spatial;
 #[cfg(target_arch = "wasm32")]
 mod table;
 use std::collections::{BTreeMap, BTreeSet};
@@ -335,6 +337,11 @@ impl SceneMembershipBatch {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
+    WorldTransform {
+        target: noon::Mobject,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: noon_core::AnimationOptions,
+    },
     FocusOn {
         focus: noon::FocusOnOptions,
         options: noon_core::AnimationOptions,
@@ -1487,6 +1494,15 @@ impl CanonicalAuthoringScene {
             );
         fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
             match child {
+                OrdinaryCompositionChild::WorldTransform {
+                    target,
+                    transform,
+                    options,
+                } => noon::AnimationCompositionRequest::WorldTransform {
+                    target,
+                    transform: *transform,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FocusOn { focus, options } => {
                     noon::AnimationCompositionRequest::FocusOn {
                         focus: *focus,
@@ -1764,6 +1780,7 @@ impl CanonicalAuthoringScene {
             output: &mut Vec<(ObjectId, &'a noon::Mobject)>,
         ) {
             match child {
+                OrdinaryCompositionChild::WorldTransform { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -2231,6 +2248,9 @@ impl CanonicalAuthoringScene {
                     )?;
                     continue;
                 }
+                OrdinaryCompositionChild::WorldTransform {
+                    target, options, ..
+                } => (None, target, *options),
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -3104,6 +3124,8 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 mod wasm {
     mod numbers;
     mod sample_space;
+    mod spatial;
+    mod world_composition;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 
@@ -3234,7 +3256,7 @@ mod wasm {
             _ => {
                 return Err(js_error(format!(
                     "ordinary fade translation must be \"shift\" or \"point\", got {translation:?}"
-                )))
+                )));
             }
         };
         Ok(noon::FadeEndpoint::new(scale_factor, translation))
@@ -3438,7 +3460,7 @@ mod wasm {
                 _ => {
                     return Err(js_error(format!(
                         "membership batch kind must be add, add_foreground, remove_foreground, remove, clear, replace, or bring_to_back; got {kind:?}"
-                    )))
+                    )));
                 }
             };
             Ok(Self {

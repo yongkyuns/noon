@@ -358,6 +358,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
             resource_retirements: RetainedResourceRetirements {
                 images: vec![initial_image],
                 texts: Vec::new(),
+                geometries: Vec::new(),
             },
             transient_presentations: Vec::new(),
             selection_overlay: None,
@@ -375,8 +376,9 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
         .first()
         .map(|item| item.geometry);
 
-    let second_bundle = RetainedResourceBundle::capture_additions(
+    let second_bundle = RetainedResourceBundle::capture_additions_with_geometries(
         [second_text],
+        [],
         source.text_resources(),
         source.geometry_resources(),
         source.font_resources(),
@@ -403,6 +405,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
             resource_retirements: RetainedResourceRetirements {
                 images: Vec::new(),
                 texts: vec![first_transport],
+                geometries: Vec::new(),
             },
             transient_presentations: Vec::new(),
             selection_overlay: None,
@@ -450,6 +453,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
                         .then_some(second_transport)
                         .into_iter()
                         .collect(),
+                    geometries: Vec::new(),
                 },
                 transient_presentations: Vec::new(),
                 selection_overlay: None,
@@ -484,6 +488,7 @@ fn live_image_retirement_is_rejected_before_mutating_the_mirror() {
         resource_retirements: RetainedResourceRetirements {
             images: vec![image],
             texts: Vec::new(),
+            geometries: Vec::new(),
         },
         transient_presentations: Vec::new(),
         selection_overlay: None,
@@ -518,6 +523,7 @@ fn snapshot_retirement_replaces_the_root_index() {
             resource_retirements: RetainedResourceRetirements {
                 images: vec![old],
                 texts: Vec::new(),
+                geometries: Vec::new(),
             },
             transient_presentations: Vec::new(),
             selection_overlay: None,
@@ -562,7 +568,8 @@ fn shared_image_survives_retirement_of_only_one_snapshot_row() {
             resource_additions: None,
             resource_retirements: RetainedResourceRetirements {
                 images: vec![image],
-                texts: Vec::new()
+                texts: Vec::new(),
+                geometries: Vec::new(),
             },
             transient_presentations: Vec::new(),
             selection_overlay: None,
@@ -587,6 +594,7 @@ fn stale_retirement_is_dropped_without_releasing_the_resource() {
         resource_retirements: RetainedResourceRetirements {
             images: vec![image],
             texts: Vec::new(),
+            geometries: Vec::new(),
         },
         transient_presentations: Vec::new(),
         selection_overlay: None,

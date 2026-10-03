@@ -23,6 +23,10 @@ on:
       - "crates/noon-web/src/semantic_execution_player*"
       - "crates/noon-web/src/semantic_execution_player/**"
       - "crates/noon-web/src/direct_execution_smoke.rs"
+      - "scripts/spatial-surface-light-qualification.mjs"
+      - "web/python/examples/noon_spatial_surface_lighting.py"
+      - "crates/noon-render-wgpu/src/gpu/mesh*"
+      - "crates/noon/src/example_scenes/spatial_surface.rs"
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
       - "crates/noon-runtime/src/replay.rs"
@@ -229,6 +233,11 @@ jobs:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
         run: node scripts/browser-smoke.mjs
+      - name: Qualify point-lit surface through direct WASM and Python worker
+        env:
+          NOON_SPATIAL_SURFACE_BACKEND: ${{ matrix.backend }}
+          NOON_SPATIAL_SURFACE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/spatial-surface-light
+        run: node scripts/spatial-surface-light-qualification.mjs
       - name: Test camera backing-density invariance
         env:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}

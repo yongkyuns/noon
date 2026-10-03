@@ -4,14 +4,15 @@ use std::collections::HashMap;
 
 use crate::{
     RetainedExecutionDeltaEnvelope, RetainedResourceRetirements, RetainedTransportObjectState,
-    TransportImageResourceHandle, TransportObjectContent, TransportSlotId,
-    TransportTextResourceHandle,
+    TransportGeometryResourceHandle, TransportImageResourceHandle, TransportObjectContent,
+    TransportSlotId, TransportTextResourceHandle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceRoot {
     Image(TransportImageResourceHandle),
     Text(TransportTextResourceHandle),
+    Geometry(TransportGeometryResourceHandle),
     RenderGeometry(u64),
 }
 
@@ -20,9 +21,9 @@ impl ResourceRoot {
         match &object.content {
             TransportObjectContent::Image { image, .. } => Some(Self::Image(*image)),
             TransportObjectContent::Text { text } => Some(Self::Text(*text)),
-            TransportObjectContent::Geometry { .. } => {
-                object.render_geometry_resource.map(Self::RenderGeometry)
-            }
+            TransportObjectContent::Geometry { resource, .. } => resource
+                .map(Self::Geometry)
+                .or_else(|| object.render_geometry_resource.map(Self::RenderGeometry)),
         }
     }
 }
@@ -63,8 +64,10 @@ impl ResourceResidency {
             let next = ResourceRoot::from_object(object).or_else(|| {
                 // The retained wire can omit unchanged inline geometry. Preserve
                 // its installed root until a new geometry or transform clears it.
-                (matches!(&object.content, TransportObjectContent::Geometry { .. })
-                    && object.render_transform.is_some()
+                (matches!(
+                    &object.content,
+                    TransportObjectContent::Geometry { resource: None, .. }
+                ) && object.render_transform.is_some()
                     && object.render_geometry.is_none())
                 .then(|| self.slots.get(&object.slot).copied())
                 .flatten()
@@ -120,6 +123,7 @@ impl ResourceResidency {
             match root {
                 ResourceRoot::Image(image) => retired.images.push(image),
                 ResourceRoot::Text(text) => retired.texts.push(text),
+                ResourceRoot::Geometry(geometry) => retired.geometries.push(geometry),
                 ResourceRoot::RenderGeometry(_) => {}
             }
         };
@@ -196,6 +200,7 @@ mod tests {
             protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,
             sequence: 1,
+            publication_context: noon_core::PublicationContext::default(),
             snapshot: false,
             time: 0.0,
             camera: noon_core::Camera2DState::default(),

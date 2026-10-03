@@ -50,9 +50,10 @@ const referenceFonts = await Promise.all([
 ]);
 const fixtureSources = new Map();
 for (const fixture of manifest.fixtures) {
-  const relativeSource = fixture.source ?? reference.source;
-  if (!fixtureSources.has(relativeSource)) {
-    fixtureSources.set(relativeSource, await readFile(path.join(repoRoot, relativeSource), "utf8"));
+  for (const relativeSource of [fixture.source ?? reference.source, fixture.noon_source].filter(Boolean)) {
+    if (!fixtureSources.has(relativeSource)) {
+      fixtureSources.set(relativeSource, await readFile(path.join(repoRoot, relativeSource), "utf8"));
+    }
   }
 }
 
@@ -317,19 +318,20 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
       captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
     }
-    const completed = await page.evaluate(async () => {
+    const completed = await page.evaluate(async (duration) => {
       const renderer = window.noonSpatialMeshOracle;
-      renderer.advanceDirectRealtime(2000);
+      renderer.advanceDirectRealtime(duration * 1000);
       let presented = false;
       for (let attempt = 0; attempt < 60; attempt += 1) {
         if (renderer.render()) { presented = true; break; }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       return { authoredDuration: renderer.time(), objectCount: renderer.objectCount(), presented };
-    });
+    }, fixture.expected_duration);
     assert.equal(completed.authoredDuration, fixture.expected_duration,
       `${fixture.id}: typed Rust/WASM duration`);
-    assert.equal(completed.objectCount, 3, `${fixture.id}: camera plus shared mesh instances`);
+    assert.ok(Number.isInteger(fixture.expected_object_count), `${fixture.id}: explicit typed fixture object count`);
+    assert.equal(completed.objectCount, fixture.expected_object_count, `${fixture.id}: canonical object count`);
     assert.equal(completed.presented, true, `${fixture.id}: endpoint not presented`);
     const forwardMidpoint = captures.find(capture => Math.abs(capture.time - 0.5) < 1e-9);
     assert.ok(forwardMidpoint, `${fixture.id}: requires a forward midpoint capture`);
@@ -357,7 +359,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
   }
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
-    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
+    { source: rasterFixtureSource(fixture.noon_source ? fixtureSources.get(fixture.noon_source) : fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
   );
   assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: shared source execution`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);

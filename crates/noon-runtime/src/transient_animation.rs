@@ -63,6 +63,7 @@ impl SceneInstance {
                 style: row.style,
                 appearance: row.appearance,
                 reveal: self.frame.reveal(index),
+                world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
             },
             binding.scale_factor(),
             binding.color(),

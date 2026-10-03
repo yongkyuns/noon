@@ -9,6 +9,8 @@ import initNoonWeb, {
   WasmManimArrowOptions,
   WasmManimGeometryOptions,
   WasmImageMobjectOptions,
+  WasmMeshOptions,
+  WasmSurfaceSamplingPlan,
   WasmSceneMembershipBatch,
   WasmTextColorBatch,
   WasmLatexCompiler,
@@ -170,6 +172,9 @@ async function initializePyodide() {
   };
   self.noonAuthoringImageOptions = WasmImageMobjectOptions;
   self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
+  self.noonAuthoringMeshOptions = WasmMeshOptions;
+  self.noonSurfaceSamplingPlan = (...args) => new WasmSurfaceSamplingPlan(...args);
+  self.noonCreateAuthoringMeshHandle = (options) => authoringStore.createMesh(options);
   self.noonLoadImageUrl = async (url) => {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);

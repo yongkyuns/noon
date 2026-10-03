@@ -970,6 +970,10 @@ impl Scene {
         self.execution.as_mut()
     }
 
+    pub(crate) fn running_execution(&self) -> Option<&ExecutionSession> {
+        self.execution.as_ref()
+    }
+
     pub(crate) fn owned_live(&mut self) -> LiveSession<'_> {
         let root = self.root;
         let store = &self.store;

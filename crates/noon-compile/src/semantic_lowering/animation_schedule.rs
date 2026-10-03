@@ -74,6 +74,9 @@ pub enum SemanticScheduledAnimationPayload {
 
         complete_priority: bool,
     },
+    WorldTransformTo {
+        transform: noon_core::SemanticWorldTransform3D,
+    },
     Indicate {
         scale_factor: f64,
         color: noon_core::Color,
@@ -212,6 +215,9 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         interpolation: SemanticTransformInterpolation,
 
         complete_priority: bool,
+    },
+    WorldTransformTo {
+        transform: noon_core::SemanticWorldTransform3D,
     },
     Indicate {
         scale_factor: f64,
@@ -756,6 +762,9 @@ fn published_payload(
 
             complete_priority,
         },
+        ScheduledAnimationPayload::WorldTransformTo { transform } => {
+            SemanticScheduledAnimationPayload::WorldTransformTo { transform }
+        }
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             SemanticScheduledAnimationPayload::PassingFlash { time_width }
         }
@@ -826,6 +835,9 @@ fn prepared_payload(
 
             complete_priority,
         },
+        ScheduledAnimationPayload::WorldTransformTo { transform } => {
+            PreparedSemanticScheduledAnimationPayload::WorldTransformTo { transform }
+        }
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width }
         }
@@ -900,6 +912,10 @@ enum AnimationDeclarationIntent<R> {
         interpolation: SemanticTransformInterpolation,
 
         complete_priority: bool,
+    },
+    WorldTransformTo {
+        target: R,
+        transform: noon_core::SemanticWorldTransform3D,
     },
     Indicate {
         target: R,
@@ -1090,6 +1106,15 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     interpolation: *interpolation,
 
                     complete_priority: *complete_priority,
+                }
+            }
+            SemanticAnimationIntent::WorldTransformTo { target, transform } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::WorldTransformTo {
+                    target: *target,
+                    transform: *transform,
                 }
             }
             SemanticAnimationIntent::Indicate {
@@ -1338,6 +1363,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
 
                         complete_priority: *complete_priority,
                     },
+                    SemanticAnimationIntent::WorldTransformTo { target, transform } => {
+                        self.prepared
+                            .object_state(*target)
+                            .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+                        AnimationDeclarationIntent::WorldTransformTo {
+                            target: (*target).into(),
+                            transform: *transform,
+                        }
+                    }
                     SemanticAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1472,6 +1506,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
 
                         complete_priority: *complete_priority,
                     },
+                    SemanticTransactionAnimationIntent::WorldTransformTo { target, transform } => {
+                        AnimationDeclarationIntent::WorldTransformTo {
+                            target: *target,
+                            transform: *transform,
+                        }
+                    }
                     SemanticTransactionAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1584,6 +1624,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
                 self.prepared
                     .object_state(*target_state)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::WorldTransformTo { target, .. } => {
+                self.prepared
+                    .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Rotate { target, .. }
@@ -1713,6 +1758,9 @@ enum ScheduledAnimationPayload<R> {
         interpolation: SemanticTransformInterpolation,
 
         complete_priority: bool,
+    },
+    WorldTransformTo {
+        transform: noon_core::SemanticWorldTransform3D,
     },
     Indicate {
         scale_factor: f64,
@@ -1926,6 +1974,25 @@ where
 
                         complete_priority,
                     },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::WorldTransformTo { target, transform } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::WorldTransformTo { transform },
                     options,
                 },
             })

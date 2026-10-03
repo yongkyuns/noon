@@ -93,6 +93,14 @@ After creating an execution session, `scene.live(&mut session)` applies supporte
 
 Raw integration-store access is deliberately not a live-mutation shortcut: edits outside coherent publication can stale a session and must be handled explicitly. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for the public typed path and `docs/architecture.md` for the authored/effective and publication contracts.
 
+### Indexed spatial meshes
+
+The native spatial profile uses the same scene, runtime and canvas. Python exposes `SpatialScene`, `Mesh3D` and `WorldTransformTo`; Rust exposes `Scene::camera_3d`, `Scene::mesh`, `MeshOptions` and ordinary world-transform animation requests. UV callbacks run once at construction. Rust validates sampling coordinates, topology and normals, and retains the resulting immutable mesh while motion updates its instance pose.
+
+This profile supports opaque fills without mesh strokes, quaternion rotation and one optional point light. Generated spheres, cubes, prisms, cylinders, cones and tori share the mesh lane. Cylinders and cones extend from zero to height along +Z. Surface resolution counts cells, including both endpoint rows. These explicit conventions do not claim Manim's class defaults or Cairo surface shading. Use `WorldTransformTo` for spatial animation; the planar `.animate` path is rejected for mesh objects. `SpatialScene` examples use `async construct` and `await self.play(...)` to run in browsers without JS Promise Integration.
+
+Native mesh replacement uses ordinary atomic content publication at a valid authoring barrier. Failed replacement preserves the previous resource and pose; transforms and lights do not regenerate topology. Effective getters read published runtime state, while Rust authored getters keep the base declaration.
+
 Equivalent examples run through the native Rust renderer and the Python browser host:
 
 | Feature | Rust | Python |
@@ -100,6 +108,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
 | Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
 | Ordinary affine playback | [ordinary_affine_play.rs](crates/noon-native/examples/ordinary_affine_play.rs) | [ordinary_affine_play.py](web/python/examples/ordinary_affine_play.py) |
+| Indexed surface motion | [spatial_surface.rs](crates/noon-native/examples/spatial_surface.rs) | [noon_spatial_surface.py](web/python/examples/noon_spatial_surface.py) |
 | Composition | [ordinary_composition_play.rs](crates/noon-native/examples/ordinary_composition_play.rs) | [ordinary_composition_play.py](web/python/examples/ordinary_composition_play.py) |
 | Ordered callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
