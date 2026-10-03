@@ -440,6 +440,11 @@ mod wasm {
                     .transport_mirror()
                     .applied_sequence()
                     .is_some_and(|sequence| delta.retained.sequence <= sequence);
+            let replaces_session = self
+                .mirror
+                .transport_mirror()
+                .session()
+                .is_some_and(|session| session != delta.retained.session);
 
             // Stale packets cannot change the current overlay. Validate a fresh
             // presentation before resource preparation or mirror admission.
@@ -559,6 +564,9 @@ mod wasm {
             }
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
+                    if replaces_session {
+                        self.renderer.reset_spatial_publication_context();
+                    }
                     self.selection_overlay = overlay;
                     let view_changed = self.pointer_view != pointer_view;
                     self.pointer_view = pointer_view;
@@ -735,6 +743,21 @@ mod wasm {
                 .and_then(|target| target.as_ref().ok());
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
+            let installed_frame = self
+                .mirror
+                .frame()
+                .ok_or_else(|| js_message("retained execution renderer has no frame snapshot"))?;
+            let spatial_upload = self
+                .renderer
+                .prepare_spatial_with_resources(
+                    &self.device,
+                    &self.queue,
+                    self.mirror.publication_context(),
+                    installed_frame,
+                    &self.pending_changes,
+                    resources.geometries(),
+                )
+                .map_err(js_error)?;
             let camera = self.renderer.camera();
             let metrics = TextDeviceMetrics::new(Vec2::new(
                 self.config.width as f32 / camera.world_size.x,
@@ -852,6 +875,7 @@ mod wasm {
             );
             self.last_bytes_uploaded = upload
                 .bytes_uploaded()
+                .saturating_add(spatial_upload.bytes_uploaded())
                 .saturating_add(transient_upload.bytes_uploaded)
                 .saturating_add(overlay_upload.bytes_uploaded);
             if let (Some(started), Some(timings)) = (upload_started, substage_timings.as_mut()) {

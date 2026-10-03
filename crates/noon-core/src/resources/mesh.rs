@@ -12,6 +12,7 @@ pub struct MeshBounds3D {
 pub struct MeshResource {
     positions: Vec<SemanticVec3>,
     normals: Option<Vec<SemanticVec3>>,
+    has_usable_normals: bool,
     indices: Vec<u32>,
     bounds: MeshBounds3D,
 }
@@ -39,6 +40,14 @@ impl MeshResource {
                 return Err(MeshResourceError::NonFiniteNormal);
             }
         }
+        // Shading admission needs this predicate frequently while objects move.
+        // Compute it once with the immutable mesh payload instead of rescanning
+        // every vertex normal for each changed pose.
+        let has_usable_normals = normals.as_ref().is_some_and(|normals| {
+            normals
+                .iter()
+                .all(|normal| normal.x.abs().max(normal.y.abs()).max(normal.z.abs()) > 0.0)
+        });
         if indices.is_empty() || !indices.len().is_multiple_of(3) {
             return Err(MeshResourceError::InvalidTriangleIndexCount(indices.len()));
         }
@@ -65,6 +74,7 @@ impl MeshResource {
         Ok(Self {
             positions,
             normals,
+            has_usable_normals,
             indices,
             bounds: MeshBounds3D { min, max },
         })
@@ -75,6 +85,11 @@ impl MeshResource {
     }
     pub fn normals(&self) -> Option<&[SemanticVec3]> {
         self.normals.as_deref()
+    }
+    /// Whether every authored vertex has a finite, non-zero normal. This
+    /// immutable summary is safe to query in O(1) from renderer preparation.
+    pub const fn has_usable_normals(&self) -> bool {
+        self.has_usable_normals
     }
     pub fn indices(&self) -> &[u32] {
         &self.indices
@@ -157,6 +172,26 @@ mod tests {
             mesh.retained_bytes(),
             3 * std::mem::size_of::<SemanticVec3>() + 3 * std::mem::size_of::<u32>()
         );
+    }
+
+    #[test]
+    fn caches_normal_usability_for_constant_time_renderer_queries() {
+        let count = 100_000;
+        let positions = vec![SemanticVec3::ZERO; count];
+        let normals = vec![SemanticVec3::new(0.0, 0.0, 1.0); count];
+        let indices = vec![0, 0, 0];
+        let usable = MeshResource::new(positions.clone(), Some(normals), indices.clone()).unwrap();
+        assert!(usable.has_usable_normals());
+        // Repeated access exercises only the cached scalar; it does not need
+        // to inspect the immutable 100k-element normals array again.
+        for _ in 0..1_000 {
+            assert!(usable.has_usable_normals());
+        }
+
+        let mut normals = vec![SemanticVec3::new(0.0, 0.0, 1.0); count];
+        normals[count / 2] = SemanticVec3::ZERO;
+        let unusable = MeshResource::new(positions, Some(normals), indices).unwrap();
+        assert!(!unusable.has_usable_normals());
     }
 
     #[test]

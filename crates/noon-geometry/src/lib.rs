@@ -1,4 +1,4 @@
-//! Deterministic renderer-independent path geometry for Noon.
+//! Deterministic renderer-independent geometry for Noon.
 
 #![forbid(unsafe_code)]
 
@@ -18,10 +18,20 @@ pub use polygon_fill::polygon_fill_contains;
 mod plotting;
 mod reverse;
 mod smoothing;
+mod solids;
+mod surface;
 pub use reverse::reverse_path;
 pub use smoothing::{
     change_path_anchor_mode, change_path_anchor_mode_with_boundary, smooth_curve_handles,
     SplineBoundary,
+};
+pub use solids::{
+    cone_mesh, cone_parts, cube_mesh, cylinder_mesh, cylinder_parts, prism_faces, prism_mesh,
+    sphere_mesh, surface_mesh, torus_mesh,
+};
+pub use surface::{
+    SurfaceCell, SurfaceCoordinates, SurfaceError, SurfaceGrid, SurfaceSample, UvSurfacePlan,
+    MAX_SURFACE_CELLS, MAX_SURFACE_VERTICES,
 };
 mod tessellation;
 mod vector_field;

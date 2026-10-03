@@ -178,7 +178,10 @@ impl std::fmt::Display for RetainedResourceMutationTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidChannel(channel) => {
-                write!(formatter, "invalid retained resource mutation channel {channel:?}")
+                write!(
+                    formatter,
+                    "invalid retained resource mutation channel {channel:?}"
+                )
             }
             Self::UnsupportedVersion(version) => write!(
                 formatter,
@@ -196,10 +199,16 @@ impl std::fmt::Display for RetainedResourceMutationTransportError {
                 formatter.write_str("retained resource mutation sequence exhausted")
             }
             Self::Encode(message) => {
-                write!(formatter, "retained resource mutation encode failed: {message}")
+                write!(
+                    formatter,
+                    "retained resource mutation encode failed: {message}"
+                )
             }
             Self::Decode(message) => {
-                write!(formatter, "retained resource mutation decode failed: {message}")
+                write!(
+                    formatter,
+                    "retained resource mutation decode failed: {message}"
+                )
             }
         }
     }

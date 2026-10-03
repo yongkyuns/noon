@@ -32,6 +32,7 @@ fn effective() -> EffectiveAnimationProperties {
         style: Style::default(),
         appearance: 1.0,
         reveal: 1.0,
+        world_transform: None,
     }
 }
 

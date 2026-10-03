@@ -553,6 +553,8 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
     mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
         world: noon_core::SemanticWorldTransform3D::IDENTITY,
         camera_projection: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     instance.take_frame_changes();
@@ -601,6 +603,8 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
             near: 0.1,
             far: 100.0,
         }),
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
     }));
     let camera_instance =
         SceneInstance::new(CompiledScene::compile_objects(vec![camera], &[]).unwrap());
@@ -634,6 +638,8 @@ fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
     mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
         world: noon_core::SemanticWorldTransform3D::IDENTITY,
         camera_projection: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     let phase = instance.prepare_advance_to(0.0).unwrap();

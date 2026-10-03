@@ -16,10 +16,11 @@ use crate::{
     SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTableLayout, SemanticTransactionGraphDeclaration,
+    SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialMaterial, SemanticStore,
+    SemanticStoreError, SemanticStyle, SemanticTableLayout, SemanticTransactionGraphDeclaration,
     SemanticTransactionGraphEdgeDependency, SemanticTransform, SemanticTransformInterpolation,
-    SemanticUpdaterRegistration, StoredGeometry, TextPresentationBaseline, VectorPath,
+    SemanticUpdaterRegistration, SemanticVec3, StoredGeometry, TextPresentationBaseline,
+    VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -1103,6 +1104,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage a typed world-pose animation for one existing semantic object.
+    pub fn create_world_transform_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        transform: crate::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::WorldTransformTo {
+                    target: target.into(),
+                    transform,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a family Transform without manufacturing semantic padding members.
     pub fn create_family_transform_animation(
         &mut self,
@@ -2023,11 +2045,25 @@ impl SemanticMutationTransaction {
                     let did_change = object_property_value(state, *property) != *value;
                     if did_change {
                         apply_object_property(state, *property, value.clone());
-                        if !state.camera_declaration_is_valid() {
-                            return Err(SemanticMutationTransactionError::InvalidCameraPose {
-                                index,
-                                object: *object,
-                            });
+                        if !state.spatial_declaration_is_valid() {
+                            let error = if state.role() == SemanticObjectRole::PointLight3D {
+                                SemanticMutationTransactionError::InvalidPointLightPose {
+                                    index,
+                                    object: *object,
+                                }
+                            } else if state.spatial_material() == SemanticSpatialMaterial::PointLit
+                            {
+                                SemanticMutationTransactionError::InvalidSpatialMaterialPose {
+                                    index,
+                                    object: *object,
+                                }
+                            } else {
+                                SemanticMutationTransactionError::InvalidCameraPose {
+                                    index,
+                                    object: *object,
+                                }
+                            };
+                            return Err(error);
                         }
                     }
                     changed.push(did_change);
@@ -2052,6 +2088,26 @@ impl SemanticMutationTransaction {
                             index,
                             object: *object,
                         });
+                    }
+                    if state.role() == SemanticObjectRole::PointLight3D
+                        && transform.scale != SemanticVec3::new(1.0, 1.0, 1.0)
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidPointLightPose {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    if state.spatial_material() == SemanticSpatialMaterial::PointLit
+                        && [transform.scale.x, transform.scale.y, transform.scale.z]
+                            .into_iter()
+                            .any(|scale| scale == 0.0)
+                    {
+                        return Err(
+                            SemanticMutationTransactionError::InvalidSpatialMaterialPose {
+                                index,
+                                object: *object,
+                            },
+                        );
                     }
                     let did_change = state.transform != *transform;
                     if did_change {
@@ -3562,6 +3618,14 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
+    InvalidPointLightPose {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
+    InvalidSpatialMaterialPose {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
     InvalidStyle {
         index: usize,
         object: SemanticNodeId,
@@ -4114,6 +4178,14 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidCameraPose { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot assign a non-unit-scale or invalid pose to Camera3D object {object:?}"
+            ),
+            Self::InvalidPointLightPose { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign a non-unit-scale or invalid pose to PointLight3D object {object:?}"
+            ),
+            Self::InvalidSpatialMaterialPose { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign a singular pose to PointLit object {object:?}"
             ),
             Self::InvalidStyle { index, object } => write!(
                 formatter,

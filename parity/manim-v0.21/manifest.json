@@ -872,13 +872,57 @@
       "source": "parity/manim-v0.21/spatial_mesh.py",
       "direct_factory": "createDirectSpatialMeshSmokeRenderer",
       "expected_duration": 2.0,
-      "sample_times": [0.0, 0.5, 1.5, 1.9666666666666666],
+      "sample_times": [
+        0.0,
+        0.5,
+        1.5,
+        1.9666666666666666
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "Source-equivalent pinned Manim 3D depth oracle for the shared typed Rust/WASM mesh scene; not a Python authoring API fixture."
+      "notes": "Source-equivalent pinned Manim 3D depth oracle for the shared typed Rust/WASM mesh scene; not a Python authoring API fixture.",
+      "expected_object_count": 3
+    },
+    {
+      "scene": "SpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 2,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-direct",
+      "direct_factory": "createDirectSpatialSurfaceSmokeRenderer",
+      "notes": "Shared native/direct-WASM indexed UV surface with world rotation, compared with an explicitly opaque unlit pinned Manim surface; native mesh profile, not default Surface-class parity. Uses the existing 3D mesh raster policy: Cairo antialiases each UV cell boundary, while the immutable indexed mesh has continuous shared edges. This is not cell-seam raster parity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "scene": "SpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 2,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-worker",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "The same native-profile surface and world intent through the actual Python authoring worker, retained resource bridge and existing renderer. Reference shading/checkerboard/transparency are explicitly disabled. Uses the existing 3D mesh raster policy: Cairo antialiases each UV cell boundary, while the immutable indexed mesh has continuous shared edges. This is not cell-seam raster parity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
     },
     {
       "id": "mathtex-substrings",

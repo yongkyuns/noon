@@ -51,7 +51,12 @@ fn nonzero_layers_survive_snapshot_storage_remapping_and_sparse_updates() {
     let mut frame = frame();
     let mut encoder = RetainedExecutionDeltaEncoder::new(71);
     let snapshot = encoder
-        .encode_snapshot_indices(&frame, Camera2DState::default(), [1, 0])
+        .encode_snapshot_indices_with_context(
+            &frame,
+            Camera2DState::default(),
+            noon_core::PublicationContext::default(),
+            [1, 0],
+        )
         .unwrap();
     let mut mirror = RetainedExecutionFrameMirror::default();
     mirror.apply(wire_round_trip(&snapshot)).unwrap();
@@ -63,10 +68,11 @@ fn nonzero_layers_survive_snapshot_storage_remapping_and_sparse_updates() {
     frame.time = 0.5;
     frame.objects[0].appearance = 0.5;
     let delta = encoder
-        .encode_incremental(
+        .encode_incremental_with_context(
             &frame,
             &FrameChanges::objects(vec![0]),
             Camera2DState::default(),
+            noon_core::PublicationContext::default(),
         )
         .unwrap()
         .unwrap();
@@ -79,10 +85,11 @@ fn nonzero_layers_survive_snapshot_storage_remapping_and_sparse_updates() {
     // A layer change and its painter splice share the same publication.
     frame.objects[0].z_index = -4.0;
     let delta = encoder
-        .encode_incremental_with_painter_order(
+        .encode_incremental_with_painter_order_and_context(
             &frame,
             &FrameChanges::objects(vec![0]).with_painter_order(0..2),
             Camera2DState::default(),
+            noon_core::PublicationContext::default(),
             &[0, 1],
         )
         .unwrap()
@@ -100,12 +107,35 @@ fn signed_zero_layer_bits_are_not_replaced_by_a_decoder_default() {
     frame.objects[0].z_index = -0.0;
     frame.objects[1].z_index = 0.0;
     let snapshot = RetainedExecutionDeltaEncoder::new(72)
-        .encode_snapshot(&frame, Camera2DState::default())
+        .encode_snapshot_with_context(
+            &frame,
+            Camera2DState::default(),
+            noon_core::PublicationContext::default(),
+        )
         .unwrap();
     let mut mirror = RetainedExecutionFrameMirror::default();
     mirror.apply(wire_round_trip(&snapshot)).unwrap();
     assert_layer(&mirror, ObjectId::new(40), -0.0);
     assert_layer(&mirror, ObjectId::new(41), 0.0);
+}
+
+#[test]
+fn version_thirteen_requires_source_publication_context() {
+    let frame = frame();
+    let delta = RetainedExecutionDeltaEncoder::new(73)
+        .encode_snapshot_with_context(
+            &frame,
+            Camera2DState::default(),
+            noon_core::PublicationContext::new(
+                noon_core::SceneRevision::new(5),
+                noon_core::ExecutionRevision::new(8),
+                noon_core::FrameEpoch::new(13),
+            ),
+        )
+        .unwrap();
+    let mut json = serde_json::to_value(delta).unwrap();
+    json.as_object_mut().unwrap().remove("publication_context");
+    assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(json).is_err());
 }
 
 fn transient(frame: &FrameState, side: TransientAnchorSide) -> TransientPresentationOccurrence {
@@ -142,7 +172,12 @@ fn real_transient_packing_preserves_nonzero_anchor_layers_on_both_sides() {
     let frame = frame();
     for side in [TransientAnchorSide::Before, TransientAnchorSide::After] {
         let retained = RetainedExecutionDeltaEncoder::new(73)
-            .encode_snapshot_indices(&frame, Camera2DState::default(), [1, 0])
+            .encode_snapshot_indices_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                [1, 0],
+            )
             .unwrap();
         let mut envelope = RetainedFamilyExecutionDeltaEnvelope {
             retained,
@@ -190,7 +225,11 @@ fn real_transient_packing_preserves_nonzero_anchor_layers_on_both_sides() {
 #[test]
 fn wire_requires_explicit_layers_and_rejects_the_previous_protocol() {
     let snapshot = RetainedExecutionDeltaEncoder::new(74)
-        .encode_snapshot(&frame(), Camera2DState::default())
+        .encode_snapshot_with_context(
+            &frame(),
+            Camera2DState::default(),
+            noon_core::PublicationContext::default(),
+        )
         .unwrap();
     let mut json = serde_json::to_value(&snapshot).unwrap();
     json["objects"][0]
@@ -215,29 +254,39 @@ fn nonfinite_layers_fail_encoding_without_consuming_a_sequence() {
         frame.objects[1].z_index = invalid;
         let mut encoder = RetainedExecutionDeltaEncoder::new(75);
         assert!(matches!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
-            Err(RetainedExecutionTransportError::InvalidZIndex(_))
-        ));
-        frame.objects[1].z_index = -3.5;
-        let valid = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
-            .unwrap();
-        assert_eq!(valid.sequence, 0);
-        frame.objects[1].z_index = invalid;
-        assert!(matches!(
-            encoder.encode_incremental(
+            encoder.encode_snapshot_with_context(
                 &frame,
-                &FrameChanges::objects(vec![1]),
-                Camera2DState::default()
+                Camera2DState::default(),
+                noon_core::PublicationContext::default()
             ),
             Err(RetainedExecutionTransportError::InvalidZIndex(_))
         ));
         frame.objects[1].z_index = -3.5;
         let valid = encoder
-            .encode_incremental(
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        assert_eq!(valid.sequence, 0);
+        frame.objects[1].z_index = invalid;
+        assert!(matches!(
+            encoder.encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default()
+            ),
+            Err(RetainedExecutionTransportError::InvalidZIndex(_))
+        ));
+        frame.objects[1].z_index = -3.5;
+        let valid = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![1]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -252,7 +301,11 @@ fn invalid_layers_reject_snapshot_and_incremental_publications_atomically() {
             let frame = frame();
             let mut encoder = RetainedExecutionDeltaEncoder::new(76);
             let initial = encoder
-                .encode_snapshot(&frame, Camera2DState::default())
+                .encode_snapshot_with_context(
+                    &frame,
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
                 .unwrap();
             let mut mirror = RetainedExecutionFrameMirror::default();
             mirror.apply(initial).unwrap();
@@ -262,14 +315,19 @@ fn invalid_layers_reject_snapshot_and_incremental_publications_atomically() {
             let sequence = mirror.applied_sequence();
             let mut delta = if snapshot {
                 encoder
-                    .encode_snapshot(&frame, Camera2DState::default())
+                    .encode_snapshot_with_context(
+                        &frame,
+                        Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
+                    )
                     .unwrap()
             } else {
                 encoder
-                    .encode_incremental(
+                    .encode_incremental_with_context(
                         &frame,
                         &FrameChanges::objects(vec![0, 1]),
                         Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
                     )
                     .unwrap()
                     .unwrap()

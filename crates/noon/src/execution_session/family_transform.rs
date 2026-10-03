@@ -678,6 +678,7 @@ mod matching_target_tests {
                 style: Style::default(),
                 appearance: 1.0,
                 reveal: 1.0,
+                world_transform: None,
             },
             tracks: vec![PreparedDerivedFamilyTransformTrack {
                 occurrence_index: 0,

@@ -1,9 +1,14 @@
-use noon_compile::{lower_semantic_execution, ExecutionPatch, SemanticExecutionIndex};
+use noon_compile::{
+    lower_semantic_execution, lower_semantic_execution_root,
+    lower_semantic_execution_root_with_animation_root, ExecutionPatch, SemanticExecutionIndex,
+};
 use noon_core::{
-    Color, CompositionTimeMap, MeshResource, Property, RateFunction, SemanticObjectRole,
-    SemanticObjectState, SemanticPaint, SemanticProjection3D, SemanticStore, SemanticStyle,
-    SemanticTransform, SemanticVec3, SemanticWorldTransform3D, StoredGeometry, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, WorldTransformTrackEndpoint,
+    AnimationOptions, Color, CompositionTimeMap, MeshResource, Property, RateFunction,
+    SemanticAnimationCompositionKind, SemanticMutationTransaction, SemanticObjectRole,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticPaint,
+    SemanticProjection3D, SemanticSpatialMaterial, SemanticStore, SemanticStyle, SemanticTransform,
+    SemanticVec3, SemanticWorldTransform3D, StoredGeometry, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, WorldTransformTrackEndpoint,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
@@ -310,6 +315,132 @@ fn build_many_mesh_scene(count: usize) -> SceneInstance {
         }))
         .unwrap();
     SceneInstance::new(compiled)
+}
+
+fn build_lighting_scene(
+    material: SemanticSpatialMaterial,
+    light_count: usize,
+    animate_light: bool,
+) -> SceneInstance {
+    build_lighting_scene_with_normal(
+        material,
+        light_count,
+        animate_light,
+        SemanticVec3::new(0.0, 0.0, 1.0),
+        Color::BLACK,
+    )
+}
+
+fn build_lighting_scene_with_normal(
+    material: SemanticSpatialMaterial,
+    light_count: usize,
+    animate_light: bool,
+    normal: SemanticVec3,
+    surface_color: Color,
+) -> SceneInstance {
+    build_lighting_scene_with_normals(
+        material,
+        light_count,
+        animate_light,
+        vec![normal; 3],
+        surface_color,
+    )
+}
+
+fn build_lighting_scene_with_normals(
+    material: SemanticSpatialMaterial,
+    light_count: usize,
+    animate_light: bool,
+    normals: Vec<SemanticVec3>,
+    surface_color: Color,
+) -> SceneInstance {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let payload = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+            SemanticVec3::new(1.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        Some(normals),
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.insert_geometry_mesh(payload);
+
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 30.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    let camera_id = attach(&mut store, camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    surface.style = opaque_style(surface_color);
+    surface.set_spatial_material(material);
+    let surface_id = store.insert_semantic_object(surface);
+    store.add_semantic_family_member(root, surface_id).unwrap();
+
+    let mut light_id = None;
+    for _ in 0..light_count {
+        let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        light.set_role(SemanticObjectRole::PointLight3D);
+        light.transform.translation.z = 2.0;
+        light.style = opaque_style(Color::rgba(1.0, 0.0, 0.0, 1.0));
+        let id = store.insert_semantic_object(light);
+        store.add_semantic_family_member(root, id).unwrap();
+        light_id.get_or_insert(id);
+    }
+
+    let mut index = SemanticExecutionIndex::new();
+    if animate_light {
+        let light_id = light_id.expect("animated light fixture includes its point light");
+        let world_pose = |x| {
+            SemanticWorldTransform3D::new(
+                SemanticVec3::new(x, 0.0, 2.0),
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        let track = transaction.create_object_property_track(
+            light_id,
+            SemanticObjectTrackProperty::WorldTransform,
+            SemanticObjectTrackValues::WorldTransform {
+                from: world_pose(0.0),
+                to: world_pose(2.0),
+            },
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            CompositionTimeMap::identity(),
+        );
+        let animation_root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            [track],
+            AnimationOptions::new(),
+        );
+        let committed = transaction.apply(&mut store).unwrap();
+        let animation_root = committed.resolve(animation_root).unwrap();
+        SceneInstance::from_semantic_execution(
+            lower_semantic_execution_root_with_animation_root(
+                &store,
+                root,
+                &mut index,
+                animation_root,
+            )
+            .unwrap(),
+        )
+    } else {
+        SceneInstance::from_semantic_execution(
+            lower_semantic_execution_root(&store, root, &mut index).unwrap(),
+        )
+    }
 }
 
 fn render(
@@ -686,6 +817,198 @@ fn native_publication_preparation_skips_spatial_rows_in_retained_vector_stream()
             retained.incremental_stats().scratch_rebuilds,
             retained_before_motion.scratch_rebuilds,
             "world/camera-only motion must not rebuild the retained planar scratch frame"
+        );
+    });
+}
+
+#[test]
+fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping point-light GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut frame_preparer = FramePreparer::new();
+        let mut lit = build_lighting_scene(SemanticSpatialMaterial::PointLit, 1, true);
+
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut frame_preparer,
+            &mut lit,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(initial.resident_meshes, 1);
+        assert_eq!(initial.resident_instances, 1);
+        assert_eq!(initial.light_bytes, 32);
+        let lit_center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            (110..=145).contains(&lit_center[0]) && lit_center[1] < 4 && lit_center[2] < 4,
+            "front-facing +Z normal receives the cubic positive response: {lit_center:?}"
+        );
+
+        lit.advance_to(0.5).unwrap();
+        let (moved, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut frame_preparer,
+            &mut lit,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            moved.rows_visited, 1,
+            "only the animated light row is visited"
+        );
+        assert_eq!(
+            moved.light_bytes, 32,
+            "the changed point-light uniform is uploaded"
+        );
+        assert_eq!(
+            moved.instance_bytes, 0,
+            "light motion does not rewrite mesh instances"
+        );
+        assert_eq!(
+            moved.geometry_bytes, 0,
+            "light motion preserves mesh residency"
+        );
+        assert_eq!(moved.camera_bytes, 0);
+        let moved_center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            moved_center[0] + 25 < lit_center[0],
+            "moving the light off the face normal lowers the cubic response: {moved_center:?}"
+        );
+
+        let mut unlit_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        unlit_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut unlit_preparer = FramePreparer::new();
+        let mut unlit = build_lighting_scene(SemanticSpatialMaterial::Unlit, 1, false);
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut unlit_renderer,
+            &mut unlit_preparer,
+            &mut unlit,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            pixel(&pixels, WIDTH / 2, HEIGHT / 2),
+            [0, 0, 0, 255],
+            "Unlit remains byte-identical when a light is present"
+        );
+
+        let mut reverse_normal_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        reverse_normal_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut reverse_normal_preparer = FramePreparer::new();
+        let mut reverse_normal = build_lighting_scene_with_normal(
+            SemanticSpatialMaterial::PointLit,
+            1,
+            false,
+            SemanticVec3::new(0.0, 0.0, -1.0),
+            Color::WHITE,
+        );
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut reverse_normal_renderer,
+            &mut reverse_normal_preparer,
+            &mut reverse_normal,
+            &target,
+        )
+        .unwrap();
+        let reverse_center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            (185..=200).contains(&reverse_center[0])
+                && reverse_center[1] > 250
+                && reverse_center[2] > 250,
+            "negative dot contribution is half-strength (-0.25 at -1): {reverse_center:?}"
+        );
+
+        // At the center sample the two lower +Z normals and upper -Z normal
+        // interpolate to zero. The fragment shader must take the unlit
+        // fallback instead of normalizing zero and producing NaNs.
+        let zero_normal_color = Color::rgba(0.0, 0.0, 1.0, 1.0);
+        let mut zero_normal_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        zero_normal_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut zero_normal_preparer = FramePreparer::new();
+        let mut zero_normal = build_lighting_scene_with_normals(
+            SemanticSpatialMaterial::PointLit,
+            1,
+            false,
+            vec![
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                SemanticVec3::new(0.0, 0.0, -1.0),
+            ],
+            zero_normal_color,
+        );
+        // The pixel center at (64,64) is world y=-1/64 for this four-unit
+        // orthographic viewport. Align the zero-normal interpolation line with
+        // that sample rather than testing a nonzero neighboring normal.
+        let row = zero_normal
+            .frame()
+            .objects
+            .iter()
+            .find(|row| {
+                matches!(
+                    &row.content,
+                    noon_core::ObjectContentRef::Geometry(noon_core::GeometryRef::External(_))
+                )
+            })
+            .unwrap();
+        let object = row.id;
+        let mut pose = row.world_transform().unwrap();
+        pose.translation.y = -1.0 / 64.0;
+        zero_normal
+            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                object,
+                transform: pose.into(),
+            })
+            .unwrap();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut zero_normal_renderer,
+            &mut zero_normal_preparer,
+            &mut zero_normal,
+            &target,
+        )
+        .unwrap();
+        let zero_normal_pixel = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            zero_normal_pixel[0] <= 2
+                && zero_normal_pixel[1] <= 2
+                && zero_normal_pixel[2] == 255
+                && zero_normal_pixel[3] == 255,
+            "zero interpolated normal falls back to the base color: {zero_normal_pixel:?}"
+        );
+
+        let mut missing_light = build_lighting_scene(SemanticSpatialMaterial::PointLit, 0, false);
+        let publication = missing_light.take_renderer_publication();
+        let mut missing_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        assert_eq!(
+            missing_renderer.prepare_spatial(&device, &queue, &publication),
+            Err(SpatialPrepareError::MissingPointLight)
+        );
+
+        let mut multiple_lights = build_lighting_scene(SemanticSpatialMaterial::Unlit, 2, false);
+        let publication = multiple_lights.take_renderer_publication();
+        let mut multiple_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        assert_eq!(
+            multiple_renderer.prepare_spatial(&device, &queue, &publication),
+            Err(SpatialPrepareError::MultiplePointLights)
         );
     });
 }

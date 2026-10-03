@@ -11,6 +11,7 @@ mod coordinates;
 mod family_layout;
 mod image;
 mod path_editing;
+mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
@@ -203,6 +204,12 @@ pub enum AnimationCompositionRequest<'a> {
         options: AnimationOptions,
     },
     TransformTo(TransformToRequest<'a>),
+    /// Animate one mesh/camera/light through the shared effective world-pose track.
+    WorldTransform {
+        target: &'a Mobject,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    },
     FamilyTransformTo {
         source: &'a MobjectFamily,
         target_state: &'a MobjectFamily,
@@ -2029,6 +2036,18 @@ impl<'a> LiveSession<'a> {
                     interpolation: child.interpolation,
                     complete_priority: child.complete_priority,
                     options: child.options,
+                }
+            }
+            AnimationCompositionRequest::WorldTransform {
+                target,
+                transform,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::WorldTransform {
+                    target: target.node_id(),
+                    transform: *transform,
+                    options: *options,
                 }
             }
             AnimationCompositionRequest::FamilyTransformTo {

@@ -630,7 +630,8 @@ fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
     assert!(matches!(
         first_delta.retained.objects[0].content,
         TransportObjectContent::Geometry {
-            geometry: GeometryRef::VectorPath(_)
+            geometry: GeometryRef::VectorPath(_),
+            ..
         }
     ));
     let lease = player
@@ -665,7 +666,8 @@ fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
     assert!(matches!(
         second_delta.retained.objects[0].content,
         TransportObjectContent::Geometry {
-            geometry: GeometryRef::VectorPath(_)
+            geometry: GeometryRef::VectorPath(_),
+            ..
         }
     ));
     assert_eq!(
@@ -1719,6 +1721,10 @@ fn shared_authoring_to_transport_preserves_style_and_emits_only_dirty_rows() {
         (initial.session, initial.sequence, initial.snapshot),
         (42, 0, true)
     );
+    assert_eq!(
+        initial.publication_context,
+        player.session.publication_context()
+    );
     assert_eq!(initial.objects.len(), 2);
     assert_eq!(
         initial.objects[0].transform.translation,
@@ -1737,6 +1743,10 @@ fn shared_authoring_to_transport_preserves_style_and_emits_only_dirty_rows() {
     player.tick_delta_json(0.0).unwrap();
     let halfway: RetainedExecutionDeltaEnvelope =
         serde_json::from_str(&player.tick_delta_json(500.0).unwrap().unwrap()).unwrap();
+    assert_eq!(
+        halfway.publication_context,
+        player.session.publication_context()
+    );
     assert!(!halfway.snapshot);
     assert_eq!(halfway.objects.len(), 1);
     assert_eq!(halfway.objects[0].transform.translation.x, 4.0);

@@ -172,6 +172,11 @@ pub(crate) enum SemanticCompositionRequest {
         complete_priority: bool,
         options: AnimationOptions,
     },
+    WorldTransform {
+        target: SemanticNodeId,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    },
     FamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
@@ -295,6 +300,7 @@ impl SemanticCompositionRequest {
     const fn direct_leaf_target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { source, .. }
+            | Self::WorldTransform { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
@@ -1549,6 +1555,7 @@ impl ExecutionSession {
                 style: row.style,
                 appearance: row.appearance,
                 reveal: *frame.reveals.get(index)?,
+                world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
             })
         })?;
         let family_animations =
@@ -2162,6 +2169,16 @@ impl ExecutionSession {
                     *options,
                 );
                 Ok(animation)
+            }
+            SemanticCompositionRequest::WorldTransform {
+                target,
+                transform,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
+                Ok(declaration.create_world_transform_animation(*target, *transform, *options))
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,
@@ -2882,6 +2899,12 @@ impl ExecutionSession {
                 }
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
+            }
+            SemanticCompositionRequest::WorldTransform { target, transform, options } => {
+                if !self.reachability.is_object_reachable(*target) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                Ok(declaration.create_world_transform_animation(*target, *transform, *options))
             }
             SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -3716,6 +3739,7 @@ impl ExecutionSession {
                     style: row.style,
                     appearance: row.appearance,
                     reveal: *frame.reveals.get(index)?,
+                    world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
                 })
             },
         )?;
@@ -3751,6 +3775,10 @@ impl ExecutionSession {
                                 style: row.style,
                                 appearance: row.appearance,
                                 reveal: *frame.reveals.get(index)?,
+                                world_transform: row
+                                    .spatial
+                                    .as_deref()
+                                    .map(|spatial| spatial.world),
                             })
                         },
                     )
@@ -3791,6 +3819,10 @@ impl ExecutionSession {
                                 style: row.style,
                                 appearance: row.appearance,
                                 reveal: *frame.reveals.get(index)?,
+                                world_transform: row
+                                    .spatial
+                                    .as_deref()
+                                    .map(|spatial| spatial.world),
                             })
                         },
                     )

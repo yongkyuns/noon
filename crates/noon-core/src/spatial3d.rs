@@ -10,6 +10,48 @@
 
 use crate::{SemanticTransform2_5D, SemanticVec3};
 
+/// Minimal material policy for retained spatial meshes. `PointLit` uses one
+/// backend-neutral cubic directional response; it intentionally does not model
+/// PBR or claim Cairo's endpoint-gradient behavior for arbitrary topology.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SemanticSpatialMaterial {
+    #[default]
+    Unlit,
+    PointLit,
+}
+
+/// Optional authored spatial metadata. Ordinary objects pay no per-row storage;
+/// cameras and explicitly shaded objects share this one immutable allocation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SemanticSpatialProperties {
+    camera_projection: Option<SemanticProjection3D>,
+    material: SemanticSpatialMaterial,
+}
+
+impl SemanticSpatialProperties {
+    pub(crate) const fn new(
+        camera_projection: Option<SemanticProjection3D>,
+        material: SemanticSpatialMaterial,
+    ) -> Self {
+        Self {
+            camera_projection,
+            material,
+        }
+    }
+
+    pub const fn camera_projection(self) -> Option<SemanticProjection3D> {
+        self.camera_projection
+    }
+
+    pub const fn material(self) -> SemanticSpatialMaterial {
+        self.material
+    }
+
+    pub const fn is_default(self) -> bool {
+        self.camera_projection.is_none() && matches!(self.material, SemanticSpatialMaterial::Unlit)
+    }
+}
+
 fn add(a: SemanticVec3, b: SemanticVec3) -> SemanticVec3 {
     SemanticVec3::new(a.x + b.x, a.y + b.y, a.z + b.z)
 }
@@ -47,6 +89,14 @@ impl SemanticRotation3D {
     /// Zero and non-finite quaternions are rejected.
     pub fn from_components(w: f64, x: f64, y: f64, z: f64) -> Option<Self> {
         Self::normalized(w, x, y, z)
+    }
+
+    /// Accept already-normalized finite components without changing their bits.
+    /// Use only at typed boundaries that promise to preserve a validated unit
+    /// quaternion exactly; ordinary authoring should use `from_components`.
+    pub fn from_validated_components(w: f64, x: f64, y: f64, z: f64) -> Option<Self> {
+        let value = Self { w, x, y, z };
+        value.is_valid().then_some(value)
     }
 
     /// Return normalized quaternion components in `(w, x, y, z)` order.

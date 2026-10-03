@@ -55,6 +55,8 @@ mod authoring_polar_plane;
 #[cfg(target_arch = "wasm32")]
 mod authoring_sample_space;
 #[cfg(target_arch = "wasm32")]
+mod authoring_spatial;
+#[cfg(target_arch = "wasm32")]
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
 mod authoring_synchronized_plotting;
@@ -162,6 +164,8 @@ pub use authoring_plotting::*;
 pub use authoring_polar_plane::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_sample_space::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_spatial::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_synchronized_plotting::*;
 #[cfg(target_arch = "wasm32")]

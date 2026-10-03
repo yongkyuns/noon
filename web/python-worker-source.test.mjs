@@ -52,6 +52,19 @@ test("image inputs cross the worker as typed retained resources with bounded URL
   assert.match(source, /size > limit/);
 });
 
+test("surface sampling factory is callable from Python and constructs the WASM plan", () => {
+  const declaration = source.match(/^\s*self\.noonSurfaceSamplingPlan = .*;$/m)?.[0];
+  assert.ok(declaration, "surface sampling factory must be installed");
+  class SamplingPlan {
+    constructor(...parameters) { this.parameters = parameters; }
+  }
+  const host = {};
+  new Function("self", "WasmSurfaceSamplingPlan", declaration)(host, SamplingPlan);
+  const plan = host.noonSurfaceSamplingPlan(-1, 1, -2, 2, 8, 4);
+  assert.ok(plan instanceof SamplingPlan);
+  assert.deepEqual(plan.parameters, [-1, 1, -2, 2, 8, 4]);
+});
+
 test("detached ValueTracker construction stays in the shared authoring store", async () => {
   assert.match(
     source,
