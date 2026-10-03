@@ -92,6 +92,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
   node --test scripts/playground-product-fps.test.mjs
+  node --test scripts/playground-product-compare.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"

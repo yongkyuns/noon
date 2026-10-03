@@ -219,6 +219,10 @@ jobs:
           node candidate/.github/ci/product-artifact.mjs verify baseline baseline
           node candidate/.github/ci/product-artifact.mjs verify candidate candidate
 
+      - name: Test product comparison validation
+        working-directory: candidate
+        run: node --test scripts/playground-product-compare.test.mjs
+
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -250,8 +254,6 @@ jobs:
         run: node scripts/renderer-init-failure-smoke.mjs
 
       - name: Measure baseline playground
-        id: baseline-product
-        continue-on-error: true
         working-directory: candidate
         env:
           NOON_PRODUCT_SITE_ROOT: ${{ github.workspace }}/baseline
@@ -270,7 +272,6 @@ jobs:
         run: node scripts/playground-product-e2e.mjs
 
       - name: Compare product behavior
-        if: steps.baseline-product.outcome == 'success'
         working-directory: candidate
         env:
           NOON_PRODUCT_MAX_LATENCY_RATIO: "1.25"
@@ -281,11 +282,6 @@ jobs:
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/baseline \
             browser-smoke-artifacts/product-gate/candidate
-
-      - name: Explain unavailable baseline comparison
-        if: steps.baseline-product.outcome != 'success'
-        run: |
-          echo "::notice title=Product baseline unavailable::The current PR base does not complete the product E2E flow. Candidate functionality is still required; relative visual/latency/FPS comparison will begin once this repair reaches master."
 
       - name: Upload product regression evidence
         if: always()

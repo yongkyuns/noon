@@ -12,13 +12,26 @@ const candidateDir = path.resolve(candidateDirArg);
 const baseline = JSON.parse(await readFile(path.join(baselineDir, "report.json"), "utf8"));
 const candidate = JSON.parse(await readFile(path.join(candidateDir, "report.json"), "utf8"));
 
+for (const [name, report] of [["baseline", baseline], ["candidate", candidate]]) {
+  assert.equal(report?.schemaVersion, 1, `${name} product report has an unsupported schema`);
+  assert.ok(typeof report.exampleId === "string" && report.exampleId.length > 0,
+    `${name} product report must name an example`);
+  assert.ok(typeof report.runtime?.backend === "string" && report.runtime.backend.length > 0,
+    `${name} product report must name a renderer backend`);
+}
 assert.equal(candidate.exampleId, baseline.exampleId, "product reports must use the same example");
 assert.equal(candidate.runtime.backend, baseline.runtime.backend, "candidate changed the renderer backend");
 
-const maxLatencyRatio = Number(process.env.NOON_PRODUCT_MAX_LATENCY_RATIO ?? "1.25");
-const latencySlackMs = Number(process.env.NOON_PRODUCT_LATENCY_SLACK_MS ?? "350");
-const minFpsRatio = Number(process.env.NOON_PRODUCT_MIN_FPS_RATIO ?? "0.80");
-const maxVisualDiffRatio = Number(process.env.NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO ?? "0.015");
+function threshold(name, fallback) {
+  const raw = process.env[name] ?? fallback;
+  assert.ok(raw.trim().length > 0, `${name} must not be empty`);
+  return Number(raw);
+}
+
+const maxLatencyRatio = threshold("NOON_PRODUCT_MAX_LATENCY_RATIO", "1.25");
+const latencySlackMs = threshold("NOON_PRODUCT_LATENCY_SLACK_MS", "350");
+const minFpsRatio = threshold("NOON_PRODUCT_MIN_FPS_RATIO", "0.80");
+const maxVisualDiffRatio = threshold("NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO", "0.015");
 
 assert.ok(Number.isFinite(maxLatencyRatio) && maxLatencyRatio > 0,
   "NOON_PRODUCT_MAX_LATENCY_RATIO must be finite and positive");
