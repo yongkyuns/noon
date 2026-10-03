@@ -40,7 +40,7 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
                 &source.integration_store().borrow(),
                 Vec::new(),
             )
-            .map_err(E::from)
+            .map_err(E::from);
         }
         Err(
             noon_core::SemanticFamilyPairingError::TopologyMismatch { .. }
@@ -488,7 +488,14 @@ pub(crate) fn prepare_become_states(
         let mut total: Option<Bounds2D64> = None;
         for state in states {
             validate_content(store, state.content)?;
-            if let Some(bounds) = layout_for_content(store, state.content, state.transform)? {
+            if let Some(bounds) = layout_for_content(
+                store,
+                state.content,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+            )? {
                 if let Some(total) = &mut total {
                     total.include(bounds.min_x, bounds.min_y);
                     total.include(bounds.max_x, bounds.max_y);
@@ -510,7 +517,10 @@ pub(crate) fn prepare_become_states(
                 crate::semantic_mobject::boundary_for_content(
                     store,
                     state.content,
-                    state.transform,
+                    state
+                        .transform
+                        .as_planar()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
                 )?,
             );
         }
@@ -564,9 +574,14 @@ pub(crate) fn prepare_become_states(
     };
     let mut result = Vec::with_capacity(targets.len());
     for mut target in targets {
-        let Ok((local_x, local_y)) =
-            crate::dimension_fit::world_scale_factors(target.transform.rotation_z, x, y)
-        else {
+        let Ok((local_x, local_y)) = crate::dimension_fit::world_scale_factors(
+            target
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+            x,
+            y,
+        ) else {
             let path = crate::family_affine::world_scaled_path(
                 store,
                 &target,

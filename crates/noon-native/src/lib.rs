@@ -573,6 +573,9 @@ impl NativeApp {
             .as_mut()
             .expect("drawable native host must own GPU state");
         gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
+        gpu.renderer
+            .prepare_spatial(&gpu.device, &gpu.queue, &publication)
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         let metrics = gpu.text_metrics(camera)?;
         gpu.preparer.set_inset_views_active(!inset_views.is_empty());
         gpu.renderer
@@ -1738,6 +1741,20 @@ mod tests {
             "native continuation endpoint emitted no geometry draw calls"
         );
         app
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an X11 display and a working native wgpu adapter"]
+    fn native_surface_smoke_presents_spatial_mesh_frame() {
+        let session = noon::example_scenes::spatial_mesh::session().unwrap();
+        let source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
+        let app = present_continuation_endpoint(Box::new(source), 0.0);
+        assert_eq!(app.session().frame().objects.len(), 3);
+        assert_eq!(
+            app.session().camera_3d().unwrap().unwrap().position,
+            noon_core::SemanticVec3::new(0.0, 0.0, 5.0),
+        );
     }
 
     #[cfg(target_os = "linux")]

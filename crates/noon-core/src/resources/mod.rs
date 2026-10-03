@@ -13,6 +13,9 @@ pub use geometry::*;
 mod image;
 pub use image::*;
 
+mod mesh;
+pub use mesh::*;
+
 mod lookup;
 pub use lookup::*;
 

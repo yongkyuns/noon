@@ -65,10 +65,15 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
                 &mut state.transform.scale.y,
                 observed.object.transform.scale.y,
             );
-            preserve_or_capture_f32(
-                &mut state.transform.rotation_z,
-                observed.object.transform.rotation,
-            );
+            let mut rotation =
+                state
+                    .transform
+                    .planar_rotation()
+                    .ok_or(AuthoringError::Unsupported(
+                        UnsupportedAuthoringOperation::CaptureRenderOverride,
+                    ))?;
+            preserve_or_capture_f32(&mut rotation, observed.object.transform.rotation);
+            state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         }
         state.set_z_index(observed.object.z_index);
         state.style = target_style_from_effective(&state.style, observed.object.style)?;

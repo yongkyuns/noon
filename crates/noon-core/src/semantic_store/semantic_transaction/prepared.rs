@@ -564,6 +564,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .filter_map(|mutation| match mutation {
                 SemanticMutation::SetZIndex { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
+                | SemanticMutation::SetObjectTransform { object, .. }
                 | SemanticMutation::SetClickIndicate { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
                 | SemanticMutation::ReplaceContent { object, .. }
@@ -1205,6 +1206,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     set_object_property(store, object, property, value);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectProperty { object, property });
+                }
+                SemanticMutation::SetObjectTransform { object, transform } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .transform = transform;
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectTransform { object });
                 }
                 SemanticMutation::SetClickIndicate { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);

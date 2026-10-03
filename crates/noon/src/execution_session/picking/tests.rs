@@ -117,7 +117,7 @@ fn reflected_rotated_nonuniform_fills_use_inverse_effective_transforms() {
     let mut state = circle();
     state.transform.translation = SemanticVec3::new(4.0, -3.0, 0.0);
     state.transform.scale = SemanticVec3::new(-3.0, 0.5, 1.0);
-    state.transform.rotation_z = 0.7;
+    state.transform.orientation = noon_core::SemanticOrientation::Planar(0.7);
     let node = attach(&mut store, state);
     let mut session = session(&store);
     let transform = session.frame().render_transform(0);
@@ -151,7 +151,7 @@ fn polygon_fill_uses_the_effective_inverse_transform() {
     let mut state = SemanticObjectState::new(StoredGeometry::Resource(path));
     state.transform.translation = SemanticVec3::new(4.0, -3.0, 0.0);
     state.transform.scale = SemanticVec3::new(-2.0, 0.5, 1.0);
-    state.transform.rotation_z = 0.7;
+    state.transform.orientation = noon_core::SemanticOrientation::Planar(0.7);
     let node = attach(&mut store, state);
     let mut session = session(&store);
     let transform = session.frame().render_transform(0);
@@ -171,7 +171,8 @@ fn polygon_fill_uses_the_effective_inverse_transform() {
 fn rotated_rectangle_rejects_its_world_axis_aligned_box_corner() {
     let mut store = SemanticStore::new();
     let mut state = rectangle();
-    state.transform.rotation_z = std::f64::consts::FRAC_PI_4;
+    state.transform.orientation =
+        noon_core::SemanticOrientation::Planar(std::f64::consts::FRAC_PI_4);
     attach(&mut store, state);
     let mut session = session(&store);
     let result = query(&mut session, Vec2::new(1.2, 1.2));

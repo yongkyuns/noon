@@ -1580,6 +1580,10 @@ mod wasm {
                     .map_err(js_error)?;
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
+                let spatial_upload = self
+                    .renderer
+                    .prepare_spatial(&self.device, &self.queue, &publication)
+                    .map_err(js_error)?;
                 let derived = self
                     .direct_preparer
                     .prepare_transient_presentations_visible(
@@ -1609,6 +1613,7 @@ mod wasm {
                 self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
                 self.last_bytes_uploaded = upload
                     .bytes_uploaded()
+                    .saturating_add(spatial_upload.bytes_uploaded())
                     .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded))
                     .saturating_add(overlay_upload.bytes_uploaded);
 

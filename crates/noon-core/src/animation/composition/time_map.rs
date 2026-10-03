@@ -42,6 +42,25 @@ impl CompositionTimeMapStep {
             finished: warped > self.start + self.duration,
         }
     }
+
+    fn evaluate_f64(self, alpha: f64) -> CompositionTimeSampleF64 {
+        let warped = self.rate_func.evaluate_f64(alpha);
+        if warped < self.start {
+            return CompositionTimeSampleF64::before();
+        }
+        if self.duration <= 0.0 {
+            return CompositionTimeSampleF64 {
+                alpha: 1.0,
+                begun: true,
+                finished: true,
+            };
+        }
+        CompositionTimeSampleF64 {
+            alpha: ((warped - self.start) / self.duration).clamp(0.0, 1.0),
+            begun: true,
+            finished: warped > self.start + self.duration,
+        }
+    }
 }
 
 /// Deterministic nested composition timing carried by a leaf track.
@@ -104,6 +123,22 @@ impl CompositionTimeMap {
                 return sample;
             }
             sample = step.evaluate(sample.alpha);
+        }
+        sample
+    }
+
+    /// Evaluate nested timing without lowering normalized progress to f32.
+    pub fn evaluate_f64(&self, alpha: f64) -> CompositionTimeSampleF64 {
+        let mut sample = CompositionTimeSampleF64 {
+            alpha: alpha.clamp(0.0, 1.0),
+            begun: true,
+            finished: alpha >= 1.0,
+        };
+        for step in &self.steps {
+            if !sample.begun {
+                return sample;
+            }
+            sample = step.evaluate_f64(sample.alpha);
         }
         sample
     }
@@ -195,6 +230,23 @@ pub struct CompositionTimeSample {
     pub finished: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompositionTimeSampleF64 {
+    pub alpha: f64,
+    pub begun: bool,
+    pub finished: bool,
+}
+
+impl CompositionTimeSampleF64 {
+    const fn before() -> Self {
+        Self {
+            alpha: 0.0,
+            begun: false,
+            finished: false,
+        }
+    }
+}
+
 impl CompositionTimeSample {
     const fn before() -> Self {
         Self {
@@ -276,6 +328,28 @@ pub fn mapped_continuous_progress(
     }
     let sample = time_map.evaluate(raw);
     sample.begun.then(|| timing.easing.evaluate(sample.alpha))
+}
+
+/// f64-preserving variant for spatial values whose timeline cannot be rounded to shader precision.
+pub fn mapped_continuous_progress_f64(
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+    time: f64,
+) -> Option<f64> {
+    if time < timing.start_time {
+        return None;
+    }
+    if timing.is_instant() || time >= timing.start_time + timing.duration {
+        return Some(1.0);
+    }
+    let raw = ((time - timing.start_time) / timing.duration).clamp(0.0, 1.0);
+    if time_map.is_identity() {
+        return Some(timing.easing.evaluate_f64(raw));
+    }
+    let sample = time_map.evaluate_f64(raw);
+    sample
+        .begun
+        .then(|| timing.easing.evaluate_f64(sample.alpha))
 }
 
 #[cfg(test)]

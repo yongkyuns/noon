@@ -563,8 +563,13 @@ pub(crate) fn placement_authored_transform(
     let authored = object.state()?;
     let authored_transform = Transform2D {
         translation: authored.transform.translation.lower_xy_f32()?,
-        rotation: authoring_render_f64("move_to authored rotation", authored.transform.rotation_z)?
-            as f32,
+        rotation: authoring_render_f64(
+            "move_to authored rotation",
+            authored
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )? as f32,
         scale: authored.transform.scale.lower_xy_f32()?,
     };
     let store_ref = store.borrow();

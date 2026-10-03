@@ -43,6 +43,23 @@ impl SemanticRotation3D {
         z: 0.0,
     };
 
+    /// Construct and normalize a quaternion from `(w, x, y, z)` components.
+    /// Zero and non-finite quaternions are rejected.
+    pub fn from_components(w: f64, x: f64, y: f64, z: f64) -> Option<Self> {
+        Self::normalized(w, x, y, z)
+    }
+
+    /// Return normalized quaternion components in `(w, x, y, z)` order.
+    pub const fn components(self) -> [f64; 4] {
+        [self.w, self.x, self.y, self.z]
+    }
+
+    /// Whether the components form a finite unit quaternion.
+    pub fn is_valid(self) -> bool {
+        let norm = self.w.hypot(self.x).hypot(self.y).hypot(self.z);
+        norm.is_finite() && (norm - 1.0).abs() <= 1.0e-12
+    }
+
     /// Reject a zero or non-finite axis or angle, then normalize the rotation.
     pub fn from_axis_angle(axis: SemanticVec3, radians: f64) -> Option<Self> {
         if !axis.is_finite() || !radians.is_finite() {
@@ -76,7 +93,7 @@ impl SemanticRotation3D {
         })
     }
 
-    fn inverse(self) -> Self {
+    pub fn inverse(self) -> Self {
         Self {
             w: self.w,
             x: -self.x,
@@ -85,7 +102,7 @@ impl SemanticRotation3D {
         }
     }
 
-    fn rotate(self, value: SemanticVec3) -> Option<SemanticVec3> {
+    pub fn rotate_vector(self, value: SemanticVec3) -> Option<SemanticVec3> {
         if !value.is_finite() {
             return None;
         }
@@ -109,6 +126,90 @@ impl SemanticRotation3D {
         );
         result.is_finite().then_some(result)
     }
+
+    /// Compose rotations as `self * rhs`; `rhs` acts on a vector first.
+    pub fn compose(self, rhs: Self) -> Option<Self> {
+        Self::normalized(
+            self.w * rhs.w - self.x * rhs.x - self.y * rhs.y - self.z * rhs.z,
+            self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,
+            self.w * rhs.y - self.x * rhs.z + self.y * rhs.w + self.z * rhs.x,
+            self.w * rhs.z + self.x * rhs.y - self.y * rhs.x + self.z * rhs.w,
+        )
+    }
+
+    /// Interpolate along the shortest quaternion arc for `t` in `[0, 1]`.
+    /// Exact endpoints are returned unchanged; near-parallel inputs use nlerp.
+    pub fn interpolate(self, target: Self, t: f64) -> Option<Self> {
+        if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+            return None;
+        }
+        if t == 0.0 {
+            return Some(self);
+        }
+        if t == 1.0 {
+            return Some(target);
+        }
+        let mut end = target;
+        let mut dot = self.w * end.w + self.x * end.x + self.y * end.y + self.z * end.z;
+        if dot < 0.0 {
+            end = Self {
+                w: -end.w,
+                x: -end.x,
+                y: -end.y,
+                z: -end.z,
+            };
+            dot = -dot;
+        }
+        dot = dot.clamp(-1.0, 1.0);
+        let (a, b) = if dot > 0.9995 {
+            (1.0 - t, t)
+        } else {
+            let theta = dot.acos();
+            let sine = theta.sin();
+            (((1.0 - t) * theta).sin() / sine, (t * theta).sin() / sine)
+        };
+        Self::normalized(
+            a * self.w + b * end.w,
+            a * self.x + b * end.x,
+            a * self.y + b * end.y,
+            a * self.z + b * end.z,
+        )
+    }
+}
+
+/// Multiply column-major 4x4 matrices (`left * right`).
+fn matrix_multiply(left: [f64; 16], right: [f64; 16]) -> Option<[f64; 16]> {
+    let mut result = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            result[column * 4 + row] = (0..4)
+                .map(|k| left[k * 4 + row] * right[column * 4 + k])
+                .sum();
+        }
+    }
+    result.iter().all(|v| v.is_finite()).then_some(result)
+}
+
+fn rotation_matrix(rotation: SemanticRotation3D) -> [f64; 16] {
+    let [w, x, y, z] = rotation.components();
+    [
+        1. - 2. * (y * y + z * z),
+        2. * (x * y + w * z),
+        2. * (x * z - w * y),
+        0.,
+        2. * (x * y - w * z),
+        1. - 2. * (x * x + z * z),
+        2. * (y * z + w * x),
+        0.,
+        2. * (x * z + w * y),
+        2. * (y * z - w * x),
+        1. - 2. * (x * x + y * y),
+        0.,
+        0.,
+        0.,
+        0.,
+        1.,
+    ]
 }
 
 /// High-precision object transform; no renderer precision or resource state.
@@ -159,8 +260,56 @@ impl SemanticWorldTransform3D {
             point.y * self.scale.y,
             point.z * self.scale.z,
         );
-        let result = add(self.rotation.rotate(scaled)?, self.translation);
+        let result = add(self.rotation.rotate_vector(scaled)?, self.translation);
         result.is_finite().then_some(result)
+    }
+
+    /// Interpolate translation/scale linearly and orientation on its shortest arc.
+    pub fn interpolate(self, target: Self, t: f64) -> Option<Self> {
+        if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+            return None;
+        }
+        if t == 0.0 {
+            return Some(self);
+        }
+        if t == 1.0 {
+            return Some(target);
+        }
+        let lerp = |a: f64, b: f64| (1.0 - t) * a + t * b;
+        Self::new(
+            SemanticVec3::new(
+                lerp(self.translation.x, target.translation.x),
+                lerp(self.translation.y, target.translation.y),
+                lerp(self.translation.z, target.translation.z),
+            ),
+            self.rotation.interpolate(target.rotation, t)?,
+            SemanticVec3::new(
+                lerp(self.scale.x, target.scale.x),
+                lerp(self.scale.y, target.scale.y),
+                lerp(self.scale.z, target.scale.z),
+            ),
+        )
+    }
+
+    /// Column-major `T * R * S` matrix, suitable for WGSL uniform upload.
+    pub fn world_matrix(self) -> Option<[f64; 16]> {
+        let mut scale = [0.; 16];
+        scale[0] = self.scale.x;
+        scale[5] = self.scale.y;
+        scale[10] = self.scale.z;
+        scale[15] = 1.;
+        let mut translation = [0.; 16];
+        translation[0] = 1.;
+        translation[5] = 1.;
+        translation[10] = 1.;
+        translation[15] = 1.;
+        translation[12] = self.translation.x;
+        translation[13] = self.translation.y;
+        translation[14] = self.translation.z;
+        matrix_multiply(
+            matrix_multiply(translation, rotation_matrix(self.rotation))?,
+            scale,
+        )
     }
 }
 
@@ -255,6 +404,25 @@ impl SemanticProjection3D {
         };
         result.is_finite().then_some(result)
     }
+
+    fn matrix(self, aspect: f64) -> Option<[f64; 16]> {
+        let [sx, sy, sz, offset] = self.coefficients(aspect)?;
+        let mut m = [0.; 16];
+        m[0] = sx;
+        m[5] = sy;
+        m[10] = sz;
+        match self {
+            Self::Perspective { .. } => {
+                m[11] = -1.;
+                m[14] = offset;
+            }
+            Self::Orthographic { .. } => {
+                m[14] = offset;
+                m[15] = 1.;
+            }
+        }
+        Some(m)
+    }
 }
 
 /// Camera orientation maps local +X/+Y/-Z into world right/up/forward.
@@ -292,8 +460,23 @@ impl SemanticCamera3D {
         let view = self
             .orientation
             .inverse()
-            .rotate(subtract(world, self.position))?;
+            .rotate_vector(subtract(world, self.position))?;
         self.projection.clip(view, viewport_aspect)
+    }
+
+    /// Column-major `P * inverse(R) * T(-position)` view-projection matrix.
+    /// Aspect is viewport width / height; values are computed in f64.
+    pub fn camera_matrix(self, viewport_aspect: f64) -> Option<[f64; 16]> {
+        let mut translation = [0.; 16];
+        translation[0] = 1.;
+        translation[5] = 1.;
+        translation[10] = 1.;
+        translation[15] = 1.;
+        translation[12] = -self.position.x;
+        translation[13] = -self.position.y;
+        translation[14] = -self.position.z;
+        let view = matrix_multiply(rotation_matrix(self.orientation.inverse()), translation)?;
+        matrix_multiply(self.projection.matrix(viewport_aspect)?, view)
     }
 }
 
@@ -336,6 +519,155 @@ mod tests {
             (actual - expected).abs() < 1.0e-12,
             "{actual} != {expected}"
         );
+    }
+
+    fn matrix_point(matrix: [f64; 16], point: SemanticVec3) -> SemanticClipPoint3D {
+        let v = [point.x, point.y, point.z, 1.0];
+        let mut out = [0.0; 4];
+        for row in 0..4 {
+            out[row] = (0..4)
+                .map(|column| matrix[column * 4 + row] * v[column])
+                .sum();
+        }
+        SemanticClipPoint3D {
+            x: out[0],
+            y: out[1],
+            z: out[2],
+            w: out[3],
+        }
+    }
+
+    #[test]
+    fn quaternion_construction_composition_and_shortest_interpolation_are_pinned() {
+        assert!(SemanticRotation3D::from_components(0.0, 0.0, 0.0, 0.0).is_none());
+        assert!(SemanticRotation3D::from_components(f64::NAN, 0.0, 0.0, 0.0).is_none());
+        let x = SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(1., 0., 0.),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        let y = SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(0., 1., 0.),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        let v = SemanticVec3::new(0., 0., 1.);
+        let composed = x.compose(y).unwrap().rotate_vector(v).unwrap();
+        let sequential = x.rotate_vector(y.rotate_vector(v).unwrap()).unwrap();
+        near(composed.x, sequential.x);
+        near(composed.y, sequential.y);
+        near(composed.z, sequential.z);
+        let reverse = y.compose(x).unwrap().rotate_vector(v).unwrap();
+        assert!(
+            (reverse.x - composed.x).abs()
+                + (reverse.y - composed.y).abs()
+                + (reverse.z - composed.z).abs()
+                > 0.5
+        );
+
+        let a = SemanticRotation3D::IDENTITY;
+        let half_turn = SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(0., 0., 1.),
+            std::f64::consts::PI,
+        )
+        .unwrap();
+        let midpoint = a
+            .interpolate(half_turn, 0.5)
+            .unwrap()
+            .rotate_vector(SemanticVec3::new(1., 0., 0.))
+            .unwrap();
+        near(midpoint.x, 0.);
+        near(midpoint.y, 1.);
+        assert_eq!(a.interpolate(half_turn, 0.0), Some(a));
+        assert_eq!(a.interpolate(half_turn, 1.0), Some(half_turn));
+        assert!(a.interpolate(half_turn, f64::NAN).is_none());
+        assert!(a.interpolate(half_turn, 1.1).is_none());
+    }
+
+    #[test]
+    fn world_and_camera_matrices_match_projection_oracle() {
+        let object = SemanticWorldTransform3D::new(
+            SemanticVec3::new(2., -1., 3.),
+            SemanticRotation3D::from_axis_angle(SemanticVec3::new(0., 0., 1.), 0.4).unwrap(),
+            SemanticVec3::new(2., 0.5, 1.5),
+        )
+        .unwrap();
+        let camera = SemanticCamera3D::new(
+            SemanticVec3::new(0.5, 1., 8.),
+            SemanticRotation3D::from_axis_angle(SemanticVec3::new(1., 0., 0.), -0.2).unwrap(),
+            SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.1,
+                near: 0.5,
+                far: 40.,
+            },
+        )
+        .unwrap();
+        let point = SemanticVec3::new(0.2, -0.7, 0.3);
+        let aspect = 16. / 9.;
+        let world_point = matrix_point(object.world_matrix().unwrap(), point);
+        let expected_world = object.transform_point(point).unwrap();
+        near(world_point.x, expected_world.x);
+        near(world_point.y, expected_world.y);
+        near(world_point.z, expected_world.z);
+        let clip_matrix = matrix_point(
+            matrix_multiply(
+                camera.camera_matrix(aspect).unwrap(),
+                object.world_matrix().unwrap(),
+            )
+            .unwrap(),
+            point,
+        );
+        let clip_oracle = camera.project(object, point, aspect).unwrap();
+        near(clip_matrix.x, clip_oracle.x);
+        near(clip_matrix.y, clip_oracle.y);
+        near(clip_matrix.z, clip_oracle.z);
+        near(clip_matrix.w, clip_oracle.w);
+
+        let ortho = SemanticCamera3D::new(
+            SemanticVec3::ZERO,
+            SemanticRotation3D::IDENTITY,
+            SemanticProjection3D::Orthographic {
+                height: 4.,
+                near: 1.,
+                far: 11.,
+            },
+        )
+        .unwrap();
+        let ortho_matrix = matrix_point(
+            ortho.camera_matrix(2.).unwrap(),
+            SemanticVec3::new(2., 1., -6.),
+        );
+        let ortho_oracle = ortho
+            .project(
+                SemanticWorldTransform3D::IDENTITY,
+                SemanticVec3::new(2., 1., -6.),
+                2.,
+            )
+            .unwrap();
+        near(ortho_matrix.x, ortho_oracle.x);
+        near(ortho_matrix.y, ortho_oracle.y);
+        near(ortho_matrix.z, ortho_oracle.z);
+        near(ortho_matrix.w, ortho_oracle.w);
+        assert!(camera.camera_matrix(0.).is_none());
+    }
+
+    #[test]
+    fn world_interpolation_handles_extreme_finite_opposite_endpoints() {
+        let from = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-1.0e308, 0.0, 0.0),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        let to = SemanticWorldTransform3D::new(
+            SemanticVec3::new(1.0e308, 0.0, 0.0),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        assert_eq!(from.interpolate(to, 0.5).unwrap().translation.x, 0.0);
+        assert_eq!(from.interpolate(to, 0.0), Some(from));
+        assert_eq!(from.interpolate(to, 1.0), Some(to));
     }
 
     #[test]
@@ -555,7 +887,9 @@ mod tests {
             std::f64::consts::PI,
         )
         .unwrap();
-        let rotated = rotation.rotate(SemanticVec3::new(1.0, 0.0, 0.0)).unwrap();
+        let rotated = rotation
+            .rotate_vector(SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
         near(rotated.x, 0.0);
         near(rotated.y, 1.0);
         near(rotated.z, 0.0);

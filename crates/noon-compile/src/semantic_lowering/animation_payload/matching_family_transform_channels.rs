@@ -59,10 +59,16 @@ impl std::fmt::Display for PreparedMatchingFamilyTransformChannelError {
         match self {
             Self::Channel(error) => error.fmt(formatter),
             Self::InvalidSourceIndex(index) => {
-                write!(formatter, "matching-shape source index {index} is out of bounds")
+                write!(
+                    formatter,
+                    "matching-shape source index {index} is out of bounds"
+                )
             }
             Self::InvalidTargetIndex(index) => {
-                write!(formatter, "matching-shape target index {index} is out of bounds")
+                write!(
+                    formatter,
+                    "matching-shape target index {index} is out of bounds"
+                )
             }
             Self::TooManyOccurrences(count) => write!(
                 formatter,

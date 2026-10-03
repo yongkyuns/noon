@@ -417,6 +417,7 @@ pub(crate) fn effective_object_conservative_bounds_with_resources(
             let handle = resources.current_handle(*id)?;
             match resources.get(handle)? {
                 GeometryResource::VectorPath(path) => vector_path_bounds(path),
+                GeometryResource::Mesh(_) => None,
             }
         }
         _ => None,
@@ -586,6 +587,7 @@ mod tests {
                 content: ObjectContentRef::Geometry(geometry),
                 text_bounds: None,
                 transform,
+                spatial: None,
                 style,
                 appearance: 1.0,
             }],
@@ -618,6 +620,7 @@ mod tests {
                     rotation: 0.0,
                     scale: Vec2::new(2.0, 0.5),
                 },
+                spatial: None,
                 style: Style::default(),
                 appearance: 1.0,
             }],

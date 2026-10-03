@@ -579,6 +579,9 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
         EffectiveSemanticPropertyWrite::Transform { .. } => {
             CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
         }
+        EffectiveSemanticPropertyWrite::WorldTransform { .. } => {
+            CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
+        }
         EffectiveSemanticPropertyWrite::Style { .. } => {
             CALLBACK_FILL | CALLBACK_STROKE | CALLBACK_STROKE_WIDTH | CALLBACK_OPACITY
         }
@@ -732,6 +735,11 @@ impl CallbackPhaseOverlay {
         let mut transform = current.transform;
         let mut style = current.style;
         match write {
+            EffectiveSemanticPropertyWrite::WorldTransform { .. } => {
+                return Err(ExecutionSessionCallbackError::UnsupportedWorldTransform(
+                    object,
+                ));
+            }
             EffectiveSemanticPropertyWrite::Presence { presence, .. } => {
                 current.presence = presence
             }
@@ -786,6 +794,7 @@ pub enum ExecutionSessionCallbackError {
         requested: f64,
     },
     UnsupportedCallbackTarget(SemanticNodeId),
+    UnsupportedWorldTransform(SemanticNodeId),
     UnknownObject(SemanticNodeId),
     Read(ExecutionSessionCallbackReadError),
     Evaluation(EvaluationError),
@@ -834,6 +843,12 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
             Self::UnsupportedCallbackTarget(target) => write!(
                 formatter,
                 "callback target {}:{} is not an execution object",
+                target.slot(),
+                target.generation()
+            ),
+            Self::UnsupportedWorldTransform(target) => write!(
+                formatter,
+                "world-transform writes are not supported by the planar callback wire protocol for {}:{}",
                 target.slot(),
                 target.generation()
             ),
@@ -1862,6 +1877,11 @@ impl ExecutionSession {
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
             let semantic = write.object();
+            if matches!(write, EffectiveSemanticPropertyWrite::WorldTransform { .. }) {
+                return Err(ExecutionSessionCallbackError::UnsupportedWorldTransform(
+                    semantic,
+                ));
+            }
             let object = self
                 .execution_index
                 .execution_object_id(semantic)

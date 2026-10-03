@@ -90,6 +90,9 @@ pub struct GraphMutationResult {
     pub removed_edges: Vec<GraphEdgeMobject>,
 }
 
+// Short-lived owned batch preparations stay inline to avoid an extra allocation
+// per edge when constructing or extending a large graph.
+#[allow(clippy::large_enum_variant)]
 enum PreparedNewEdge {
     Line(ManimGeometryOptions),
     Arrow(PreparedArrow),

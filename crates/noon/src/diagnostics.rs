@@ -50,6 +50,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                         GeometryResource::VectorPath(path) => {
                             GeometryRef::VectorPath((**path).clone())
                         }
+                        GeometryResource::Mesh(_) => GeometryRef::External(*id),
                     }),
                 geometry => geometry.cloned(),
             };

@@ -45,6 +45,8 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintOpacityQuery,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
+    /// 2D layout and boundary queries do not project spatial mesh geometry.
+    SpatialMeshBounds2D,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
     /// This operation cannot retain the requested world-axis deformation.
@@ -78,6 +80,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
+            Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",
             Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",

@@ -353,11 +353,17 @@ fn state_bounds(
     store: &SemanticStore,
     state: &noon_core::SemanticObjectState,
 ) -> Result<Bounds2D64, TextAuthoringError> {
-    Ok(
-        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
-            .map_err(TextAuthoringError::Semantic)?
-            .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)),
+    Ok(crate::semantic_mobject::boundary_for_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)
+            .map_err(TextAuthoringError::Semantic)?,
     )
+    .map_err(TextAuthoringError::Semantic)?
+    .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)))
 }
 
 fn states_bounds(

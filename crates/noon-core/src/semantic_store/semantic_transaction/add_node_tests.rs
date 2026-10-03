@@ -77,7 +77,7 @@ fn invalid_object_state_rolls_back_earlier_mutation_before_allocation() {
     let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
     let before_len = store.len();
     let mut invalid = object_state(1.0);
-    invalid.transform.rotation_z = f64::NAN;
+    invalid.transform.orientation = crate::SemanticOrientation::Planar(f64::NAN);
 
     let mut transaction = SemanticMutationTransaction::new();
     transaction

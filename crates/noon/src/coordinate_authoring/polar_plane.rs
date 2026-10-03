@@ -309,7 +309,8 @@ fn stage_polar_circles(
         state.transform = SemanticTransform2_5D {
             translation: SemanticVec3::new(center[0], center[1], 0.0),
             ..SemanticTransform2_5D::default()
-        };
+        }
+        .into();
         let is_background = index % ratio == 0;
         state.style = if is_background {
             background_style.clone()

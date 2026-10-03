@@ -120,7 +120,7 @@ fn publish(
                     let (handle, (transform, style)) =
                         entries.next().expect("prepared label count");
                     let mut state = SemanticObjectState::new(*handle);
-                    state.transform = transform;
+                    state.transform = transform.into();
                     state.style = style;
                     let leaf = transaction.create_node(SemanticNodeCreation::object(state));
                     transaction.add_member(root, leaf);

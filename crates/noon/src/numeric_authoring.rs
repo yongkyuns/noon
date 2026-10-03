@@ -508,7 +508,7 @@ impl PreparedDecimalValue {
         transform: SemanticTransform2_5D,
     ) -> Result<SemanticObjectState, TextAuthoringError> {
         let mut state = SemanticObjectState::new(handle);
-        state.transform = transform;
+        state.transform = transform.into();
         state.style.fill = Some(SemanticPaint::Solid(WHITE));
         state.set_decimal_number(Some(decimal_metadata(
             self.value,
@@ -741,7 +741,7 @@ fn decimal_replacement_transaction(
             }
         })?;
     effective.content = SemanticObjectContent::Text(handle);
-    effective.transform = noon_core::SemanticTransform2_5D::default();
+    effective.transform = noon_core::SemanticTransform2_5D::default().into();
     let scale = effective_font_size / f64::from(font_size);
     effective.transform.scale.x = scale;
     effective.transform.scale.y = scale;
@@ -770,14 +770,21 @@ fn left_edge_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<(f64, f64), TextAuthoringError> {
-    Ok(
-        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
-            .map_err(TextAuthoringError::Semantic)?
-            .map_or(
-                (state.transform.translation.x, state.transform.translation.y),
-                |bounds| (bounds.min_x, (bounds.min_y + bounds.max_y) * 0.5),
-            ),
+    Ok(crate::semantic_mobject::boundary_for_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(TextAuthoringError::Semantic(
+                crate::AuthoringError::NonFiniteObjectState,
+            ))?,
     )
+    .map_err(TextAuthoringError::Semantic)?
+    .map_or(
+        (state.transform.translation.x, state.transform.translation.y),
+        |bounds| (bounds.min_x, (bounds.min_y + bounds.max_y) * 0.5),
+    ))
 }
 
 fn numeric_presentation_baseline(
@@ -805,10 +812,17 @@ fn effective_font_size(
     if baseline.initial_height == 0.0 {
         return Ok(baseline.initial_font_size);
     }
-    let height =
-        crate::semantic_mobject::boundary_for_content(store, state.content, state.transform)
-            .map_err(TextAuthoringError::Semantic)?
-            .map_or(0.0, |bounds| bounds.height());
+    let height = crate::semantic_mobject::boundary_for_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(crate::AuthoringError::NonFiniteObjectState)
+            .map_err(NumericAuthoringError::Semantic)?,
+    )
+    .map_err(TextAuthoringError::Semantic)?
+    .map_or(0.0, |bounds| bounds.height());
     let value = height / baseline.initial_height * baseline.initial_font_size;
     if !value.is_finite() || value <= 0.0 || value > f64::from(f32::MAX) {
         return Err(NumericAuthoringError::InvalidEffectiveFontSize { value });
@@ -1057,7 +1071,7 @@ mod tests {
         let mut effective = authored.clone();
         effective.transform.scale.x = 2.0;
         effective.transform.scale.y = 2.0;
-        effective.transform.rotation_z = 0.6;
+        effective.transform.orientation = noon_core::SemanticOrientation::Planar(0.6);
         effective.transform.translation.x = 3.0;
         effective.transform.translation.y = -2.0;
         let before = left_edge_center(&store, &effective).unwrap();
@@ -1075,7 +1089,13 @@ mod tests {
         .unwrap();
         tx.apply(&mut store).unwrap();
         let after = store.semantic_object_state_checked(node).unwrap();
-        assert_eq!(after.transform.rotation_z, 0.0);
+        assert_eq!(
+            after
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.0
+        );
         assert!((left_edge_center(&store, after).unwrap().0 - before.0).abs() < 1e-9);
         assert!((left_edge_center(&store, after).unwrap().1 - before.1).abs() < 1e-9);
         assert!((effective_font_size(&store, after).unwrap() - font).abs() < 1e-9);

@@ -7,9 +7,9 @@ use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOption
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticLocalNodeToken,
     SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, Transform2D, Vec2, VectorPath,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
+    Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -467,7 +467,7 @@ fn manim_geometry_state(
     role: noon_core::SemanticObjectRole,
 ) -> SemanticObjectState {
     let mut state = SemanticObjectState::new(geometry);
-    state.transform = transform;
+    state.transform = transform.into();
     state.style = style;
     state.set_z_index(z_index);
     state.set_role(role);
@@ -685,7 +685,13 @@ impl Mobject {
         Ok((t.x as f64, t.y as f64))
     }
     pub fn wire_rotation(&self) -> Result<f64, AuthoringError> {
-        Ok(finite_f32("rotation", self.state()?.transform.rotation_z)? as f64)
+        Ok(finite_f32(
+            "rotation",
+            self.state()?
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )? as f64)
     }
     pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, AuthoringError> {
         let s = self.state()?.style;
@@ -705,7 +711,14 @@ impl Mobject {
     /// Return world-space endpoints, including geometry replaced by point matching.
     pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
-        line_endpoints_for_state(&self.store.borrow(), &state, state.transform)
+        line_endpoints_for_state(
+            &self.store.borrow(),
+            &state,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     /// Return visible fill RGB, falling back to stroke RGB, independently of opacity.
@@ -721,7 +734,13 @@ impl Mobject {
         line_endpoints_for_state(
             &self.store.borrow(),
             &state,
-            semantic_transform_with_effective_affine(state.transform, transform),
+            semantic_transform_with_effective_affine(
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+                transform,
+            ),
         )
     }
 
@@ -730,7 +749,14 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        boundary_for_content(&store, state.content, state.transform)
+        boundary_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     pub(crate) fn boundary_bounds_at(
@@ -744,7 +770,13 @@ impl Mobject {
         boundary_for_content(
             &store,
             state.content,
-            semantic_transform_with_effective_affine(state.transform, transform),
+            semantic_transform_with_effective_affine(
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+                transform,
+            ),
         )
     }
 
@@ -755,7 +787,14 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        layout_for_content(&store, state.content, state.transform)
+        layout_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     /// Resolve authored content through an effective renderer-independent
@@ -769,8 +808,13 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        let semantic_transform =
-            semantic_transform_with_effective_affine(state.transform, transform);
+        let semantic_transform = semantic_transform_with_effective_affine(
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+            transform,
+        );
         layout_for_content(&store, state.content, semantic_transform)
     }
 
@@ -779,7 +823,10 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        let mut transform = state.transform;
+        let mut transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
         let translation = transform.translation;
         // Measure around the origin, then translate the center once. Translating
         // both extrema before averaging can lose a small authored translation or
@@ -925,7 +972,11 @@ impl Mobject {
     pub fn set_rotation(&mut self, angle: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
-        state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
+        if state.transform.planar_rotation().is_none() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        state.transform.orientation =
+            noon_core::SemanticOrientation::Planar(authoring_render_f64("rotation", angle)?);
         self.commit_state(state)
     }
 
@@ -959,13 +1010,16 @@ impl Mobject {
         let mut state = self.state()?;
         let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
             (state.transform.translation.x, state.transform.translation.y),
-            state.transform.rotation_z,
+            state
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
             angle,
             (point_x, point_y),
         )?;
         state.transform.translation.x = translation_x;
         state.transform.translation.y = translation_y;
-        state.transform.rotation_z = rotation;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         self.commit_state(state)
     }
 }
@@ -1009,22 +1063,8 @@ pub(crate) fn stage_state_changes(
     if previous.content != next.content {
         transaction.replace_content(target, next.content);
     }
-    if previous.transform.translation != next.transform.translation {
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::Translation,
-            next.transform.translation,
-        );
-    }
-    if previous.transform.scale != next.transform.scale {
-        transaction.set_property(target, SemanticObjectProperty::Scale, next.transform.scale);
-    }
-    if previous.transform.rotation_z != next.transform.rotation_z {
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::RotationZ,
-            next.transform.rotation_z,
-        );
+    if previous.transform != next.transform {
+        transaction.set_object_transform(target, next.transform);
     }
     if previous.style != next.style {
         transaction.replace_style(target, next.style.clone());
@@ -1035,14 +1075,21 @@ pub(crate) fn state_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<(f64, f64), AuthoringError> {
-    Ok(boundary_for_content(store, state.content, state.transform)?
-        .map(|bounds| {
-            (
-                (bounds.min_x + bounds.max_x) * 0.5,
-                (bounds.min_y + bounds.max_y) * 0.5,
-            )
-        })
-        .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
+    Ok(boundary_for_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
+    )?
+    .map(|bounds| {
+        (
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+        )
+    })
+    .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
 }
 
 pub(crate) fn scale_state_about_center(

@@ -18,7 +18,7 @@ use crate::{
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
     SemanticTableLayout, SemanticTransactionGraphDeclaration,
-    SemanticTransactionGraphEdgeDependency, SemanticTransformInterpolation,
+    SemanticTransactionGraphEdgeDependency, SemanticTransform, SemanticTransformInterpolation,
     SemanticUpdaterRegistration, StoredGeometry, TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
@@ -85,6 +85,11 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
+    },
+    /// Atomically replace the complete authored transform, including spatial orientation.
+    SetObjectTransform {
+        object: SemanticTransactionNodeRef,
+        transform: SemanticTransform,
     },
     /// Replace or clear one object-owned click indication declaration.
     SetClickIndicate {
@@ -201,6 +206,7 @@ impl SemanticMutation {
         match self {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
+            | Self::SetObjectTransform { object, .. }
             | Self::SetClickIndicate { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
@@ -266,6 +272,7 @@ impl SemanticMutation {
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
+            | Self::SetObjectTransform { object, .. }
             | Self::SetClickIndicate { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
@@ -300,6 +307,9 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             }),
+            Self::SetObjectTransform { object, .. } => {
+                Some(SemanticMutationKey::ObjectTransform(*object))
+            }
             Self::SetClickIndicate { object, .. } => {
                 Some(SemanticMutationKey::ClickIndicate(*object))
             }
@@ -357,6 +367,7 @@ pub(super) enum SemanticMutationKey {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
     },
+    ObjectTransform(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
     ClickIndicate(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
@@ -400,6 +411,9 @@ pub enum SemanticMutationImpact {
     ObjectProperty {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
+    },
+    ObjectTransform {
+        object: SemanticNodeId,
     },
     ObjectContent {
         object: SemanticNodeId,
@@ -591,6 +605,21 @@ impl SemanticMutationTransaction {
             object: object.into(),
             property,
             value: value.into(),
+        });
+        self
+    }
+
+    /// Replace one object's complete authored transform through the shared
+    /// staged mutation path. Spatial orientation cannot be represented through
+    /// the legacy scalar RotationZ property.
+    pub fn set_object_transform(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        transform: SemanticTransform,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetObjectTransform {
+            object: object.into(),
+            transform,
         });
         self
     }
@@ -1705,6 +1734,8 @@ impl SemanticMutationTransaction {
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut style_replacements = HashSet::new();
         let mut style_property_writes = HashSet::new();
+        let mut object_transform_writes = HashSet::new();
+        let mut object_transform_property_writes = HashSet::new();
         let mut changed = Vec::with_capacity(self.mutations.len());
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
@@ -1854,6 +1885,26 @@ impl SemanticMutationTransaction {
                     }
                     style_replacements.insert(*object);
                 }
+                SemanticMutation::SetObjectTransform { object, .. } => {
+                    if object_transform_property_writes.contains(object) {
+                        return Err(duplicate_mutation_error(
+                            index,
+                            SemanticMutationKey::ObjectTransform(*object),
+                        ));
+                    }
+                    object_transform_writes.insert(*object);
+                }
+                SemanticMutation::SetProperty {
+                    object, property, ..
+                } if is_transform_property(*property) => {
+                    if object_transform_writes.contains(object) {
+                        return Err(duplicate_mutation_error(
+                            index,
+                            SemanticMutationKey::ObjectTransform(*object),
+                        ));
+                    }
+                    object_transform_property_writes.insert(*object);
+                }
                 SemanticMutation::SetProperty {
                     object, property, ..
                 } if is_style_property(*property) => {
@@ -1959,9 +2010,52 @@ impl SemanticMutationTransaction {
                         *object,
                         index,
                     )?;
+                    if *property == SemanticObjectProperty::RotationZ
+                        && state.transform.planar_rotation().is_none()
+                    {
+                        return Err(
+                            SemanticMutationTransactionError::SpatialOrientationForPlanarRotation {
+                                index,
+                                object: *object,
+                            },
+                        );
+                    }
                     let did_change = object_property_value(state, *property) != *value;
                     if did_change {
                         apply_object_property(state, *property, value.clone());
+                        if !state.camera_declaration_is_valid() {
+                            return Err(SemanticMutationTransactionError::InvalidCameraPose {
+                                index,
+                                object: *object,
+                            });
+                        }
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetObjectTransform { object, transform } => {
+                    if !transform.is_valid() {
+                        return Err(SemanticMutationTransactionError::InvalidObjectTransform {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if state.role() == SemanticObjectRole::Camera3D
+                        && !state.camera_transform_is_valid(*transform)
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidCameraPose {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    let did_change = state.transform != *transform;
+                    if did_change {
+                        state.transform = *transform;
                     }
                     changed.push(did_change);
                 }
@@ -2909,7 +3003,7 @@ fn object_property_value(
         }
         SemanticObjectProperty::Scale => SemanticSignalValue::Vec3(state.transform.scale),
         SemanticObjectProperty::RotationZ => {
-            SemanticSignalValue::Scalar(state.transform.rotation_z)
+            SemanticSignalValue::Scalar(state.transform.planar_rotation().unwrap_or(f64::NAN))
         }
         SemanticObjectProperty::FillOpacity => {
             SemanticSignalValue::Scalar(state.style.fill_opacity)
@@ -2994,7 +3088,7 @@ fn apply_object_property(
             state.transform.scale = value;
         }
         (SemanticObjectProperty::RotationZ, SemanticSignalValue::Scalar(value)) => {
-            state.transform.rotation_z = value;
+            state.transform.orientation = crate::SemanticOrientation::Planar(value);
         }
         (SemanticObjectProperty::FillOpacity, SemanticSignalValue::Scalar(value)) => {
             state.style.fill_opacity = value;
@@ -3062,7 +3156,16 @@ fn set_object_style(store: &mut SemanticStore, object: SemanticNodeId, style: Se
         .style = style;
 }
 
-const fn is_style_property(property: SemanticObjectProperty) -> bool {
+const fn is_transform_property(property: SemanticObjectProperty) -> bool {
+    matches!(
+        property,
+        SemanticObjectProperty::Translation
+            | SemanticObjectProperty::Scale
+            | SemanticObjectProperty::RotationZ
+    )
+}
+
+fn is_style_property(property: SemanticObjectProperty) -> bool {
     matches!(
         property,
         SemanticObjectProperty::FillOpacity
@@ -3447,6 +3550,18 @@ pub enum SemanticMutationTransactionError {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    SpatialOrientationForPlanarRotation {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
+    InvalidObjectTransform {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
+    InvalidCameraPose {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+    },
     InvalidStyle {
         index: usize,
         object: SemanticNodeId,
@@ -3511,11 +3626,23 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPendingGeometryPath => formatter.write_str("pending geometry path contains non-finite coordinates"),
-            Self::PendingGeometryLimitExceeded => formatter.write_str("pending geometry working set exceeds the transaction limit"),
-            Self::LocalResourceTokenExhausted => formatter.write_str("transaction-local resource tokens exhausted"),
-            Self::UnknownPendingGeometryResource { index, resource } => write!(formatter, "semantic transaction mutation {index} names unknown pending geometry resource {resource:?}"),
-            Self::InvalidTableLayout { index, scope } => write!(formatter, "semantic transaction mutation {index} has invalid Table layout for {scope:?}"),
+            Self::InvalidPendingGeometryPath => {
+                formatter.write_str("pending geometry path contains non-finite coordinates")
+            }
+            Self::PendingGeometryLimitExceeded => {
+                formatter.write_str("pending geometry working set exceeds the transaction limit")
+            }
+            Self::LocalResourceTokenExhausted => {
+                formatter.write_str("transaction-local resource tokens exhausted")
+            }
+            Self::UnknownPendingGeometryResource { index, resource } => write!(
+                formatter,
+                "semantic transaction mutation {index} names unknown pending geometry resource {resource:?}"
+            ),
+            Self::InvalidTableLayout { index, scope } => write!(
+                formatter,
+                "semantic transaction mutation {index} has invalid Table layout for {scope:?}"
+            ),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats or replaces Graph declarations for {scope:?}"
@@ -3975,6 +4102,18 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 property,
                 object.slot(),
                 object.generation()
+            ),
+            Self::SpatialOrientationForPlanarRotation { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot apply planar RotationZ to spatially oriented object {object:?}"
+            ),
+            Self::InvalidObjectTransform { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign invalid transform to object {object:?}"
+            ),
+            Self::InvalidCameraPose { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot assign a non-unit-scale or invalid pose to Camera3D object {object:?}"
             ),
             Self::InvalidStyle { index, object } => write!(
                 formatter,

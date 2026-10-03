@@ -1167,8 +1167,21 @@ impl ExecutionSession {
     /// An authored camera never falls back silently: if its effective frame becomes
     /// invalid, the host receives an error just as the transport encoder does.
     pub fn camera(&self) -> Result<Camera2DState, ExecutionSessionCameraError> {
+        match self.camera_2d()? {
+            Some(camera) => Ok(camera),
+            None => match self.camera_object {
+                Some(object) => Err(ExecutionSessionCameraError { object }),
+                None => Ok(Camera2DState::default()),
+            },
+        }
+    }
+
+    /// Effective authored 2D camera, returning `None` when the unified camera
+    /// identity declares a 3D projection. Scenes without an authored camera use
+    /// the shared Manim-compatible default.
+    pub fn camera_2d(&self) -> Result<Option<Camera2DState>, ExecutionSessionCameraError> {
         let Some(camera_object) = self.camera_object else {
-            return Ok(Camera2DState::default());
+            return Ok(Some(Camera2DState::default()));
         };
         let object =
             self.runtime
@@ -1176,12 +1189,41 @@ impl ExecutionSession {
                 .ok_or(ExecutionSessionCameraError {
                     object: camera_object,
                 })?;
+        if object.camera_projection().is_some() {
+            return Ok(None);
+        }
         object
             .geometry()
             .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.transform))
+            .map(Some)
             .ok_or(ExecutionSessionCameraError {
                 object: camera_object,
             })
+    }
+
+    /// Effective authored 3D camera derived from the unified camera identity's
+    /// world pose and validated projection in the current runtime frame.
+    pub fn camera_3d(
+        &self,
+    ) -> Result<Option<noon_core::SemanticCamera3D>, ExecutionSessionCameraError> {
+        let Some(camera_object) = self.camera_object else {
+            return Ok(None);
+        };
+        let object =
+            self.runtime
+                .effective_object(camera_object)
+                .ok_or(ExecutionSessionCameraError {
+                    object: camera_object,
+                })?;
+        let Some(projection) = object.camera_projection() else {
+            return Ok(None);
+        };
+        let camera = object.world_transform().and_then(|world| {
+            noon_core::SemanticCamera3D::new(world.translation, world.rotation, projection)
+        });
+        camera.map(Some).ok_or(ExecutionSessionCameraError {
+            object: camera_object,
+        })
     }
 
     /// Active inset views derived from ordinary objects in the current frame epoch.
@@ -1722,7 +1764,7 @@ impl ExecutionSession {
                 return Err(ReactiveError::NotInputSignal(
                     noon_compile::semantic_execution_signal_id(signal),
                 )
-                .into())
+                .into());
             }
         };
         let mut transaction = SemanticMutationTransaction::new();
@@ -3814,7 +3856,7 @@ impl ExecutionSession {
                     return Err(ReactiveError::NotInputSignal(
                         noon_compile::semantic_execution_signal_id(leaf.signal),
                     )
-                    .into())
+                    .into());
                 }
             };
             let projection_enrollment = self
@@ -5241,7 +5283,7 @@ mod tests {
 
         let mut first_state = store.semantic_object_state_checked(object).unwrap().clone();
         first_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
-        first_state.transform.rotation_z = 0.5;
+        first_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.5);
         first_state.transform.scale = SemanticVec3::new(2.0, 2.0, 1.0);
         let first_state = store.insert_semantic_object(first_state);
         let first = store
@@ -5250,7 +5292,7 @@ mod tests {
 
         let mut second_state = store.semantic_object_state_checked(object).unwrap().clone();
         second_state.transform.translation = SemanticVec3::new(10.0, 0.0, 0.0);
-        second_state.transform.rotation_z = 1.5;
+        second_state.transform.orientation = noon_core::SemanticOrientation::Planar(1.5);
         second_state.transform.scale = SemanticVec3::new(4.0, 1.0, 1.0);
         let second_state = store.insert_semantic_object(second_state);
         let second = store

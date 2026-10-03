@@ -1007,8 +1007,15 @@ impl<'a> LiveSession<'a> {
         self.require_target_capture()?;
         let state = self.capture_mobject_state(mobject)?;
         let store = self.store.borrow();
-        crate::semantic_mobject::boundary_for_content(&store, state.content, state.transform)
-            .map_err(LiveSessionError::from)
+        crate::semantic_mobject::boundary_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(crate::AuthoringError::NonFiniteObjectState)?,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Publish one atomic batch of direct family additions.
@@ -3077,7 +3084,13 @@ mod tests {
             target_state.transform.scale,
             SemanticVec3::new(1.5, 1.0, 1.0)
         );
-        assert_eq!(target_state.transform.rotation_z, 0.25);
+        assert_eq!(
+            target_state
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.25
+        );
         assert_eq!(
             target_state.style,
             SemanticStyle {
@@ -3120,7 +3133,13 @@ mod tests {
         live.rotate(&target, 0.75).unwrap();
         let authored = live.authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
-        assert_eq!(authored.transform.rotation_z, 1.0);
+        assert_eq!(
+            authored
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            1.0
+        );
         assert!(live.session.take_frame_changes().is_empty());
     }
 
@@ -5397,7 +5416,15 @@ mod recursive_composition_tests {
             Ok(4.0)
         );
         assert!(
-            (square.state().unwrap().transform.rotation_z - std::f64::consts::PI).abs() < 1e-12
+            (square
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .unwrap_or(f64::NAN)
+                - std::f64::consts::PI)
+                .abs()
+                < 1e-12
         );
 
         live.set_value(&tracker, 3.0).unwrap();
@@ -5909,7 +5936,17 @@ mod recursive_composition_tests {
         assert!((rotated.transform.rotation - 0.2).abs() < 1.0e-5);
         live.advance_segment_to(follow, follow.end_time()).unwrap();
         live.complete_segment(follow).unwrap();
-        assert!((square.state().unwrap().transform.rotation_z - 0.4).abs() < 1.0e-12);
+        assert!(
+            (square
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .unwrap_or(f64::NAN)
+                - 0.4)
+                .abs()
+                < 1.0e-12
+        );
     }
 
     #[test]

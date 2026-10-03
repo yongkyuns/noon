@@ -36,8 +36,15 @@ impl FamilyAffine {
             if let Self::Scale(x, y, pivot) = self {
                 authoring_render_f64("scale.x", x)?;
                 authoring_render_f64("scale.y", y)?;
-                if crate::dimension_fit::world_scale_factors(state.transform.rotation_z, x, y)
-                    .is_err()
+                if crate::dimension_fit::world_scale_factors(
+                    state
+                        .transform
+                        .planar_rotation()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
+                    x,
+                    y,
+                )
+                .is_err()
                 {
                     let pivot =
                         resolve_pivot(bounds, bounds_critical_point(bounds, 0.0, 0.0), pivot)?;
@@ -99,7 +106,10 @@ impl FamilyAffine {
             match self {
                 Self::Scale(x, y, _) => {
                     let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
-                        previous.transform.rotation_z,
+                        previous
+                            .transform
+                            .planar_rotation()
+                            .ok_or(AuthoringError::NonFiniteObjectState)?,
                         x,
                         y,
                     )?;
@@ -121,13 +131,24 @@ impl FamilyAffine {
                     next.transform.translation.x = pivot.0 + c * dx + s * dy;
                     next.transform.translation.y = pivot.1 + s * dx - c * dy;
                     // F(axis) R(theta) D(sx, sy) = R(2*axis-theta) D(sx, -sy).
-                    next.transform.rotation_z = 2.0 * y.atan2(x) - previous.transform.rotation_z;
+                    next.transform.orientation = noon_core::SemanticOrientation::Planar(
+                        2.0 * y.atan2(x)
+                            - previous
+                                .transform
+                                .planar_rotation()
+                                .ok_or(AuthoringError::NonFiniteObjectState)?,
+                    );
                     next.transform.scale.y = -previous.transform.scale.y;
                     next.transform
                         .translation
                         .lower_xy_f32()
                         .map_err(AuthoringError::from)?;
-                    authoring_render_f64("flip rotation result", next.transform.rotation_z)?;
+                    authoring_render_f64(
+                        "flip rotation result",
+                        next.transform
+                            .planar_rotation()
+                            .ok_or(AuthoringError::NonFiniteObjectState)?,
+                    )?;
                 }
                 Self::Rotate(_, _) | Self::Flip(_, _) => {
                     let angle = match self {
@@ -139,13 +160,16 @@ impl FamilyAffine {
                             previous.transform.translation.x,
                             previous.transform.translation.y,
                         ),
-                        previous.transform.rotation_z,
+                        previous
+                            .transform
+                            .planar_rotation()
+                            .ok_or(AuthoringError::NonFiniteObjectState)?,
                         angle,
                         pivot,
                     )?;
                     next.transform.translation.x = translation.0;
                     next.transform.translation.y = translation.1;
-                    next.transform.rotation_z = rotation;
+                    next.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
                 }
             }
             stage_state_changes(&mut transaction, leaf, previous, &next);

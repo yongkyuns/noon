@@ -126,7 +126,7 @@ fn text_state(
     item: &PreparedText,
 ) -> Result<SemanticObjectState, TextAuthoringError> {
     let mut state = SemanticObjectState::new(handle);
-    state.transform = item.transform;
+    state.transform = item.transform.into();
     state.style = item.style.clone();
     state.set_text_presentation_baseline(crate::latex_authoring::latex_presentation_baseline(
         &item.dependency.1,

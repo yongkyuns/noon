@@ -80,6 +80,7 @@ impl CompiledScene {
             }
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => {
                 rows.insert(index(*object)?);
             }

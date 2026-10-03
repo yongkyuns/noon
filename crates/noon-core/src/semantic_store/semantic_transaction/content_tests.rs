@@ -95,7 +95,7 @@ fn content_property_and_subscription_changes_share_one_object_slot() {
 
     let state = store.semantic_object_state_checked(target).unwrap();
     assert_eq!(state.content, replacement);
-    assert_eq!(state.transform.rotation_z, 0.25);
+    assert_eq!(state.transform.planar_rotation().unwrap(), 0.25);
     assert_eq!(state.signal_bindings().len(), 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
     assert_eq!(
@@ -256,7 +256,8 @@ fn unavailable_geometry_resource_replacement_rolls_back_atomically() {
                 .semantic_object_state_checked(earlier)
                 .unwrap()
                 .transform
-                .rotation_z,
+                .planar_rotation()
+                .unwrap(),
             0.0
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -329,7 +330,8 @@ fn unavailable_text_replacement_rolls_back_an_earlier_valid_property_write() {
                 .semantic_object_state_checked(earlier)
                 .unwrap()
                 .transform
-                .rotation_z,
+                .planar_rotation()
+                .unwrap(),
             0.0
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);

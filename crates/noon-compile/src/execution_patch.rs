@@ -1,6 +1,6 @@
 use noon_core::{
-    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, Style, TrackDefinition, TrackId,
-    Transform2D,
+    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, SemanticTransform, Style,
+    TrackDefinition, TrackId, Transform2D,
 };
 
 use crate::{CompiledFamilyAnimation, CompiledGraphArrowPolicy, CompiledObject, CompiledScene};
@@ -46,6 +46,12 @@ pub enum ExecutionPatch {
     SetTransform {
         object: ObjectId,
         transform: Transform2D,
+    },
+    /// Replace the complete authored transform while preserving spatial values in
+    /// the compiler-owned f64 column.
+    SetSemanticTransform {
+        object: ObjectId,
+        transform: SemanticTransform,
     },
     SetZIndex {
         object: ObjectId,
@@ -106,6 +112,37 @@ impl ExecutionMutationTransaction {
 }
 
 impl CompiledScene {
+    /// Precompute the compact and optional spatial representation of one authored
+    /// transform for an already-identified object slot.
+    pub fn prepare_semantic_transform_value(
+        &self,
+        object_index: u32,
+        transform: SemanticTransform,
+    ) -> Option<(Transform2D, Option<crate::CompiledSpatialState>)> {
+        let object = self.objects().get(object_index as usize)?;
+        super::lower_semantic_transform_patch(object.id, object.spatial.as_deref(), transform)
+    }
+
+    /// Commit a semantic transform computed during prepared publication.
+    #[doc(hidden)]
+    pub fn commit_prepared_semantic_transform_value(
+        &mut self,
+        object_index: u32,
+        base_transform: Transform2D,
+        spatial: Option<crate::CompiledSpatialState>,
+    ) {
+        let object = &mut self.objects[object_index as usize];
+        object.base_transform = base_transform;
+        match (object.spatial.as_deref_mut(), spatial) {
+            (Some(current), Some(next)) => *current = next,
+            (None, None) => {}
+            _ => debug_assert!(
+                false,
+                "spatial transform classification changed after preflight"
+            ),
+        }
+    }
+
     /// Commit one transform value whose object slot and numeric payload were already
     /// validated by the caller's prepared publication proof.
     ///

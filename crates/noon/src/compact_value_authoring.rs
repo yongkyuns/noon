@@ -24,7 +24,7 @@ pub fn semantic_object_state_from_compact(
     let style = semantic_style_from_compact(style)?;
     let mut state =
         SemanticObjectState::new(crate::semantic_mobject::import_geometry(store, geometry)?);
-    state.transform = transform;
+    state.transform = transform.into();
     state.style = style;
     Ok(state)
 }

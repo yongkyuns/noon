@@ -94,7 +94,10 @@ pub enum PreparedFamilyTransformActivationError {
 impl std::fmt::Display for PreparedFamilyTransformActivationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PendingFamilyEndpoint { animation, endpoint } => write!(
+            Self::PendingFamilyEndpoint {
+                animation,
+                endpoint,
+            } => write!(
                 formatter,
                 "prepared family Transform {animation:?} retains pending family endpoint {endpoint:?}"
             ),

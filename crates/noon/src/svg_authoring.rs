@@ -301,7 +301,7 @@ impl MobjectFamily {
                 let family = transaction.create_node(family_creation);
                 for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
                     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
-                    state.transform = prepared.transform;
+                    state.transform = prepared.transform.into();
                     state.style = style;
                     let creation = with_svg_source_identity(
                         SemanticNodeCreation::object(state),

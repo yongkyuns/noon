@@ -167,6 +167,15 @@ pub async fn create_direct_painter_order_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct Rust/WASM counterpart of the native shared spatial-mesh qualification scene.
+#[wasm_bindgen(js_name = createDirectSpatialMeshSmokeRenderer)]
+pub async fn create_direct_spatial_mesh_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_mesh::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Shared family mutation semantics run directly through the Rust/WASM engine.
 #[wasm_bindgen(js_name = createDirectFamilyAffineSmokeRenderer)]
 pub async fn create_direct_family_affine_smoke_renderer(

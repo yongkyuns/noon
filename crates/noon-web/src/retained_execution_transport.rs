@@ -177,6 +177,7 @@ pub enum RetainedExecutionTransportError {
     StructuralChangeRequiresSnapshot,
     FrameShapeMismatch,
     InvalidObjectIndex(usize),
+    UnsupportedSpatialObject(ObjectId),
     InvalidZIndex(TransportSlotId),
     InvalidOrder(u32),
     DuplicateSlot(TransportSlotId),
@@ -196,8 +197,17 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownImageResource(handle) => write!(formatter, "unknown raster image resource {handle:?}"),
-            Self::ImageRenderGeometry(slot) => write!(formatter, "image slot {slot:?} cannot carry vector reveal, morph, or render geometry"),
+            Self::UnsupportedSpatialObject(object) => write!(
+                formatter,
+                "spatial object {object:?} is not supported by the planar worker transport"
+            ),
+            Self::UnknownImageResource(handle) => {
+                write!(formatter, "unknown raster image resource {handle:?}")
+            }
+            Self::ImageRenderGeometry(slot) => write!(
+                formatter,
+                "image slot {slot:?} cannot carry vector reveal, morph, or render geometry"
+            ),
             Self::InvalidChannel(channel) => {
                 write!(
                     formatter,
@@ -1338,6 +1348,11 @@ fn transport_object(
         .objects
         .get(index)
         .ok_or(RetainedExecutionTransportError::InvalidObjectIndex(index))?;
+    if object.spatial.is_some() {
+        return Err(RetainedExecutionTransportError::UnsupportedSpatialObject(
+            object.id,
+        ));
+    }
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
@@ -1420,6 +1435,7 @@ fn frame_object(
     content: ObjectContentRef,
 ) -> FrameObjectState {
     FrameObjectState {
+        spatial: None,
         z_index: object.z_index,
         id: object.object,
         content,
@@ -1490,6 +1506,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -1499,6 +1516,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(12),
                     content: ObjectContentRef::Text(text),
@@ -1517,6 +1535,32 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         }
+    }
+
+    #[test]
+    fn planar_worker_transport_rejects_spatial_rows_without_consuming_sequence() {
+        let mut frame = mixed_frame();
+        frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 30.0,
+            }),
+        }));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        assert_eq!(
+            encoder.encode_snapshot(&frame, Camera2DState::default()),
+            Err(RetainedExecutionTransportError::UnsupportedSpatialObject(
+                ObjectId::new(11)
+            ))
+        );
+        frame.objects[0].spatial = None;
+        let retry = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        assert_eq!(retry.sequence, 0);
+        assert!(retry.snapshot);
     }
 
     #[test]
@@ -1764,6 +1808,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
@@ -1866,6 +1911,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),

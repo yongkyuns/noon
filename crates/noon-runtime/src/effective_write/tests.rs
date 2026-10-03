@@ -135,6 +135,7 @@ fn assign_expected(
         EffectivePropertyWrite::Transform {
             transform: value, ..
         } => *transform = value,
+        EffectivePropertyWrite::WorldTransform { .. } => {}
         EffectivePropertyWrite::Style { style: value, .. } => *style = value,
         EffectivePropertyWrite::Translation { translation, .. } => {
             transform.translation = translation
@@ -528,4 +529,120 @@ fn scoped_write_vocabulary_does_not_unseal_replay() {
         Err(EvaluationError::ReplaySealed)
     ));
     assert!(instance.replay_is_sealed());
+}
+
+#[test]
+fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_scale() {
+    let id = object();
+    let world = noon_core::SemanticWorldTransform3D::new(
+        noon_core::SemanticVec3::new(4.0, -2.0, 3.0),
+        noon_core::SemanticRotation3D::from_axis_angle(
+            noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
+            0.75,
+        )
+        .unwrap(),
+        noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+    )
+    .unwrap();
+    let mut mesh = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        base_style(),
+    );
+    mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+    }));
+    let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
+    instance.take_frame_changes();
+    let initial = instance.publication_context();
+    let phase = instance.prepare_advance_to(0.0).unwrap();
+    let batch = instance
+        .prepare_effective_property_batch(&[EffectivePropertyWrite::WorldTransform {
+            object: id,
+            world,
+        }])
+        .unwrap();
+    instance.commit_prepared_frame(phase, batch).unwrap();
+    assert_eq!(instance.frame().objects[0].world_transform(), Some(world));
+    assert_eq!(
+        instance.compiled.objects()[0]
+            .spatial
+            .as_deref()
+            .unwrap()
+            .world,
+        noon_core::SemanticWorldTransform3D::IDENTITY,
+    );
+    assert_eq!(
+        instance.publication_context().scene_revision(),
+        initial.scene_revision()
+    );
+    assert_eq!(
+        instance.publication_context().execution_revision(),
+        initial.execution_revision()
+    );
+    assert_eq!(
+        instance.publication_context().frame_epoch(),
+        initial.frame_epoch().checked_next().unwrap(),
+    );
+    assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+
+    let mut camera = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        base_style(),
+    );
+    camera.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+            vertical_fov_radians: 1.0,
+            near: 0.1,
+            far: 100.0,
+        }),
+    }));
+    let camera_instance =
+        SceneInstance::new(CompiledScene::compile_objects(vec![camera], &[]).unwrap());
+    let bad_world = noon_core::SemanticWorldTransform3D::new(
+        noon_core::SemanticVec3::ZERO,
+        noon_core::SemanticRotation3D::IDENTITY,
+        noon_core::SemanticVec3::new(2.0, 1.0, 1.0),
+    )
+    .unwrap();
+    let before = camera_instance.frame().clone();
+    let publication = camera_instance.publication_context();
+    assert!(camera_instance
+        .prepare_effective_property_batch(&[EffectivePropertyWrite::WorldTransform {
+            object: id,
+            world: bad_world
+        },])
+        .is_err());
+    assert_eq!(camera_instance.frame(), &before);
+    assert_eq!(camera_instance.publication_context(), publication);
+}
+
+#[test]
+fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
+    let id = object();
+    let mut mesh = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        base_style(),
+    );
+    mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+    }));
+    let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
+    let phase = instance.prepare_advance_to(0.0).unwrap();
+    let batch = instance
+        .prepare_effective_property_batch(&[EffectivePropertyWrite::Presence {
+            object: id,
+            presence: false,
+        }])
+        .unwrap();
+    instance.commit_prepared_frame(phase, batch).unwrap();
+    assert!(!instance.frame().is_present(0));
 }
