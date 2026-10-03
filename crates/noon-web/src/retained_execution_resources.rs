@@ -13,11 +13,13 @@ use crate::{
     RetainedTransportApplyOutcome, TransportObjectContent,
 };
 
+/// Render-side owner of one resolved retained frame and its installed resources.
+/// The transport mirror resolves handles before committing a delta, so its frame
+/// is also the frame consumed by family execution and the renderer.
 #[derive(Clone, Debug)]
 pub struct InstalledRetainedExecutionMirror {
     wire: RetainedExecutionFrameMirror,
     resources: InstalledRetainedResources,
-    resolved: Option<FrameState>,
     family: InstalledRetainedFamilyExecutionState,
     transient_presentations: Vec<noon_runtime::TransientPresentationOccurrence>,
     resource_roots: ResourceResidency,
@@ -35,7 +37,6 @@ impl InstalledRetainedExecutionMirror {
         Ok(Self {
             wire,
             resources,
-            resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
             transient_presentations: Vec::new(),
             resource_roots: ResourceResidency::default(),
@@ -52,7 +53,7 @@ impl InstalledRetainedExecutionMirror {
     }
 
     pub fn frame(&self) -> Option<&FrameState> {
-        self.resolved.as_ref()
+        self.wire.frame()
     }
 
     pub fn painter_order(&self) -> &[u32] {
@@ -64,8 +65,8 @@ impl InstalledRetainedExecutionMirror {
             return Ok(None);
         }
         let frame = self
-            .resolved
-            .as_ref()
+            .wire
+            .frame()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
         Ok(Some(self.family.frame(frame)?))
     }
@@ -77,8 +78,8 @@ impl InstalledRetainedExecutionMirror {
             return Ok(None);
         }
         let frame = self
-            .resolved
-            .as_ref()
+            .wire
+            .frame()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
         Ok(Some(self.family.planned_frame(frame)?))
     }
@@ -140,11 +141,6 @@ impl InstalledRetainedExecutionMirror {
             return Ok((outcome, changes));
         }
 
-        if changes.is_all() || self.resolved.is_none() {
-            self.rebuild_resolved_snapshot()?;
-        } else {
-            self.apply_resolved_incremental(&changes)?;
-        }
         self.resource_roots.commit(staged_roots);
         if snapshot {
             self.family = InstalledRetainedFamilyExecutionState::default();
@@ -352,8 +348,8 @@ impl InstalledRetainedExecutionMirror {
         let mut next_row = if snapshot {
             0
         } else {
-            self.resolved
-                .as_ref()
+            self.wire
+                .frame()
                 .ok_or(InstalledExecutionError::MissingResolvedFrame)?
                 .objects
                 .len()
@@ -408,7 +404,7 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedFamilyExecutionDeltaEnvelope,
         texts: &(impl noon_core::TextResourceLookup + ?Sized),
     ) -> Result<PreparedInstalledFamilyUpdate, InstalledExecutionError> {
-        let current = self.resolved.as_ref();
+        let current = self.wire.frame();
         let mut changed_objects = HashMap::with_capacity(delta.retained.objects.len());
         let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
         let added_plan_objects = delta
@@ -499,69 +495,6 @@ impl InstalledRetainedExecutionMirror {
         }
         Ok(())
     }
-
-    fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {
-        let wire = self
-            .wire
-            .frame()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        self.resolved = Some(self.resolve_wire_frame(wire));
-        Ok(())
-    }
-
-    fn resolve_wire_frame(&self, wire: &FrameState) -> FrameState {
-        wire.clone()
-    }
-
-    fn apply_resolved_incremental(
-        &mut self,
-        changes: &FrameChanges,
-    ) -> Result<(), InstalledExecutionError> {
-        let wire = self
-            .wire
-            .frame()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        let resolved = self
-            .resolved
-            .as_mut()
-            .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
-        if resolved.objects.len() > wire.objects.len() {
-            return Err(InstalledExecutionError::FrameShapeMismatch);
-        }
-
-        resolved.time = wire.time;
-        for &index in changes.object_indices() {
-            let source = wire
-                .objects
-                .get(index)
-                .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
-            if index == resolved.objects.len() {
-                resolved.objects.push(source.clone());
-                resolved.presences.push(wire.presences[index]);
-                resolved.reveals.push(wire.reveals[index]);
-                resolved.morphs.push(wire.morphs[index]);
-                resolved
-                    .render_geometries
-                    .push(wire.render_geometries[index].clone());
-                resolved
-                    .render_transforms
-                    .push(wire.render_transforms[index]);
-                continue;
-            }
-            let target = resolved
-                .objects
-                .get_mut(index)
-                .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
-
-            *target = source.clone();
-            resolved.presences[index] = wire.presences[index];
-            resolved.reveals[index] = wire.reveals[index];
-            resolved.morphs[index] = wire.morphs[index];
-            resolved.render_geometries[index] = wire.render_geometries[index].clone();
-            resolved.render_transforms[index] = wire.render_transforms[index];
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -571,10 +504,7 @@ pub enum InstalledExecutionError {
     Family(RetainedFamilyExecutionTransportError),
     Json(String),
     UnknownTextResource { id: u64, version: u64 },
-    MissingWireFrame,
     MissingResolvedFrame,
-    FrameShapeMismatch,
-    InvalidObjectIndex(usize),
 }
 
 impl std::fmt::Display for InstalledExecutionError {
@@ -587,18 +517,8 @@ impl std::fmt::Display for InstalledExecutionError {
             Self::UnknownTextResource { id, version } => {
                 write!(formatter, "unknown installed text resource {id}@{version}")
             }
-            Self::MissingWireFrame => formatter.write_str("retained execution has no wire frame"),
             Self::MissingResolvedFrame => {
                 formatter.write_str("retained execution has no renderer-local frame")
-            }
-            Self::FrameShapeMismatch => {
-                formatter.write_str("wire and renderer-local retained frame shapes differ")
-            }
-            Self::InvalidObjectIndex(index) => {
-                write!(
-                    formatter,
-                    "invalid renderer-local retained object index {index}"
-                )
             }
         }
     }
