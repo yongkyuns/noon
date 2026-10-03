@@ -25,6 +25,13 @@ const sourceHash = createHash("sha256").update(source).digest("hex");
 const server = await serveRepository(root, port);
 const browser = await chromium.launch({ headless: true, args: browserArgs(backend) });
 const context = await browser.newContext({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
+context.on("page", page => {
+  page.on("console", message => {
+    if (message.type() === "error" || message.type() === "warning")
+      process.stderr.write(`[browser ${message.type()}] ${message.text()}\n`);
+  });
+  page.on("pageerror", error => process.stderr.write(`[browser error] ${error.message}\n`));
+});
 const samples = [0, 0.5, 1];
 const report = { backend, sourceHash, fixture: "spatial-surface-point-light", samples: [] };
 
@@ -52,6 +59,7 @@ async function captureDirect() {
         return { metrics, uploads: window.spatialDirectRenderer.lastBytesUploaded(),
           geometryCacheMisses: window.spatialDirectRenderer.lastGeometryCacheMisses() };
       }, time);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
       frames.push({ time, ...frame, png: await page.locator("#scene").screenshot() });
     }
     return frames;
@@ -99,10 +107,11 @@ async function assertMissingLightRejected() {
     await page.waitForFunction(() => window.noonHostRaster);
     const missingLightSource = `from noon import *
 class MissingPointLight(SpatialScene):
-    def construct(self):
+    async def construct(self):
         mesh = Mesh3D.parametric(lambda u, v: (u, v, 0.25*u*v),
             u_range=(-1.5, 1.5), v_range=(-1.5, 1.5), resolution=(8, 8), point_lit=True)
         self.add(mesh)
+        await self.wait(0.1)
 `;
     const error = await Promise.race([
       page.evaluate(async code => {

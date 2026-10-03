@@ -157,6 +157,7 @@ impl SpatialGpuState {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_with_resources(
         &mut self,
         device: &wgpu::Device,

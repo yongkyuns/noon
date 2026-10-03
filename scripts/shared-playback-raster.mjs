@@ -17,7 +17,10 @@ const baseline = JSON.parse(await readFile(path.join(artifactRoot, "report.json"
 const reference = JSON.parse(await readFile(path.join(artifactRoot, "semantic/manim-all-frames.json"), "utf8"));
 const backends = (process.env.NOON_MANIM_RASTER_BACKENDS ?? "webgpu,webgl").split(",").map((s) => s.trim());
 const selectedIds = process.env.NOON_SHARED_PLAYBACK_FIXTURES?.split(",").map((s) => s.trim());
-const fixtures = selectedIds ? manifest.fixtures.filter((f) => selectedIds.includes(f.id)) : manifest.fixtures;
+// Direct Rust factories have their own typed seek/forward qualification in the
+// raster harness. This pass executes source through the Python worker only.
+const workerFixtures = manifest.fixtures.filter((f) => !f.direct_factory);
+const fixtures = selectedIds ? workerFixtures.filter((f) => selectedIds.includes(f.id)) : workerFixtures;
 if (selectedIds) assert.equal(fixtures.length, new Set(selectedIds).size, "unknown playback fixture");
 assert.ok(backends.length > 0 && backends.every((b) => ["webgpu", "webgl"].includes(b)), "invalid backend");
 assert.deepEqual(baseline.reference, manifest.reference, "dense raster reference configuration changed");
@@ -54,7 +57,7 @@ async function qualifyFixture(page, fixture, backend) {
     return sample.time;
   });
   times.push(fixture.expected_duration);
-  const source = await readFile(path.join(repoRoot, fixture.source ?? manifest.reference.source), "utf8");
+  const source = await readFile(path.join(repoRoot, fixture.noon_source ?? fixture.source ?? manifest.reference.source), "utf8");
   const selected = rasterFixtureSource(source, fixture.scene, fixture);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
   assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,

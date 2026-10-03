@@ -37,6 +37,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn create_mesh_family(
         &mut self,
         options: Vec<noon::MeshOptions>,
@@ -133,6 +134,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn world_affine(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -170,7 +172,7 @@ impl CanonicalAuthoringScene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon::{MeshOptions, SemanticRotation3D, SemanticWorldTransform3D};
+    use noon::{MeshOptions, SemanticRotation3D, SemanticWorldTransform3D, WorldAffineEdit};
     use noon_core::{ObjectId, SemanticProjection3D, SemanticSpatialMaterial};
 
     fn mesh_at(x: f64) -> MeshOptions {
@@ -259,15 +261,12 @@ mod tests {
         context.bind_mobject(ObjectId::new(2), &mesh).unwrap();
         assert_eq!(context.active_live_player().unwrap().time(), 0.0);
         assert!(context.identities.contains_key(&mesh.node_id()));
-        assert!(
-            context
-                .scene
-                .integration_store()
-                .borrow()
-                .geometry_resources()
-                .len()
-                > 0
-        );
+        assert!(!context
+            .scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .is_empty());
     }
 
     #[test]
@@ -331,5 +330,73 @@ mod tests {
             expected
         );
         assert_eq!(object.world_transform().unwrap(), expected);
+    }
+
+    #[test]
+    fn family_world_affine_and_parallel_world_transform_composition_share_scene_state() {
+        let mut context = CanonicalAuthoringScene::default();
+        let first = context.create_mesh(mesh_at(-1.0)).unwrap();
+        let second = context.create_mesh(mesh_at(1.0)).unwrap();
+        context.bind_mobject(ObjectId::new(21), &first).unwrap();
+        context.bind_mobject(ObjectId::new(22), &second).unwrap();
+        let family = context
+            .scene
+            .family(&[(&first).into(), (&second).into()])
+            .unwrap();
+        context
+            .world_affine(
+                (&family).into(),
+                WorldAffineEdit::Shift(SemanticVec3::new(0.5, -0.25, 1.0)),
+            )
+            .unwrap();
+        assert_eq!(
+            first.world_transform().unwrap().translation,
+            SemanticVec3::new(-0.5, -0.25, 1.0)
+        );
+        assert_eq!(
+            second.world_transform().unwrap().translation,
+            SemanticVec3::new(1.5, -0.25, 1.0)
+        );
+
+        let first_end = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-2.0, 0.0, 2.0),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        let second_end = SemanticWorldTransform3D::new(
+            SemanticVec3::new(2.0, 0.0, 2.0),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        let children = [
+            crate::canonical_authoring_scene::OrdinaryCompositionChild::WorldTransform {
+                target: first.clone(),
+                transform: first_end,
+                options: noon_core::AnimationOptions::new(),
+            },
+            crate::canonical_authoring_scene::OrdinaryCompositionChild::WorldTransform {
+                target: second.clone(),
+                transform: second_end,
+                options: noon_core::AnimationOptions::new(),
+            },
+        ];
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                noon_core::AnimationOptions::new(),
+                noon_core::AnimationOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            context.effective_world_transform(&first).unwrap(),
+            first_end
+        );
+        assert_eq!(
+            context.effective_world_transform(&second).unwrap(),
+            second_end
+        );
     }
 }

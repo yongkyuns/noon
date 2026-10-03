@@ -126,7 +126,7 @@ fn validate_edit(edit: WorldAffineEdit) -> Result<(), AuthoringError> {
     match edit {
         WorldAffineEdit::Shift(delta) if delta.is_finite() => Ok(()),
         WorldAffineEdit::Scale { factor, about }
-            if factor.is_finite() && about.map_or(true, SemanticVec3::is_finite) =>
+            if factor.is_finite() && about.is_none_or(SemanticVec3::is_finite) =>
         {
             Ok(())
         }
@@ -136,7 +136,7 @@ fn validate_edit(edit: WorldAffineEdit) -> Result<(), AuthoringError> {
             about,
         } if axis.is_finite()
             && radians.is_finite()
-            && about.map_or(true, SemanticVec3::is_finite)
+            && about.is_none_or(SemanticVec3::is_finite)
             && noon_core::SemanticRotation3D::from_axis_angle(axis, radians).is_some() =>
         {
             Ok(())

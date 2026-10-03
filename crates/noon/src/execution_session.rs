@@ -4587,12 +4587,20 @@ mod tests {
             )
             .unwrap();
 
-        let mut second_state = store.semantic_object_state_checked(object).unwrap().clone();
+        let second_object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(second_object).unwrap();
+        let mut second_state = store
+            .semantic_object_state_checked(second_object)
+            .unwrap()
+            .clone();
         second_state.transform.translation.x = 6.0;
         let second_target = store.insert_semantic_object(second_state);
         let second = store
             .insert_semantic_transform_animation(
-                object,
+                second_object,
                 second_target,
                 AnimationOptions::new()
                     .run_time(2.0)

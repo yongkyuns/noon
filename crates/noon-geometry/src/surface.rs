@@ -384,7 +384,7 @@ pub(crate) fn derive_normals(
     indices: &[u32],
 ) -> Result<Vec<SemanticVec3>, SurfaceError> {
     let mut sums = vec![SemanticVec3::ZERO; positions.len()];
-    for triangle in indices.chunks_exact(3) {
+    for triangle in indices.as_chunks::<3>().0 {
         let a = positions[triangle[0] as usize];
         let b = positions[triangle[1] as usize];
         let c = positions[triangle[2] as usize];

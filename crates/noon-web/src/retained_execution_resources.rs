@@ -535,11 +535,10 @@ impl InstalledRetainedExecutionMirror {
                 ..
             } = object.content
             {
-                if self
+                if !self
                     .resources
                     .geometry_handle_remap()
-                    .get(&geometry)
-                    .is_none()
+                    .contains_key(&geometry)
                 {
                     return Err(
                         RetainedExecutionTransportError::UnknownGeometryResource(geometry).into(),
@@ -677,7 +676,8 @@ mod tests {
             panic!("mesh payload must stay an indexed mesh");
         };
         let retained = std::sync::Arc::clone(mesh);
-        let midpoint = player.seek_delta_json(0.5).unwrap().unwrap();
+        player.tick_delta_json(0.0).unwrap();
+        let midpoint = player.tick_delta_json(500.0).unwrap().unwrap();
         let update: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&midpoint).unwrap();
         assert_eq!(update.retained.objects.len(), 1);
         assert_eq!(update.retained.objects[0].object, mesh_id);
@@ -866,7 +866,18 @@ mod tests {
             delta
                 .objects
                 .push(spatial_auxiliary(2, 92, [3.0, 4.0, 5.0], None, true));
-            mirror.apply(delta).unwrap();
+            mirror
+                .apply_family(RetainedFamilyExecutionDeltaEnvelope {
+                    retained: delta,
+                    family_states: Vec::new(),
+                    family_plans: Vec::new(),
+                    resource_additions: None,
+                    resource_retirements: crate::RetainedResourceRetirements::default(),
+                    transient_presentations: Vec::new(),
+                    selection_overlay: None,
+                    pointer_view: None,
+                })
+                .unwrap();
             assert_eq!(mirror.publication_context(), source_context);
             assert_eq!(
                 mirror.frame().unwrap().objects[0].content.geometry(),
@@ -886,7 +897,7 @@ mod tests {
                     .material,
                 noon_core::SemanticSpatialMaterial::PointLit
             );
-            assert_eq!(mirror.camera_3d_object().unwrap().object, ObjectId::new(91));
+            assert_eq!(mirror.camera_3d_object().unwrap().id, ObjectId::new(91));
             let light = mirror.frame().unwrap().objects.iter().find(|object| {
                 object
                     .spatial
