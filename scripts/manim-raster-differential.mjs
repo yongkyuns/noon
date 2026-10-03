@@ -312,7 +312,10 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
       const outputPath = path.join(fixtureDir, `${sample.label}.png`);
       await page.locator("#scene").screenshot({ path: outputPath });
-      captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame: null });
+      const debugFrame = await page.evaluate(() =>
+        JSON.parse(window.noonSpatialMeshOracle.debugSelectionFrameJson()));
+      assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+      captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
     }
     const completed = await page.evaluate(async () => {
       const renderer = window.noonSpatialMeshOracle;

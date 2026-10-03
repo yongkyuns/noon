@@ -1408,6 +1408,17 @@ impl ExecutionSession {
             .with_additional_timeline(self.signal_timeline.wake_state())
     }
 
+    /// Bound a realtime sample to the current authored continuation endpoint.
+    /// Internal track boundaries do not stop a sample; explicit seek/advance calls
+    /// retain their ordinary timeline semantics.
+    pub fn bounded_realtime_target(&self, requested_time: f64) -> f64 {
+        self.pending_segment_completion
+            .as_ref()
+            .map_or(requested_time, |pending| {
+                requested_time.min(pending.end_time)
+            })
+    }
+
     /// Whether looping playback must revisit authored timeline history after the
     /// current runtime wake state settles.
     ///
@@ -1592,6 +1603,7 @@ impl ExecutionSession {
         segment = segment.with_completion_token(token);
         self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
+            segment.end_time(),
             store.scene_revision(),
             PendingSegmentCompletionKind {
                 lifecycle_root: None,
@@ -1896,6 +1908,7 @@ impl ExecutionSession {
         segment = segment.with_completion_token(token);
         self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
+            segment.end_time(),
             store.scene_revision(),
             PendingSegmentCompletionKind {
                 lifecycle_root: None,
@@ -4104,6 +4117,7 @@ impl ExecutionSession {
             self.next_segment_sequence = next_segment_sequence;
             self.pending_segment_completion = Some(PendingSegmentCompletion::new(
                 token,
+                segment.end_time(),
                 activation_scene_revision,
                 PendingSegmentCompletionKind {
                     lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
@@ -4501,6 +4515,8 @@ mod tests {
         assert_eq!(segment.start_time(), 3.0);
         assert_eq!(segment.duration(), 1.5);
         assert_eq!(segment.end_time(), 4.5);
+        assert_eq!(session.bounded_realtime_target(4.0), 4.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 4.5);
         assert_eq!(
             session.segment_state(segment).timeline(),
             TimelineWakeState::Continuous
@@ -4512,6 +4528,75 @@ mod tests {
         session.complete_segment(&mut store, segment).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(session.frame().objects[0].transform.translation.x, 6.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 100.0);
+        session.advance_to(4.5441).unwrap();
+        assert_eq!(session.frame().time, 4.5441);
+    }
+
+    #[test]
+    fn bounded_realtime_target_crosses_internal_sequence_endpoint_but_clamps_at_continuation_end() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+
+        let mut first_state = store.semantic_object_state_checked(object).unwrap().clone();
+        first_state.transform.translation.x = 2.0;
+        let first_target = store.insert_semantic_object(first_state);
+        let first = store
+            .insert_semantic_transform_animation(
+                object,
+                first_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        let second_object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(second_object).unwrap();
+        let mut second_state = store
+            .semantic_object_state_checked(second_object)
+            .unwrap()
+            .clone();
+        second_state.transform.translation.x = 6.0;
+        let second_target = store.insert_semantic_object(second_state);
+        let second = store
+            .insert_semantic_transform_animation(
+                second_object,
+                second_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let sequence = store
+            .insert_semantic_sequence_animation(&[first, second], AnimationOptions::new())
+            .unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(&store, sequence, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(segment.start_time(), 0.0);
+        assert_eq!(segment.end_time(), 3.0);
+
+        // The first child's endpoint at t=1 is internal to this continuation.
+        // Realtime may sample past it, but its final sample is bounded by t=3.
+        assert_eq!(session.bounded_realtime_target(2.0), 2.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 3.0);
+
+        // Explicit timeline operations retain their historical unbounded and
+        // reverse-seek semantics; only realtime host samples use this bound.
+        session.advance_to(3.25).unwrap();
+        assert_eq!(session.frame().time, 3.25);
+        session.seek(0.5).unwrap();
+        assert_eq!(session.frame().time, 0.5);
     }
 
     #[test]
