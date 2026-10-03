@@ -7,6 +7,7 @@ import test from "node:test";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
 const report = () => ({
+  schemaVersion: 1,
   exampleId: "validation-fixture",
   runtime: { backend: "webgpu" },
   shellReadyMs: 100,
@@ -61,14 +62,27 @@ for (const side of ["baseline", "candidate"]) {
 }
 
 for (const [key, values] of Object.entries({
-  NOON_PRODUCT_MAX_LATENCY_RATIO: ["NaN", "Infinity", "0", "-1"],
-  NOON_PRODUCT_LATENCY_SLACK_MS: ["NaN", "Infinity", "-1"],
-  NOON_PRODUCT_MIN_FPS_RATIO: ["NaN", "Infinity", "0", "-1"],
-  NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: ["NaN", "Infinity", "-1", "1.01"],
+  NOON_PRODUCT_MAX_LATENCY_RATIO: ["", "NaN", "Infinity", "0", "-1"],
+  NOON_PRODUCT_LATENCY_SLACK_MS: [" ", "NaN", "Infinity", "-1"],
+  NOON_PRODUCT_MIN_FPS_RATIO: ["", "NaN", "Infinity", "0", "-1"],
+  NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: ["", "NaN", "Infinity", "-1", "1.01"],
 })) {
   for (const value of values) {
     test(`${key} rejects ${value}`, async () => {
       await rejectsReport(report(), report(), new RegExp(key), { [key]: value });
     });
   }
+}
+
+for (const [name, mutate, expected] of [
+  ["missing schema", (baseline) => { delete baseline.schemaVersion; }, /baseline product report has an unsupported schema/],
+  ["missing example", (baseline) => { baseline.exampleId = null; }, /baseline product report must name an example/],
+  ["missing backend", (_baseline, candidate) => { candidate.runtime = {}; }, /candidate product report must name a renderer backend/],
+]) {
+  test(name, async () => {
+    const baseline = report();
+    const candidate = report();
+    mutate(baseline, candidate);
+    await rejectsReport(baseline, candidate, expected);
+  });
 }

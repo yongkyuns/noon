@@ -219,10 +219,6 @@ jobs:
           node candidate/.github/ci/product-artifact.mjs verify baseline baseline
           node candidate/.github/ci/product-artifact.mjs verify candidate candidate
 
-      - name: Test product comparison validation
-        working-directory: candidate
-        run: node --test scripts/playground-product-compare.test.mjs
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
