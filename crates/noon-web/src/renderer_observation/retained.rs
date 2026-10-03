@@ -562,6 +562,7 @@ mod tests {
                 render_transform: None,
                 render_geometry_resource: None,
             }],
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         };
