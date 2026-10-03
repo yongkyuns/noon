@@ -3002,9 +3002,13 @@ impl SemanticExecutionPlayer {
     }
 
     fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {
-        self.delta(snapshot)?
-            .map(|delta| serde_json::to_string(&delta).map_err(|e| e.to_string()))
-            .transpose()
+        let Some(mut delta) = self.delta(snapshot)? else {
+            return Ok(None);
+        };
+        self.encoder.compact_dense_rows(&mut delta);
+        serde_json::to_string(&delta)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 }
 

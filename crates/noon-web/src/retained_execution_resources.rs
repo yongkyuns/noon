@@ -995,6 +995,7 @@ mod tests {
                 camera: initial.camera,
                 inset_2d_views: Vec::new(),
                 objects: vec![changed.clone(), changed],
+                object_patches: Vec::new(),
                 removed_slots: Vec::new(),
                 painter_order: None,
             },
@@ -1047,6 +1048,7 @@ mod tests {
             camera: initial.camera,
             inset_2d_views: Vec::new(),
             objects: vec![changed],
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         };

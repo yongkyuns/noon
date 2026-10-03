@@ -35,6 +35,7 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     render_geometry_generations: Vec<u32>,
     free_render_geometry_resources: Vec<u32>,
     next_render_geometry_resource: u32,
+    published_rows: HashMap<crate::TransportSlotId, crate::RetainedTransportObjectState>,
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +198,73 @@ impl RenderGeometryChanges {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
+    /// Compact only dense updates whose stable wire fields are unchanged. This
+    /// runs after resource attachment so the comparison uses published IDs.
+    pub(crate) fn compact_dense_rows(
+        &mut self,
+        envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
+    ) {
+        let retained = &mut envelope.retained;
+        if retained.snapshot {
+            self.published_rows.clear();
+            return;
+        }
+        // Static snapshots and small scenes do not need a second row copy. A
+        // dense incremental first seeds the cache without altering its wire.
+        if self.published_rows.is_empty() && retained.objects.len() < 128 {
+            return;
+        }
+        for slot in &retained.removed_slots {
+            self.published_rows.remove(slot);
+        }
+
+        let eligible = !retained.snapshot
+            && retained.objects.len() >= 128
+            && retained.removed_slots.is_empty()
+            && retained.painter_order.is_none()
+            && envelope.family_plans.is_empty()
+            && envelope.resource_additions.is_none()
+            && envelope.resource_retirements.is_empty();
+        let mut full = Vec::new();
+        for row in std::mem::take(&mut retained.objects) {
+            let previous = self.published_rows.get(&row.slot);
+            let stable = previous.is_some_and(|previous| {
+                previous.order == row.order
+                    && previous.object == row.object
+                    && previous.z_index == row.z_index
+                    && previous.content == row.content
+                    && previous.appearance == row.appearance
+                    && previous.text_bounds == row.text_bounds
+                    && previous.presence == row.presence
+                    && previous.reveal == row.reveal
+                    && previous.render_geometry == row.render_geometry
+                    && previous.render_transform == row.render_transform
+                    && previous.render_geometry_resource == row.render_geometry_resource
+            });
+            let patch = previous.and_then(|previous| {
+                let transform = (previous.transform != row.transform).then_some(row.transform);
+                let style = (previous.style != row.style).then_some(row.style);
+                let morph = (previous.morph != row.morph).then_some(row.morph);
+                (eligible && stable && (transform.is_some() || style.is_some() || morph.is_some()))
+                    .then_some(crate::RetainedTransportObjectPatch {
+                        slot: row.slot,
+                        object: row.object,
+                        transform,
+                        style,
+                        morph,
+                    })
+            });
+            if let Some(patch) = patch {
+                retained.object_patches.push(patch);
+                self.published_rows.insert(row.slot, row);
+            } else {
+                self.published_rows.insert(row.slot, row.clone());
+                full.push(row);
+            }
+        }
+        retained.objects = full;
+    }
+
     pub(crate) const fn session(&self) -> u32 {
         self.retained.session()
     }
@@ -216,6 +284,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             render_geometry_generations: Vec::new(),
             free_render_geometry_resources: Vec::new(),
             next_render_geometry_resource: 0,
+            published_rows: HashMap::new(),
         }
     }
 
@@ -851,6 +920,79 @@ mod tests {
             render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
+    }
+
+    #[test]
+    fn dense_row_compaction_preserves_changed_content_as_full_row() {
+        let (_, mut frame, _) = fixture();
+        let template = frame.objects[0].clone();
+        frame.objects = (0..128)
+            .map(|index| FrameObjectState {
+                id: ObjectId::new(index + 1),
+                ..template.clone()
+            })
+            .collect();
+        frame.family_animations = vec![None; 128];
+        frame.family_animation_plan_indices = vec![None; 128];
+        frame.presences = vec![true; 128];
+        frame.reveals = vec![1.0; 128];
+        frame.morphs = vec![0.0; 128];
+        frame.render_geometries = vec![None; 128];
+        frame.render_transforms = vec![None; 128];
+
+        let mut base = RetainedExecutionDeltaEncoder::new(1);
+        let mut compactor = RetainedFamilyExecutionDeltaEncoder::new(1);
+        let wrap = |retained| RetainedFamilyExecutionDeltaEnvelope {
+            retained,
+            family_states: Vec::new(),
+            family_plans: Vec::new(),
+            resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
+        };
+        let mut snapshot = wrap(
+            base.encode_snapshot(&frame, Camera2DState::default())
+                .unwrap(),
+        );
+        compactor.compact_dense_rows(&mut snapshot);
+        assert_eq!(snapshot.retained.objects.len(), 128);
+        assert!(snapshot.retained.object_patches.is_empty());
+
+        frame.time = 0.5;
+        frame.morphs.fill(0.3);
+        let mut seed = wrap(
+            base.encode_incremental(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        compactor.compact_dense_rows(&mut seed);
+        assert_eq!(seed.retained.objects.len(), 128);
+        assert!(seed.retained.object_patches.is_empty());
+
+        frame.time = 0.6;
+        frame.morphs.fill(0.4);
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(4.0));
+        let full = wrap(
+            base.encode_incremental(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let full_bytes = serde_json::to_vec(&full).unwrap().len();
+        let mut compact = full.clone();
+        compactor.compact_dense_rows(&mut compact);
+        assert_eq!(compact.retained.objects.len(), 1);
+        assert_eq!(compact.retained.object_patches.len(), 127);
+        assert!(serde_json::to_vec(&compact).unwrap().len() < full_bytes);
     }
 
     #[test]

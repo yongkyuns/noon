@@ -201,6 +201,7 @@ mod tests {
             camera: noon_core::Camera2DState::default(),
             inset_2d_views: vec![],
             objects: vec![],
+            object_patches: Vec::new(),
             removed_slots: vec![slot],
             painter_order: None,
         };

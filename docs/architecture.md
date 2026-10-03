@@ -1001,6 +1001,8 @@ Exact worker placement remains an integration decision, not a semantic boundary.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.
 
+The retained execution channel may send changed style, transform, and morph fields for an existing row in a dense incremental publication. The receiver validates the session sequence, slot generation, object identity, and the whole patch set before applying it to the same retained frame mirror used by full rows. Snapshots and changes to content, resources, structure, or family plans retain their complete transport form. This is a wire-size optimization at the worker boundary; it does not add semantic state or a second execution model.
+
 JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed Rust authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
 
 A transport/mirror used for a real worker boundary must not become mandatory for a direct Rust/WASM scene executing in one context.

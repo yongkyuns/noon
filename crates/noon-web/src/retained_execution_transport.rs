@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 10;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -99,6 +99,20 @@ pub struct RetainedTransportObjectState {
     pub render_geometry_resource: Option<u64>,
 }
 
+/// Existing-row update for the three hot fields in dense, nonstructural frames.
+/// The slot generation and object identity must match the installed row.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedTransportObjectPatch {
+    pub slot: TransportSlotId,
+    pub object: ObjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Transform2D>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Style>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub morph: Option<f32>,
+}
+
 mod render_geometry_id_json {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -136,6 +150,8 @@ pub struct RetainedExecutionDeltaEnvelope {
     pub inset_2d_views: Vec<Inset2DViewState>,
     pub objects: Vec<RetainedTransportObjectState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_patches: Vec<RetainedTransportObjectPatch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_slots: Vec<TransportSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub painter_order: Option<RetainedPainterOrderDelta>,
@@ -166,6 +182,7 @@ pub enum RetainedExecutionTransportError {
     DuplicateSlot(TransportSlotId),
     DuplicateObject(ObjectId),
     UnknownSlot(TransportSlotId),
+    InvalidObjectPatch(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
     InvalidRenderGeometryResource(u64),
@@ -233,6 +250,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::UnknownSlot(slot) => write!(
                 formatter,
                 "unknown retained execution slot {}:{}",
+                slot.slot, slot.generation
+            ),
+            Self::InvalidObjectPatch(slot) => write!(
+                formatter,
+                "invalid retained execution patch for slot {}:{}",
                 slot.slot, slot.generation
             ),
             Self::SlotIdentityChanged(slot) => write!(
@@ -425,6 +447,7 @@ impl RetainedExecutionDeltaEncoder {
             camera,
             inset_2d_views: Vec::new(),
             objects,
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         })
@@ -614,6 +637,7 @@ impl RetainedExecutionDeltaEncoder {
             camera,
             inset_2d_views: Vec::new(),
             objects,
+            object_patches: Vec::new(),
             removed_slots,
             painter_order,
         }))
@@ -909,6 +933,11 @@ impl RetainedExecutionFrameMirror {
         &mut self,
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), RetainedExecutionTransportError> {
+        if let Some(patch) = delta.object_patches.first() {
+            return Err(RetainedExecutionTransportError::InvalidObjectPatch(
+                patch.slot,
+            ));
+        }
         let mut objects = delta.objects.clone();
         objects.sort_by_key(|object| object.order);
         let mut seen_slots = HashSet::with_capacity(objects.len());
@@ -1064,6 +1093,37 @@ impl RetainedExecutionFrameMirror {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Validate the complete patch set before changing any installed row.
+        let mut patch_updates = Vec::with_capacity(delta.object_patches.len());
+        for patch in &delta.object_patches {
+            if !seen_slots.insert(patch.slot) || seen_removed.contains(&patch.slot) {
+                return Err(RetainedExecutionTransportError::DuplicateSlot(patch.slot));
+            }
+            let index = self
+                .slot_indices
+                .get(&patch.slot)
+                .copied()
+                .ok_or(RetainedExecutionTransportError::UnknownSlot(patch.slot))?;
+            if frame.objects[index].id != patch.object {
+                return Err(RetainedExecutionTransportError::SlotIdentityChanged(
+                    patch.slot,
+                ));
+            }
+            if patch.transform.is_none() && patch.style.is_none() && patch.morph.is_none() {
+                return Err(RetainedExecutionTransportError::InvalidObjectPatch(
+                    patch.slot,
+                ));
+            }
+            if frame.objects[index].content.image().is_some()
+                && patch.morph.is_some_and(|morph| morph != 0.0)
+            {
+                return Err(RetainedExecutionTransportError::ImageRenderGeometry(
+                    patch.slot,
+                ));
+            }
+            patch_updates.push((index, patch));
+        }
+
         let painter_update = self.validate_painter_order_delta(
             delta.painter_order.as_ref(),
             &added_slot_indices,
@@ -1079,7 +1139,7 @@ impl RetainedExecutionFrameMirror {
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
         let frame = self.frame.as_mut().expect("validated retained frame");
-        let mut changed = Vec::with_capacity(updates.len());
+        let mut changed = Vec::with_capacity(updates.len() + patch_updates.len());
         for (index, is_added, object, geometry, content) in updates {
             if is_added {
                 debug_assert_eq!(index, frame.objects.len());
@@ -1099,6 +1159,18 @@ impl RetainedExecutionFrameMirror {
                 frame.morphs[index] = object.morph;
                 frame.render_geometries[index] = geometry;
                 frame.render_transforms[index] = object.render_transform;
+            }
+            changed.push(index);
+        }
+        for (index, patch) in patch_updates {
+            if let Some(transform) = patch.transform {
+                frame.objects[index].transform = transform;
+            }
+            if let Some(style) = patch.style {
+                frame.objects[index].style = style;
+            }
+            if let Some(morph) = patch.morph {
+                frame.morphs[index] = morph;
             }
             changed.push(index);
         }
@@ -1564,6 +1636,72 @@ mod tests {
         let (_, changes) = mirror.apply(delta).unwrap();
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame().unwrap(), &updated);
+    }
+
+    #[test]
+    fn object_patch_updates_existing_row_and_rejects_conflicts_atomically() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(81);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let slot = initial.objects[0].slot;
+        let object = initial.objects[0].object;
+        let mut mirror = test_mirror();
+        let mut invalid_snapshot = initial.clone();
+        invalid_snapshot
+            .object_patches
+            .push(RetainedTransportObjectPatch {
+                slot,
+                object,
+                transform: None,
+                style: None,
+                morph: Some(0.25),
+            });
+        assert_eq!(
+            mirror.apply(invalid_snapshot),
+            Err(RetainedExecutionTransportError::InvalidObjectPatch(slot))
+        );
+        assert!(mirror.frame().is_none());
+        mirror.apply(initial).unwrap();
+
+        let mut next = frame.clone();
+        next.time = 0.5;
+        next.objects[0].transform.translation = Vec2::new(3.0, 4.0);
+        next.objects[0].style.fill = Some(Color::WHITE);
+        next.morphs[0] = 0.25;
+        let mut delta = encoder
+            .encode_incremental(
+                &next,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        delta.objects.clear();
+        delta.object_patches.push(RetainedTransportObjectPatch {
+            slot,
+            object,
+            transform: Some(next.objects[0].transform),
+            style: Some(next.objects[0].style),
+            morph: Some(next.morphs[0]),
+        });
+        let json = serde_json::to_string(&delta).unwrap();
+        let decoded = serde_json::from_str(&json).unwrap();
+        let mut conflict = delta.clone();
+        conflict
+            .object_patches
+            .push(conflict.object_patches[0].clone());
+        assert_eq!(
+            mirror.apply(conflict),
+            Err(RetainedExecutionTransportError::DuplicateSlot(slot))
+        );
+        assert_eq!(mirror.applied_sequence(), Some(0));
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        let (_, changes) = mirror.apply(decoded).unwrap();
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.frame(), Some(&next));
     }
 
     #[test]
