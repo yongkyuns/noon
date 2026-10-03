@@ -29,7 +29,8 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 9;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 10;
+const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
 
 /// A reusable arena slot qualified by its occupant generation.
 pub(crate) fn render_geometry_id(slot: u32, generation: u32) -> u64 {
@@ -50,7 +51,10 @@ pub(crate) struct RenderGeometrySlot {
 struct RenderGeometryUpdate {
     slot: u32,
     generation: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     geometry: Option<GeometryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    geometry_index: Option<u32>,
 }
 
 /// Exact source resources whose final published row reference was released by
@@ -85,8 +89,71 @@ impl RetainedResourceRetirements {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TransportRenderGeometryResources {
     session: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    geometries: Vec<GeometryRef>,
     updates: Vec<RenderGeometryUpdate>,
     preparations: Vec<RenderGeometryPreparation>,
+}
+
+impl TransportRenderGeometryResources {
+    fn from_updates(
+        session: u32,
+        updates: Vec<(u32, u32, Option<Arc<GeometryRef>>)>,
+        preparations: Vec<RenderGeometryPreparation>,
+    ) -> Self {
+        // Bound deep comparisons and the per-delta table. Small publications
+        // retain their original inline form; dense scenes can share repeated
+        // immutable paths without changing slot or generation ownership.
+        const MIN_SHARED_UPDATES: usize = 64;
+        let share = updates.len() >= MIN_SHARED_UPDATES;
+        let mut geometries = Vec::<GeometryRef>::new();
+        let updates = updates
+            .into_iter()
+            .map(|(slot, generation, geometry)| {
+                let geometry_index = geometry.as_ref().and_then(|geometry| {
+                    if !share {
+                        return None;
+                    }
+                    if let Some(index) = geometries
+                        .iter()
+                        .position(|candidate| candidate == geometry.as_ref())
+                    {
+                        return Some(index as u32);
+                    }
+                    if geometries.len() == MAX_SHARED_RENDER_GEOMETRIES {
+                        return None;
+                    }
+                    let index = geometries.len() as u32;
+                    geometries.push(geometry.as_ref().clone());
+                    Some(index)
+                });
+                RenderGeometryUpdate {
+                    slot,
+                    generation,
+                    geometry: if geometry_index.is_some() {
+                        None
+                    } else {
+                        geometry.map(|geometry| geometry.as_ref().clone())
+                    },
+                    geometry_index,
+                }
+            })
+            .collect();
+        Self {
+            session,
+            geometries,
+            updates,
+            preparations,
+        }
+    }
+
+    fn geometry<'a>(&'a self, update: &'a RenderGeometryUpdate) -> Option<&'a GeometryRef> {
+        update.geometry.as_ref().or_else(|| {
+            update
+                .geometry_index
+                .and_then(|index| self.geometries.get(index as usize))
+        })
+    }
 }
 
 /// Derived renderer inputs, transferred once with the installed geometry table.
@@ -470,19 +537,21 @@ impl RetainedResourceBundle {
         geometries: Arc<[Arc<GeometryRef>]>,
         preparations: Vec<RenderGeometryPreparation>,
     ) {
-        self.render_geometry_resources = Some(TransportRenderGeometryResources {
+        self.render_geometry_resources = Some(TransportRenderGeometryResources::from_updates(
             session,
-            updates: geometries
+            geometries
                 .iter()
                 .enumerate()
-                .map(|(slot, geometry)| RenderGeometryUpdate {
-                    slot: u32::try_from(slot).expect("render geometry index exceeds u32"),
-                    generation: 0,
-                    geometry: Some(geometry.as_ref().clone()),
+                .map(|(slot, geometry)| {
+                    (
+                        u32::try_from(slot).expect("render geometry index exceeds u32"),
+                        0,
+                        Some(geometry.clone()),
+                    )
                 })
                 .collect(),
             preparations,
-        });
+        ));
     }
 
     pub(crate) fn set_render_geometry_updates(
@@ -491,18 +560,11 @@ impl RetainedResourceBundle {
         updates: Vec<(u32, u32, Option<Arc<GeometryRef>>)>,
         preparations: Vec<RenderGeometryPreparation>,
     ) {
-        self.render_geometry_resources = Some(TransportRenderGeometryResources {
+        self.render_geometry_resources = Some(TransportRenderGeometryResources::from_updates(
             session,
-            updates: updates
-                .into_iter()
-                .map(|(slot, generation, geometry)| RenderGeometryUpdate {
-                    slot,
-                    generation,
-                    geometry: geometry.map(|geometry| geometry.as_ref().clone()),
-                })
-                .collect(),
+            updates,
             preparations,
-        });
+        ));
     }
 
     pub fn geometry_count(&self) -> usize {
@@ -534,8 +596,9 @@ impl RetainedResourceBundle {
     pub fn install(self) -> Result<InstalledRetainedResources, RetainedResourceTransportError> {
         self.validate_protocol()?;
         if let Some(resources) = &self.render_geometry_resources {
+            incremental_render::validate_render_geometry_resources(resources)?;
             for (index, update) in resources.updates.iter().enumerate() {
-                let Some(geometry) = &update.geometry else {
+                let Some(geometry) = resources.geometry(update) else {
                     return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
                 };
                 if update.slot as usize != index
@@ -648,12 +711,21 @@ impl RetainedResourceBundle {
             render_geometries: self
                 .render_geometry_resources
                 .map(|resources| {
+                    let shared = resources
+                        .geometries
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect::<Vec<_>>();
                     resources
                         .updates
                         .into_iter()
                         .map(|update| RenderGeometrySlot {
                             generation: update.generation,
-                            geometry: update.geometry.map(Arc::new),
+                            geometry: update.geometry.map(Arc::new).or_else(|| {
+                                update
+                                    .geometry_index
+                                    .map(|index| shared[index as usize].clone())
+                            }),
                         })
                         .collect()
                 })
@@ -2742,6 +2814,181 @@ mod tests {
             decoded.install(),
             Err(RetainedResourceTransportError::InvalidRenderGeometry(0))
         ));
+    }
+
+    #[test]
+    fn packed_snapshot_installs_shared_geometry_with_independent_slots() {
+        let geometry = Arc::new(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 1.0)),
+        ));
+        let mut bundle = RetainedResourceBundle::capture(
+            [],
+            &TextResourceArena::new(),
+            &GeometryResourceArena::new(),
+            &FontResourceArena::new(),
+        )
+        .unwrap();
+        bundle.set_render_geometries(17, vec![geometry; 64].into(), Vec::new());
+        assert_eq!(
+            bundle
+                .render_geometry_resources
+                .as_ref()
+                .unwrap()
+                .geometries
+                .len(),
+            1
+        );
+        let installed = RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap())
+            .unwrap()
+            .install()
+            .unwrap();
+        let slots = installed.render_geometries();
+        assert_eq!(slots.len(), 64);
+        assert!(Arc::ptr_eq(
+            slots[0].geometry.as_ref().unwrap(),
+            slots[63].geometry.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn dense_render_updates_share_geometry_without_sharing_slot_generations() {
+        let empty = || {
+            RetainedResourceBundle::capture(
+                [],
+                &TextResourceArena::new(),
+                &GeometryResourceArena::new(),
+                &FontResourceArena::new(),
+            )
+            .unwrap()
+        };
+        let path = |offset: f32| {
+            Arc::new(GeometryRef::path((0..32).fold(
+                VectorPath::new().move_to(Vec2::new(offset, 0.0)),
+                |path, index| path.line_to(Vec2::new(offset + index as f32, index as f32)),
+            )))
+        };
+        let first = path(0.0);
+        let second = path(100.0);
+        let mut bundle = empty();
+        bundle.set_render_geometry_updates(
+            17,
+            (0..600)
+                .map(|slot| {
+                    (
+                        slot,
+                        0,
+                        Some(if slot % 2 == 0 {
+                            first.clone()
+                        } else {
+                            second.clone()
+                        }),
+                    )
+                })
+                .collect(),
+            Vec::new(),
+        );
+        let resources = bundle.render_geometry_resources.as_ref().unwrap();
+        assert_eq!(resources.geometries.len(), 2);
+        assert!(resources
+            .updates
+            .iter()
+            .all(|update| update.geometry_index.is_some()));
+        let encoded = serde_json::to_vec(&bundle).unwrap();
+        let mut inline = bundle.clone();
+        let resources = inline.render_geometry_resources.as_mut().unwrap();
+        for update in &mut resources.updates {
+            update.geometry =
+                Some(resources.geometries[update.geometry_index.take().unwrap() as usize].clone());
+        }
+        resources.geometries.clear();
+        assert!(encoded.len() * 3 < serde_json::to_vec(&inline).unwrap().len());
+
+        let mut installed = empty().install().unwrap();
+        let decoded = serde_json::from_slice(&encoded).unwrap();
+        let prepared = installed.prepare_additions_with_render(decoded).unwrap();
+        installed.commit_additions_with_render(prepared);
+        let slots = installed.render_geometries();
+        assert_eq!(slots.len(), 600);
+        assert!(Arc::ptr_eq(
+            slots[0].geometry.as_ref().unwrap(),
+            slots[2].geometry.as_ref().unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            slots[0].geometry.as_ref().unwrap(),
+            slots[1].geometry.as_ref().unwrap()
+        ));
+
+        let mut invalid = bundle;
+        invalid.render_geometry_resources.as_mut().unwrap().updates[0].geometry_index = Some(99);
+        assert!(matches!(
+            empty()
+                .install()
+                .unwrap()
+                .prepare_additions_with_render(invalid),
+            Err(RetainedResourceTransportError::InvalidRenderGeometry(0))
+        ));
+        let mut ambiguous = inline;
+        ambiguous
+            .render_geometry_resources
+            .as_mut()
+            .unwrap()
+            .geometries
+            .push(first.as_ref().clone());
+        ambiguous
+            .render_geometry_resources
+            .as_mut()
+            .unwrap()
+            .updates[0]
+            .geometry_index = Some(0);
+        assert!(matches!(
+            empty()
+                .install()
+                .unwrap()
+                .prepare_additions_with_render(ambiguous),
+            Err(RetainedResourceTransportError::InvalidRenderGeometry(0))
+        ));
+
+        let mut replacements = empty();
+        replacements.set_render_geometry_updates(
+            17,
+            vec![(0, 1, None), (1, 1, Some(first))],
+            Vec::new(),
+        );
+        let prepared = installed
+            .prepare_additions_with_render(replacements)
+            .unwrap();
+        installed.commit_additions_with_render(prepared);
+        assert!(installed.render_geometries()[0].geometry.is_none());
+        assert_eq!(installed.render_geometries()[0].generation, 1);
+        assert!(installed.render_geometries()[1].geometry.is_some());
+        assert_eq!(installed.render_geometries()[1].generation, 1);
+    }
+
+    #[test]
+    fn dense_unique_render_updates_bound_the_shared_table() {
+        let updates = (0..96)
+            .map(|slot| {
+                let geometry = GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(slot as f32, 0.0))
+                        .line_to(Vec2::new(slot as f32, 1.0)),
+                );
+                (slot, 0, Some(Arc::new(geometry)))
+            })
+            .collect();
+        let resources = TransportRenderGeometryResources::from_updates(3, updates, Vec::new());
+        assert_eq!(resources.geometries.len(), 16);
+        assert_eq!(
+            resources
+                .updates
+                .iter()
+                .filter(|update| update.geometry.is_some())
+                .count(),
+            80
+        );
+        incremental_render::validate_render_geometry_resources(&resources).unwrap();
     }
 }
 

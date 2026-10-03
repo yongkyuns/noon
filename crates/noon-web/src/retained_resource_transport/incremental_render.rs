@@ -31,7 +31,7 @@ impl RetainedResourceBundle {
                 resources
                     .updates
                     .iter()
-                    .filter(|update| update.geometry.is_some())
+                    .filter(|update| resources.geometry(update).is_some())
                     .count()
             })
     }
@@ -83,19 +83,21 @@ impl InstalledRetainedResources {
         };
 
         let mut updates = Vec::with_capacity(resources.updates.len());
+        let shared = resources
+            .geometries
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
         let mut expected_len = self.render_geometries.len();
         for update in resources.updates {
             let index = update.slot as usize;
+            let has_geometry = update.geometry.is_some() || update.geometry_index.is_some();
             let valid = match self.render_geometries.get(index) {
                 Some(previous) if previous.geometry.is_some() => {
                     previous.generation.checked_add(1) == Some(update.generation)
                 }
-                Some(previous) => {
-                    previous.generation == update.generation && update.geometry.is_some()
-                }
-                None => {
-                    index == expected_len && update.generation == 0 && update.geometry.is_some()
-                }
+                Some(previous) => previous.generation == update.generation && has_geometry,
+                None => index == expected_len && update.generation == 0 && has_geometry,
             };
             if !valid {
                 return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
@@ -107,7 +109,11 @@ impl InstalledRetainedResources {
                 update.slot,
                 RenderGeometrySlot {
                     generation: update.generation,
-                    geometry: update.geometry.map(Arc::new),
+                    geometry: update.geometry.map(Arc::new).or_else(|| {
+                        update
+                            .geometry_index
+                            .map(|index| shared[index as usize].clone())
+                    }),
                 },
             ));
         }
@@ -185,20 +191,31 @@ impl PreparedRetainedResourceAdditionsWithRender {
     }
 }
 
-fn validate_render_geometry_resources(
+pub(super) fn validate_render_geometry_resources(
     resources: &super::TransportRenderGeometryResources,
 ) -> Result<(), RetainedResourceTransportError> {
+    if resources.geometries.len() > super::MAX_SHARED_RENDER_GEOMETRIES
+        || resources.geometries.iter().any(|geometry| {
+            !matches!(geometry, GeometryRef::VectorPath(_)) || !geometry.is_finite()
+        })
+    {
+        return Err(RetainedResourceTransportError::InvalidRenderGeometry(0));
+    }
     let mut seen = HashSet::new();
     let mut live_updates = HashSet::new();
     for (index, update) in resources.updates.iter().enumerate() {
         if !seen.insert(update.slot)
-            || update.geometry.as_ref().is_some_and(|geometry| {
+            || (update.geometry.is_some() && update.geometry_index.is_some())
+            || update
+                .geometry_index
+                .is_some_and(|index| resources.geometries.get(index as usize).is_none())
+            || resources.geometry(update).is_some_and(|geometry| {
                 !matches!(geometry, GeometryRef::VectorPath(_)) || !geometry.is_finite()
             })
         {
             return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
         }
-        if update.geometry.is_some() {
+        if resources.geometry(update).is_some() {
             live_updates.insert(update.slot);
         }
     }
