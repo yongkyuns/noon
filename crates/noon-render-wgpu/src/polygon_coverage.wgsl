@@ -73,20 +73,63 @@ fn clip_polygon_axis(
 
 // Returns 1 for a pixel wholly inside the convex polygon, 0 for one wholly
 // outside, and -1 when an edge can touch it.
+fn classify_convex_edge(p: vec2<f32>, q: vec2<f32>, winding: f32) -> i32 {
+    let edge = q - p;
+    let delta = vec2<f32>(0.5) - p;
+    let positive = edge.x * delta.y;
+    let negative = edge.y * delta.x;
+    let signed_centre = winding * (positive - negative);
+    let support = 0.5 * (abs(edge.x) + abs(edge.y));
+    let guard = POLYGON_CLASSIFY_EPSILON * max(
+        abs(positive) + abs(negative) + support,
+        0.000000000001,
+    );
+    if signed_centre != signed_centre || support != support || guard != guard {
+        // Preserve the original classifier's immediate conservative fallback
+        // when arithmetic is invalid, even if a later edge would be outside.
+        return -2i;
+    }
+    if signed_centre < -support - guard {
+        return 0i;
+    }
+    if signed_centre <= support + guard {
+        return -1i;
+    }
+    return 1i;
+}
+
 fn classify_convex_pixel(polygon: ClippedPolygon) -> i32 {
+    // This function is entered before clipping, with only the source triangle
+    // and rectangle quad. Constant accesses and unrolled edges avoid the
+    // switch-based dynamic access required by the later clipped polygon path.
+    if polygon.count != 3u && polygon.count != 4u {
+        return -1i;
+    }
+    let a = polygon.points[0];
+    let b = polygon.points[1];
+    let c = polygon.points[2];
+    let d = polygon.points[3];
+    let last = select(a, d, polygon.count == 4u);
+
     var twice_area = 0.0;
     var area_scale = 0.0;
-    for (var index = 0u; index < 8u; index += 1u) {
-        if index >= polygon.count {
-            break;
-        }
-        let next = select(index + 1u, 0u, index + 1u == polygon.count);
-        let p = polygon_point(polygon, index);
-        let q = polygon_point(polygon, next);
-        let positive = p.x * q.y;
-        let negative = p.y * q.x;
-        twice_area += positive - negative;
-        area_scale += abs(positive) + abs(negative);
+    let positive0 = a.x * b.y;
+    let negative0 = a.y * b.x;
+    twice_area += positive0 - negative0;
+    area_scale += abs(positive0) + abs(negative0);
+    let positive1 = b.x * c.y;
+    let negative1 = b.y * c.x;
+    twice_area += positive1 - negative1;
+    area_scale += abs(positive1) + abs(negative1);
+    let positive2 = c.x * last.y;
+    let negative2 = c.y * last.x;
+    twice_area += positive2 - negative2;
+    area_scale += abs(positive2) + abs(negative2);
+    if polygon.count == 4u {
+        let positive3 = d.x * a.y;
+        let negative3 = d.y * a.x;
+        twice_area += positive3 - negative3;
+        area_scale += abs(positive3) + abs(negative3);
     }
     let area_guard = POLYGON_CLASSIFY_EPSILON * max(area_scale, 0.000000000001);
     if twice_area != twice_area || area_scale != area_scale || abs(twice_area) <= area_guard {
@@ -94,29 +137,45 @@ fn classify_convex_pixel(polygon: ClippedPolygon) -> i32 {
     }
     let winding = select(-1.0, 1.0, twice_area > 0.0);
     var fully_inside = true;
-    for (var index = 0u; index < 8u; index += 1u) {
-        if index >= polygon.count {
-            break;
-        }
-        let next = select(index + 1u, 0u, index + 1u == polygon.count);
-        let p = polygon_point(polygon, index);
-        let edge = polygon_point(polygon, next) - p;
-        let delta = vec2<f32>(0.5) - p;
-        let positive = edge.x * delta.y;
-        let negative = edge.y * delta.x;
-        let signed_centre = winding * (positive - negative);
-        let support = 0.5 * (abs(edge.x) + abs(edge.y));
-        let guard = POLYGON_CLASSIFY_EPSILON * max(
-            abs(positive) + abs(negative) + support,
-            0.000000000001,
-        );
-        if signed_centre != signed_centre || support != support || guard != guard {
+    let edge0 = classify_convex_edge(a, b, winding);
+    if edge0 == -2i {
+        return -1i;
+    }
+    if edge0 == 0i {
+        return 0i;
+    }
+    if edge0 < 0i {
+        fully_inside = false;
+    }
+    let edge1 = classify_convex_edge(b, c, winding);
+    if edge1 == -2i {
+        return -1i;
+    }
+    if edge1 == 0i {
+        return 0i;
+    }
+    if edge1 < 0i {
+        fully_inside = false;
+    }
+    let edge2 = classify_convex_edge(c, last, winding);
+    if edge2 == -2i {
+        return -1i;
+    }
+    if edge2 == 0i {
+        return 0i;
+    }
+    if edge2 < 0i {
+        fully_inside = false;
+    }
+    if polygon.count == 4u {
+        let edge3 = classify_convex_edge(d, a, winding);
+        if edge3 == -2i {
             return -1i;
         }
-        if signed_centre < -support - guard {
+        if edge3 == 0i {
             return 0i;
         }
-        if signed_centre <= support + guard {
+        if edge3 < 0i {
             fully_inside = false;
         }
     }
