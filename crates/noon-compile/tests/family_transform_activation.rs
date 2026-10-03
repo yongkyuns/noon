@@ -32,6 +32,7 @@ fn index(store: &SemanticStore) -> SemanticExecutionIndex {
 
 fn effective(object: ObjectId) -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
+        world_transform: None,
         z_index: 0.0,
         transform: Transform2D {
             translation: Vec2::new(object.get() as f32, -(object.get() as f32)),

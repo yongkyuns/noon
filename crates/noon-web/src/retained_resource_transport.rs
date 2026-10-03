@@ -1074,7 +1074,7 @@ impl InstalledRetainedResources {
                 let is_path =
                     matches!(geometries.get(local), Some(GeometryResource::VectorPath(_)))
                         || matches!(
-                            self.geometries.get(local),
+                            GeometryResourceLookup::get(self, local),
                             Some(GeometryResource::VectorPath(_))
                         );
                 if !is_path {

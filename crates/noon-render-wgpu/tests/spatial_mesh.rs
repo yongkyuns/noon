@@ -177,7 +177,7 @@ fn build_scene(
         translation: SemanticVec3::new(0.0, 0.0, 5.0),
         ..SemanticTransform::default()
     };
-    let camera_id = store.insert_semantic_object(camera);
+    let camera_id = attach(&mut store, camera);
 
     // The near red mesh is deliberately earlier in painter order than the far
     // blue mesh. Depth must decide the winner when the far mesh is drawn last.
@@ -392,7 +392,7 @@ fn build_lighting_scene_with_normals(
         let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
         light.set_role(SemanticObjectRole::PointLight3D);
         light.transform.translation.z = 2.0;
-        light.style = opaque_style(Color::RED);
+        light.style = opaque_style(Color::rgba(1.0, 0.0, 0.0, 1.0));
         let id = store.insert_semantic_object(light);
         store.add_semantic_family_member(root, id).unwrap();
         light_id.get_or_insert(id);
@@ -954,6 +954,29 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
             ],
             zero_normal_color,
         );
+        // The pixel center at (64,64) is world y=-1/64 for this four-unit
+        // orthographic viewport. Align the zero-normal interpolation line with
+        // that sample rather than testing a nonzero neighboring normal.
+        let row = zero_normal
+            .frame()
+            .objects
+            .iter()
+            .find(|row| {
+                matches!(
+                    &row.content,
+                    noon_core::ObjectContentRef::Geometry(noon_core::GeometryRef::External(_))
+                )
+            })
+            .unwrap();
+        let object = row.id;
+        let mut pose = row.world_transform().unwrap();
+        pose.translation.y = -1.0 / 64.0;
+        zero_normal
+            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                object,
+                transform: pose.into(),
+            })
+            .unwrap();
         let (_, pixels) = render(
             &device,
             &queue,
@@ -969,7 +992,7 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
                 && zero_normal_pixel[1] <= 2
                 && zero_normal_pixel[2] == 255
                 && zero_normal_pixel[3] == 255,
-            "zero/near-zero interpolated normal falls back to the base color: {zero_normal_pixel:?}"
+            "zero interpolated normal falls back to the base color: {zero_normal_pixel:?}"
         );
 
         let mut missing_light = build_lighting_scene(SemanticSpatialMaterial::PointLit, 0, false);

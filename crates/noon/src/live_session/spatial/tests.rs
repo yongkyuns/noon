@@ -76,7 +76,7 @@ fn execution_mesh(
     handle: noon_core::GeometryResourceHandle,
 ) -> Arc<MeshResource> {
     match execution.geometry_resources().get(handle).unwrap() {
-        GeometryResource::Mesh(mesh) => Arc::clone(&mesh),
+        GeometryResource::Mesh(mesh) => Arc::clone(mesh),
         _ => panic!("expected mesh resource"),
     }
 }

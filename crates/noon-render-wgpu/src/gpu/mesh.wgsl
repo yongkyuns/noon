@@ -79,7 +79,7 @@ fn stable_normalize(value: vec3<f32>) -> vec4<f32> {
             if cosine >= 0.0 {
                 response = 0.5 * cubic;
             }
-            result.rgb += lighting.color_intensity.rgb * lighting.color_intensity.a * response;
+            result = vec4<f32>(result.rgb + lighting.color_intensity.rgb * lighting.color_intensity.a * response, result.a);
         }
     }
     return result;

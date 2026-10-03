@@ -1,7 +1,9 @@
 //! Typed spatial operations exposed by the existing execution player wrapper.
 
 use crate::authoring_error::AuthoringFailure;
-use noon::{MeshOptions, Mobject, MobjectFamily, SemanticWorldTransform3D, WorldAffineEdit};
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::MobjectFamily;
+use noon::{MeshOptions, Mobject, SemanticWorldTransform3D, WorldAffineEdit};
 
 impl super::SemanticExecutionPlayer {
     pub(crate) fn live_create_mesh(
@@ -11,6 +13,7 @@ impl super::SemanticExecutionPlayer {
         self.with_live_session(|live| live.create_mesh(options))
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_mesh_family(
         &mut self,
         options: Vec<MeshOptions>,
@@ -34,6 +37,7 @@ impl super::SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_world_affine_object(
         &mut self,
         object: &Mobject,
@@ -43,6 +47,7 @@ impl super::SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_world_affine_family(
         &mut self,
         family: &MobjectFamily,

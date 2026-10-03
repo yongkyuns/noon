@@ -61,7 +61,7 @@ pub fn cylinder_mesh(
     height: f64,
     segments: usize,
 ) -> Result<MeshResource, SurfaceError> {
-    combine_parts(cylinder_parts(radius, height, segments)?.into_iter())
+    combine_parts(cylinder_parts(radius, height, segments)?)
 }
 
 /// Side, lower cap, upper cap. Parts retain independent normals and identity.
@@ -88,7 +88,7 @@ pub fn cylinder_parts(
 }
 
 pub fn cone_mesh(radius: f64, height: f64, segments: usize) -> Result<MeshResource, SurfaceError> {
-    combine_parts(cone_parts(radius, height, segments)?.into_iter())
+    combine_parts(cone_parts(radius, height, segments)?)
 }
 
 /// Side and lower base, suitable for retaining as separate semantic faces.
@@ -117,7 +117,7 @@ pub fn cone_parts(
 
 /// Rectangular prism with flat-shaded, independently indexed faces.
 pub fn prism_mesh(size: SemanticVec3) -> Result<MeshResource, SurfaceError> {
-    combine_parts(prism_faces(size)?.into_iter())
+    combine_parts(prism_faces(size)?)
 }
 
 /// The six flat-shaded faces in +X, -X, +Y, -Y, +Z, -Z order.

@@ -1417,7 +1417,7 @@ impl RetainedExecutionFrameMirror {
         for object in &delta.objects {
             camera_rows.insert(object.object, object.spatial);
         }
-        validate_single_camera(camera_rows.into_iter())?;
+        validate_single_camera(camera_rows)?;
         let added_indices = updates
             .iter()
             .filter_map(|(index, added, _, _, _)| {
@@ -1737,10 +1737,10 @@ fn validate_single_camera(
 ) -> Result<(), RetainedExecutionTransportError> {
     let mut camera = None;
     for (object, spatial) in rows {
-        if spatial.is_some_and(|state| state.camera_projection.is_some()) {
-            if camera.replace(object).is_some() {
-                return Err(RetainedExecutionTransportError::MultipleCamera3D);
-            }
+        if spatial.is_some_and(|state| state.camera_projection.is_some())
+            && camera.replace(object).is_some()
+        {
+            return Err(RetainedExecutionTransportError::MultipleCamera3D);
         }
     }
     Ok(())
@@ -1979,10 +1979,10 @@ mod tests {
             noon_core::ExecutionRevision::new(8),
             noon_core::FrameEpoch::new(8),
         );
-        let mut snapshot = encoder
+        let snapshot = encoder
             .encode_snapshot_with_context(&start, Camera2DState::default(), start_context)
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror.apply(snapshot).unwrap();
         assert_eq!(mirror.publication_context(), start_context);
 

@@ -226,8 +226,7 @@ fn unsupported_mesh_fade_is_rejected_before_activation_but_light_opacity_remains
         let mut execution = scene.execution_session().unwrap();
 
         let activation = {
-            let mut live =
-                LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
+            let mut live = scene.live(&mut execution);
             live.declare_and_activate_fade_with_endpoint(
                 &mesh,
                 SemanticFadeDirection::Out,
@@ -297,7 +296,7 @@ fn unsupported_mesh_fade_is_rejected_before_activation_but_light_opacity_remains
         .find(|row| row.spatial.as_ref().is_some_and(|state| state.point_light))
         .unwrap();
     assert!(light_row.spatial.as_ref().unwrap().point_light);
-    assert_eq!(light_row.style.fill_opacity, 0.75);
+    assert_eq!(light_row.style.opacity, 0.75);
 }
 
 #[test]
