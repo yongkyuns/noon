@@ -315,6 +315,16 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if !self.retained.object_patches.is_empty()
+            && (self.retained.snapshot
+                || self.retained.painter_order.is_some()
+                || !self.retained.removed_slots.is_empty()
+                || !self.family_plans.is_empty()
+                || self.resource_additions.is_some()
+                || !self.resource_retirements.is_empty())
+        {
+            return Err(RetainedFamilyExecutionTransportError::InvalidPatchCombination);
+        }
         if let Some(view) = self.pointer_view {
             view.validate()
                 .map_err(|_| RetainedFamilyExecutionTransportError::InvalidPointerView)?;
@@ -701,6 +711,7 @@ pub enum RetainedFamilyExecutionTransportError {
     IncrementalBeforeSnapshot,
     MissingSnapshot,
     FrameShapeMismatch,
+    InvalidPatchCombination,
     PlanSetShrank {
         published: usize,
         available: usize,
@@ -745,6 +756,9 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             }
             Self::FrameShapeMismatch => formatter
                 .write_str("retained family state shape does not match retained frame objects"),
+            Self::InvalidPatchCombination => formatter.write_str(
+                "retained row patches require a nonstructural delta without resource or plan changes",
+            ),
             Self::PlanSetShrank {
                 published,
                 available,
@@ -957,6 +971,28 @@ mod tests {
             std::slice::from_ref(&geometry_plan()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn row_patch_cannot_arrive_with_new_family_plan() {
+        let mut delta = family_snapshot(0.25);
+        delta.retained.snapshot = false;
+        delta.retained.sequence = 1;
+        let row = &delta.retained.objects[0];
+        delta
+            .retained
+            .object_patches
+            .push(crate::RetainedTransportObjectPatch {
+                slot: row.slot,
+                object: row.object,
+                transform: None,
+                style: Some(row.style),
+                morph: None,
+            });
+        assert_eq!(
+            delta.validate(),
+            Err(RetainedFamilyExecutionTransportError::InvalidPatchCombination)
+        );
     }
 
     #[test]
