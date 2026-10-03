@@ -39,6 +39,20 @@ The handoff covers:
 
 Renderer and public-API work consume these semantics; they do not own alternate matrix conventions.
 
+The initial numeric substrate is `crates/noon-core/src/spatial3d.rs`. It reuses
+`SemanticVec3` with f64 translation/scale and unit-quaternion rotation. World axes
+are right-handed (+X right, +Y up, +Z toward the viewer); object points apply
+scale, then rotation, then translation. Camera orientation maps local axes into
+world axes, with local -Z forward; world-to-view uses its inverse. Perspective
+and orthographic projection use positive near/far distances and homogeneous
+clip depth 0..w. Viewport aspect is supplied at evaluation time.
+
+The finite ordinary projection in [ManimCE v0.21.0's ThreeDCamera](https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/camera/three_d_camera.py)
+can map focal distance, frame height, and zoom to this perspective convention;
+the numeric tests pin that mapping. This does not qualify the public camera API,
+exponential projection, or Manim's behind-camera fallback. Shared authored and
+effective camera integration, mesh resources, and D1's full gate remain pending.
+
 ### DH2 — immutable mesh-resource contract
 
 Owned by D1.3/#698.
