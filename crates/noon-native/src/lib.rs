@@ -1710,7 +1710,7 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn present_continuation_endpoint(
+    fn present_native_source_until(
         source: Box<dyn NativeExecutionSource>,
         endpoint: f64,
     ) -> NativeApp {
@@ -1734,12 +1734,24 @@ mod tests {
         if let Some(error) = app.error.take() {
             panic!("native continuation surface smoke failed before its endpoint: {error}");
         }
-        assert_eq!(app.presented_frame_time, Some(endpoint));
-        assert_eq!(app.session().frame().time, endpoint);
+        assert!(app
+            .presented_frame_time
+            .is_some_and(|time| time >= endpoint));
         assert!(
             app.last_geometry_draw_calls > 0,
             "native continuation endpoint emitted no geometry draw calls"
         );
+        app
+    }
+
+    #[cfg(target_os = "linux")]
+    fn present_continuation_endpoint(
+        source: Box<dyn NativeExecutionSource>,
+        endpoint: f64,
+    ) -> NativeApp {
+        let app = present_native_source_until(source, endpoint);
+        assert_eq!(app.presented_frame_time, Some(endpoint));
+        assert_eq!(app.session().frame().time, endpoint);
         app
     }
 
@@ -1749,12 +1761,20 @@ mod tests {
     fn native_surface_smoke_presents_spatial_mesh_frame() {
         let session = noon::example_scenes::spatial_mesh::session().unwrap();
         let source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
-        let app = present_continuation_endpoint(Box::new(source), 0.0);
+        let app = present_native_source_until(Box::new(source), 2.0);
         assert_eq!(app.session().frame().objects.len(), 3);
         assert_eq!(
             app.session().camera_3d().unwrap().unwrap().position,
-            noon_core::SemanticVec3::new(0.0, 0.0, 5.0),
+            noon_core::SemanticVec3::new(0.25, 0.0, 5.0),
         );
+        let front = app
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|object| object.style.fill == Some(noon_core::Color::RED))
+            .unwrap();
+        assert_eq!(front.world_transform().unwrap().translation.z, -1.0);
     }
 
     #[cfg(target_os = "linux")]
