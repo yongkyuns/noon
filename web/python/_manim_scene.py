@@ -437,11 +437,14 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
+    spatial_domain: str | None = None,
 ) -> None:
     from _manim_updaters import active_callback_membership_context
 
     callback = active_callback_membership_context(scene)
     if callback is not None:
+        if spatial_domain is not None:
+            raise NotImplementedError("spatial membership requires an ordinary continuation boundary")
         _stage_callback_membership(scene, callback, kind, values, key=key)
         return
     if key is not None and (
@@ -453,6 +456,8 @@ def _canonical_edit_membership(
     key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
+    if spatial_domain is not None:
+        engine_call(batch.setSpatialDomain, spatial_domain, operation="Scene.spatial_membership")
     next_object_id = scene._next_object_id
     reservations = []
     binding_reservations: dict[str, _TypedBindingReservation] = {}
@@ -2098,7 +2103,7 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     return family, leaves, animation.mode
 
 
-def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
+def _apply_matrix_target(target: object, animation: object) -> None:
     """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
     try:
         raw_rows = list(animation.matrix)
@@ -2114,9 +2119,16 @@ def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
     columns = len(rows[0]) if rows else 0
     values = [float(value) for row in rows for value in row]
     about = _base._as_vec2(animation.about_point)
-    handle = getattr(target, "_semantic_handle", None)
+    is_family = isinstance(target, _compat.Group)
+    handle = getattr(
+        target,
+        "_semantic_family_handle" if is_family else "_semantic_handle",
+        None,
+    )
     if handle is None:
-        raise NotImplementedError("ApplyMatrix requires a typed semantic Mobject")
+        raise NotImplementedError(
+            "ApplyMatrix requires a typed semantic Mobject or family"
+        )
     context = getattr(target, "_canonical_live_target_context", None)
     if context is None:
         engine_call(
@@ -2130,7 +2142,7 @@ def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
         )
     else:
         engine_call(
-            context.liveApplyMatrix,
+            context.liveApplyMatrixFamily if is_family else context.liveApplyMatrix,
             handle,
             values,
             len(rows),
@@ -2200,18 +2212,18 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
-        from _noon_spatial import WorldTransformTo, _bulk
-        if isinstance(animation, WorldTransformTo):
+        from _noon_spatial import WorldTransformTo, CameraProfileTo, _bulk
+        if isinstance(animation, (WorldTransformTo, CameraProfileTo)):
             target = animation.mobject
             if target._scene is not self:
                 raise ValueError("WorldTransformTo target must belong to this Scene")
             child = _canonical_composition_child_options(animation, child_kwargs)
             if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
                 raise NotImplementedError("world endpoints support duration and rate function options")
-            builder.appendWorldTransform(
-                target._semantic_handle, _bulk(animation.endpoint),
-                float(child.run_time), str(child.rate_func),
-            )
+            append = (builder.appendCameraProfile if isinstance(animation, CameraProfileTo)
+                      else builder.appendWorldTransform)
+            append(target._semantic_handle, _bulk(animation.endpoint),
+                   float(child.run_time), str(child.rate_func))
             return
         cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
         if cyclic_replace is not None:

@@ -108,7 +108,7 @@ where
             return Err(AuthoringError::NonFiniteObjectState);
         }
         let mut candidate_state = pose.state;
-        candidate_state.transform = semantic_transform(world);
+        candidate_state.set_transform(semantic_transform(world));
         if !candidate_state.spatial_declaration_is_valid() {
             return Err(AuthoringError::NonFiniteObjectState);
         }
@@ -155,16 +155,20 @@ fn validate_spatial_leaf(
 ) -> Result<(), AuthoringError> {
     match state.role() {
         SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D => Ok(()),
-        SemanticObjectRole::Ordinary => {
-            let Some(StoredGeometry::Resource(handle)) = state.content.geometry() else {
-                return Err(unsupported_spatial_path());
-            };
-            match store.geometry_resources().get(handle) {
-                Some(GeometryResource::Mesh(_)) => Ok(()),
-                Some(GeometryResource::VectorPath(_)) => Err(unsupported_spatial_path()),
-                None => Err(AuthoringError::MissingGeometryResource(handle)),
-            }
-        }
+        SemanticObjectRole::Ordinary => match state.content {
+            noon_core::SemanticObjectContent::Image(_) => Err(unsupported_spatial_path()),
+            noon_core::SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => store
+                .geometry_resources()
+                .get(handle)
+                .map(|_| ())
+                .ok_or(AuthoringError::MissingGeometryResource(handle)),
+            noon_core::SemanticObjectContent::Geometry(_) => Ok(()),
+            noon_core::SemanticObjectContent::Text(handle) => store
+                .text_resources()
+                .get(handle)
+                .map(|_| ())
+                .ok_or(AuthoringError::MissingTextResource(handle)),
+        },
         _ => Err(unsupported_spatial_path()),
     }
 }
@@ -185,31 +189,55 @@ fn union_world_bounds_center(
                 [pose.world.translation; 8]
             }
             SemanticObjectRole::Ordinary => {
-                let Some(StoredGeometry::Resource(handle)) = pose.state.content.geometry() else {
-                    return Err(unsupported_spatial_path());
+                let (local_min, local_max) = match pose.state.content.geometry() {
+                    Some(StoredGeometry::Resource(handle))
+                        if matches!(
+                            store.geometry_resources().get(handle),
+                            Some(GeometryResource::Mesh(_))
+                        ) =>
+                    {
+                        let Some(GeometryResource::Mesh(mesh)) =
+                            store.geometry_resources().get(handle)
+                        else {
+                            unreachable!()
+                        };
+                        let bounds = mesh.bounds();
+                        (bounds.min, bounds.max)
+                    }
+                    _ => {
+                        let bounds = crate::semantic_mobject::boundary_for_content(
+                            store,
+                            pose.state.content,
+                            noon_core::SemanticTransform2_5D {
+                                translation: SemanticVec3::ZERO,
+                                scale: SemanticVec3::new(1.0, 1.0, 1.0),
+                                rotation_z: 0.0,
+                            },
+                        )?
+                        .ok_or(AuthoringError::NonFiniteGeometry)?;
+                        (
+                            SemanticVec3::new(bounds.min_x, bounds.min_y, 0.0),
+                            SemanticVec3::new(bounds.max_x, bounds.max_y, 0.0),
+                        )
+                    }
                 };
-                let Some(GeometryResource::Mesh(mesh)) = store.geometry_resources().get(handle)
-                else {
-                    return Err(unsupported_spatial_path());
-                };
-                let bounds = mesh.bounds();
                 let mut corners = [SemanticVec3::ZERO; 8];
                 for (index, corner) in corners.iter_mut().enumerate() {
                     let local = SemanticVec3::new(
                         if index & 1 == 0 {
-                            bounds.min.x
+                            local_min.x
                         } else {
-                            bounds.max.x
+                            local_max.x
                         },
                         if index & 2 == 0 {
-                            bounds.min.y
+                            local_min.y
                         } else {
-                            bounds.max.y
+                            local_max.y
                         },
                         if index & 4 == 0 {
-                            bounds.min.z
+                            local_min.z
                         } else {
-                            bounds.max.z
+                            local_max.z
                         },
                     );
                     *corner = pose
@@ -465,12 +493,20 @@ mod tests {
             .translation;
         assert_eq!(moved.x, 5.0);
 
-        let mut circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
-        circle.transform.translation.x = 10.0;
-        let circle_id = store.borrow_mut().insert_semantic_object(circle);
-        let circle = Mobject::from_node(Rc::clone(&store), circle_id).unwrap();
+        // Planar paths are now supported in the spatial lane. Raster images
+        // remain an unsupported late leaf and must reject the entire edit.
+        let image_id = store
+            .borrow_mut()
+            .with_raster_image_rgba8(1, 1, vec![255u8; 4], |store, handle| {
+                let mut image =
+                    SemanticObjectState::new(noon_core::SemanticImageContent::new(handle));
+                image.transform.translation.x = 10.0;
+                Ok::<_, noon_core::RasterImageResourceError>(store.insert_semantic_object(image))
+            })
+            .unwrap();
+        let image = Mobject::from_node(Rc::clone(&store), image_id).unwrap();
         let mixed =
-            MobjectFamily::create(Rc::clone(&store), &[(&mesh).into(), (&circle).into()]).unwrap();
+            MobjectFamily::create(Rc::clone(&store), &[(&mesh).into(), (&image).into()]).unwrap();
         let before_revision = store.borrow().scene_revision();
         let before_mesh = store
             .borrow()

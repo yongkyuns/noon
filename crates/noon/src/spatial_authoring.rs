@@ -120,6 +120,9 @@ impl Scene {
         target: crate::MobjectTarget<'_>,
         edit: crate::WorldAffineEdit,
     ) -> Result<(), AuthoringError> {
+        if let crate::MobjectTarget::Object(object) = &target {
+            crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
+        }
         let transaction = if let Some(session) = self.running_execution() {
             crate::world_affine::prepare_world_affine_with(
                 self.integration_store(),
@@ -224,7 +227,7 @@ impl Scene {
         self.create_spatial_role(state, false)
     }
 
-    fn create_spatial_role(
+    pub(crate) fn create_spatial_role(
         &mut self,
         state: SemanticObjectState,
         attach: bool,
@@ -249,6 +252,7 @@ impl Scene {
         world: SemanticWorldTransform3D,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
+        crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_object_transform(object.node_id(), world.into());
         self.apply_semantic_transaction(transaction).map(|_| ())

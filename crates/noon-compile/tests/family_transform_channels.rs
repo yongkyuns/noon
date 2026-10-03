@@ -40,6 +40,7 @@ fn effective(x: f32) -> EffectiveAnimationProperties {
 fn effective_with_appearance(x: f32, appearance: f32) -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
         world_transform: None,
+        camera_profile: None,
         z_index: 0.0,
         transform: Transform2D {
             translation: Vec2::new(x, 0.0),

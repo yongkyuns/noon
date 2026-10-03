@@ -8,6 +8,9 @@ impl LiveSession<'_> {
         target: MobjectTarget<'_>,
         edit: crate::WorldAffineEdit,
     ) -> Result<(), LiveSessionError> {
+        if let MobjectTarget::Object(object) = &target {
+            crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
+        }
         let transaction = crate::world_affine::prepare_world_affine_with(
             self.store,
             target,
@@ -54,6 +57,7 @@ impl LiveSession<'_> {
         world: noon_core::SemanticWorldTransform3D,
     ) -> Result<(), LiveSessionError> {
         self.require_mobject(object)?;
+        crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_object_transform(object.node_id(), world.into());
         self.apply(transaction).map(|_| ())
@@ -97,3 +101,36 @@ impl LiveSession<'_> {
 
 #[cfg(test)]
 mod tests;
+
+impl crate::LiveSession<'_> {
+    /// Ordinary spatial-scene add retains any existing label registration.
+    pub fn add_all_world_mobjects(
+        &mut self,
+        targets: &[MobjectTarget<'_>],
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::SpatialCompositionError> {
+        let transaction = crate::spatial_composition::add_transaction(
+            self.integration_store(),
+            self.root,
+            targets,
+            noon_core::SemanticSpatialCompositionDomain::World,
+            true,
+        )?;
+        self.apply(transaction).map_err(Into::into)
+    }
+
+    /// Attach a batch with its spatial domain through the current publication.
+    pub fn add_all_in_spatial_composition_domain(
+        &mut self,
+        targets: &[MobjectTarget<'_>],
+        domain: noon_core::SemanticSpatialCompositionDomain,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::SpatialCompositionError> {
+        let transaction = crate::spatial_composition::add_transaction(
+            self.integration_store(),
+            self.root,
+            targets,
+            domain,
+            false,
+        )?;
+        self.apply(transaction).map_err(Into::into)
+    }
+}

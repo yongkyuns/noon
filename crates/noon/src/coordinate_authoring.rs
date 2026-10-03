@@ -1,12 +1,14 @@
 //! Linear coordinate families over the existing Semantic Scene and path queries.
 //!
-//! Only ordinary Line leaves are rendered. Ranges live on semantic shafts;
-//! wrappers retain family identity, never ranges, endpoints, or a second scene.
-//! Initial constructors require explicit ranges and do not add tips or labels.
+//! Ranges live on semantic shafts; wrappers retain family identity, never
+//! endpoints or a second scene. Two-dimensional constructors stay tipless and
+//! label-free. The bounded ThreeDAxes request uses retained tips by default.
 
 mod number_plane;
+mod three_d_axes;
 pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
+pub use three_d_axes::{ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions};
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -771,6 +773,7 @@ pub(crate) fn prepare_number_line(
         &options.style,
         &options.numbers_with_elongated_ticks,
         options.longer_tick_multiple,
+        false,
     )?;
     let mut transaction = SemanticMutationTransaction::new();
     let root = stage_line(&mut transaction, states);
@@ -802,7 +805,7 @@ fn prepare_line(
     ticks: CoordinateTicks,
     style: &SemanticStyle,
 ) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
-    prepare_line_with_elongated_ticks(frame, ticks, style, &[], 2.0)
+    prepare_line_with_elongated_ticks(frame, ticks, style, &[], 2.0, false)
 }
 
 fn prepare_line_with_elongated_ticks(
@@ -811,6 +814,7 @@ fn prepare_line_with_elongated_ticks(
     style: &SemanticStyle,
     elongated: &[f64],
     multiple: f64,
+    include_tip: bool,
 ) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
     if elongated.len() > ticks.limit {
         return Err(CoordinateError::TickLimitExceeded.into());
@@ -839,7 +843,12 @@ fn prepare_line_with_elongated_ticks(
         ));
     }
     let values = if ticks.enabled {
-        number_line_tick_values(frame.range(), false, ticks.exclude_origin, ticks.limit)?
+        number_line_tick_values(
+            frame.range(),
+            include_tip,
+            ticks.exclude_origin,
+            ticks.limit,
+        )?
     } else {
         Vec::new()
     };

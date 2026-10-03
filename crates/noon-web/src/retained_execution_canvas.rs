@@ -756,6 +756,9 @@ mod wasm {
                     installed_frame,
                     &self.pending_changes,
                     resources.geometries(),
+                    resources.texts(),
+                    resources.fonts(),
+                    self.mirror.painter_order(),
                 )
                 .map_err(js_error)?;
             let camera = self.renderer.camera();

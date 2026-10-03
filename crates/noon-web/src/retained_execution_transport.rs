@@ -20,7 +20,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 13;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 14;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -60,6 +60,9 @@ pub enum TransportObjectContent {
 /// It is reconstructed into the ordinary compiled spatial row on receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransportSpatialState {
+    pub draw_kind: noon_compile::CompiledSpatialDrawKind,
+    pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
+    pub fixed_orientation_center: Option<[f64; 3]>,
     pub translation: [f64; 3],
     pub rotation_wxyz: [f64; 4],
     pub scale: [f64; 3],
@@ -92,7 +95,7 @@ pub enum TransportSpatialMaterial {
 }
 
 impl TransportSpatialState {
-    fn from_compiled(value: noon_compile::CompiledSpatialState) -> Self {
+    fn from_compiled(value: &noon_compile::CompiledSpatialState) -> Self {
         let world = value.world;
         let camera_projection = value.camera_projection.map(|projection| match projection {
             SemanticProjection3D::Perspective {
@@ -109,6 +112,9 @@ impl TransportSpatialState {
             }
         });
         Self {
+            draw_kind: value.draw_kind,
+            composition_domain: value.composition_domain,
+            fixed_orientation_center: value.fixed_orientation_center.map(|v| [v.x, v.y, v.z]),
             translation: [
                 world.translation.x,
                 world.translation.y,
@@ -126,6 +132,27 @@ impl TransportSpatialState {
     }
 
     fn is_valid(self) -> bool {
+        use noon_compile::CompiledSpatialDrawKind as Draw;
+        use noon_core::SemanticSpatialCompositionDomain as Domain;
+        if (self.camera_projection.is_some() || self.point_light)
+            && self.composition_domain != Domain::World
+            || self.draw_kind == Draw::Mesh && self.composition_domain != Domain::World
+            || self.material == TransportSpatialMaterial::PointLit && self.draw_kind != Draw::Mesh
+            || self.material == TransportSpatialMaterial::PointLit
+                && self.scale.into_iter().any(|component| component == 0.0)
+            || self.camera_projection.is_some() && self.point_light
+            || (self.camera_projection.is_some() || self.point_light)
+                && (self.draw_kind != Draw::Planar
+                    || self.scale != [1.0; 3]
+                    || self.material != TransportSpatialMaterial::Unlit)
+            || (self.composition_domain == Domain::FixedOrientation)
+                != self.fixed_orientation_center.is_some()
+            || self
+                .fixed_orientation_center
+                .is_some_and(|v| !v.into_iter().all(f64::is_finite))
+        {
+            return false;
+        }
         let [w, x, y, z] = self.rotation_wxyz;
         let Some(rotation) = SemanticRotation3D::from_validated_components(w, x, y, z) else {
             return false;
@@ -189,8 +216,16 @@ impl TransportSpatialState {
             }
         });
         Some(noon_compile::CompiledSpatialState {
+            draw_kind: self.draw_kind,
+            composition_domain: self.composition_domain,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: self
+                .fixed_orientation_center
+                .map(|v| SemanticVec3::new(v[0], v[1], v[2])),
             world,
             camera_projection,
+            camera_profile: None,
+            camera_motions: None,
             material: match self.material {
                 TransportSpatialMaterial::Unlit => SemanticSpatialMaterial::Unlit,
                 TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
@@ -1409,7 +1444,6 @@ impl RetainedExecutionFrameMirror {
                     object
                         .spatial
                         .as_deref()
-                        .copied()
                         .map(TransportSpatialState::from_compiled),
                 )
             })
@@ -1641,7 +1675,6 @@ fn transport_object(
         spatial: object
             .spatial
             .as_deref()
-            .copied()
             .map(TransportSpatialState::from_compiled),
         style: object.style,
         appearance: object.appearance,
@@ -1884,10 +1917,31 @@ mod tests {
         )
         .unwrap();
         frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::new(
                 noon_core::SemanticVec3::new(1.0 / 3.0, -1.0e60, 1.0e-100),
                 rotation,
                 noon_core::SemanticVec3::new(0.75, 2.0, 1.25),
+            )
+            .unwrap(),
+            camera_projection: None,
+            material: noon_core::SemanticSpatialMaterial::PointLit,
+            point_light: false,
+            camera_profile: None,
+            camera_motions: None,
+        }));
+        frame.objects[1].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: None,
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(0.0, 0.0, 8.0),
+                rotation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
             )
             .unwrap(),
             camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
@@ -1895,8 +1949,10 @@ mod tests {
                 near: 0.1,
                 far: 30.0,
             }),
-            material: noon_core::SemanticSpatialMaterial::PointLit,
+            material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            camera_profile: None,
+            camera_motions: None,
         }));
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let publication_context = noon_core::PublicationContext::new(
@@ -1918,7 +1974,7 @@ mod tests {
         assert_eq!(mirror.publication_context(), snapshot.publication_context);
         assert_eq!(
             mirror.camera_3d_object().unwrap().camera_projection(),
-            frame.objects[0].camera_projection()
+            frame.objects[1].camera_projection()
         );
         assert_eq!(
             mirror.frame().unwrap().objects[0]
@@ -1941,6 +1997,9 @@ mod tests {
             )
             .unwrap();
         delta.objects[0].spatial = Some(TransportSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_center: None,
             translation: [0.0; 3],
             rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
             scale: [1.0; 3],
@@ -1961,9 +2020,97 @@ mod tests {
     }
 
     #[test]
+    fn worker_spatial_rows_preserve_domains_and_reject_inconsistent_roles() {
+        use noon_compile::CompiledSpatialDrawKind as Draw;
+        use noon_core::SemanticSpatialCompositionDomain as Domain;
+        let valid = TransportSpatialState {
+            draw_kind: Draw::Planar,
+            composition_domain: Domain::FixedOrientation,
+            fixed_orientation_center: Some([1.0 / 3.0, -2.5, 4.0]),
+            translation: [0.0; 3],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: None,
+            material: TransportSpatialMaterial::Unlit,
+            point_light: false,
+        };
+        let wire = serde_json::to_vec(&valid).unwrap();
+        let decoded: TransportSpatialState = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded, valid);
+        let compiled = decoded.into_compiled().unwrap();
+        assert_eq!(compiled.composition_domain, Domain::FixedOrientation);
+        assert_eq!(compiled.fixed_orientation_anchor_family, None);
+        assert_eq!(compiled.camera_profile, None);
+        assert!(compiled.camera_motions.is_none());
+        assert_eq!(TransportSpatialState::from_compiled(&compiled), valid);
+
+        let camera = TransportSpatialState {
+            composition_domain: Domain::World,
+            fixed_orientation_center: None,
+            camera_projection: Some(TransportProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 100.0,
+            }),
+            ..valid
+        };
+        assert!(camera.is_valid());
+        let invalid = [
+            TransportSpatialState {
+                fixed_orientation_center: None,
+                ..valid
+            },
+            TransportSpatialState {
+                fixed_orientation_center: Some([f64::NAN, 0.0, 0.0]),
+                ..valid
+            },
+            TransportSpatialState {
+                draw_kind: Draw::Mesh,
+                ..valid
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::PointLit,
+                ..valid
+            },
+            TransportSpatialState {
+                point_light: true,
+                ..valid
+            },
+            TransportSpatialState {
+                scale: [2.0; 3],
+                ..camera
+            },
+            TransportSpatialState {
+                draw_kind: Draw::Mesh,
+                ..camera
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::PointLit,
+                ..camera
+            },
+            TransportSpatialState {
+                point_light: true,
+                ..camera
+            },
+            TransportSpatialState {
+                composition_domain: Domain::FixedFrame,
+                ..camera
+            },
+        ];
+        for row in invalid {
+            assert!(!row.is_valid(), "invalid role/domain combination: {row:?}");
+            assert!(row.into_compiled().is_none());
+        }
+    }
+
+    #[test]
     fn incremental_spatial_world_track_replaces_one_effective_row_atomically() {
         let mut start = mixed_frame();
         start.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::IDENTITY,
             camera_projection: Some(noon_core::SemanticProjection3D::Orthographic {
                 height: 8.0,
@@ -1972,6 +2119,8 @@ mod tests {
             }),
             material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            camera_profile: None,
+            camera_motions: None,
         }));
         let mut encoder = RetainedExecutionDeltaEncoder::new(9);
         let start_context = noon_core::PublicationContext::new(
@@ -1989,6 +2138,10 @@ mod tests {
         let mut end = start.clone();
         end.time = 0.75;
         end.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::new(
                 noon_core::SemanticVec3::new(2.25, -4.5, 7.0),
                 noon_core::SemanticRotation3D::from_axis_angle(
@@ -1996,12 +2149,14 @@ mod tests {
                     0.8,
                 )
                 .unwrap(),
-                noon_core::SemanticVec3::new(1.0, 2.0, 0.5),
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
             )
             .unwrap(),
             camera_projection: start.objects[0].camera_projection(),
-            material: noon_core::SemanticSpatialMaterial::PointLit,
+            material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            camera_profile: None,
+            camera_motions: None,
         }));
         let end_context = noon_core::PublicationContext::new(
             noon_core::SceneRevision::new(3),

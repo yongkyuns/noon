@@ -8,6 +8,35 @@
 use crate::{AuthoringError, ManimArrow, ManimLineEndpoints};
 
 impl ManimArrow {
+    /// Transform the Arrow's public endpoints with the shared pointwise-matrix
+    /// implementation. Callers construct a new typed Arrow from these values,
+    /// regenerating rather than shearing the retained tip geometry.
+    pub fn matrix_transformed_endpoints(
+        &self,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<ManimLineEndpoints, AuthoringError> {
+        let endpoints = self.manim_endpoints()?;
+        let start = crate::matrix_authoring::transform_planar_point_about(
+            values,
+            rows,
+            columns,
+            endpoints.start,
+            (about_x, about_y),
+        )?;
+        let end = crate::matrix_authoring::transform_planar_point_about(
+            values,
+            rows,
+            columns,
+            endpoints.end,
+            (about_x, about_y),
+        )?;
+        Ok(ManimLineEndpoints { start, end })
+    }
+
     /// Public Arrow endpoints in world space, including retained tips.
     pub fn manim_endpoints(&self) -> Result<ManimLineEndpoints, AuthoringError> {
         let start = match self.start_tip() {

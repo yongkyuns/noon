@@ -31,6 +31,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_three_d_axes(
+        &mut self,
+        options: &noon::ManimThreeDAxesOptions,
+    ) -> Result<noon::ManimThreeDAxes, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.three_d_axes(options)))?
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,

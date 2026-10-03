@@ -66,6 +66,8 @@ mod authoring_error;
 mod boolean_authoring;
 mod brace_authoring;
 mod camera_authoring;
+mod camera_motion_authoring;
+mod camera_profile_authoring;
 mod compact_value_authoring;
 mod composite_entry;
 mod coordinate_authoring;
@@ -100,12 +102,14 @@ mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
 mod spatial_authoring;
+mod spatial_composition;
 mod world_affine;
 pub use graph_authoring::{
     DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
     GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
     DEFAULT_GRAPH_VERTEX_RADIUS, DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
 };
+pub use spatial_composition::SpatialCompositionError;
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
 mod host_callbacks;
@@ -160,6 +164,7 @@ pub mod time_series_plotting_example;
 #[cfg(feature = "latex")]
 mod variable_authoring;
 mod vector_field_authoring;
+mod vector_space_authoring;
 mod z_index;
 mod zoomed_scene;
 
@@ -184,8 +189,9 @@ pub use coordinate_authoring::BarLabelOptions;
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
     ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
-    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection,
-    RiemannRectangleOptions, RiemannRectanglePlan, RiemannSample,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, ManimThreeDAxes,
+    ManimThreeDAxesFrame, ManimThreeDAxesOptions, PolarAzimuthDirection, RiemannRectangleOptions,
+    RiemannRectanglePlan, RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -257,12 +263,14 @@ pub use noon_core::{
     YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_core::{
-    MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+    CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshResource, SemanticCamera3D,
+    SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
 pub use noon_geometry::{
-    cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
-    SurfaceError, SurfaceGrid, SurfaceSample, UvSurfacePlan,
+    cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
+    torus_mesh, triangular_polyhedron_mesh, SurfaceError, SurfaceGrid, SurfaceSample,
+    UvSurfacePlan,
 };
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
@@ -315,6 +323,9 @@ pub use text_part_authoring::TextPartAuthoringError;
 #[cfg(feature = "latex")]
 pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use vector_space_authoring::{
+    linear_transformation_path_arc, LinearTransformationAuthoring, LinearTransformationOptions,
+};
 pub use world_affine::WorldAffineEdit;
 pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
@@ -324,9 +335,10 @@ pub mod prelude {
     pub use crate::WorldAffineEdit;
     pub use crate::{
         cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
-        MeshOptions, MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
-        SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D, SurfaceGrid,
-        SurfaceSample, UvSurfacePlan,
+        CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshOptions, MeshResource,
+        SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+        SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticVec3,
+        SemanticWorldTransform3D, SurfaceGrid, SurfaceSample, UvSurfacePlan,
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
@@ -336,9 +348,10 @@ pub mod prelude {
         LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
         NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
-        RateFunction, Scene, SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate,
-        SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker,
-        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
+        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
+        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
+        VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,

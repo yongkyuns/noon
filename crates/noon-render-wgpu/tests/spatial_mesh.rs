@@ -962,10 +962,8 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
             .objects
             .iter()
             .find(|row| {
-                matches!(
-                    &row.content,
-                    noon_core::ObjectContentRef::Geometry(noon_core::GeometryRef::External(_))
-                )
+                row.geometry()
+                    .is_some_and(|geometry| matches!(geometry, noon_core::GeometryRef::External(_)))
             })
             .unwrap();
         let object = row.id;

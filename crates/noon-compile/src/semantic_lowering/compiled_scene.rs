@@ -186,7 +186,7 @@ fn materialize_semantic_projection(
             content,
             text_bounds,
             base_transform: object.base_transform,
-            spatial: object.spatial.map(Box::new),
+            spatial: object.spatial.clone().map(Box::new),
             base_style: object.base_style,
             base_z_index: object.presentation.z_index,
             dynamic: DynamicProperties::default(),
@@ -345,7 +345,7 @@ fn materialize_semantic_projection(
         },
     );
 
-    Ok(CompiledScene {
+    let mut compiled = CompiledScene {
         family_order,
         family_ranks,
         live_object_count: objects.len(),
@@ -367,8 +367,30 @@ fn materialize_semantic_projection(
         graph_dirty_dependencies,
         graph_authored_content,
         numeric_text_drivers,
+        fixed_orientation_groups: Vec::new(),
+        fixed_orientation_group_indices: HashMap::new(),
+        fixed_orientation_row_groups: HashMap::new(),
+        fixed_orientation_bounds_row_groups: HashMap::new(),
+        fixed_orientation_local_bounds: HashMap::new(),
         resources,
-    })
+    };
+    compiled.rebuild_fixed_orientation_groups();
+    if let Some(store) = store {
+        let anchors = compiled.fixed_orientation_anchor_families();
+        for anchor in anchors {
+            let members = store
+                .ordered_leaf_nodes(anchor)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|node| {
+                    let execution_id = super::membership::semantic_execution_object_id(node);
+                    compiled.object_index(execution_id)
+                })
+                .collect::<Vec<_>>();
+            compiled.set_fixed_orientation_group_bounds_members(anchor, &members);
+        }
+    }
+    Ok(compiled)
 }
 
 pub(super) fn lower_content(

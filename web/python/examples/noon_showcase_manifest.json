@@ -141,6 +141,26 @@
       "beats": [{"time": 1.5, "label": "Axes"}, {"time": 3.1, "label": "Function"}, {"time": 5.65, "label": "Sampled observations"}]
     },
     {
+      "id": "showcase-spatial-scene",
+      "title": "A surface in three dimensions",
+      "lesson": "See a point-lit parametric surface from changing camera angles while its light and a solid marker move through the same authored timeline.",
+      "primary_feature": "spatial-scene-authoring",
+      "category": "Geometry and layout",
+      "path": "python/examples/showcase_spatial_scene.py",
+      "features": ["ThreeDScene", "point-lit Mesh3D", "point light", "WorldTransformTo", "finite camera movement", "fixed-frame and fixed-orientation labels"],
+      "duration": 8.0,
+      "thumbnail_time": 7.1,
+      "thumbnail": "thumbnails/showcase/showcase-spatial-scene.png",
+      "thumbnail_alt": "A blue saddle-shaped surface under a warm point light, viewed beside a lifted orange marker and fixed labels",
+      "still_intervals": [[1.85, 2.2], [3.8, 4.1], [6.0, 8.0]],
+      "beats": [
+        {"time": 0.8, "label": "Light the surface"},
+        {"time": 3.5, "label": "Lift the marker"},
+        {"time": 5.5, "label": "Turn to a second view"},
+        {"time": 7.0, "label": "Hold the final composition"}
+      ]
+    },
+    {
       "id": "showcase-reactive-relationships",
       "title": "Relationships that follow motion",
       "lesson": "Drive two dots with ValueTrackers and keep their connector attached using public updaters.",

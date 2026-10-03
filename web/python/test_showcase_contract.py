@@ -18,11 +18,24 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertFalse(any(isinstance(node, ast.Assert) for node in ast.walk(tree)))
                 scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
                 self.assertEqual(len(scenes), 1)
-                self.assertTrue(any(isinstance(base, ast.Name) and base.id == "Scene" for base in scenes[0].bases))
+                is_spatial = entry["id"] == "showcase-spatial-scene"
+                scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
+                self.assertTrue(scene_bases & ({"Scene", "ThreeDScene"} if is_spatial else {"Scene"}))
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
-                plays = [node for node in calls if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "self" and node.func.attr == "play"]
+                plays = [node for node in calls if isinstance(node.func, ast.Attribute)
+                         and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+                         and node.func.attr in ({"play", "move_camera"} if is_spatial else {"play"})]
                 self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
-                self.assertTrue(any(isinstance(node.func, ast.Name) and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))
+                if is_spatial:
+                    self.assertTrue(any(isinstance(node.func, ast.Attribute)
+                                        and isinstance(node.func.value, ast.Name)
+                                        and node.func.value.id == "Mesh3D"
+                                        and node.func.attr == "parametric" for node in calls))
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id == "WorldTransformTo" for node in calls))
+                else:
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))
                 self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):

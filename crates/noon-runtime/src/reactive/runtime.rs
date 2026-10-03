@@ -206,7 +206,7 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
-        // WorldTransform is deliberately excluded: ReactiveValue has no world-pose
+        // Spatial properties are deliberately excluded: ReactiveValue has no world-pose
         // payload, and reactive graph compilation rejects that property by kind.
         const PROPERTIES: [Property; 12] = [
             Property::Presence,
@@ -344,6 +344,7 @@ impl SceneInstance {
 
     /// Publish a coherent effective-only frame change.
     pub(crate) fn publish_effective_change(&mut self) {
+        self.flush_fixed_orientation_anchor_changes();
         let next = self
             .publication
             .frame_epoch()
@@ -356,6 +357,7 @@ impl SceneInstance {
     /// effective frame context. Authored scene revision remains pinned to the
     /// semantic snapshot from which this session was built.
     pub(crate) fn publish_execution_change(&mut self) {
+        self.flush_fixed_orientation_anchor_changes();
         let execution = self
             .publication
             .execution_revision()
@@ -584,6 +586,7 @@ const fn property_slot(property: Property) -> u8 {
         Property::Presence => 0,
         Property::Transform => 1,
         Property::WorldTransform => 2,
+        Property::CameraProfile => 14,
         Property::Position => 3,
         Property::Rotation => 4,
         Property::Scale => 5,
@@ -676,7 +679,14 @@ pub(crate) fn apply_reactive_value_to_row(
             *row.morph = value;
             changed
         }
-        (Property::Transform | Property::Fill | Property::Stroke, _) => {
+        (
+            Property::Transform
+            | Property::CameraProfile
+            | Property::WorldTransform
+            | Property::Fill
+            | Property::Stroke,
+            _,
+        ) => {
             unreachable!("reactive values cannot drive object-snapshot or paint-color properties")
         }
         _ => unreachable!("validated reactive binding value type must match its property"),

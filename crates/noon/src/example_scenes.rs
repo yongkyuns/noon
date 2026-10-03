@@ -46,8 +46,12 @@ pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
+pub mod spatial_camera_labels;
 pub mod spatial_mesh;
+pub mod spatial_primitives;
 pub mod spatial_surface;
+pub mod spatial_three_d_axes;
 pub mod specialized_geometry;
 pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]
@@ -67,6 +71,7 @@ pub mod text_write;
 pub mod timed_composition;
 #[cfg(feature = "latex")]
 pub mod variable;
+pub mod vector_space;
 pub mod zoomed_scene;
 
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]

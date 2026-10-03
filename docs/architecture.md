@@ -1259,6 +1259,49 @@ Extend the same architecture:
 
 No separate 3D scene engine or canvas/runtime.
 
+### Bounded implementation profiles
+
+Phase D exposes checked capability slices over the shared semantic scene; the
+Manim class name alone does not imply full ManimCE parity. `Mesh3D` provides
+indexed Surface, sphere, cube, prism, torus, cylinder, cone, line, and point
+profiles with Rust-owned geometry, transforms, resources, and rendering.
+Compatibility constructors preserve pinned Manim defaults in their signatures
+and reject unsupported defaults/options (including Cairo checkerboards,
+per-face strokes/shading, non-opaque mesh fills, partial sweeps, and unsupported
+primitive orientations) instead of silently substituting a different result.
+Only explicitly admitted opaque/unshaded profiles are in scope.
+
+`ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
+publication/runtime. Camera profile tracks update the effective pose and
+projection together; ambient camera motion is authored camera state, while
+ordinary object animation remains on the common timeline. Ambient intervals
+are sampled analytically from authored time and share the existing camera-profile
+scheduler channel. Overlapping finite camera moves and ambient ownership are
+rejected; stopping closes the interval at the exact effective endpoint. Ordinary
+authored edits require a completed animation segment, and zero-rate ambient
+intervals do not keep settled playback awake. Direct seeking and forward playback are required to produce the same effective spatial state.
+World, FixedOrientation, and FixedFrame composition are represented as
+semantic domains on ordinary objects/families. World mesh/path content uses
+depth; FixedOrientation currently supports retained path and vector text with
+the runtime-derived shared family center; FixedFrame remains planar HUD
+content. Point-lit mesh material/light inputs are bounded renderer semantics,
+not Cairo lighting emulation.
+
+The bounded `ThreeDAxes` profile defaults to three linear ranges and lengths,
+ticks, and three retained filled triangular tips. Checked `c2p`/`p2c` helpers
+derive coordinates from the authored or effective axis families. Custom axis
+labels/configurations, Cairo pieces/shading, and custom tip shapes are outside
+this profile. The Phase D vector-space subset reuses family transforms and
+matrix animation; it does not introduce a separate coordinate or scene model.
+
+These profiles do not claim complete Manim API compatibility. In particular,
+custom Surface materials, transparent/partially filled solids, unsupported
+geometry topologies, arbitrary per-face appearance, unsupported vector-space
+operations, and optional host-language APIs remain outside the qualified
+surface until their owning capability and paired qualification are added.
+The JS/TypeScript facade is an independent optional frontend track (D6); it is
+not a required Phase D 3D exit criterion.
+
 ---
 
 ## 15. Validation strategy

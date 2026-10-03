@@ -3,6 +3,8 @@ use crate::authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
+mod camera_profile;
+#[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(target_arch = "wasm32")]
 mod graph;
@@ -65,8 +67,33 @@ pub(crate) enum SceneMembershipBatchKind {
     BringToBack,
 }
 
+// The browser binding constructs these policies; native builds validate the
+// same batch type without exposing the JS constructor.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Clone, Copy)]
+pub(crate) enum SpatialMembershipPolicy {
+    Assign(noon_core::SemanticSpatialCompositionDomain),
+    DefaultWorld,
+}
+
+impl SpatialMembershipPolicy {
+    fn apply_scene(
+        self,
+        scene: &mut noon::Scene,
+        targets: &[noon::MobjectTarget<'_>],
+    ) -> Result<(), AuthoringFailure> {
+        match self {
+            Self::Assign(domain) => scene.add_all_in_spatial_composition_domain(targets, domain),
+            Self::DefaultWorld => scene.add_all_world_mobjects(targets),
+        }
+        .map(|_| ())
+        .map_err(Into::into)
+    }
+}
+
 pub(crate) struct SceneMembershipBatch {
     kind: SceneMembershipBatchKind,
+    spatial_domain: Option<SpatialMembershipPolicy>,
     members: Vec<OwnedSceneMembershipMember>,
     bindings: Vec<(ObjectId, noon::Mobject)>,
 }
@@ -89,6 +116,7 @@ impl SceneMembershipBatch {
     ) -> Self {
         Self {
             kind,
+            spatial_domain: None,
             members: members
                 .into_iter()
                 .map(|handle| OwnedSceneMembershipMember::Mobject {
@@ -107,6 +135,7 @@ impl SceneMembershipBatch {
     ) -> Self {
         Self {
             kind,
+            spatial_domain: None,
             members: members
                 .into_iter()
                 .map(|member| match member {
@@ -149,6 +178,13 @@ impl SceneMembershipBatch {
         store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
         apply: impl FnOnce(SemanticSceneMembershipRequest<'_>) -> Result<R, AuthoringFailure>,
     ) -> Result<R, AuthoringFailure> {
+        if self.spatial_domain.is_some() {
+            return Err(AuthoringFailure::new(
+                "unsupported_operation",
+                "callback.spatial_domain",
+                "spatial membership edits require an ordinary continuation boundary",
+            ));
+        }
         let ids = self
             .family_members()
             .map_err(AuthoringFailure::from)?
@@ -342,6 +378,11 @@ enum OrdinaryCompositionChild {
         transform: noon_core::SemanticWorldTransform3D,
         options: noon_core::AnimationOptions,
     },
+    CameraProfile {
+        target: noon::Mobject,
+        profile: noon_core::ManimCamera3DProfile,
+        options: noon_core::AnimationOptions,
+    },
     FocusOn {
         focus: noon::FocusOnOptions,
         options: noon_core::AnimationOptions,
@@ -528,6 +569,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -1503,6 +1545,15 @@ impl CanonicalAuthoringScene {
                     transform: *transform,
                     options: *options,
                 },
+                OrdinaryCompositionChild::CameraProfile {
+                    target,
+                    profile,
+                    options,
+                } => noon::AnimationCompositionRequest::CameraProfile {
+                    target,
+                    profile: *profile,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FocusOn { focus, options } => {
                     noon::AnimationCompositionRequest::FocusOn {
                         focus: *focus,
@@ -1780,7 +1831,8 @@ impl CanonicalAuthoringScene {
             output: &mut Vec<(ObjectId, &'a noon::Mobject)>,
         ) {
             match child {
-                OrdinaryCompositionChild::WorldTransform { .. } => {}
+                OrdinaryCompositionChild::WorldTransform { .. }
+                | OrdinaryCompositionChild::CameraProfile { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -2251,6 +2303,38 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::WorldTransform {
                     target, options, ..
                 } => (None, target, *options),
+                OrdinaryCompositionChild::CameraProfile {
+                    target,
+                    profile,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
+                        return Err(
+                            "ordinary camera profile target belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    let state = target.state().map_err(|error| error.to_string())?;
+                    let clips = match state.camera_projection() {
+                        Some(noon_core::SemanticProjection3D::Perspective {
+                            near, far, ..
+                        }) => Some((near, far)),
+                        _ => None,
+                    };
+                    if state.role() != noon_core::SemanticObjectRole::Camera3D
+                        || state.camera_profile().is_none()
+                        || clips.is_none_or(|(near, far)| profile.camera(near, far).is_none())
+                    {
+                        return Err(
+                            "ordinary camera profile endpoint is invalid for this camera".into(),
+                        );
+                    }
+                    (None, target, *options)
+                }
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -2620,6 +2704,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -2856,25 +2941,57 @@ impl CanonicalAuthoringScene {
                 }
             }
         };
-        #[cfg(not(any(target_arch = "wasm32", test)))]
-        self.scene
-            .edit_membership(request)
-            .map_err(AuthoringFailure::from)?;
-        #[cfg(any(target_arch = "wasm32", test))]
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
-                self.scene
-                    .edit_membership(request)
-                    .map_err(AuthoringFailure::from)?;
+        if let Some(domain) = batch.spatial_domain {
+            if batch.kind != SceneMembershipBatchKind::Add {
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "spatial.membership_kind",
+                    "spatial composition requires an add membership batch",
+                ));
             }
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_edit_membership(request)?;
+            #[cfg(not(any(target_arch = "wasm32", test)))]
+            domain.apply_scene(&mut self.scene, &borrowed)?;
+            #[cfg(any(target_arch = "wasm32", test))]
+            match &mut self.player_ownership {
+                PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
+                    domain.apply_scene(&mut self.scene, &borrowed)?;
+                }
+                PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                    self.active_live_player()?
+                        .live_add_spatial_membership(&borrowed, domain)?;
+                }
+                PlayerOwnership::Unstarted => {
+                    return Err(
+                        "membership edit cannot follow pre-execution canonical timing".into(),
+                    );
+                }
+                PlayerOwnership::Transferred(_) => {
+                    return Err("live execution session is running in the semantic engine".into());
+                }
             }
-            PlayerOwnership::Unstarted => {
-                return Err("membership edit cannot follow pre-execution canonical timing".into());
-            }
-            PlayerOwnership::Transferred(_) => {
-                return Err("live execution session is running in the semantic engine".into());
+        } else {
+            #[cfg(not(any(target_arch = "wasm32", test)))]
+            self.scene
+                .edit_membership(request)
+                .map_err(AuthoringFailure::from)?;
+            #[cfg(any(target_arch = "wasm32", test))]
+            match &mut self.player_ownership {
+                PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
+                    self.scene
+                        .edit_membership(request)
+                        .map_err(AuthoringFailure::from)?;
+                }
+                PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                    self.active_live_player()?.live_edit_membership(request)?;
+                }
+                PlayerOwnership::Unstarted => {
+                    return Err(
+                        "membership edit cannot follow pre-execution canonical timing".into(),
+                    );
+                }
+                PlayerOwnership::Transferred(_) => {
+                    return Err("live execution session is running in the semantic engine".into());
+                }
             }
         }
         for (id, node) in new_bindings {
@@ -2942,6 +3059,7 @@ impl CanonicalAuthoringScene {
             .ok_or("live Mobject is not bound to this Scene")?;
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Remove,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -3122,6 +3240,8 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod camera_profile;
+    mod matrix_family;
     mod numbers;
     mod sample_space;
     mod spatial;
@@ -3466,10 +3586,35 @@ mod wasm {
             Ok(Self {
                 inner: SceneMembershipBatch {
                     kind,
+                    spatial_domain: None,
                     members: Vec::new(),
                     bindings: Vec::new(),
                 },
             })
+        }
+
+        /// Set one composition domain for this inert ordinary add batch.
+        #[wasm_bindgen(js_name = setSpatialDomain)]
+        pub fn set_spatial_domain(&mut self, domain: &str) -> Result<(), JsValue> {
+            if self.inner.kind != SceneMembershipBatchKind::Add {
+                return Err(js_error(
+                    "spatial composition requires an add membership batch",
+                ));
+            }
+            self.inner.spatial_domain = Some(match domain {
+                "world_default" => SpatialMembershipPolicy::DefaultWorld,
+                "world" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::World,
+                ),
+                "fixed_frame" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+                ),
+                "fixed_orientation" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+                ),
+                _ => return Err(js_error("unknown spatial composition domain")),
+            });
+            Ok(())
         }
 
         /// Append one phase-local callback object to this existing typed batch.
@@ -7077,6 +7222,10 @@ mod wasm {
                     .inner
                     .live_create_polar_plane(&options)
                     .map(|plane| plane.family().clone()),
+                CoordinateRequest::ThreeDAxes(options) => self
+                    .inner
+                    .live_create_three_d_axes(&options)
+                    .map(|axes| axes.family().clone()),
             };
             family
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
@@ -8463,6 +8612,7 @@ mod tests {
         let revision = scene.integration_store().borrow().scene_revision();
         let mut batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: None,
                 handle: object.clone(),
@@ -8504,6 +8654,7 @@ mod tests {
         assert_eq!(local.node_id(), foreign.node_id());
         let foreign_batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: None,
                 handle: foreign,
@@ -8524,6 +8675,7 @@ mod tests {
             .unwrap();
         let stale_batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: None,
                 handle: stale,
@@ -8545,6 +8697,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
                 members: vec![
                     membership_mobject(0, &first),
                     membership_mobject(1, &second),
@@ -8577,6 +8730,7 @@ mod tests {
         let before = context.root_membership_keys().unwrap();
         let error = context.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Replace,
+            spatial_domain: None,
             members: vec![
                 membership_mobject(0, &first),
                 membership_mobject(0, &replacement),
@@ -8593,6 +8747,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Replace,
+                spatial_domain: None,
                 members: vec![
                     membership_mobject(0, &first),
                     membership_mobject(2, &replacement),
@@ -8621,6 +8776,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })
@@ -8638,6 +8794,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::AddForeground,
+                spatial_domain: None,
                 members: vec![
                     membership_mobject(0, &first),
                     membership_mobject(1, &second),
@@ -8667,6 +8824,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
                 members: vec![membership_mobject(2, &later)],
                 bindings: vec![(ObjectId::new(2), later.clone())],
             })
@@ -8696,6 +8854,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::RemoveForeground,
+                spatial_domain: None,
                 members: vec![OwnedSceneMembershipMember::Mobject {
                     wrapper_id: None,
                     handle: first.clone(),
@@ -8716,6 +8875,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::BringToBack,
+                spatial_domain: None,
                 members: vec![OwnedSceneMembershipMember::Mobject {
                     wrapper_id: None,
                     handle: second.clone(),
@@ -8741,6 +8901,7 @@ mod tests {
         let before = context.scene.revision();
         let error = context.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::AddForeground,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: None,
                 handle: object.clone(),
@@ -8778,6 +8939,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })
@@ -9014,6 +9176,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
                 members: vec![OwnedSceneMembershipMember::Family(family)],
                 bindings: vec![
                     (ObjectId::new(4), left.clone()),
@@ -9375,6 +9538,7 @@ mod tests {
             .unwrap();
         let batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![
                 OwnedSceneMembershipMember::Mobject {
                     wrapper_id: None,
@@ -9719,6 +9883,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })

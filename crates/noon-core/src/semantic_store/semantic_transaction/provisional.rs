@@ -644,6 +644,8 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::ClickIndicate(object)
         | SemanticMutationKey::ObjectBarMetadata(object)
         | SemanticMutationKey::ObjectRole(object)
+        | SemanticMutationKey::SpatialCompositionDomain(object)
+        | SemanticMutationKey::CameraMotions(object)
         | SemanticMutationKey::DecimalNumber(object)
         | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
@@ -687,7 +689,11 @@ pub(super) fn duplicate_mutation_error(
             SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
         }
         SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
-        | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
+        | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::SpatialCompositionDomain(SemanticTransactionNodeRef::Existing(
+            target,
+        ))
+        | SemanticMutationKey::CameraMotions(SemanticTransactionNodeRef::Existing(target)) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
         SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {

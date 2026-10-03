@@ -77,6 +77,9 @@ pub enum SemanticScheduledAnimationPayload {
     WorldTransformTo {
         transform: noon_core::SemanticWorldTransform3D,
     },
+    CameraProfileTo {
+        profile: noon_core::ManimCamera3DProfile,
+    },
     Indicate {
         scale_factor: f64,
         color: noon_core::Color,
@@ -218,6 +221,9 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     },
     WorldTransformTo {
         transform: noon_core::SemanticWorldTransform3D,
+    },
+    CameraProfileTo {
+        profile: noon_core::ManimCamera3DProfile,
     },
     Indicate {
         scale_factor: f64,
@@ -765,6 +771,9 @@ fn published_payload(
         ScheduledAnimationPayload::WorldTransformTo { transform } => {
             SemanticScheduledAnimationPayload::WorldTransformTo { transform }
         }
+        ScheduledAnimationPayload::CameraProfileTo { profile } => {
+            SemanticScheduledAnimationPayload::CameraProfileTo { profile }
+        }
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             SemanticScheduledAnimationPayload::PassingFlash { time_width }
         }
@@ -837,6 +846,9 @@ fn prepared_payload(
         },
         ScheduledAnimationPayload::WorldTransformTo { transform } => {
             PreparedSemanticScheduledAnimationPayload::WorldTransformTo { transform }
+        }
+        ScheduledAnimationPayload::CameraProfileTo { profile } => {
+            PreparedSemanticScheduledAnimationPayload::CameraProfileTo { profile }
         }
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width }
@@ -916,6 +928,10 @@ enum AnimationDeclarationIntent<R> {
     WorldTransformTo {
         target: R,
         transform: noon_core::SemanticWorldTransform3D,
+    },
+    CameraProfileTo {
+        target: R,
+        profile: noon_core::ManimCamera3DProfile,
     },
     Indicate {
         target: R,
@@ -1115,6 +1131,15 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::WorldTransformTo {
                     target: *target,
                     transform: *transform,
+                }
+            }
+            SemanticAnimationIntent::CameraProfileTo { target, profile } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::CameraProfileTo {
+                    target: *target,
+                    profile: *profile,
                 }
             }
             SemanticAnimationIntent::Indicate {
@@ -1372,6 +1397,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             transform: *transform,
                         }
                     }
+                    SemanticAnimationIntent::CameraProfileTo { target, profile } => {
+                        self.prepared
+                            .object_state(*target)
+                            .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+                        AnimationDeclarationIntent::CameraProfileTo {
+                            target: (*target).into(),
+                            profile: *profile,
+                        }
+                    }
                     SemanticAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1512,6 +1546,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             transform: *transform,
                         }
                     }
+                    SemanticTransactionAnimationIntent::CameraProfileTo { target, profile } => {
+                        AnimationDeclarationIntent::CameraProfileTo {
+                            target: *target,
+                            profile: *profile,
+                        }
+                    }
                     SemanticTransactionAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1627,6 +1667,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::WorldTransformTo { target, .. } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::CameraProfileTo { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -1762,6 +1807,9 @@ enum ScheduledAnimationPayload<R> {
     WorldTransformTo {
         transform: noon_core::SemanticWorldTransform3D,
     },
+    CameraProfileTo {
+        profile: noon_core::ManimCamera3DProfile,
+    },
     Indicate {
         scale_factor: f64,
         color: noon_core::Color,
@@ -1842,6 +1890,28 @@ type SchedulePlanResult<L, T> = Result<
         <L as AnimationScheduleLookup>::Error,
     >,
 >;
+
+fn validate_spatial_animation_options<R, E>(
+    animation: R,
+    options: ResolvedAnimationOptions,
+) -> Result<(), AnimationSchedulePlanError<R, E>> {
+    if options.lag_ratio != 0.0 {
+        return Err(AnimationSchedulePlanError::Options {
+            animation,
+            error: AnimationOptionsError::UnsupportedLagRatio(options.lag_ratio),
+        });
+    }
+    if options.remover || options.introducer {
+        return Err(
+            AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                animation,
+                remover: options.remover,
+                introducer: options.introducer,
+            },
+        );
+    }
+    Ok(())
+}
 
 fn lower_animation_schedule<L>(
     lookup: &L,
@@ -1986,6 +2056,7 @@ where
             let options =
                 resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
                     .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            validate_spatial_animation_options(animation, options)?;
             Ok(PlannedAnimation {
                 animation,
                 run_time: options.run_time,
@@ -1993,6 +2064,26 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::WorldTransformTo { transform },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::CameraProfileTo { target, profile } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            validate_spatial_animation_options(animation, options)?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::CameraProfileTo { profile },
                     options,
                 },
             })

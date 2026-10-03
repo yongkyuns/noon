@@ -604,11 +604,11 @@ impl From<VisibleRenderError> for RetainedPrepareError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct OutlineKey {
-    font: FontResourceHandle,
+pub(super) struct OutlineKey {
+    pub(super) font: FontResourceHandle,
     glyph_id: GlyphId,
-    size_bits: u32,
-    variation_fingerprint: u64,
+    pub(super) size_bits: u32,
+    pub(super) variation_fingerprint: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -672,7 +672,7 @@ enum OutlineResidencyKey {
     Stroked(StrokedOutlineKey),
 }
 
-struct GlyphOutlineCache {
+pub(super) struct GlyphOutlineCache {
     scale_context: ScaleContext,
     faces: HashMap<FontResourceHandle, SwashFace>,
     face_entry_counts: HashMap<FontResourceHandle, usize>,
@@ -687,6 +687,16 @@ struct GlyphOutlineCache {
     rejected_admissions: u64,
 }
 
+impl std::fmt::Debug for GlyphOutlineCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GlyphOutlineCache")
+            .field("stats", &self.stats())
+            .field("limits", &self.limits)
+            .finish()
+    }
+}
+
 impl Default for GlyphOutlineCache {
     fn default() -> Self {
         Self::with_limits(GlyphOutlineCacheLimits::default())
@@ -694,7 +704,7 @@ impl Default for GlyphOutlineCache {
 }
 
 impl GlyphOutlineCache {
-    fn with_limits(limits: GlyphOutlineCacheLimits) -> Self {
+    pub(super) fn with_limits(limits: GlyphOutlineCacheLimits) -> Self {
         Self {
             scale_context: ScaleContext::new(),
             faces: HashMap::new(),
@@ -869,7 +879,7 @@ impl GlyphOutlineCache {
         }
     }
 
-    fn outline(
+    pub(super) fn outline(
         &mut self,
         fonts: &(impl FontResourceLookup + ?Sized),
         run: &GlyphRun,
@@ -943,7 +953,7 @@ impl GlyphOutlineCache {
         Ok((key, path))
     }
 
-    fn stroked_outline(
+    pub(super) fn stroked_outline(
         &mut self,
         outline_key: OutlineKey,
         outline: &VectorPath,
@@ -2857,7 +2867,7 @@ impl RetainedFramePreparer {
     }
 }
 
-fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
+pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
     let has_stroke = vector.style.stroke_width > 0.0;
     Style {
         fill: if vector.style.fill.is_some() || !has_stroke {
@@ -3142,7 +3152,11 @@ fn push_geometry_item(
     });
 }
 
-fn transform_path(path: &VectorPath, transform: TextAffineTransform, offset: Vec2) -> VectorPath {
+pub(super) fn transform_path(
+    path: &VectorPath,
+    transform: TextAffineTransform,
+    offset: Vec2,
+) -> VectorPath {
     let mut result = append_transformed_path(VectorPath::new(), path, transform, offset);
     if let Some(target) = path.morph_target() {
         result = result.with_morph_target(transform_path(target, transform, offset));
@@ -3150,7 +3164,7 @@ fn transform_path(path: &VectorPath, transform: TextAffineTransform, offset: Vec
     result
 }
 
-fn append_transformed_path(
+pub(super) fn append_transformed_path(
     mut target: VectorPath,
     source: &VectorPath,
     transform: TextAffineTransform,
@@ -3175,7 +3189,7 @@ fn append_transformed_path(
     target
 }
 
-fn variation_fingerprint(run: &GlyphRun) -> u64 {
+pub(super) fn variation_fingerprint(run: &GlyphRun) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for setting in run.variations.iter() {
         for byte in setting.tag {

@@ -313,12 +313,14 @@ fn apply_derived_track(
             );
             Ok(())
         }
-        Property::Presence | Property::ZIndex | Property::Transform | Property::WorldTransform => {
-            Err(DerivedDisplayEvaluationError::UnsupportedProperty {
-                occurrence_index,
-                property: track.property,
-            })
-        }
+        Property::Presence
+        | Property::ZIndex
+        | Property::Transform
+        | Property::WorldTransform
+        | Property::CameraProfile => Err(DerivedDisplayEvaluationError::UnsupportedProperty {
+            occurrence_index,
+            property: track.property,
+        }),
     }
 }
 

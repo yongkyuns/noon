@@ -47,6 +47,10 @@ impl PreparedPathEdits {
         !self.paths.is_empty()
     }
 
+    pub(crate) fn has_changes(&self) -> bool {
+        !self.states.is_empty() || !self.property_edits.is_empty()
+    }
+
     pub(crate) fn publish<T, E>(
         self,
         store: &mut SemanticStore,

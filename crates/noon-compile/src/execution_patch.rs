@@ -3,7 +3,10 @@ use noon_core::{
     TrackDefinition, TrackId, Transform2D,
 };
 
-use crate::{CompiledFamilyAnimation, CompiledGraphArrowPolicy, CompiledObject, CompiledScene};
+use crate::{
+    CompiledFamilyAnimation, CompiledGraphArrowPolicy, CompiledObject, CompiledScene,
+    CompiledSpatialState,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CompiledGraphDependencyKind {
@@ -53,6 +56,13 @@ pub enum ExecutionPatch {
         object: ObjectId,
         transform: SemanticTransform,
     },
+    /// Commit a prepared transform together with its optional spatial routing
+    /// metadata. Used when a semantic domain edit promotes/demotes one row.
+    SetSpatialState {
+        object: ObjectId,
+        base_transform: Transform2D,
+        spatial: Option<CompiledSpatialState>,
+    },
     SetZIndex {
         object: ObjectId,
         value: f64,
@@ -66,6 +76,12 @@ pub enum ExecutionPatch {
     SetGraphDependencies {
         owner: ObjectId,
         dependencies: Vec<CompiledGraphDependencyDefinition>,
+    },
+    /// Replace the affected anchor group's leaf rows after one prepared family
+    /// membership edit. IDs are semantic leaf identities encoded as execution keys.
+    SetFixedOrientationGroupBoundsMembers {
+        anchor_family: noon_core::SemanticNodeId,
+        members: Vec<ObjectId>,
     },
     AddTrack(TrackDefinition),
     AddFamilyAnimation(CompiledFamilyAnimation),
@@ -131,15 +147,22 @@ impl CompiledScene {
         base_transform: Transform2D,
         spatial: Option<crate::CompiledSpatialState>,
     ) {
+        let previous = self.objects[object_index as usize]
+            .spatial
+            .as_deref()
+            .cloned();
+        self.update_fixed_orientation_group(object_index, previous.as_ref(), spatial.as_ref());
         let object = &mut self.objects[object_index as usize];
         object.base_transform = base_transform;
-        match (object.spatial.as_deref_mut(), spatial) {
-            (Some(current), Some(next)) => *current = next,
-            (None, None) => {}
-            _ => debug_assert!(
-                false,
-                "spatial transform classification changed after preflight"
-            ),
+        match spatial {
+            Some(next) => {
+                if let Some(current) = object.spatial.as_deref_mut() {
+                    *current = next;
+                } else {
+                    object.spatial = Some(Box::new(next));
+                }
+            }
+            None => object.spatial = None,
         }
     }
 

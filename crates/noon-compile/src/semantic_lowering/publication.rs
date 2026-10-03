@@ -194,6 +194,12 @@ struct PreparedGraphUpdate {
     preflight_dependencies: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PreparedAnchorBoundsUpdate {
+    anchor_family: SemanticNodeId,
+    members: Vec<ObjectId>,
+}
+
 /// Fully fallible compiler work retained until transaction-local names become IDs.
 #[derive(Debug)]
 pub struct PreparedSemanticPublication {
@@ -202,6 +208,7 @@ pub struct PreparedSemanticPublication {
     entries: Vec<PreparedEntry>,
     possible_exits: Vec<ObjectId>,
     graph_updates: Vec<PreparedGraphUpdate>,
+    anchor_bounds_updates: Vec<PreparedAnchorBoundsUpdate>,
     numeric_text: Vec<CompiledNumericTextDriverRevisionEntry>,
     stats: SemanticPublicationPreparationStats,
 }
@@ -315,6 +322,12 @@ impl PreparedSemanticPublication {
             });
             patches.push(ExecutionPatch::CreateObject(entry.compiled));
         }
+        patches.extend(self.anchor_bounds_updates.into_iter().map(|update| {
+            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+                anchor_family: update.anchor_family,
+                members: update.members,
+            }
+        }));
         let mut active_graphs = membership
             .entered_graph_roots()
             .iter()
@@ -427,6 +440,7 @@ pub fn prepare_semantic_updater_publication(
             entries: Vec::new(),
             possible_exits: Vec::new(),
             graph_updates: Vec::new(),
+            anchor_bounds_updates: Vec::new(),
             numeric_text: Vec::new(),
             stats: SemanticPublicationPreparationStats::default(),
         },
@@ -450,6 +464,9 @@ fn validate_mutations(
             mutation,
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::SetObjectTransform { .. }
+                | SemanticMutation::SetSpatialCompositionDomain { .. }
+                | SemanticMutation::SetCameraProfile { .. }
+                | SemanticMutation::SetCameraMotions { .. }
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
@@ -591,6 +608,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         .map(semantic_execution_object_id)
         .collect::<Vec<_>>();
     let graph_updates = prepare_graph_updates(prepared, reachability)?;
+    let anchor_bounds_updates = prepare_anchor_bounds_updates(prepared, index, &entries)?;
     let stats = SemanticPublicationPreparationStats {
         object_states_lowered: entries.len(),
         possible_entries: entries.len(),
@@ -602,9 +620,108 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         entries,
         possible_exits,
         graph_updates,
+        anchor_bounds_updates,
         numeric_text,
         stats,
     })
+}
+
+fn prepare_anchor_bounds_updates(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    index: &SemanticExecutionIndex,
+    entries: &[PreparedEntry],
+) -> Result<Vec<PreparedAnchorBoundsUpdate>, SemanticPublicationLoweringError> {
+    let mut anchors = HashSet::new();
+    for mutation in prepared.candidate_mutations() {
+        match mutation {
+            SemanticMutation::AddMember { family, .. }
+            | SemanticMutation::RemoveMember { family, .. }
+            | SemanticMutation::ReorderMember { family, .. } => {
+                if let Some(family) = prepared.planned_node_id(*family) {
+                    anchors.extend(index.fixed_orientation_anchors_for_family(family));
+                }
+            }
+            SemanticMutation::RemoveNode { node } => {
+                if let Some(node) = node.existing().and_then(|node| prepared.store().node(node)) {
+                    for &parent in node.parents() {
+                        anchors.extend(index.fixed_orientation_anchors_for_family(parent));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for mutation in prepared.candidate_mutations() {
+        if let SemanticMutation::SetSpatialCompositionDomain { object, .. } = mutation {
+            if let Ok(state) = prepared.object_state(*object) {
+                if let Some(anchor) = state.spatial_anchor_family() {
+                    anchors.insert(anchor);
+                }
+            }
+        }
+    }
+    for entry in entries {
+        if let Some(anchor) = entry
+            .compiled
+            .spatial
+            .as_ref()
+            .and_then(|spatial| spatial.fixed_orientation_anchor_family)
+        {
+            anchors.insert(anchor);
+        }
+    }
+
+    let mut anchors = anchors.into_iter().collect::<Vec<_>>();
+    anchors.sort_unstable();
+    anchors
+        .into_iter()
+        .map(|anchor_family| {
+            let mut members = Vec::new();
+            let mut visited = HashSet::new();
+            collect_prepared_anchor_leaves(
+                prepared,
+                SemanticTransactionNodeRef::Existing(anchor_family),
+                &mut visited,
+                &mut members,
+            )?;
+            members.sort_unstable();
+            members.dedup();
+            members.retain(|member| {
+                index.execution_object_id(*member).is_some()
+                    || entries
+                        .iter()
+                        .any(|entry| prepared.planned_node_id(entry.object) == Some(*member))
+            });
+            Ok(PreparedAnchorBoundsUpdate {
+                anchor_family,
+                members: members
+                    .into_iter()
+                    .map(semantic_execution_object_id)
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+fn collect_prepared_anchor_leaves(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    node: SemanticTransactionNodeRef,
+    visited: &mut HashSet<SemanticTransactionNodeRef>,
+    members: &mut Vec<SemanticNodeId>,
+) -> Result<(), SemanticPublicationLoweringError> {
+    if !visited.insert(node) || prepared.node_is_removed(node) {
+        return Ok(());
+    }
+    if prepared.object_state(node).is_ok() {
+        if let Some(node) = prepared.planned_node_id(node) {
+            members.push(node);
+        }
+        return Ok(());
+    }
+    for child in prepared.family_members(node)? {
+        collect_prepared_anchor_leaves(prepared, child, visited, members)?;
+    }
+    Ok(())
 }
 
 fn prepare_graph_updates(
@@ -1043,6 +1160,7 @@ struct PublicationDomains {
     z_index: bool,
     numeric: bool,
     semantic_transform: bool,
+    spatial_state: bool,
 }
 
 /// Lower only changed content/transform/style values already in this execution domain.
@@ -1080,6 +1198,21 @@ fn lower_semantic_publication(
             SemanticMutation::SetObjectTransform { object, .. } => {
                 if let Some(object) = object.existing() {
                     domains.entry(object).or_default().semantic_transform = true;
+                }
+            }
+            SemanticMutation::SetSpatialCompositionDomain { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().spatial_state = true;
+                }
+            }
+            SemanticMutation::SetCameraProfile { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().spatial_state = true;
+                }
+            }
+            SemanticMutation::SetCameraMotions { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().spatial_state = true;
                 }
             }
             SemanticMutation::ReplaceContent { object, .. } => {
@@ -1120,6 +1253,9 @@ fn lower_semantic_publication(
             | SemanticMutation::SetClickIndicate { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
+    }
+    for object in prepared.spatial_anchor_cleared_owners() {
+        domains.entry(*object).or_default().spatial_state = true;
     }
     let mut mutations = Vec::with_capacity(domains.len() * 3);
     let mut resource_additions = CompiledResources::default();
@@ -1179,14 +1315,22 @@ fn lower_semantic_publication(
                 text_bounds,
             });
         }
-        if flags.transform || flags.semantic_transform {
+        if flags.transform || flags.semantic_transform || flags.spatial_state {
             let prior = prepared
                 .store()
                 .semantic_object_state_checked(node)
                 .map_err(SemanticLoweringError::from)?;
             let prior_is_spatial =
                 super::projection::object_requires_spatial_lowering(prior, prepared.store());
-            if flags.semantic_transform || prior_is_spatial {
+            if flags.semantic_transform || flags.spatial_state {
+                let lowered =
+                    super::projection::lower_object_state(node, &state, prepared.store())?;
+                mutations.push(ExecutionPatch::SetSpatialState {
+                    object,
+                    base_transform: lowered.base_transform,
+                    spatial: lowered.spatial,
+                });
+            } else if prior_is_spatial {
                 mutations.push(ExecutionPatch::SetSemanticTransform {
                     object,
                     transform: state.transform,

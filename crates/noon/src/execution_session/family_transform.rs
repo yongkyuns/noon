@@ -679,6 +679,7 @@ mod matching_target_tests {
                 appearance: 1.0,
                 reveal: 1.0,
                 world_transform: None,
+                camera_profile: None,
             },
             tracks: vec![PreparedDerivedFamilyTransformTrack {
                 occurrence_index: 0,

@@ -387,6 +387,23 @@ fn lower_object_track_values(
                 to: noon_core::WorldTransformTrackEndpoint::from_world(*to),
             },
         ),
+        (
+            SemanticObjectTrackProperty::CameraProfile,
+            SemanticObjectTrackValues::CameraProfile {
+                from,
+                to,
+                near,
+                far,
+            },
+        ) => (
+            Property::CameraProfile,
+            TrackValues::CameraProfile {
+                from: *from,
+                to: *to,
+                near: *near,
+                far: *far,
+            },
+        ),
         _ => return Err(SemanticInitialAnimationError::InvalidLeaf { animation }),
     };
     Ok(direct)

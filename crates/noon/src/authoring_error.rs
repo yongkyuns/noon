@@ -83,7 +83,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",
-            Self::WorldAffineContent => "world affine edits require mesh, camera, or light content",
+            Self::WorldAffineContent => "world affine edits require vector, text, mesh, camera, or light content",
             Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
@@ -116,6 +116,10 @@ pub enum AuthoringError {
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
     /// Camera auto-frame inputs cannot produce a finite representable viewport.
     InvalidCameraAutoFrame(&'static str),
+    /// An ambient camera-rotation input or sampled endpoint is not representable.
+    InvalidCameraMotionInput(&'static str),
+    /// A second ambient interval cannot begin while the camera has an open owner.
+    AmbientCameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
     UnresolvedCreatedNode(noon_core::SemanticLocalNodeToken),
     /// Existing shared domain cause.
@@ -287,6 +291,10 @@ impl std::fmt::Display for AuthoringError {
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::NonFiniteObjectState => {
                 f.write_str("geometry, transform, and style must be finite")
+            }
+            Self::InvalidCameraMotionInput(message) => f.write_str(message),
+            Self::AmbientCameraMotionAlreadyActive => {
+                f.write_str("camera already has an open ambient rotation; stop it before beginning another")
             }
             Self::NonFiniteTransform => f.write_str("compact transform must be finite"),
             Self::NonFiniteStyle => f.write_str("compact style must be finite"),

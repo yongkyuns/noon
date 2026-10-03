@@ -496,6 +496,38 @@ impl WasmAuthoringArrowHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringArrowHandle {
+    /// Transform public arrow endpoints with the shared pointwise matrix path.
+    /// The caller can rebuild an Arrow target so its tip is regenerated.
+    #[wasm_bindgen(js_name = matrixTransformedEndpoints)]
+    pub fn matrix_transformed_endpoints(
+        &self,
+        values: Vec<f64>,
+        rows: u32,
+        columns: u32,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<js_sys::Array, JsValue> {
+        let endpoints = self
+            .arrow()?
+            .matrix_transformed_endpoints(
+                &values,
+                rows as usize,
+                columns as usize,
+                (about_x, about_y),
+            )
+            .map_err(js_error)?;
+        let result = js_sys::Array::new();
+        for value in [
+            endpoints.start.0,
+            endpoints.start.1,
+            endpoints.end.0,
+            endpoints.end.1,
+        ] {
+            result.push(&JsValue::from_f64(value));
+        }
+        Ok(result)
+    }
+
     pub fn family(&self) -> WasmAuthoringFamilyHandle {
         let family = match &self.published {
             PublishedArrowRequest::Arrow(arrow) => arrow.family(),

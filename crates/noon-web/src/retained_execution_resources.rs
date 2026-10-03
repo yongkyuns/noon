@@ -794,6 +794,9 @@ mod tests {
                     transform: Transform2D::IDENTITY,
                     spatial: Some(crate::TransportSpatialState {
                         translation: [1.0 / 3.0, -1.0e20, 5.5],
+                        draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+                        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                        fixed_orientation_center: None,
                         rotation_wxyz: [0.9238795325112867, 0.0, 0.3826834323650898, 0.0],
                         scale: [0.5, 1.25, 2.0],
                         camera_projection: None,
@@ -834,6 +837,9 @@ mod tests {
                     transform: Transform2D::IDENTITY,
                     spatial: Some(crate::TransportSpatialState {
                         translation,
+                        draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+                        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                        fixed_orientation_center: None,
                         rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
                         scale: [1.0; 3],
                         camera_projection,
@@ -964,6 +970,9 @@ mod tests {
                         transform: Transform2D::IDENTITY,
                         spatial: Some(crate::TransportSpatialState {
                             translation: [-2.0, 4.5, 7.25],
+                            draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+                            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                            fixed_orientation_center: None,
                             rotation_wxyz: [0.8660254037844386, 0.0, 0.5, 0.0],
                             scale: [1.5, 0.75, 2.25],
                             camera_projection: None,

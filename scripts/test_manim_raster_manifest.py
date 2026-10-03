@@ -15,6 +15,31 @@ ORACLE = ROOT / "scripts/manim-raster-semantic-reference.py"
 
 
 class RasterManifestTests(unittest.TestCase):
+    def test_vector_space_lts_has_direct_and_worker_pairs(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in manifest["fixtures"]
+            if fixture["id"] in {"vector-space-lts-direct", "vector-space-lts-worker"}
+        }
+        self.assertEqual(set(fixtures), {"vector-space-lts-direct", "vector-space-lts-worker"})
+        direct = fixtures["vector-space-lts-direct"]
+        worker = fixtures["vector-space-lts-worker"]
+        self.assertEqual(direct["scene"], "VectorSpaceLTS")
+        self.assertEqual(worker["scene"], direct["scene"])
+        self.assertEqual(direct["source"], worker["source"])
+        self.assertEqual(direct["direct_factory"], "createDirectVectorSpaceSmokeRenderer")
+        self.assertEqual(direct["expected_duration"], 3.0)
+        self.assertEqual(worker["expected_duration"], 3.0)
+        self.assertEqual(direct["sample_times"], [0.0, 1.5, 2.966666666666667])
+        self.assertEqual(worker["sample_times"], direct["sample_times"])
+        self.assertNotIn("tolerance", direct)
+        self.assertNotIn("tolerance", worker)
+        source = (ROOT / direct["source"]).read_text(encoding="utf-8")
+        self.assertIn("from manim import *", source)
+        self.assertIn("class VectorSpaceLTS(LinearTransformationScene)", source)
+        self.assertIn("self.apply_matrix([[0.0, 1.0], [1.0, 0.0]])", source)
+
     def test_spatial_mesh_fixture_is_a_direct_typed_rust_wasm_pair(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         fixtures = [

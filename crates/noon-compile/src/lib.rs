@@ -10,8 +10,11 @@ mod execution_patch;
 mod graph_dependencies;
 pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
 mod replay_revision;
+mod spatial_composition;
 pub use replay_revision::CompiledReplayRevision;
+pub use spatial_composition::CompiledLocalBounds2D64;
 mod semantic_lowering;
+use spatial_composition::CompiledFixedOrientationGroup;
 mod transaction_preflight;
 mod transform;
 
@@ -54,6 +57,7 @@ pub struct DynamicProperties {
     pub z_index: bool,
     pub transform: bool,
     pub world_transform: bool,
+    pub camera_profile: bool,
     pub position: bool,
     pub rotation: bool,
     pub scale: bool,
@@ -73,6 +77,7 @@ impl DynamicProperties {
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
             Property::WorldTransform => self.world_transform = true,
+            Property::CameraProfile => self.camera_profile = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
@@ -91,6 +96,7 @@ impl DynamicProperties {
             || self.z_index
             || self.transform
             || self.world_transform
+            || self.camera_profile
             || self.position
             || self.rotation
             || self.scale
@@ -123,12 +129,30 @@ pub struct CompiledObject {
 }
 
 /// Compact optional 3D state shared by semantic lowering and runtime publication.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CompiledSpatialState {
     pub world: noon_core::SemanticWorldTransform3D,
     pub camera_projection: Option<noon_core::SemanticProjection3D>,
+    pub camera_profile: Option<noon_core::ManimCamera3DProfile>,
+    pub camera_motions: Option<std::sync::Arc<[noon_core::CameraAngularMotion]>>,
     pub material: noon_core::SemanticSpatialMaterial,
     pub point_light: bool,
+    pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
+    pub draw_kind: CompiledSpatialDrawKind,
+    /// Authoritative semantic family whose effective center is shared by this
+    /// FixedOrientation row. Compiler/runtime only; worker payloads carry center.
+    pub fixed_orientation_anchor_family: Option<noon_core::SemanticNodeId>,
+    /// Effective world-bounds center shared by every row in the anchor family.
+    pub fixed_orientation_center: Option<SemanticVec3>,
+}
+
+/// Source geometry class used to route spatial objects without inferring role
+/// from authored metadata. Mesh identity comes from the captured resource type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledSpatialDrawKind {
+    Mesh,
+    Planar,
 }
 
 /// One sparse tracker-to-effective-text execution declaration.
@@ -867,6 +891,12 @@ pub struct CompiledScene {
     graph_authored_content: HashMap<u32, ObjectContentRef>,
     /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
     numeric_text_drivers: Vec<CompiledNumericTextDriver>,
+    /// Sparse shared family-center dependencies. Ordinary scenes allocate none.
+    fixed_orientation_groups: Vec<CompiledFixedOrientationGroup>,
+    fixed_orientation_group_indices: HashMap<noon_core::SemanticNodeId, u32>,
+    fixed_orientation_row_groups: HashMap<u32, u32>,
+    fixed_orientation_bounds_row_groups: HashMap<u32, Vec<u32>>,
+    fixed_orientation_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
     resources: CompiledResources,
 }
 
@@ -1202,6 +1232,7 @@ impl CompiledScene {
                         | Property::Reveal
                         | Property::Morph
                         | Property::WorldTransform
+                        | Property::CameraProfile
                         | Property::ZIndex
                 )
             {
@@ -1296,6 +1327,16 @@ impl CompiledScene {
             );
         }
         sort_tracks(&mut tracks);
+        if camera_world_track_conflict(&tracks).is_some() {
+            return Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidCameraProfileValues,
+            ));
+        }
+        if camera_motion_track_overlap(&tracks, &objects) {
+            return Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidCameraProfileValues,
+            ));
+        }
         validate_presence_chains(&tracks)
             .map_err(|(previous, next)| CompileError::DiscontinuousPresence { previous, next })?;
         let track_locators = tracks
@@ -1323,7 +1364,7 @@ impl CompiledScene {
         for (rank, &index) in painter_order.iter().enumerate() {
             painter_ranks[index as usize] = Some(rank as u32);
         }
-        Ok(Self {
+        let mut compiled = Self {
             family_order: (0..objects.len() as u32).collect(),
             family_ranks: (0..objects.len() as u32).map(Some).collect(),
             painter_order,
@@ -1345,8 +1386,15 @@ impl CompiledScene {
             graph_dirty_dependencies: HashMap::new(),
             graph_authored_content: HashMap::new(),
             numeric_text_drivers: Vec::new(),
+            fixed_orientation_groups: Vec::new(),
+            fixed_orientation_group_indices: HashMap::new(),
+            fixed_orientation_row_groups: HashMap::new(),
+            fixed_orientation_bounds_row_groups: HashMap::new(),
+            fixed_orientation_local_bounds: HashMap::new(),
             resources: CompiledResources::default(),
-        })
+        };
+        compiled.rebuild_fixed_orientation_groups();
+        Ok(compiled)
     }
 
     /// Stable compiled object slots. Retired slots remain in this slice and have `live == false`.
@@ -1510,6 +1558,26 @@ impl CompiledScene {
         object.live.then_some(object.id)
     }
 
+    pub(crate) fn compiled_object_is_mesh(&self, object_index: usize) -> bool {
+        let Some(GeometryRef::External(id)) = self
+            .objects
+            .get(object_index)
+            .and_then(|object| object.content.geometry())
+        else {
+            return false;
+        };
+        self.resources
+            .current_handle(*id)
+            .and_then(|handle| GeometryResourceLookup::get(&self.resources, handle))
+            .is_some_and(|resource| matches!(resource, GeometryResource::Mesh(_)))
+    }
+
+    pub fn object_index_is_live(&self, object_index: u32) -> bool {
+        self.objects
+            .get(object_index as usize)
+            .is_some_and(|object| object.live)
+    }
+
     pub fn object_channels(&self, id: ObjectId) -> Vec<CompiledChannelKey> {
         let Some(object_index) = self.object_index(id) else {
             return Vec::new();
@@ -1666,6 +1734,14 @@ impl CompiledScene {
                     })
                 })
             }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => self.object_index(*object).is_none_or(|index| {
+                self.objects[index as usize].base_transform != *base_transform
+                    || self.objects[index as usize].spatial.as_deref() != spatial.as_ref()
+            }),
             ExecutionPatch::SetZIndex { object, value } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_z_index != *value),
@@ -1689,6 +1765,18 @@ impl CompiledScene {
                 owner,
                 dependencies,
             } => self.graph_dependencies_patch_changes(*owner, dependencies),
+            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+                anchor_family,
+                members,
+            } => {
+                let mut next = members
+                    .iter()
+                    .filter_map(|member| self.object_index(*member))
+                    .collect::<Vec<_>>();
+                next.sort_unstable();
+                self.fixed_orientation_group_for_anchor(*anchor_family)
+                    .is_some_and(|group| self.fixed_orientation_group_bounds_members(group) != next)
+            }
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
@@ -1720,6 +1808,8 @@ impl CompiledScene {
                 object.live = true;
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
                     self.objects[index as usize] = object;
+                    let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                    self.update_fixed_orientation_group(index, None, spatial.as_ref());
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
@@ -1735,6 +1825,8 @@ impl CompiledScene {
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
+                let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_fixed_orientation_group(index, None, spatial.as_ref());
                 self.live_object_count += 1;
                 self.family_order.push(index);
                 self.family_ranks
@@ -1749,6 +1841,8 @@ impl CompiledScene {
                 let index = self
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_fixed_orientation_group(index, previous.as_ref(), None);
                 self.graph_authored_content.remove(&index);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
@@ -1863,6 +1957,17 @@ impl CompiledScene {
                     self.objects[index as usize].content = content.clone();
                 }
                 self.objects[index as usize].text_bounds = *text_bounds;
+                let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                if spatial.as_ref().is_some_and(|spatial| {
+                    spatial.composition_domain
+                        == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                }) || self
+                    .fixed_orientation_bounds_row_groups
+                    .contains_key(&index)
+                {
+                    let bounds = self.fixed_orientation_local_bounds_for(index as usize);
+                    self.fixed_orientation_local_bounds.insert(index, bounds);
+                }
             }
             ExecutionPatch::SetTransform { object, transform } => {
                 let index = self
@@ -1890,8 +1995,83 @@ impl CompiledScene {
                     object: *object,
                     field: ObjectStateField::Transform,
                 })?;
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_fixed_orientation_group(index, previous.as_ref(), spatial.as_ref());
                 self.objects[index as usize].base_transform = base_transform;
                 self.objects[index as usize].spatial = spatial.map(Box::new);
+            }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_transform(*object, *base_transform).map_err(map_object_state_error)?;
+                if !valid_compiled_spatial(spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                let object_is_mesh = self.compiled_object_is_mesh(index as usize);
+                if spatial.as_ref().is_some_and(|spatial| {
+                    (spatial.draw_kind == CompiledSpatialDrawKind::Mesh) != object_is_mesh
+                }) || (object_is_mesh && spatial.is_none())
+                {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                const SPATIAL_CHANNELS: [Property; 15] = [
+                    Property::Presence,
+                    Property::ZIndex,
+                    Property::Transform,
+                    Property::WorldTransform,
+                    Property::CameraProfile,
+                    Property::Position,
+                    Property::Rotation,
+                    Property::Scale,
+                    Property::Fill,
+                    Property::Stroke,
+                    Property::StrokeWidth,
+                    Property::Opacity,
+                    Property::Appearance,
+                    Property::Reveal,
+                    Property::Morph,
+                ];
+                if SPATIAL_CHANNELS.into_iter().any(|property| {
+                    self.channel_tracks(CompiledChannelKey::new(index, property))
+                        .iter()
+                        .any(|track| {
+                            !valid_compiled_track_for_spatial(
+                                track.property,
+                                &track.values,
+                                spatial.as_ref(),
+                            )
+                        })
+                }) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_fixed_orientation_group(index, previous.as_ref(), spatial.as_ref());
+                let compiled = &mut self.objects[index as usize];
+                compiled.base_transform = *base_transform;
+                match spatial {
+                    Some(next) => {
+                        if let Some(current) = compiled.spatial.as_deref_mut() {
+                            *current = next.clone();
+                        } else {
+                            compiled.spatial = Some(Box::new(next.clone()));
+                        }
+                    }
+                    None => compiled.spatial = None,
+                }
             }
             ExecutionPatch::SetStyle { object, style } => {
                 let index = self
@@ -1904,6 +2084,21 @@ impl CompiledScene {
                 owner,
                 dependencies,
             } => self.apply_graph_dependencies(*owner, dependencies)?,
+            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+                anchor_family,
+                members,
+            } => {
+                let indices = members
+                    .iter()
+                    .filter_map(|member| self.object_index(*member))
+                    .collect::<Vec<_>>();
+                if self
+                    .fixed_orientation_group_for_anchor(*anchor_family)
+                    .is_some()
+                {
+                    self.set_fixed_orientation_group_bounds_members(*anchor_family, &indices);
+                }
+            }
             ExecutionPatch::AddTrack(track) => {
                 if self.track_locators.contains_key(&track.id) {
                     return Err(CompilePatchError::DuplicateTrack(track.id));
@@ -2056,6 +2251,7 @@ impl CompiledScene {
                             | Property::Reveal
                             | Property::Morph
                             | Property::WorldTransform
+                            | Property::CameraProfile
                             | Property::ZIndex
                     )
                 {
@@ -2367,45 +2563,165 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
 }
 
-fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
+pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
     let Some(spatial) = spatial else {
         return true;
     };
     let world = spatial.world;
     noon_core::SemanticWorldTransform3D::new(world.translation, world.rotation, world.scale)
         .is_some()
+        && ((!spatial.point_light && spatial.camera_projection.is_none())
+            || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
+        && (spatial.draw_kind != CompiledSpatialDrawKind::Mesh
+            || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && ((spatial.composition_domain
+            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation)
+            || (spatial.fixed_orientation_anchor_family.is_none()
+                && spatial.fixed_orientation_center.is_none()))
+        && spatial.fixed_orientation_center.is_none_or(|center| {
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite()
+        })
         && spatial
             .camera_projection
             .is_none_or(noon_core::SemanticProjection3D::is_valid)
         && (spatial.camera_projection.is_none() || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
         && (!spatial.point_light || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+        && spatial.camera_profile.is_none_or(|profile| {
+            let Some(noon_core::SemanticProjection3D::Perspective { near, far, .. }) =
+                spatial.camera_projection
+            else {
+                return false;
+            };
+            profile.camera(near, far).is_some_and(|camera| {
+                world.scale == SemanticVec3::new(1.0, 1.0, 1.0)
+                    && world.translation == camera.position
+                    && world.rotation == camera.orientation
+                    && spatial.camera_projection == Some(camera.projection)
+            })
+        })
+        && spatial.camera_motions.as_deref().is_none_or(|motions| {
+            noon_core::camera_motion_history_is_valid(motions)
+                && spatial.camera_projection.is_some_and(|projection| {
+                    motions.iter().all(|motion| {
+                        let (near, far) = motion.clips();
+                        let Some(camera) = motion.source().camera(near, far) else {
+                            return false;
+                        };
+                        motion.end().is_some()
+                            || (projection == camera.projection
+                                && spatial.camera_profile == Some(motion.source()))
+                    })
+                })
+        })
         && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
             || [world.scale.x, world.scale.y, world.scale.z]
                 .into_iter()
                 .all(|value| value.is_finite() && value != 0.0))
 }
 
+pub(crate) fn camera_world_track_conflict(tracks: &[CompiledTrack]) -> Option<(TrackId, TrackId)> {
+    for profile in tracks
+        .iter()
+        .filter(|track| track.property == Property::CameraProfile)
+    {
+        let (profile_start, profile_end) =
+            continuous_time_map_interval(profile.timing, &profile.time_map).ok()?;
+        for world in tracks.iter().filter(|track| {
+            track.object_index == profile.object_index && track.property == Property::WorldTransform
+        }) {
+            let (world_start, world_end) =
+                continuous_time_map_interval(world.timing, &world.time_map).ok()?;
+            if profile_start < world_end && world_start < profile_end {
+                return Some((profile.id, world.id));
+            }
+        }
+    }
+    None
+}
+
+fn camera_motion_track_overlap(tracks: &[CompiledTrack], objects: &[CompiledObject]) -> bool {
+    tracks
+        .iter()
+        .filter(|track| {
+            matches!(
+                track.property,
+                Property::CameraProfile | Property::WorldTransform
+            )
+        })
+        .any(|track| {
+            let Some(motions) = objects
+                .get(track.object_index as usize)
+                .and_then(|object| object.spatial.as_deref())
+                .and_then(|spatial| spatial.camera_motions.as_deref())
+            else {
+                return false;
+            };
+            let Ok((track_start, track_end)) =
+                continuous_time_map_interval(track.timing, &track.time_map)
+            else {
+                return true;
+            };
+            motions.iter().any(|motion| {
+                let motion_end = motion.end().unwrap_or(f64::INFINITY);
+                if motion.start() == motion_end {
+                    track_start <= motion.start() && motion.start() <= track_end
+                } else {
+                    track_start < motion_end && motion.start() < track_end
+                }
+            })
+        })
+}
+
 fn valid_track_for_spatial(
     track: &TrackDefinition,
     spatial: Option<&CompiledSpatialState>,
 ) -> bool {
+    valid_track_values_for_spatial(track.property, &track.values, spatial)
+}
+
+pub(crate) fn valid_compiled_track_for_spatial(
+    property: Property,
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    valid_track_values_for_spatial(property, values, spatial)
+}
+
+fn valid_track_values_for_spatial(
+    property: Property,
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
     let Some(spatial) = spatial else {
-        return track.property != Property::WorldTransform;
+        return !matches!(property, Property::WorldTransform | Property::CameraProfile);
     };
-    if track.property == Property::WorldTransform {
-        return valid_world_track_for_spatial(&track.values, Some(spatial));
+    if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+        return !matches!(property, Property::WorldTransform | Property::CameraProfile);
+    }
+    if property == Property::WorldTransform {
+        return valid_world_track_for_spatial(values, Some(spatial));
+    }
+    if property == Property::CameraProfile {
+        return spatial.camera_projection.is_some()
+            && matches!(
+                values,
+                TrackValues::CameraProfile { from, to, near, far }
+                    if from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some()
+            );
     }
     if spatial.camera_projection.is_some() {
         return false;
     }
     // Point lights use ordinary color and opacity as color/intensity channels.
     if spatial.point_light {
-        return matches!(track.property, Property::Fill | Property::Opacity);
+        return matches!(property, Property::Fill | Property::Opacity);
     }
     // Meshes require opaque color endpoints. Planar stroke, reveal, appearance,
     // and opacity effects must fail before activation rather than during drawing.
     matches!(
-        (&track.property, &track.values),
+        (&property, values),
         (
             Property::Fill,
             TrackValues::Color { from: Some(from), to: Some(to) }
@@ -2420,6 +2736,9 @@ fn valid_world_track_for_spatial(
     let Some(spatial) = spatial else {
         return false;
     };
+    if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+        return false;
+    }
     let TrackValues::WorldTransform { from, to } = values else {
         return false;
     };
@@ -2450,6 +2769,16 @@ fn lower_semantic_transform_patch(
         return None;
     }
     if let Some(spatial) = spatial {
+        if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+            let planar = transform.as_planar()?;
+            let lowered = Transform2D {
+                translation: Vec2::new(planar.translation.x as f32, planar.translation.y as f32),
+                rotation: planar.rotation_z as f32,
+                scale: Vec2::new(planar.scale.x as f32, planar.scale.y as f32),
+            };
+            validate_transform(object, lowered).ok()?;
+            return Some((lowered, Some(spatial.clone())));
+        }
         if (spatial.camera_projection.is_some() || spatial.point_light)
             && transform.scale != SemanticVec3::new(1.0, 1.0, 1.0)
         {
@@ -2468,8 +2797,14 @@ fn lower_semantic_transform_patch(
             Some(CompiledSpatialState {
                 world,
                 camera_projection: spatial.camera_projection,
+                camera_profile: None,
+                camera_motions: spatial.camera_motions.clone(),
                 material: spatial.material,
                 point_light: spatial.point_light,
+                composition_domain: spatial.composition_domain,
+                draw_kind: spatial.draw_kind,
+                fixed_orientation_anchor_family: spatial.fixed_orientation_anchor_family,
+                fixed_orientation_center: spatial.fixed_orientation_center,
             }),
         ));
     }
@@ -2537,17 +2872,18 @@ const fn property_rank(property: Property) -> u8 {
         Property::Presence => 0,
         Property::Transform => 1,
         Property::WorldTransform => 2,
-        Property::Position => 3,
-        Property::Rotation => 4,
-        Property::Scale => 5,
-        Property::Fill => 6,
-        Property::Stroke => 7,
-        Property::StrokeWidth => 8,
-        Property::Opacity => 9,
-        Property::Appearance => 10,
-        Property::Reveal => 11,
-        Property::Morph => 12,
-        Property::ZIndex => 13,
+        Property::CameraProfile => 3,
+        Property::Position => 4,
+        Property::Rotation => 5,
+        Property::Scale => 6,
+        Property::Fill => 7,
+        Property::Stroke => 8,
+        Property::StrokeWidth => 9,
+        Property::Opacity => 10,
+        Property::Appearance => 11,
+        Property::Reveal => 12,
+        Property::Morph => 13,
+        Property::ZIndex => 14,
     }
 }
 
@@ -2843,6 +3179,7 @@ mod tests {
                 reveal: false,
                 morph: false,
                 world_transform: false,
+                camera_profile: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
@@ -3203,6 +3540,7 @@ mod tests {
                 reveal: true,
                 morph: false,
                 world_transform: false,
+                camera_profile: false,
             }
         );
     }
@@ -3906,8 +4244,14 @@ mod tests {
                     near: 0.1,
                     far: 100.0,
                 }),
+                camera_profile: None,
+                camera_motions: None,
                 material: noon_core::SemanticSpatialMaterial::Unlit,
                 point_light: false,
+                composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                draw_kind: CompiledSpatialDrawKind::Planar,
+                fixed_orientation_anchor_family: None,
+                fixed_orientation_center: None,
             })),
             ..CompiledObject::new(
                 id,
@@ -3959,8 +4303,14 @@ mod tests {
                     near: 2.0,
                     far: 1.0,
                 }),
+                camera_profile: None,
+                camera_motions: None,
                 material: noon_core::SemanticSpatialMaterial::Unlit,
                 point_light: false,
+                composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                draw_kind: CompiledSpatialDrawKind::Planar,
+                fixed_orientation_anchor_family: None,
+                fixed_orientation_center: None,
             })),
             ..camera
         };
@@ -3977,8 +4327,14 @@ mod tests {
         let mesh = CompiledSpatialState {
             world: noon_core::SemanticWorldTransform3D::IDENTITY,
             camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
             material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Mesh,
+            fixed_orientation_anchor_family: None,
+            fixed_orientation_center: None,
         };
         let light = CompiledSpatialState {
             point_light: true,

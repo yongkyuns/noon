@@ -105,10 +105,8 @@ class ApplyMatrix:
         run_time: float = 3.0,
         **kwargs: Any,
     ) -> None:
-        if isinstance(mobject, _compat.Group):
-            raise NotImplementedError("ApplyMatrix currently supports one leaf Mobject")
-        if not isinstance(mobject, _base.Mobject):
-            raise TypeError("ApplyMatrix target must be a Mobject")
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("ApplyMatrix target must be a Mobject or Group")
         self.matrix = matrix
         self.mobject = mobject
         self.source = mobject

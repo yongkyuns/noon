@@ -176,6 +176,15 @@ pub async fn create_direct_spatial_mesh_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct WASM counterpart for the public Line3D and explicit triangular-mesh fixture.
+#[wasm_bindgen(js_name = createDirectSpatialPrimitivesSmokeRenderer)]
+pub async fn create_direct_spatial_primitives_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_primitives::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct Rust/WASM smoke for the shared renderer-independent UV surface fixture.
 #[wasm_bindgen(js_name = createDirectSpatialSurfaceSmokeRenderer)]
 pub async fn create_direct_spatial_surface_smoke_renderer(
@@ -191,6 +200,24 @@ pub async fn create_direct_spatial_surface_lighting_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::spatial_surface::lighting_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Mixed World/FixedOrientation/FixedFrame Typst labels with a native camera-profile track.
+#[wasm_bindgen(js_name = createDirectSpatialCameraLabelsSmokeRenderer)]
+pub async fn create_direct_spatial_camera_labels_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_camera_labels::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared native/direct-WASM ThreeDAxes, Rust c2p point, and camera-profile track.
+#[wasm_bindgen(js_name = createDirectSpatialThreeDAxesSmokeRenderer)]
+pub async fn create_direct_spatial_three_d_axes_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_three_d_axes::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -1083,6 +1110,15 @@ pub async fn create_direct_path_smoothing_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::path_smoothing::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct typed Rust/WASM fixture for the VectorScene/LTS matrix profile.
+#[wasm_bindgen(js_name = createDirectVectorSpaceSmokeRenderer)]
+pub async fn create_direct_vector_space_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::vector_space::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

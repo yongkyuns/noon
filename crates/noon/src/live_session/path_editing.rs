@@ -37,6 +37,36 @@ impl LiveSession<'_> {
         };
         self.publish_path_edits(prepared).map(|_| ())
     }
+
+    /// Apply one pointwise matrix to all path leaves beneath the family in the
+    /// active session's single prepared resource/publication transaction.
+    pub fn apply_matrix_to_family(
+        &mut self,
+        family: &MobjectFamily,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_family(family)?;
+        let prepared = {
+            let store = self.store.borrow();
+            crate::matrix_authoring::prepare_apply_matrix_family(
+                &store,
+                family,
+                values,
+                rows,
+                columns,
+                (about_x, about_y),
+            )
+            .map_err(LiveSessionError::from)?
+        };
+        let Some(prepared) = prepared else {
+            return Ok(());
+        };
+        self.publish_path_edits(prepared).map(|_| ())
+    }
     pub(crate) fn publish_path_edits(
         &mut self,
         prepared: crate::path_editing::PreparedPathEdits,

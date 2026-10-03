@@ -5,6 +5,16 @@ use crate::authoring_composite::entry_handle;
 use crate::{authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle};
 use wasm_bindgen::prelude::*;
 
+/// Shared Manim LinearTransformationScene default for matrix-induced arcs.
+#[wasm_bindgen(js_name = noonLinearTransformationPathArc)]
+pub fn linear_transformation_path_arc(
+    values: Vec<f64>,
+    rows: u32,
+    columns: u32,
+) -> Result<f64, JsValue> {
+    noon::linear_transformation_path_arc(&values, rows as usize, columns as usize).map_err(js_error)
+}
+
 #[wasm_bindgen]
 pub struct WasmMatrixOptions {
     pub(crate) options: noon::MatrixOptions,
@@ -44,6 +54,22 @@ impl WasmMatrixHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    /// Apply a matrix to the detached target family using the shared retained
+    /// path-replacement transaction. Running scenes use `liveApplyMatrixFamily`.
+    #[wasm_bindgen(js_name = applyMatrix)]
+    pub fn apply_matrix(
+        &self,
+        values: Vec<f64>,
+        rows: u32,
+        columns: u32,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), JsValue> {
+        self.semantic_family()?
+            .apply_matrix(&values, rows as usize, columns as usize, about_x, about_y)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = asMatrix)]
     pub fn as_matrix(&self) -> Result<WasmMatrixHandle, JsValue> {
         self.semantic_family()

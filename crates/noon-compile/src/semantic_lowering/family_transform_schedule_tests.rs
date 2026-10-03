@@ -33,6 +33,7 @@ fn effective() -> EffectiveAnimationProperties {
         appearance: 1.0,
         reveal: 1.0,
         world_transform: None,
+        camera_profile: None,
     }
 }
 

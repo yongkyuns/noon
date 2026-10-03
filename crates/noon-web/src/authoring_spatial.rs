@@ -144,6 +144,50 @@ impl WasmMeshOptions {
             .map(|options| Self { options })
             .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
+    #[wasm_bindgen(js_name = line3D)]
+    pub fn line_3d(
+        start: &[f64],
+        end: &[f64],
+        thickness: f64,
+        segments: usize,
+    ) -> Result<Self, JsValue> {
+        noon::line_3d_mesh(
+            vec3(start, "start")?,
+            vec3(end, "end")?,
+            thickness,
+            segments,
+        )
+        .map(mesh_options)
+        .map(|options| Self { options })
+        .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+
+    /// Explicit triangular faces preserve winding and use flat normals.
+    pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, JsValue> {
+        let (vertices, vertex_tail) = vertices.as_chunks::<3>();
+        let (faces, face_tail) = faces.as_chunks::<3>();
+        if !vertex_tail.is_empty() || !face_tail.is_empty() {
+            return Err(invalid(
+                "spatial.invalid_mesh",
+                "polyhedron inputs require triples",
+            ));
+        }
+        if vertices.len() > noon::MAX_SURFACE_VERTICES || faces.len() > noon::MAX_SURFACE_CELLS {
+            return Err(invalid(
+                "spatial.invalid_mesh",
+                "polyhedron exceeds the bounded mesh size",
+            ));
+        }
+        let vertices = vertices
+            .iter()
+            .map(|v| SemanticVec3::new(v[0], v[1], v[2]))
+            .collect::<Vec<_>>();
+        noon::triangular_polyhedron_mesh(&vertices, faces)
+            .map(mesh_options)
+            .map(|options| Self { options })
+            .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+
     pub fn cube(size: f64) -> Result<Self, JsValue> {
         noon::cube_mesh(size)
             .map(mesh_options)

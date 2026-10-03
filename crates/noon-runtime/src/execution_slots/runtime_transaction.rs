@@ -25,11 +25,13 @@ pub(super) fn final_value_writes(
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => {
                 let lane = match patch {
                     ExecutionPatch::SetContent { .. } => 0,
                     ExecutionPatch::SetTransform { .. }
                     | ExecutionPatch::SetSemanticTransform { .. } => 1,
+                    ExecutionPatch::SetSpatialState { .. } => 1,
                     ExecutionPatch::SetStyle { .. } => 2,
                     _ => unreachable!(),
                 };
@@ -523,6 +525,7 @@ impl SceneInstance {
                     ExecutionPatch::SetContent { object, .. }
                     | ExecutionPatch::SetTransform { object, .. }
                     | ExecutionPatch::SetSemanticTransform { object, .. }
+                    | ExecutionPatch::SetSpatialState { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,

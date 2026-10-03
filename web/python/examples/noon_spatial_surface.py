@@ -6,12 +6,16 @@ class SpatialSurface(SpatialScene):
         super().__init__(far=30)
 
     async def construct(self):
-        surface = Mesh3D.parametric(
+        surface = Surface(
             lambda u, v: (u, v, 0.25 * u * v),
             u_range=(-1.5, 1.5),
             v_range=(-1.5, 1.5),
             resolution=(8, 8),
-            color=Color(0.2, 0.55, 0.85),
+            checkerboard_colors=False,
+            fill_color=Color(0.2, 0.55, 0.85),
+            fill_opacity=1,
+            stroke_width=0,
+            shade_in_3d=False,
         )
         self.add(surface)
         await self.play(WorldTransformTo(

@@ -89,6 +89,9 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     }
                 });
                 json!({
+                    "draw_kind": state.draw_kind,
+                    "composition_domain": state.composition_domain,
+                    "fixed_orientation_center": state.fixed_orientation_center.map(|v| [v.x, v.y, v.z]),
                     "translation": [world.translation.x, world.translation.y, world.translation.z],
                     "rotation_wxyz": world.rotation.components(),
                     "scale": [world.scale.x, world.scale.y, world.scale.z],

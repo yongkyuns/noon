@@ -25,6 +25,9 @@ pub use smoothing::{
     change_path_anchor_mode, change_path_anchor_mode_with_boundary, smooth_curve_handles,
     SplineBoundary,
 };
+mod mesh_helpers;
+pub use mesh_helpers::{line_3d_mesh, triangular_polyhedron_mesh};
+
 pub use solids::{
     cone_mesh, cone_parts, cube_mesh, cylinder_mesh, cylinder_parts, prism_faces, prism_mesh,
     sphere_mesh, surface_mesh, torus_mesh,

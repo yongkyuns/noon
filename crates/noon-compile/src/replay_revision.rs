@@ -81,6 +81,7 @@ impl CompiledScene {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => {
                 rows.insert(index(*object)?);
             }
@@ -107,7 +108,8 @@ impl CompiledScene {
                 // The runtime admits this only when the interval does not start
                 // before publication. No row or channel payload is replaced.
             }
-            ExecutionPatch::SetGraphDependencies { .. } => return None,
+            ExecutionPatch::SetGraphDependencies { .. }
+            | ExecutionPatch::SetFixedOrientationGroupBoundsMembers { .. } => return None,
         }
         Some(CompiledReplayRevision {
             rows: rows

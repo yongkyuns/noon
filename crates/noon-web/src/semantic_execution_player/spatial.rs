@@ -6,6 +6,25 @@ use noon::MobjectFamily;
 use noon::{MeshOptions, Mobject, SemanticWorldTransform3D, WorldAffineEdit};
 
 impl super::SemanticExecutionPlayer {
+    pub(crate) fn live_add_spatial_membership(
+        &mut self,
+        targets: &[noon::MobjectTarget<'_>],
+        policy: crate::canonical_authoring_scene::SpatialMembershipPolicy,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(match policy {
+                crate::canonical_authoring_scene::SpatialMembershipPolicy::Assign(domain) => {
+                    live.add_all_in_spatial_composition_domain(targets, domain)
+                }
+                crate::canonical_authoring_scene::SpatialMembershipPolicy::DefaultWorld => {
+                    live.add_all_world_mobjects(targets)
+                }
+            })
+        })?
+        .map(|_| ())
+        .map_err(AuthoringFailure::from)
+    }
+
     pub(crate) fn live_create_mesh(
         &mut self,
         options: MeshOptions,

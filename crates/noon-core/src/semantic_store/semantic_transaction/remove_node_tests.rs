@@ -57,6 +57,38 @@ fn remove_node_unbinds_properties_and_cascades_invalid_derived_signals() {
 }
 
 #[test]
+fn removing_fixed_orientation_anchor_family_clears_surviving_leaf_anchor_explicitly() {
+    let mut store = SemanticStore::new();
+    let leaf = store.insert_semantic_object(crate::SemanticObjectState::new(
+        crate::StoredGeometry::Circle { radius: 1.0 },
+    ));
+    let root = store.insert_family();
+    store.add_member(root, leaf).unwrap();
+    let mut anchor = SemanticMutationTransaction::new();
+    anchor.set_spatial_composition_domain_with_anchor(
+        leaf,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(root),
+    );
+    anchor.apply(&mut store).unwrap();
+
+    let mut remove = SemanticMutationTransaction::new();
+    remove.remove_node(root);
+    let result = remove.apply(&mut store).unwrap();
+
+    let state = store.semantic_object_state_checked(leaf).unwrap();
+    assert_eq!(
+        state.spatial_composition_domain(),
+        crate::SemanticSpatialCompositionDomain::FixedOrientation
+    );
+    assert_eq!(state.spatial_anchor_family(), None);
+    assert!(result
+        .impacts()
+        .contains(&SemanticMutationImpact::SpatialAnchorChanged { object: leaf }));
+    assert_eq!(store.last_mutation_stats().slots_written, 2);
+}
+
+#[test]
 fn removing_animation_target_cascades_leaf_and_parent_composition_only() {
     let mut store = SemanticStore::new();
     let target = object(&mut store, 1.0);

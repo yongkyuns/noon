@@ -8,7 +8,7 @@ use super::semantic_declarations::{
 };
 use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
-    AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
+    AnimationOptions, HostCallbackId, ManimCamera3DProfile, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticBarMetadata, SemanticClickIndicate, SemanticDecimalNumber, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind,
@@ -16,11 +16,11 @@ use crate::{
     SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialMaterial, SemanticStore,
-    SemanticStoreError, SemanticStyle, SemanticTableLayout, SemanticTransactionGraphDeclaration,
-    SemanticTransactionGraphEdgeDependency, SemanticTransform, SemanticTransformInterpolation,
-    SemanticUpdaterRegistration, SemanticVec3, StoredGeometry, TextPresentationBaseline,
-    VectorPath,
+    SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
+    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency, SemanticTransform,
+    SemanticTransformInterpolation, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
+    TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -101,6 +101,23 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         camera_frame: Option<SemanticTransactionNodeRef>,
         capture_own_display: bool,
+    },
+    SetSpatialCompositionDomain {
+        object: SemanticTransactionNodeRef,
+        domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<SemanticNodeId>,
+    },
+    /// Replace immutable native angular-driver intervals on one camera.
+    SetCameraMotions {
+        object: SemanticTransactionNodeRef,
+        motions: std::sync::Arc<[crate::CameraAngularMotion]>,
+    },
+    /// Atomically replace a camera's Manim profile and its derived pose/lens.
+    SetCameraProfile {
+        object: SemanticTransactionNodeRef,
+        profile: ManimCamera3DProfile,
+        near: f64,
+        far: f64,
     },
     ReplaceContent {
         object: SemanticTransactionNodeRef,
@@ -208,6 +225,8 @@ impl SemanticMutation {
             Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
+            | Self::SetCameraProfile { object, .. }
+            | Self::SetCameraMotions { object, .. }
             | Self::SetClickIndicate { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
@@ -215,6 +234,15 @@ impl SemanticMutation {
             | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
+            Self::SetSpatialCompositionDomain {
+                object,
+                anchor_family,
+                ..
+            } => {
+                let mut refs = vec![*object];
+                refs.extend(anchor_family.map(SemanticTransactionNodeRef::Existing));
+                refs
+            }
             Self::SetInset2DView {
                 object,
                 camera_frame,
@@ -281,6 +309,9 @@ impl SemanticMutation {
             | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::SetInset2DView { object, .. }
+            | Self::SetSpatialCompositionDomain { object, .. }
+            | Self::SetCameraProfile { object, .. }
+            | Self::SetCameraMotions { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
@@ -321,6 +352,15 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::ObjectBarMetadata(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
+            Self::SetSpatialCompositionDomain { object, .. } => {
+                Some(SemanticMutationKey::SpatialCompositionDomain(*object))
+            }
+            Self::SetCameraMotions { object, .. } => {
+                Some(SemanticMutationKey::CameraMotions(*object))
+            }
+            Self::SetCameraProfile { object, .. } => {
+                Some(SemanticMutationKey::ObjectTransform(*object))
+            }
             Self::ReplaceDecimalNumber { object, .. } => {
                 Some(SemanticMutationKey::DecimalNumber(*object))
             }
@@ -369,10 +409,12 @@ pub(super) enum SemanticMutationKey {
         property: SemanticObjectProperty,
     },
     ObjectTransform(SemanticTransactionNodeRef),
+    CameraMotions(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
     ClickIndicate(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
+    SpatialCompositionDomain(SemanticTransactionNodeRef),
     DecimalNumber(SemanticTransactionNodeRef),
     TextPresentationBaseline(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
@@ -427,6 +469,18 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     ObjectRole {
+        object: SemanticNodeId,
+    },
+    SpatialCompositionDomain {
+        object: SemanticNodeId,
+    },
+    CameraProfile {
+        object: SemanticNodeId,
+    },
+    CameraMotions {
+        object: SemanticNodeId,
+    },
+    SpatialAnchorChanged {
         object: SemanticNodeId,
     },
     DecimalNumber {
@@ -513,6 +567,9 @@ pub(super) struct SemanticTransactionPreflight {
     staged_foreground: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     removed_existing: HashSet<SemanticNodeId>,
     removed_pending: HashSet<SemanticLocalNodeToken>,
+    /// Owners whose family anchor is cleared by this transaction's removal
+    /// closure, staged before publication just like explicit object writes.
+    spatial_anchor_cleared: Vec<SemanticNodeId>,
 }
 
 impl Default for SemanticMutationTransaction {
@@ -713,6 +770,68 @@ impl SemanticMutationTransaction {
             object: object.into(),
             camera_frame: None,
             capture_own_display: false,
+        });
+        self
+    }
+
+    /// Change the camera-composition domain of one semantic object.
+    pub fn set_spatial_composition_domain(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        domain: SemanticSpatialCompositionDomain,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::SetSpatialCompositionDomain {
+                object: object.into(),
+                domain,
+                anchor_family: None,
+            });
+        self
+    }
+
+    /// Set composition domain and an optional shared FixedOrientation anchor.
+    /// The anchor must be the object itself or an ancestor family containing it.
+    pub fn set_spatial_composition_domain_with_anchor(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<SemanticNodeId>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::SetSpatialCompositionDomain {
+                object: object.into(),
+                domain,
+                anchor_family,
+            });
+        self
+    }
+
+    /// Stage native camera-driver history without any host evaluation state.
+    pub fn set_camera_motions(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        motions: std::sync::Arc<[crate::CameraAngularMotion]>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetCameraMotions {
+            object: object.into(),
+            motions,
+        });
+        self
+    }
+
+    /// Stage a validated camera profile together with the pose and lens it derives.
+    pub fn set_camera_profile(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        profile: ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetCameraProfile {
+            object: object.into(),
+            profile,
+            near,
+            far,
         });
         self
     }
@@ -1118,6 +1237,27 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::WorldTransformTo {
                     target: target.into(),
                     transform,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage an animatable unwrapped Manim camera-profile endpoint.
+    pub fn create_camera_profile_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        profile: ManimCamera3DProfile,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::CameraProfileTo {
+                    target: target.into(),
+                    profile,
                 },
                 options,
             ),
@@ -2109,9 +2249,10 @@ impl SemanticMutationTransaction {
                             },
                         );
                     }
-                    let did_change = state.transform != *transform;
+                    let did_change =
+                        state.transform != *transform || state.camera_profile().is_some();
                     if did_change {
-                        state.transform = *transform;
+                        state.set_transform(*transform);
                     }
                     changed.push(did_change);
                 }
@@ -2229,6 +2370,99 @@ impl SemanticMutationTransaction {
                     } else {
                         state.set_role(SemanticObjectRole::Ordinary);
                     }
+                }
+                SemanticMutation::SetSpatialCompositionDomain {
+                    object,
+                    domain,
+                    anchor_family,
+                } => {
+                    if let Some(anchor) = anchor_family {
+                        catalog.ensure_authoring_node((*anchor).into(), index)?;
+                        let target = object.existing().ok_or(
+                            SemanticMutationTransactionError::InvalidNodeObjectState { index },
+                        )?;
+                        let anchor_node = store.node(*anchor).expect("anchor preflighted");
+                        let valid_anchor = match anchor_node.kind() {
+                            SemanticNodeKind::AuthoringObject => *anchor == target,
+                            SemanticNodeKind::Family(_) => {
+                                store.is_family_ancestor(*anchor, target).unwrap_or(false)
+                            }
+                            _ => false,
+                        };
+                        if !valid_anchor {
+                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                                index,
+                            });
+                        }
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.spatial_composition_domain() != *domain
+                        || state.spatial_anchor_family() != *anchor_family;
+                    if did_change {
+                        state
+                            .set_spatial_composition_domain_with_anchor(*domain, *anchor_family)
+                            .map_err(|_| {
+                                SemanticMutationTransactionError::InvalidNodeObjectState { index }
+                            })?;
+                    }
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetCameraMotions { object, motions } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.camera_motions() != motions.as_ref();
+                    state
+                        .set_camera_motions(std::sync::Arc::clone(motions))
+                        .map_err(
+                            |_| SemanticMutationTransactionError::InvalidNodeObjectState { index },
+                        )?;
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetCameraProfile {
+                    object,
+                    profile,
+                    near,
+                    far,
+                } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if state.role() != SemanticObjectRole::Camera3D
+                        || profile.camera(*near, *far).is_none()
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let current = (
+                        state.camera_profile(),
+                        state.transform,
+                        state.camera_projection(),
+                    );
+                    state
+                        .set_camera_profile(*profile, *near, *far)
+                        .map_err(
+                            |_| SemanticMutationTransactionError::InvalidNodeObjectState { index },
+                        )?;
+                    let did_change = current
+                        != (
+                            state.camera_profile(),
+                            state.transform,
+                            state.camera_projection(),
+                        );
+                    changed.push(did_change);
                 }
                 SemanticMutation::ReplaceDecimalNumber { object, number } => {
                     let state = catalog.staged_object_state(
@@ -2667,6 +2901,32 @@ impl SemanticMutationTransaction {
                 *changed = false;
             }
         }
+        let mut spatial_anchor_cleared = Vec::new();
+        let mut ordered_removed = removed_nodes.iter().copied().collect::<Vec<_>>();
+        ordered_removed.sort_unstable();
+        for removed in ordered_removed {
+            for owner in store.spatial_anchor_owners_for_target(removed) {
+                if removed_nodes.contains(&owner) || spatial_anchor_cleared.contains(&owner) {
+                    continue;
+                }
+                let Some(mut state) = store.semantic_object_state_checked(owner).ok().cloned()
+                else {
+                    continue;
+                };
+                state
+                    .set_spatial_composition_domain_with_anchor(
+                        SemanticSpatialCompositionDomain::FixedOrientation,
+                        None,
+                    )
+                    .expect("clearing a valid removed anchor retains a valid domain");
+                let node = SemanticTransactionNodeRef::Existing(owner);
+                staged_objects.insert(node, state);
+                if !staged_object_order.contains(&node) {
+                    staged_object_order.push(node);
+                }
+                spatial_anchor_cleared.push(owner);
+            }
+        }
         staged_objects.retain(|node, _| {
             !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token))
         });
@@ -2720,6 +2980,7 @@ impl SemanticMutationTransaction {
             pending_animations,
             removed_existing: removed_nodes,
             removed_pending,
+            spatial_anchor_cleared,
         };
         inset_view::validate(self, &preflight, store)?;
         // A graph declaration describes the complete final topology/binding
@@ -3138,13 +3399,19 @@ fn apply_object_property(
             unreachable!("presence property writes are rejected during transaction preflight")
         }
         (SemanticObjectProperty::Translation, SemanticSignalValue::Vec3(value)) => {
-            state.transform.translation = value;
+            let mut transform = state.transform;
+            transform.translation = value;
+            state.set_transform(transform);
         }
         (SemanticObjectProperty::Scale, SemanticSignalValue::Vec3(value)) => {
-            state.transform.scale = value;
+            let mut transform = state.transform;
+            transform.scale = value;
+            state.set_transform(transform);
         }
         (SemanticObjectProperty::RotationZ, SemanticSignalValue::Scalar(value)) => {
-            state.transform.orientation = crate::SemanticOrientation::Planar(value);
+            let mut transform = state.transform;
+            transform.orientation = crate::SemanticOrientation::Planar(value);
+            state.set_transform(transform);
         }
         (SemanticObjectProperty::FillOpacity, SemanticSignalValue::Scalar(value)) => {
             state.style.fill_opacity = value;

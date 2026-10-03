@@ -23,7 +23,13 @@ pub struct FrameObjectState {
 
 impl FrameObjectState {
     pub fn world_transform(&self) -> Option<noon_core::SemanticWorldTransform3D> {
-        self.spatial.as_deref().map(|spatial| spatial.world)
+        self.spatial
+            .as_deref()
+            .filter(|spatial| {
+                spatial.composition_domain
+                    != noon_core::SemanticSpatialCompositionDomain::FixedFrame
+            })
+            .map(|spatial| spatial.world)
     }
 
     pub fn camera_projection(&self) -> Option<noon_core::SemanticProjection3D> {
@@ -32,15 +38,98 @@ impl FrameObjectState {
             .and_then(|spatial| spatial.camera_projection)
     }
 
+    /// Effective unwrapped camera profile and clipping planes, if this row is a
+    /// profiled camera. The tuple comes from the same spatial epoch as its pose.
+    pub fn camera_profile(&self) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {
+        let spatial = self.spatial.as_deref()?;
+        let profile = spatial.camera_profile?;
+        let projection = spatial.camera_projection?;
+        let (near, far) = match projection {
+            noon_core::SemanticProjection3D::Perspective { near, far, .. }
+            | noon_core::SemanticProjection3D::Orthographic { near, far, .. } => (near, far),
+        };
+        Some((profile, near, far))
+    }
+
     pub fn geometry(&self) -> Option<&GeometryRef> {
-        if self.spatial.is_some() {
+        if self
+            .spatial
+            .as_deref()
+            .is_some_and(|spatial| !is_fixed_frame_planar(spatial))
+        {
             return None;
         }
         self.content.geometry()
     }
 
-    pub const fn text(&self) -> Option<TextResourceHandle> {
+    pub fn text(&self) -> Option<TextResourceHandle> {
+        // Spatial world/fixed-orientation content belongs to the spatial
+        // renderer. FixedFrame text stays on the ordinary retained 2D lane.
+        if let Some(spatial) = self.spatial.as_deref() {
+            if !is_fixed_frame_planar(spatial) {
+                return None;
+            }
+        }
         self.content.text()
+    }
+}
+
+#[cfg(test)]
+mod spatial_render_routing_tests {
+    use super::*;
+    use noon_compile::{CompiledSpatialDrawKind, CompiledSpatialState};
+    use noon_core::{SemanticSpatialCompositionDomain as Domain, SemanticSpatialMaterial};
+
+    fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
+        FrameObjectState {
+            z_index: 0.0,
+            id: ObjectId::new(1),
+            content: GeometryRef::circle(1.0).into(),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: None,
+                camera_profile: None,
+                camera_motions: None,
+                material: SemanticSpatialMaterial::Unlit,
+                point_light: false,
+                composition_domain: domain,
+                draw_kind,
+                fixed_orientation_anchor_family: None,
+                fixed_orientation_center: None,
+            })),
+            style: Style::default(),
+            appearance: 1.0,
+        }
+    }
+
+    #[test]
+    fn only_fixed_frame_planar_spatial_rows_enter_the_ordinary_geometry_lane() {
+        let geometry = GeometryRef::circle(1.0);
+        let fixed = row(Domain::FixedFrame, CompiledSpatialDrawKind::Planar);
+        assert_eq!(fixed.geometry(), Some(&geometry));
+        assert_eq!(fixed.world_transform(), None);
+
+        let fixed_frame = FrameState {
+            time: 0.0,
+            objects: vec![fixed],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
+        };
+        assert_eq!(fixed_frame.render_geometry(0), Some(&geometry));
+
+        let world = row(Domain::World, CompiledSpatialDrawKind::Planar);
+        assert_eq!(world.geometry(), None);
+        assert!(world.world_transform().is_some());
+        let mesh = row(Domain::World, CompiledSpatialDrawKind::Mesh);
+        assert_eq!(mesh.geometry(), None);
+        assert!(mesh.world_transform().is_some());
     }
 }
 
@@ -88,7 +177,11 @@ impl FrameState {
     }
 
     pub fn render_geometry(&self, object_index: usize) -> Option<&GeometryRef> {
-        if self.objects[object_index].spatial.is_some() {
+        if self.objects[object_index]
+            .spatial
+            .as_deref()
+            .is_some_and(|spatial| !is_fixed_frame_planar(spatial))
+        {
             return None;
         }
         self.render_geometries[object_index]
@@ -99,6 +192,17 @@ impl FrameState {
     pub fn text(&self, object_index: usize) -> Option<TextResourceHandle> {
         self.objects[object_index].text()
     }
+}
+
+fn is_fixed_frame_planar(spatial: &noon_compile::CompiledSpatialState) -> bool {
+    matches!(
+        spatial.draw_kind,
+        noon_compile::CompiledSpatialDrawKind::Planar
+    ) && matches!(
+        spatial.composition_domain,
+        noon_core::SemanticSpatialCompositionDomain::FixedFrame
+    ) && spatial.camera_projection.is_none()
+        && !spatial.point_light
 }
 
 /// Copyable effective properties exposed to required host callbacks without
@@ -319,7 +423,7 @@ impl FrameRowState {
         Self {
             z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
-            spatial: frame.objects[object_index].spatial.as_deref().copied(),
+            spatial: frame.objects[object_index].spatial.as_deref().cloned(),
             style: frame.objects[object_index].style,
             appearance: frame.objects[object_index].appearance,
             presence: frame.presences[object_index],

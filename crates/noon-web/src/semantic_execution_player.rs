@@ -2,6 +2,8 @@
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
+mod camera_profile;
+#[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
 mod graph;

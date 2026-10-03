@@ -56,6 +56,7 @@ class ManimApplyMatrixTests(unittest.TestCase):
 
             from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_animate  # noqa: F401
+            import _manim_compat
             from noon import ApplyMatrix, ORIGIN, Rectangle
 
             rect = identity(Rectangle)
@@ -67,6 +68,13 @@ class ManimApplyMatrixTests(unittest.TestCase):
             assert animation.about_point == ORIGIN
             assert animation.anim_args == {"run_time": 3.0}
             assert not hasattr(animation, "target")
+
+            # Group ApplyMatrix remains an inert request. A typed semantic
+            # family is required only when the Scene adapter prepares it.
+            group = object.__new__(_manim_compat.Group)
+            family_animation = ApplyMatrix(matrix, group)
+            assert family_animation.source is group
+            assert family_animation.mobject is group
 
             custom = ApplyMatrix(matrix, rect, about_point=(1.0, -2.0), run_time=1.25)
             assert custom.about_point == (1.0, -2.0)

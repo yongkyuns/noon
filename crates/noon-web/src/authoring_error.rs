@@ -208,6 +208,12 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.non_finite_object_state",
                 message,
             ),
+            AuthoringError::InvalidCameraMotionInput(_) => {
+                Self::new("invalid_input", "camera.invalid_ambient_rotation", message)
+            }
+            AuthoringError::AmbientCameraMotionAlreadyActive => {
+                Self::new("lifecycle", "camera.ambient_rotation_active", message)
+            }
             AuthoringError::NonFiniteTransform => {
                 Self::new("invalid_input", "authoring.non_finite_transform", message)
             }
@@ -358,6 +364,9 @@ impl From<noon_core::AnimationOptionsError> for AuthoringFailure {
             E::UnsupportedPathArc(_) => ("unsupported_operation", "animation.unsupported_path_arc"),
             E::UnsupportedReverseRateFunction => {
                 ("unsupported_operation", "animation.unsupported_reverse")
+            }
+            E::UnsupportedLagRatio(_) => {
+                ("unsupported_operation", "animation.unsupported_lag_ratio")
             }
             E::InvalidRunTime(_) => ("invalid_input", "animation.invalid_run_time"),
             E::InvalidLagRatio(_) => ("invalid_input", "animation.invalid_lag_ratio"),
@@ -1204,5 +1213,26 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
+    }
+}
+
+impl From<noon::SpatialCompositionError> for AuthoringFailure {
+    fn from(error: noon::SpatialCompositionError) -> Self {
+        use noon::SpatialCompositionError::*;
+        match error {
+            Authoring(error) => error.into(),
+            Live(error) => error.into(),
+            FixedFrameRequiresPlanarOrientation => Self::new(
+                "unsupported_operation",
+                "spatial.fixed_frame_orientation",
+                error,
+            ),
+            CameraOrLightMustRemainWorld => Self::new(
+                "unsupported_operation",
+                "spatial.camera_light_domain",
+                error,
+            ),
+            MeshMustRemainWorld => Self::new("unsupported_operation", "spatial.mesh_domain", error),
+        }
     }
 }

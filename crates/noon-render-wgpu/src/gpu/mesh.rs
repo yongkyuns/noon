@@ -2,6 +2,7 @@
 //! Local changes inspect only dirty execution rows. wgpu retains old buffers for
 //! already encoded/submitted work when resource references are dropped here.
 
+use super::spatial_path::{SpatialPathError, SpatialPathGpuState};
 use super::{create_buffer_with_data, DrawStats};
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
@@ -44,6 +45,7 @@ pub enum SpatialPrepareError {
     MissingPointLight,
     MultiplePointLights,
     PointLitMeshNeedsNormals(usize),
+    SpatialPath(SpatialPathError),
     BufferLimit,
     StalePublication,
 }
@@ -130,6 +132,8 @@ pub(super) struct SpatialGpuState {
     free_instances: Vec<usize>,
     camera_matrix: Option<[f32; 16]>,
     viewport: [u32; 2],
+    planar_camera: Option<super::Camera2D>,
+    paths: SpatialPathGpuState,
 }
 
 impl SpatialGpuState {
@@ -144,6 +148,7 @@ impl SpatialGpuState {
         format: wgpu::TextureFormat,
         viewport: [u32; 2],
         publication: &RendererPublication<'_>,
+        camera: super::Camera2D,
     ) -> Result<SpatialUploadStats, SpatialPrepareError> {
         self.prepare_with_resources(
             device,
@@ -154,6 +159,10 @@ impl SpatialGpuState {
             publication.frame(),
             publication.changes(),
             publication.geometry_resources(),
+            publication.text_resources(),
+            publication.font_resources(),
+            publication.painter_order(),
+            camera,
         )
     }
 
@@ -168,6 +177,10 @@ impl SpatialGpuState {
         frame: &FrameState,
         changes: &FrameChanges,
         geometry_resources: &dyn GeometryResourceLookup,
+        text_resources: &dyn noon_core::TextResourceLookup,
+        font_resources: &dyn noon_core::FontResourceLookup,
+        painter_order: &[u32],
+        camera: super::Camera2D,
     ) -> Result<SpatialUploadStats, SpatialPrepareError> {
         if self
             .last_publication
@@ -176,10 +189,10 @@ impl SpatialGpuState {
             return Err(SpatialPrepareError::StalePublication);
         }
         let retry = self.last_publication == Some(context);
-        if retry && self.viewport == viewport {
+        if retry && self.viewport == viewport && self.planar_camera == Some(camera) {
             return Ok(SpatialUploadStats {
                 resident_meshes: self.meshes.len(),
-                resident_instances: self.draws.len(),
+                resident_instances: self.draws.len() + self.paths.draw_count(),
                 ..Default::default()
             });
         }
@@ -192,8 +205,13 @@ impl SpatialGpuState {
             frame,
             if retry { &clean } else { changes },
             geometry_resources,
+            text_resources,
+            font_resources,
+            painter_order,
+            camera,
         )?;
         self.last_publication = Some(context);
+        self.planar_camera = Some(camera);
         Ok(result)
     }
 
@@ -207,11 +225,16 @@ impl SpatialGpuState {
         frame: &FrameState,
         changes: &FrameChanges,
         resources: &dyn GeometryResourceLookup,
+        text_resources: &dyn noon_core::TextResourceLookup,
+        font_resources: &dyn noon_core::FontResourceLookup,
+        painter_order: &[u32],
+        camera: super::Camera2D,
     ) -> Result<SpatialUploadStats, SpatialPrepareError> {
         let full = !self.initialized || changes.is_all();
-        let indices: BTreeSet<_> = if full {
+        let mut indices: BTreeSet<_> = if full {
             (0..frame.objects.len())
                 .chain(self.draws.keys().copied())
+                .chain(self.paths.draw_indices())
                 .chain(self.cameras.keys().copied())
                 .collect()
         } else {
@@ -223,6 +246,42 @@ impl SpatialGpuState {
                 .copied()
                 .collect()
         };
+        if changes.has_painter_order_change() {
+            indices.extend(self.paths.draw_indices());
+            indices.extend(
+                frame
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, object)| {
+                        frame
+                            .is_present(index)
+                            .then_some(object.spatial.as_deref())
+                            .flatten()
+                            .filter(|spatial| {
+                                spatial.composition_domain
+                                    == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                            })
+                            .map(|_| index)
+                    }),
+            );
+        }
+        // Stage and validate the planar lane before mesh residency, buffer
+        // allocation, or queue writes. Its commit is infallible after this point.
+        let path_plan = self
+            .paths
+            .plan(
+                device,
+                frame,
+                &indices,
+                changes,
+                camera,
+                painter_order,
+                resources,
+                text_resources,
+                font_resources,
+            )
+            .map_err(SpatialPrepareError::SpatialPath)?;
         let mut cameras = self.cameras.clone(); // at most one admitted camera
         let touched_existing_light = self
             .light_object
@@ -247,6 +306,30 @@ impl SpatialGpuState {
             let mut draw = None;
             if let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) {
                 if let Some(spatial) = object.spatial.as_deref() {
+                    let fixed_orientation = spatial.composition_domain
+                        == noon_core::SemanticSpatialCompositionDomain::FixedOrientation;
+                    if spatial.fixed_orientation_center.is_some() != fixed_orientation {
+                        return Err(SpatialPrepareError::InvalidWorld(index));
+                    }
+                    if (spatial.point_light || spatial.camera_projection.is_some())
+                        && spatial.composition_domain
+                            != noon_core::SemanticSpatialCompositionDomain::World
+                    {
+                        return Err(SpatialPrepareError::InvalidWorld(index));
+                    }
+                    if fixed_orientation
+                        && spatial.draw_kind != noon_compile::CompiledSpatialDrawKind::Planar
+                    {
+                        return Err(SpatialPrepareError::SpatialPath(
+                            SpatialPathError::UnsupportedGeometry,
+                        ));
+                    }
+                    if spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh
+                        && spatial.composition_domain
+                            != noon_core::SemanticSpatialCompositionDomain::World
+                    {
+                        return Err(SpatialPrepareError::InvalidWorld(index));
+                    }
                     if spatial.point_light {
                         if light_object.is_some() {
                             return Err(SpatialPrepareError::MultiplePointLights);
@@ -283,7 +366,10 @@ impl SpatialGpuState {
                         )
                         .ok_or(SpatialPrepareError::InvalidCamera)?;
                         cameras.insert(index, camera);
-                    } else if let Some(GeometryRef::External(id)) = object.content.geometry() {
+                    } else if spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh {
+                        let Some(GeometryRef::External(id)) = object.content.geometry() else {
+                            return Err(SpatialPrepareError::MissingMesh(index));
+                        };
                         let handle = resources
                             .current_handle(*id)
                             .ok_or(SpatialPrepareError::MissingMesh(index))?;
@@ -332,6 +418,7 @@ impl SpatialGpuState {
                     isize::from(draw.is_some()) - isize::from(self.draws.contains_key(index))
                 })
                 .sum::<isize>();
+        let remaining_paths = self.paths.remaining_after(&path_plan);
         let mut remaining_point_lit_draws = self.point_lit_draws;
         for (index, draw) in &staged {
             if self
@@ -360,7 +447,9 @@ impl SpatialGpuState {
                 )
                 .ok_or(SpatialPrepareError::InvalidCamera)?,
             ),
-            None if remaining_draws > 0 => return Err(SpatialPrepareError::MissingCamera),
+            None if remaining_draws > 0 || remaining_paths > 0 => {
+                return Err(SpatialPrepareError::MissingCamera)
+            }
             None => None,
         };
         // Validate every new resource and allocation before changing residency or issuing writes.
@@ -406,10 +495,29 @@ impl SpatialGpuState {
             rows_visited: indices.len(),
             ..Default::default()
         };
-        if self.gpu.is_none() && remaining_draws > 0 {
+        if self.gpu.is_none() && (remaining_draws > 0 || remaining_paths > 0) {
             self.gpu = Some(GpuState::new(device, queue, format, viewport));
             self.viewport = viewport;
         }
+        let path_stats = if remaining_paths > 0 || self.paths.is_active() {
+            let gpu = self
+                .gpu
+                .as_ref()
+                .expect("active spatial paths need GPU state");
+            self.paths.commit(
+                device,
+                queue,
+                &gpu.camera,
+                format,
+                super::PATH_SAMPLE_COUNT,
+                path_plan,
+            )
+        } else {
+            Default::default()
+        };
+        stats.geometry_bytes += path_stats.geometry_bytes;
+        stats.instance_bytes += path_stats.instance_bytes;
+        stats.camera_bytes += path_stats.camera_bytes;
         for (handle, (vertices, mesh)) in new_meshes {
             let vertex_bytes = bytemuck::cast_slice(&vertices);
             let index_bytes = bytemuck::cast_slice(mesh.indices());
@@ -502,7 +610,7 @@ impl SpatialGpuState {
             if matrix != self.camera_matrix {
                 if let Some(matrix) = matrix {
                     queue.write_buffer(&gpu.camera, 0, bytemuck::cast_slice(&matrix));
-                    stats.camera_bytes = size_of_val(&matrix);
+                    stats.camera_bytes += size_of_val(&matrix);
                 }
             }
             if point_light != gpu.light_value {
@@ -560,12 +668,12 @@ impl SpatialGpuState {
         self.camera_matrix = matrix;
         self.initialized = true;
         stats.resident_meshes = self.meshes.len();
-        stats.resident_instances = self.draws.len();
+        stats.resident_instances = self.draws.len() + self.paths.draw_count();
         Ok(stats)
     }
 
     pub fn is_active(&self) -> bool {
-        !self.draws.is_empty()
+        !self.draws.is_empty() || self.paths.is_active()
     }
 
     pub fn encode(
@@ -600,7 +708,7 @@ impl SpatialGpuState {
                 },
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+                    store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
             }),
@@ -608,26 +716,29 @@ impl SpatialGpuState {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(if sample_count == 1 {
-            &gpu.pipeline
-        } else {
-            &gpu.pipeline_msaa
-        });
-        pass.set_bind_group(0, &gpu.camera_group, &[]);
-        pass.set_vertex_buffer(1, gpu.instances.slice(..));
         let mut draw_calls = 0;
-        for (handle, ranges) in &self.mesh_instances {
-            let mesh = &self.meshes[handle];
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for (start, end) in ranges.iter() {
-                pass.draw_indexed(0..mesh.index_count, 0, start as u32..end as u32);
-                draw_calls += 1;
+        if !self.draws.is_empty() {
+            pass.set_pipeline(if sample_count == 1 {
+                &gpu.pipeline
+            } else {
+                &gpu.pipeline_msaa
+            });
+            pass.set_bind_group(0, &gpu.camera_group, &[]);
+            pass.set_vertex_buffer(1, gpu.instances.slice(..));
+            for (handle, ranges) in &self.mesh_instances {
+                let mesh = &self.meshes[handle];
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                for (start, end) in ranges.iter() {
+                    pass.draw_indexed(0..mesh.index_count, 0, start as u32..end as u32);
+                    draw_calls += 1;
+                }
             }
         }
+        draw_calls += self.paths.encode(&mut pass, sample_count);
         DrawStats {
             draw_calls,
-            instances_drawn: self.draws.len(),
+            instances_drawn: self.draws.len() + self.paths.draw_count(),
         }
     }
 }

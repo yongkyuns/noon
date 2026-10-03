@@ -6,7 +6,7 @@ use noon_core::{
 use super::runtime_transaction::{final_value_writes, AuthoredPublicationError};
 use crate::{FrameRowState, FrameState, RuntimeIdentity, SceneInstance};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum PreparedAuthoredValueWrite {
     Transform {
         object_index: usize,
@@ -27,15 +27,15 @@ enum PreparedAuthoredValueWrite {
 }
 
 impl PreparedAuthoredValueWrite {
-    const fn object_index(self) -> usize {
+    const fn object_index(&self) -> usize {
         match self {
             Self::Transform { object_index, .. }
             | Self::SemanticTransform { object_index, .. }
-            | Self::Style { object_index, .. } => object_index,
+            | Self::Style { object_index, .. } => *object_index,
         }
     }
 
-    const fn changes_execution(self) -> bool {
+    const fn changes_execution(&self) -> bool {
         match self {
             Self::Transform {
                 changes_execution, ..
@@ -45,13 +45,13 @@ impl PreparedAuthoredValueWrite {
             }
             | Self::SemanticTransform {
                 changes_execution, ..
-            } => changes_execution,
+            } => *changes_execution,
         }
     }
 }
 
-/// Runtime proof for one already-semantic-prepared batch containing only ordinary
-/// local transform/style writes.
+/// Runtime proof for one already-semantic-prepared batch containing only local
+/// transform, spatial-routing, or style writes.
 ///
 /// Construction validates the exact Runtime identity/context, complete compiled
 /// transaction, object slots, and revision capacity. The execution-session owner
@@ -68,7 +68,7 @@ pub struct PreparedAuthoredValuePublication {
 }
 
 impl SceneInstance {
-    /// Prepare the narrow P1 authored-value publication contract.
+    /// Prepare the narrow authored-value publication contract for local rows.
     ///
     /// `Ok(None)` means the transaction contains something other than transform/style
     /// base writes and must stay on the existing general publication path.
@@ -87,6 +87,7 @@ impl SceneInstance {
                 patch,
                 ExecutionPatch::SetTransform { .. }
                     | ExecutionPatch::SetSemanticTransform { .. }
+                    | ExecutionPatch::SetSpatialState { .. }
                     | ExecutionPatch::SetStyle { .. }
             )
         }) {
@@ -117,6 +118,7 @@ impl SceneInstance {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
                 ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
+                ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
                 _ => return Ok(None),
             };
@@ -155,6 +157,19 @@ impl SceneInstance {
                         changes_execution,
                     }
                 }
+                (
+                    2,
+                    ExecutionPatch::SetSpatialState {
+                        base_transform,
+                        spatial,
+                        ..
+                    },
+                ) => PreparedAuthoredValueWrite::SemanticTransform {
+                    object_index,
+                    base_transform: *base_transform,
+                    spatial: spatial.clone(),
+                    changes_execution,
+                },
                 _ => unreachable!("ordinary value publication classified above"),
             });
         }
@@ -204,6 +219,18 @@ impl SceneInstance {
             }
             let object_index = write.object_index();
             let before = FrameRowState::from_frame(&self.frame, object_index);
+            if let Some(anchor_family) = self.frame.objects[object_index]
+                .spatial
+                .as_deref()
+                .and_then(|spatial| spatial.fixed_orientation_anchor_family)
+            {
+                if let Some(group) = self
+                    .compiled
+                    .fixed_orientation_group_for_anchor(anchor_family)
+                {
+                    self.pending_fixed_orientation_anchor_groups.insert(group);
+                }
+            }
             match write {
                 PreparedAuthoredValueWrite::Transform {
                     transform,
@@ -233,20 +260,21 @@ impl SceneInstance {
                     self.compiled.commit_prepared_semantic_transform_value(
                         object_index as u32,
                         base_transform,
-                        spatial,
+                        spatial.clone(),
                     );
                     self.frame.release_render_transform(object_index);
                     self.frame.objects[object_index].transform = base_transform;
-                    if let (Some(current), Some(next)) = (
-                        self.frame.objects[object_index].spatial.as_deref_mut(),
-                        spatial,
-                    ) {
-                        *current = next;
-                    } else {
-                        debug_assert_eq!(
-                            self.frame.objects[object_index].spatial.is_some(),
-                            spatial.is_some()
-                        );
+                    match spatial {
+                        Some(next) => {
+                            if let Some(current) =
+                                self.frame.objects[object_index].spatial.as_deref_mut()
+                            {
+                                *current = next;
+                            } else {
+                                self.frame.objects[object_index].spatial = Some(Box::new(next));
+                            }
+                        }
+                        None => self.frame.objects[object_index].spatial = None,
                     }
                     self.reapply_properties(
                         object_index,
@@ -256,6 +284,7 @@ impl SceneInstance {
                             Property::Rotation,
                             Property::Scale,
                             Property::WorldTransform,
+                            Property::CameraProfile,
                         ],
                     );
                 }
@@ -285,6 +314,8 @@ impl SceneInstance {
                 self.mark_changed(object_index);
             }
         }
+
+        self.flush_fixed_orientation_anchor_changes();
 
         self.publication = PublicationContext::new(
             prepared.scene_revision,

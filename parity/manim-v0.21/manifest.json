@@ -887,6 +887,90 @@
       "expected_object_count": 3
     },
     {
+      "id": "vector-space-lts-direct",
+      "scene": "VectorSpaceLTS",
+      "source": "parity/manim-v0.21/vector_space.py",
+      "direct_factory": "createDirectVectorSpaceSmokeRenderer",
+      "expected_duration": 3.0,
+      "sample_times": [0.0, 1.5, 2.966666666666667],
+      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed by the same ordinary parallel family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0, exercising regenerated Arrow tips without relaxing transform payload support."
+    },
+    {
+      "id": "vector-space-lts-worker",
+      "scene": "VectorSpaceLTS",
+      "source": "parity/manim-v0.21/vector_space.py",
+      "noon_source": "web/python/examples/noon_vector_space.py",
+      "expected_duration": 3.0,
+      "sample_times": [0.0, 1.5, 2.966666666666667],
+      "notes": "The same VectorScene/LTS matrix animation through the async Python worker, using Rust-owned matrix path-arc defaults and ordinary shared ApplyMatrix/Transform requests."
+    },
+    {
+      "id": "spatial-camera-labels-direct",
+      "scene": "SpatialCameraLabels",
+      "source": "parity/manim-v0.21/spatial_camera_labels.py",
+      "direct_factory": "createDirectSpatialCameraLabelsSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 7,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 8,
+        "max_differing_ratio": 0.2,
+        "max_mean_absolute_channel_error": 12
+      },
+      "notes": "Pinned ManimCE 0.21 finite ThreeDCamera profile and three composition domains. This is a representative composition oracle, not glyph-raster parity: Noon uses retained Typst glyph/vector resources while the reference uses Cairo Text/MathTex."
+    },
+    {
+      "id": "spatial-camera-labels-worker",
+      "scene": "SpatialCameraLabels",
+      "source": "parity/manim-v0.21/spatial_camera_labels.py",
+      "noon_source": "web/python/examples/noon_spatial_camera_labels.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 7,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 8,
+        "max_differing_ratio": 0.2,
+        "max_mean_absolute_channel_error": 12
+      },
+      "notes": "The same mixed World/FixedOrientation/FixedFrame composition and unwrapped camera-profile track through the async Python worker. Typst is used for retained labels; the pinned source provides a representative Cairo camera/layering oracle, not glyph-shape parity."
+    },
+    {
+      "id": "spatial-three-d-axes-direct",
+      "scene": "SpatialThreeDAxes",
+      "source": "parity/manim-v0.21/spatial_three_d_axes.py",
+      "direct_factory": "createDirectSpatialThreeDAxesSmokeRenderer",
+      "expected_duration": 1.0,
+      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 8,
+        "max_differing_ratio": 0.2,
+        "max_mean_absolute_channel_error": 12
+      },
+      "notes": "Default pinned linear ThreeDAxes ranges/lengths/ticks/positive tips, an f64 Rust-c2p point, and a finite camera-profile track. Cairo axis pieces/shading and axis labels are deliberately outside this bounded native subset; default tips are retained and included."
+    },
+    {
+      "id": "spatial-three-d-axes-worker",
+      "scene": "SpatialThreeDAxes",
+      "source": "parity/manim-v0.21/spatial_three_d_axes.py",
+      "noon_source": "web/python/examples/noon_spatial_three_d_axes.py",
+      "expected_duration": 1.0,
+      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 8,
+        "max_differing_ratio": 0.2,
+        "max_mean_absolute_channel_error": 12
+      },
+      "notes": "The same typed axes/tips, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain explicitly outside the supported subset."
+    },
+    {
       "scene": "SpatialSurface",
       "source": "parity/manim-v0.21/spatial_surface.py",
       "expected_duration": 1.0,
@@ -923,6 +1007,36 @@
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       }
+    },
+    {
+      "id": "spatial-primitives-direct",
+      "scene": "SpatialPrimitives",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "direct_factory": "createDirectSpatialPrimitivesSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 3,
+      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Native and direct-WASM ordinary Scene publication of the bounded opaque Line3D tube and explicit one-face triangular mesh, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
+    },
+    {
+      "id": "spatial-primitives-worker",
+      "scene": "SpatialPrimitives",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "noon_source": "web/python/examples/noon_spatial_primitives.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 3,
+      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The same Line3D and explicit Mesh3D.polyhedron scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
     },
     {
       "id": "mathtex-substrings",

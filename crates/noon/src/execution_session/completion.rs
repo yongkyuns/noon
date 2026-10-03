@@ -424,6 +424,17 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        let final_camera_profile_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::CameraProfile { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -452,6 +463,11 @@ impl ExecutionSession {
                             entry.semantic_object,
                             SemanticTransform::from(*value),
                         );
+                    }
+                }
+                SemanticAnimationCompletion::CameraProfile { profile, near, far } => {
+                    if final_camera_profile_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.set_camera_profile(entry.semantic_object, *profile, *near, *far);
                     }
                 }
                 SemanticAnimationCompletion::Fill { .. }

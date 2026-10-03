@@ -21,6 +21,57 @@ const latexCreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/showcase_latex_create.py"),
   "utf8",
 );
+const spatialMeshAdaptersSource = `
+from noon import *
+
+class SpatialMeshAdapterSmoke(ThreeDScene):
+    async def construct(self):
+        meshes = [
+            Sphere(center=(-2.4, 0, 0), radius=0.35, resolution=(8, 6),
+                   fill_opacity=1, checkerboard_colors=False, stroke_width=0,
+                   shade_in_3d=False),
+            Cube(side_length=0.55, fill_opacity=1, stroke_width=0, shade_in_3d=False),
+            Prism(dimensions=(0.6, 0.45, 0.7), fill_opacity=1, stroke_width=0,
+                  shade_in_3d=False),
+            Cylinder(radius=0.25, height=0.7, direction=(0, 0, 1),
+                     show_ends=True, resolution=8, fill_opacity=1,
+                     checkerboard_colors=False, stroke_width=0, shade_in_3d=False),
+            Cone(base_radius=0.3, height=0.7, direction=(0, 0, 1), show_base=True,
+                 v_range=(0, 2 * PI), u_min=0, checkerboard_colors=False,
+                 resolution=8, fill_opacity=1, stroke_width=0, shade_in_3d=False),
+            Torus(major_radius=0.3, minor_radius=0.1, resolution=(8, 6),
+                  fill_opacity=1, checkerboard_colors=False, stroke_width=0,
+                  shade_in_3d=False),
+            Dot3D(point=(2.4, 0, 0), radius=0.08, resolution=(8, 8),
+                  stroke_width=0, shade_in_3d=False),
+        ]
+        for index, mesh in enumerate(meshes[1:-1], start=1):
+            mesh.move_to((index * 0.8 - 2.4, 0, 0))
+        handles = [mesh._semantic_handle for mesh in meshes]
+        assert all(handle is not None and handle is mesh._semantic_handle
+                   for mesh, handle in zip(meshes, handles))
+        identities = [(int(handle.semanticSlot), int(handle.semanticGeneration))
+                      for handle in handles]
+        assert len(set(identities)) == len(meshes)
+        self.add_world_mobjects(*meshes)
+
+        start_camera = self._camera_endpoint()
+        self.begin_ambient_camera_rotation(rate=0.4, about="theta")
+        await self.wait(0.5)
+        self.stop_ambient_camera_rotation()
+        stopped_camera = self._camera_endpoint()
+        assert abs(stopped_camera[1] - (start_camera[1] + 0.2)) < 1e-8
+        self.set_camera_orientation(theta=stopped_camera[1] + 0.15)
+        edited_camera = self._camera_endpoint()
+        assert abs(edited_camera[1] - (stopped_camera[1] + 0.15)) < 1e-12
+
+        await self.play(
+            WorldTransformTo(meshes[0], translation=(-1.8, 0.2, 0.1)),
+            run_time=0.25, rate_func=linear,
+        )
+        assert all(abs(actual - expected) < 1e-8
+                   for actual, expected in zip(meshes[0].world_transform[:3], (-1.8, 0.2, 0.1)))
+`;
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -679,6 +730,21 @@ try {
   assert.equal(latexCreate.metrics.objectCount, 1, "MathTex Create must retain its equation");
   assert.ok(latexCreate.metrics.presentedFrames > 0, "MathTex Create must present");
 
+  const spatialMeshAdapters = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    spatialMeshAdaptersSource,
+  );
+  assert.equal(spatialMeshAdapters.metrics.objectCount, 7,
+    "public solid adapters must enter the shared semantic scene as retained meshes");
+  assert.ok(spatialMeshAdapters.metrics.presentedFrames > 0);
+  assert.ok(spatialMeshAdapters.metrics.drawCalls > 0,
+    "mesh adapters must reach the real retained renderer");
+  assert.ok(spatialMeshAdapters.frame.objects.every(object => object.spatial?.draw_kind === "mesh"),
+    "the worker frame must retain mesh draw kinds rather than flattening adapters to planar paths");
+  assert.ok(spatialMeshAdapters.frame.objects.some(object =>
+    object.spatial.translation[0] === -1.8 && object.spatial.translation[1] === 0.2),
+  "the worker must publish the WorldTransformTo endpoint from the shared timeline");
+
   let zError = null;
   try {
     await page.evaluate(
@@ -692,7 +758,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

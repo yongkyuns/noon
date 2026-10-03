@@ -47,6 +47,8 @@ for (const required of [
   "createDirectTypstCanvasRenderer",
   "createDirectSingleTypstCanvasRenderer",
   "noon::example_scenes::spatial_mesh::session()",
+  "noon::example_scenes::vector_space::session()",
+  "createDirectVectorSpaceSmokeRenderer",
   "activate_animation",
   "Mobject::from_text",
   "Text::new(\"Noon\")",

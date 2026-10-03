@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 mod brace;
+mod camera_motion;
 mod coordinates;
 mod family_layout;
 mod image;
@@ -208,6 +209,11 @@ pub enum AnimationCompositionRequest<'a> {
     WorldTransform {
         target: &'a Mobject,
         transform: noon_core::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    },
+    CameraProfile {
+        target: &'a Mobject,
+        profile: noon_core::ManimCamera3DProfile,
         options: AnimationOptions,
     },
     FamilyTransformTo {
@@ -2050,6 +2056,18 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::CameraProfile {
+                target,
+                profile,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::CameraProfile {
+                    target: target.node_id(),
+                    profile: *profile,
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::FamilyTransformTo {
                 source,
                 target_state,
@@ -2933,14 +2951,14 @@ impl<'a> LiveSession<'a> {
         self.replace_style(mobject, style)
     }
 
-    fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, mobject.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(Into::into)
     }
 
-    fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, family.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }

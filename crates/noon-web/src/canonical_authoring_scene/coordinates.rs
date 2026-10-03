@@ -27,6 +27,14 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(super) fn live_create_three_d_axes(
+        &mut self,
+        options: &noon::ManimThreeDAxesOptions,
+    ) -> Result<noon::ManimThreeDAxes, AuthoringFailure> {
+        self.active_live_player()?.live_create_three_d_axes(options)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,

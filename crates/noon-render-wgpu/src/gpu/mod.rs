@@ -11,7 +11,9 @@ mod presentation;
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod inset_capture;
 mod mesh;
+mod spatial_path;
 pub use mesh::{SpatialPrepareError, SpatialUploadStats};
+pub use spatial_path::SpatialPathError;
 mod raster_image_gpu;
 mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
@@ -705,7 +707,12 @@ impl GpuRenderer {
                 instance_layout: line_instance_layout(),
             },
         );
-        let path_source = format!("{}\n{}", include_str!("../path.wgsl"), polygon_coverage);
+        let path_source = format!(
+            "{}\n{}\n{}",
+            include_str!("../path.wgsl"),
+            include_str!("../cairo_color.wgsl"),
+            polygon_coverage
+        );
         let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon path shader"),
             source: wgpu::ShaderSource::Wgsl(path_source.into()),
@@ -826,6 +833,7 @@ impl GpuRenderer {
             self.target_format,
             self.viewport_size,
             publication,
+            self.camera,
         )
     }
 
@@ -841,6 +849,9 @@ impl GpuRenderer {
         frame: &FrameState,
         changes: &FrameChanges,
         geometry_resources: &dyn noon_core::GeometryResourceLookup,
+        text_resources: &dyn noon_core::TextResourceLookup,
+        font_resources: &dyn noon_core::FontResourceLookup,
+        painter_order: &[u32],
     ) -> Result<SpatialUploadStats, SpatialPrepareError> {
         self.spatial.prepare_with_resources(
             device,
@@ -851,6 +862,10 @@ impl GpuRenderer {
             frame,
             changes,
             geometry_resources,
+            text_resources,
+            font_resources,
+            painter_order,
+            self.camera,
         )
     }
 

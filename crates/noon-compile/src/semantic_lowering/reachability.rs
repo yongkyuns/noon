@@ -244,6 +244,10 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectTransform { .. }
+                | SemanticMutationImpact::SpatialCompositionDomain { .. }
+                | SemanticMutationImpact::SpatialAnchorChanged { .. }
+                | SemanticMutationImpact::CameraProfile { .. }
+                | SemanticMutationImpact::CameraMotions { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
