@@ -15,6 +15,7 @@ mod publication;
 mod reactive;
 mod resources;
 mod semantic_store;
+mod spatial3d;
 
 pub use animation::*;
 pub use graph_topology::*;
@@ -24,6 +25,7 @@ pub use publication::*;
 pub use reactive::*;
 pub use resources::*;
 pub use semantic_store::*;
+pub use spatial3d::*;
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
