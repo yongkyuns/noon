@@ -33,10 +33,15 @@ impl SemanticStore {
                 .validate()
                 .map_err(SemanticTextImportError::Validation)?;
             for vector in resource.vector_items.iter() {
-                let crate::GeometryResource::VectorPath(path) = self
+                let resource = self
                     .geometry_resources
                     .get(vector.geometry)
                     .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+                let crate::GeometryResource::VectorPath(path) = resource else {
+                    return Err(
+                        SemanticTextImportError::UnsupportedGeometry(vector.geometry).into(),
+                    );
+                };
                 if !path.is_finite() {
                     return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
                 }
@@ -235,9 +240,14 @@ impl SemanticStore {
         for vector in resource.vector_items.iter() {
             if let std::collections::hash_map::Entry::Vacant(entry) = indices.entry(vector.geometry)
             {
-                let GeometryResource::VectorPath(path) = geometry
+                let resource = geometry
                     .get(vector.geometry)
                     .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+                let GeometryResource::VectorPath(path) = resource else {
+                    return Err(
+                        SemanticTextImportError::UnsupportedGeometry(vector.geometry).into(),
+                    );
+                };
                 if !path.is_finite() {
                     return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry).into());
                 }
@@ -522,10 +532,15 @@ impl SemanticStore {
             }
         }
         for vector in resource.vector_items.iter() {
-            let crate::GeometryResource::VectorPath(path) = self
+            let resource = self
                 .geometry_resources
                 .get(vector.geometry)
                 .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+            let crate::GeometryResource::VectorPath(path) = resource else {
+                return Err(SemanticTextImportError::UnsupportedGeometry(
+                    vector.geometry,
+                ));
+            };
             if !path.is_finite() {
                 return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry));
             }

@@ -250,6 +250,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
@@ -259,6 +260,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -290,6 +292,7 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -299,6 +302,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(21),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -323,6 +327,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(20),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -332,6 +337,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(21),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -421,6 +427,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(resource).unwrap();
         let object = FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Text(handle),

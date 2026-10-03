@@ -75,7 +75,10 @@ impl CompositeEntry {
             if let Some(next) = crate::semantic_mobject::layout_for_content(
                 &object.integration_store().borrow(),
                 state.content,
-                state.transform,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
             )? {
                 if let Some(bounds) = &mut result {
                     bounds.include(next.min_x, next.min_y);

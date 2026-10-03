@@ -104,7 +104,10 @@ impl std::fmt::Display for RetainedPlannedFamilyFrameError {
                 "retained planned-family state shape does not match retained frame objects",
             ),
             Self::InvalidObjectIndex(index) => {
-                write!(formatter, "invalid retained planned-family object index {index}")
+                write!(
+                    formatter,
+                    "invalid retained planned-family object index {index}"
+                )
             }
             Self::MissingPlanIndex(object) => write!(
                 formatter,

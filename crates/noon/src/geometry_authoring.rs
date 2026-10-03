@@ -83,7 +83,10 @@ pub(crate) fn prepare_brace_geometry(
     sharpness: f64,
 ) -> Result<PreparedBraceGeometry, AuthoringError> {
     prepare_brace_geometry_with_transform(target, direction, buff, sharpness, |_, state| {
-        Ok(state.transform)
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)
     })
 }
 

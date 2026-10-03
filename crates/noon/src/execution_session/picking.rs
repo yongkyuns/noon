@@ -182,8 +182,9 @@ fn effective_fill_contains(
         Some(GeometryRef::External(id)) => resources
             .current_handle(*id)
             .and_then(|handle| resources.get(handle))
-            .map(|resource| match resource {
-                GeometryResource::VectorPath(path) => path.as_ref(),
+            .and_then(|resource| match resource {
+                GeometryResource::VectorPath(path) => Some(path.as_ref()),
+                GeometryResource::Mesh(_) => None,
             }),
         _ => None,
     };

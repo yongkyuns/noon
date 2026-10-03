@@ -206,6 +206,8 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
+        // WorldTransform is deliberately excluded: ReactiveValue has no world-pose
+        // payload, and reactive graph compilation rejects that property by kind.
         const PROPERTIES: [Property; 12] = [
             Property::Presence,
             Property::Transform,
@@ -581,17 +583,18 @@ const fn property_slot(property: Property) -> u8 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
-        Property::Position => 2,
-        Property::Rotation => 3,
-        Property::Scale => 4,
-        Property::Fill => 5,
-        Property::Stroke => 6,
-        Property::StrokeWidth => 7,
-        Property::Opacity => 8,
-        Property::Appearance => 9,
-        Property::Reveal => 10,
-        Property::Morph => 11,
-        Property::ZIndex => 12,
+        Property::WorldTransform => 2,
+        Property::Position => 3,
+        Property::Rotation => 4,
+        Property::Scale => 5,
+        Property::Fill => 6,
+        Property::Stroke => 7,
+        Property::StrokeWidth => 8,
+        Property::Opacity => 9,
+        Property::Appearance => 10,
+        Property::Reveal => 11,
+        Property::Morph => 12,
+        Property::ZIndex => 13,
     }
 }
 

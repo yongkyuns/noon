@@ -58,7 +58,10 @@ impl PreparedBarLabels {
             let target = crate::semantic_mobject::boundary_for_content(
                 &store.borrow(),
                 state.content,
-                state.transform,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
             )?;
             let color = options.color.unwrap_or(match state.style.fill {
                 Some(SemanticPaint::Solid(color)) => color,
@@ -169,13 +172,18 @@ impl PreparedBarLabels {
                     handles.iter().zip(placements)
                 {
                     let mut state = SemanticObjectState::new(*handle);
-                    state.transform = transform;
+                    state.transform = transform.into();
                     state.style = style;
                     state.set_text_presentation_baseline(baseline);
                     let bounds = crate::semantic_mobject::boundary_for_content(
                         store,
                         state.content,
-                        state.transform,
+                        state
+                            .transform
+                            .as_planar()
+                            .ok_or(TextAuthoringError::Semantic(
+                                AuthoringError::NonFiniteObjectState,
+                            ))?,
                     )
                     .map_err(TextAuthoringError::Semantic)?;
                     let delta = crate::family_layout::RelativePlacement::Next(ManimNextToArgs {

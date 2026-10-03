@@ -15,12 +15,27 @@ pub struct FrameObjectState {
     pub content: ObjectContentRef,
     pub text_bounds: Option<noon_core::Rect>,
     pub transform: Transform2D,
+    /// Effective 3D pose and optional camera projection from the same runtime epoch.
+    pub spatial: Option<Box<noon_compile::CompiledSpatialState>>,
     pub style: Style,
     pub appearance: f32,
 }
 
 impl FrameObjectState {
+    pub fn world_transform(&self) -> Option<noon_core::SemanticWorldTransform3D> {
+        self.spatial.as_deref().map(|spatial| spatial.world)
+    }
+
+    pub fn camera_projection(&self) -> Option<noon_core::SemanticProjection3D> {
+        self.spatial
+            .as_deref()
+            .and_then(|spatial| spatial.camera_projection)
+    }
+
     pub fn geometry(&self) -> Option<&GeometryRef> {
+        if self.spatial.is_some() {
+            return None;
+        }
         self.content.geometry()
     }
 
@@ -73,6 +88,9 @@ impl FrameState {
     }
 
     pub fn render_geometry(&self, object_index: usize) -> Option<&GeometryRef> {
+        if self.objects[object_index].spatial.is_some() {
+            return None;
+        }
         self.render_geometries[object_index]
             .as_deref()
             .or_else(|| self.objects[object_index].geometry())
@@ -285,6 +303,7 @@ impl EffectiveBoundsBasis {
 pub(crate) struct FrameRowState {
     pub(super) z_index: f64,
     pub(super) transform: Transform2D,
+    pub(super) spatial: Option<noon_compile::CompiledSpatialState>,
     pub(super) style: Style,
     pub(super) appearance: f32,
     pub(super) presence: bool,
@@ -300,6 +319,7 @@ impl FrameRowState {
         Self {
             z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
+            spatial: frame.objects[object_index].spatial.as_deref().copied(),
             style: frame.objects[object_index].style,
             appearance: frame.objects[object_index].appearance,
             presence: frame.presences[object_index],
@@ -315,6 +335,10 @@ impl FrameRowState {
         let object = &mut frame.objects[object_index];
         object.z_index = self.z_index;
         object.transform = self.transform;
+        match (&mut object.spatial, self.spatial) {
+            (Some(target), Some(value)) => **target = value,
+            (target, value) => *target = value.map(Box::new),
+        }
         object.style = self.style;
         object.appearance = self.appearance;
         if let Some(content) = self.content_override {
@@ -331,6 +355,7 @@ impl FrameRowState {
         let object = &frame.objects[object_index];
         self.z_index != object.z_index
             || self.transform != object.transform
+            || self.spatial.as_ref() != object.spatial.as_deref()
             || self.style != object.style
             || self.appearance != object.appearance
             || self.presence != frame.presences[object_index]
@@ -369,6 +394,7 @@ impl FrameRowState {
     ) -> bool {
         let object = &frame.objects[object_index];
         self.transform != object.transform
+            || self.spatial.as_ref() != object.spatial.as_deref()
             || self.style.stroke != object.style.stroke
             || self.style.stroke_width != object.style.stroke_width
             || self.content_override.is_some()
@@ -384,6 +410,7 @@ impl FrameRowState {
             },
             z_index: &mut self.z_index,
             transform: &mut self.transform,
+            spatial: FrameSpatialMut::Inline(&mut self.spatial),
             style: &mut self.style,
             appearance: &mut self.appearance,
             presence: &mut self.presence,
@@ -423,6 +450,7 @@ pub(super) struct FrameRowMut<'a> {
     pub(super) z_index: &'a mut f64,
     pub(super) content: FrameContentMut<'a>,
     pub(super) transform: &'a mut Transform2D,
+    pub(super) spatial: FrameSpatialMut<'a>,
     pub(super) style: &'a mut Style,
     pub(super) appearance: &'a mut f32,
     pub(super) presence: &'a mut bool,
@@ -438,6 +466,7 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
         content: FrameContentMut::Direct(&mut object.content),
         z_index: &mut object.z_index,
         transform: &mut object.transform,
+        spatial: FrameSpatialMut::Retained(&mut object.spatial),
         style: &mut object.style,
         appearance: &mut object.appearance,
         presence: &mut frame.presences[object_index],
@@ -445,6 +474,29 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
         morph: &mut frame.morphs[object_index],
         render_geometry: &mut frame.render_geometries[object_index],
         render_transform: &mut frame.render_transforms[object_index],
+    }
+}
+
+/// Borrow either retained spatial storage or a transaction-local value without
+/// allocating/copying a Box for every animated row on every frame.
+pub(super) enum FrameSpatialMut<'a> {
+    Retained(&'a mut Option<Box<noon_compile::CompiledSpatialState>>),
+    Inline(&'a mut Option<noon_compile::CompiledSpatialState>),
+}
+
+impl FrameSpatialMut<'_> {
+    pub(super) fn as_ref(&self) -> Option<&noon_compile::CompiledSpatialState> {
+        match self {
+            Self::Retained(value) => value.as_deref(),
+            Self::Inline(value) => value.as_ref(),
+        }
+    }
+
+    pub(super) fn as_mut(&mut self) -> Option<&mut noon_compile::CompiledSpatialState> {
+        match self {
+            Self::Retained(value) => value.as_deref_mut(),
+            Self::Inline(value) => value.as_mut(),
+        }
     }
 }
 

@@ -24,6 +24,7 @@ pub enum TextPartQueryError {
     NonContiguousVectors,
     /// A selected vector refers to missing or retired geometry.
     MissingGeometry(crate::GeometryResourceHandle),
+    UnsupportedGeometry(crate::GeometryResourceHandle),
 }
 
 impl fmt::Display for TextPartQueryError {
@@ -39,6 +40,10 @@ impl fmt::Display for TextPartQueryError {
             Self::MissingGeometry(handle) => {
                 write!(formatter, "text part geometry is unavailable: {handle:?}")
             }
+            Self::UnsupportedGeometry(handle) => write!(
+                formatter,
+                "text part requires vector path geometry: {handle:?}"
+            ),
             Self::NonContiguousVectors => {
                 write!(
                     formatter,
@@ -118,9 +123,12 @@ impl TextResource {
         // An indexed fraction/radical part owns only its selected rules. Using
         // the complete formula's bounds would corrupt part layout and matching.
         for vector in &projected_vectors {
-            let crate::GeometryResource::VectorPath(path) = geometry
+            let resource = geometry
                 .get(vector.geometry)
                 .ok_or(TextPartQueryError::MissingGeometry(vector.geometry))?;
+            let crate::GeometryResource::VectorPath(path) = resource else {
+                return Err(TextPartQueryError::UnsupportedGeometry(vector.geometry));
+            };
             if let Some(local) =
                 crate::semantic_path_bounds(path, f64::from(vector.style.stroke_width)).layout
             {

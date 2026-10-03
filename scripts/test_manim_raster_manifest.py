@@ -15,6 +15,34 @@ ORACLE = ROOT / "scripts/manim-raster-semantic-reference.py"
 
 
 class RasterManifestTests(unittest.TestCase):
+    def test_spatial_mesh_fixture_is_a_direct_typed_rust_wasm_pair(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixtures = [
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "spatial-mesh-depth"
+        ]
+        self.assertEqual(len(fixtures), 1)
+        fixture = fixtures[0]
+        self.assertEqual(fixture["scene"], "SpatialMeshDepthOracle")
+        self.assertEqual(fixture["direct_factory"], "createDirectSpatialMeshSmokeRenderer")
+        self.assertEqual(fixture["expected_duration"], 2.0)
+        self.assertEqual(fixture["sample_times"], [0.0, 0.5, 1.5, 1.9666666666666666])
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        raster_driver = (ROOT / "scripts/manim-raster-differential.mjs").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "class SpatialMeshDepthOracle(ThreeDScene)",
+            "focal_distance=5",
+            "zoom=4 / (5 * np.tan(0.5))",
+            "frame_center=RIGHT * 0.25",
+            "self.red_mesh.animate.shift(2.0 * IN)",
+            "def noon_oracle_state(self)",
+        ):
+            self.assertIn(required, source)
+        self.assertIn("if (fixture.direct_factory)", raster_driver)
+        self.assertIn("direct_typed_execution", raster_driver)
+
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         matching = [

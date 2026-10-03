@@ -178,10 +178,16 @@ impl std::fmt::Display for DerivedDisplayEvaluationError {
         match *self {
             Self::InvalidTime(time) => write!(formatter, "invalid derived display time {time}"),
             Self::DuplicateOccurrence(index) => {
-                write!(formatter, "derived display occurrence {index} is duplicated")
+                write!(
+                    formatter,
+                    "derived display occurrence {index} is duplicated"
+                )
             }
             Self::EmptyOccurrence(index) => {
-                write!(formatter, "derived display occurrence {index} has no channels")
+                write!(
+                    formatter,
+                    "derived display occurrence {index} has no channels"
+                )
             }
             Self::UnsupportedPainterPlacement(index) => write!(
                 formatter,
@@ -225,6 +231,7 @@ fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
         z_index: base.z_index,
         transform: base.transform,
+        spatial: None,
         style: base.style,
         appearance: base.appearance,
         presence: base.presence,
@@ -306,7 +313,7 @@ fn apply_derived_track(
             );
             Ok(())
         }
-        Property::Presence | Property::ZIndex | Property::Transform => {
+        Property::Presence | Property::ZIndex | Property::Transform | Property::WorldTransform => {
             Err(DerivedDisplayEvaluationError::UnsupportedProperty {
                 occurrence_index,
                 property: track.property,

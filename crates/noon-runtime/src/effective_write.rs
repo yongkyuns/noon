@@ -1,5 +1,8 @@
 use noon_compile::ExecutionPatch;
-use noon_core::{Color, ObjectId, Property, Style, Transform2D, Vec2};
+use noon_core::{
+    Color, ObjectId, Property, SemanticOrientation, SemanticTransform, SemanticWorldTransform3D,
+    Style, Transform2D, Vec2,
+};
 
 use crate::{apply_evaluated_value, release_render_transform, EvaluatedValue, FrameRowMut};
 
@@ -16,16 +19,50 @@ use crate::{apply_evaluated_value, release_render_transform, EvaluatedValue, Fra
 /// responsibility; preparing a batch does not bypass publication/replay guards.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EffectivePropertyWrite<I = ObjectId> {
-    Presence { object: I, presence: bool },
-    Transform { object: I, transform: Transform2D },
-    Style { object: I, style: Style },
-    Translation { object: I, translation: Vec2 },
-    Rotation { object: I, rotation: f32 },
-    Scale { object: I, scale: Vec2 },
-    Fill { object: I, fill: Option<Color> },
-    Stroke { object: I, stroke: Option<Color> },
-    StrokeWidth { object: I, stroke_width: f32 },
-    Opacity { object: I, opacity: f32 },
+    Presence {
+        object: I,
+        presence: bool,
+    },
+    Transform {
+        object: I,
+        transform: Transform2D,
+    },
+    WorldTransform {
+        object: I,
+        world: SemanticWorldTransform3D,
+    },
+    Style {
+        object: I,
+        style: Style,
+    },
+    Translation {
+        object: I,
+        translation: Vec2,
+    },
+    Rotation {
+        object: I,
+        rotation: f32,
+    },
+    Scale {
+        object: I,
+        scale: Vec2,
+    },
+    Fill {
+        object: I,
+        fill: Option<Color>,
+    },
+    Stroke {
+        object: I,
+        stroke: Option<Color>,
+    },
+    StrokeWidth {
+        object: I,
+        stroke_width: f32,
+    },
+    Opacity {
+        object: I,
+        opacity: f32,
+    },
 }
 
 impl<I: Copy> EffectivePropertyWrite<I> {
@@ -33,6 +70,7 @@ impl<I: Copy> EffectivePropertyWrite<I> {
         match self {
             Self::Presence { object, .. }
             | Self::Transform { object, .. }
+            | Self::WorldTransform { object, .. }
             | Self::Style { object, .. }
             | Self::Translation { object, .. }
             | Self::Rotation { object, .. }
@@ -54,6 +92,9 @@ impl<I: Copy> EffectivePropertyWrite<I> {
             }
             Self::Transform { transform, .. } => {
                 EffectivePropertyWrite::Transform { object, transform }
+            }
+            Self::WorldTransform { world, .. } => {
+                EffectivePropertyWrite::WorldTransform { object, world }
             }
             Self::Style { style, .. } => EffectivePropertyWrite::Style { object, style },
             Self::Translation { translation, .. } => EffectivePropertyWrite::Translation {
@@ -81,13 +122,21 @@ impl EffectivePropertyWrite {
     /// to the execution plan or used to assign a whole effective row.
     pub(crate) fn as_execution_patch(self) -> ExecutionPatch {
         match self {
-            Self::Presence { object, .. } => ExecutionPatch::SetTransform {
+            Self::Presence { object, .. } => ExecutionPatch::SetStyle {
                 object,
-                transform: Transform2D::IDENTITY,
+                style: Style::default(),
             },
             Self::Transform { object, transform } => {
                 ExecutionPatch::SetTransform { object, transform }
             }
+            Self::WorldTransform { object, world } => ExecutionPatch::SetSemanticTransform {
+                object,
+                transform: SemanticTransform {
+                    translation: world.translation,
+                    scale: world.scale,
+                    orientation: SemanticOrientation::Spatial(world.rotation),
+                },
+            },
             Self::Style { object, style } => ExecutionPatch::SetStyle { object, style },
             Self::Translation {
                 object,
@@ -160,6 +209,13 @@ pub(crate) fn apply_effective_property_to_row(
         EffectivePropertyWrite::Transform { transform, .. } => {
             release_render_transform(row.render_geometry, row.render_transform, *row.transform);
             *row.transform = transform;
+            return;
+        }
+        EffectivePropertyWrite::WorldTransform { world, .. } => {
+            row.spatial
+                .as_mut()
+                .expect("world transform write was validated for a spatial row")
+                .world = world;
             return;
         }
         EffectivePropertyWrite::Style { style, .. } => {

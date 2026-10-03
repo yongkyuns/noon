@@ -470,7 +470,12 @@ impl From<ReactiveError> for SemanticReactiveLoweringError {
 impl std::fmt::Display for SemanticReactiveLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownExecutionRoot(root) => write!(formatter, "unknown execution root {}:{}", root.slot(), root.generation()),
+            Self::UnknownExecutionRoot(root) => write!(
+                formatter,
+                "unknown execution root {}:{}",
+                root.slot(),
+                root.generation()
+            ),
             Self::Signal(error) => error.fmt(formatter),
             Self::Reactive(error) => error.fmt(formatter),
             Self::NonFiniteSignalValue { signal } => write!(
@@ -546,7 +551,11 @@ pub fn lower_semantic_reactive_projection_for_roots(
 
     for object in projection.objects() {
         for binding in &object.signal_bindings {
-            let property = lower_property(object.semantic_id, binding.property())?;
+            let property = lower_property(
+                object.semantic_id,
+                binding.property(),
+                object.spatial.is_some(),
+            )?;
             let signal = lowerer.lower_signal(binding.signal())?;
             lowerer.bindings.push(noon_core::ReactiveBinding {
                 signal,
@@ -792,7 +801,18 @@ fn lower_scalar_timeline_entry(
 fn lower_property(
     target: SemanticNodeId,
     property: SemanticObjectProperty,
+    spatial: bool,
 ) -> Result<Property, SemanticReactiveLoweringError> {
+    if spatial
+        && matches!(
+            property,
+            SemanticObjectProperty::Translation
+                | SemanticObjectProperty::Scale
+                | SemanticObjectProperty::RotationZ
+        )
+    {
+        return Err(SemanticReactiveLoweringError::UnsupportedProperty { target, property });
+    }
     match property {
         SemanticObjectProperty::Presence => Ok(Property::Presence),
         SemanticObjectProperty::Translation => Ok(Property::Position),
@@ -1076,5 +1096,37 @@ mod tests {
         assert_eq!(track.semantic_signal(), reachable);
         assert!(reactive.timeline_owns(reachable));
         assert!(!reactive.timeline_owns(unrelated));
+    }
+
+    #[test]
+    fn planar_signal_binding_is_rejected_for_spatial_camera_rows() {
+        let mut store = SemanticStore::new();
+        let signal = store
+            .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
+            .unwrap();
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state.set_role(noon_core::SemanticObjectRole::Camera3D);
+        state
+            .set_camera_projection(Some(noon_core::SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 100.0,
+            }))
+            .unwrap();
+        let object = store.insert_semantic_object(state);
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::Translation)
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let execution = projection(&store, &mut index);
+        assert_eq!(
+            lower_semantic_reactive_projection(&store, &execution).unwrap_err(),
+            SemanticReactiveLoweringError::UnsupportedProperty {
+                target: object,
+                property: SemanticObjectProperty::Translation,
+            }
+        );
     }
 }

@@ -173,6 +173,9 @@ mod tests {
             StoredGeometry::Resource(handle) => {
                 match store.geometry_resources().get(handle).unwrap() {
                     GeometryResource::VectorPath(path) => path.as_ref().clone(),
+                    GeometryResource::Mesh(_) => {
+                        panic!("2D ApplyMatrix fixture resolved to a mesh")
+                    }
                 }
             }
             _ => panic!("ApplyMatrix target must be path-backed"),
@@ -192,7 +195,13 @@ mod tests {
         assert_eq!(state.transform.translation.y, 0.0);
         assert_eq!(state.transform.scale.x, 1.0);
         assert_eq!(state.transform.scale.y, 1.0);
-        assert_eq!(state.transform.rotation_z, 0.0);
+        assert_eq!(
+            state
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.0
+        );
         let path = path_for(&rectangle);
         let points: Vec<Vec2> = path
             .commands()

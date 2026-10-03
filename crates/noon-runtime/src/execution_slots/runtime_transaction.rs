@@ -24,8 +24,16 @@ pub(super) fn final_value_writes(
         match patch {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => {
-                if !final_writes.insert((*object, std::mem::discriminant(patch))) {
+                let lane = match patch {
+                    ExecutionPatch::SetContent { .. } => 0,
+                    ExecutionPatch::SetTransform { .. }
+                    | ExecutionPatch::SetSemanticTransform { .. } => 1,
+                    ExecutionPatch::SetStyle { .. } => 2,
+                    _ => unreachable!(),
+                };
+                if !final_writes.insert((*object, lane)) {
                     continue;
                 }
             }
@@ -514,6 +522,7 @@ impl SceneInstance {
                 let object = match patch {
                     ExecutionPatch::SetContent { object, .. }
                     | ExecutionPatch::SetTransform { object, .. }
+                    | ExecutionPatch::SetSemanticTransform { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,

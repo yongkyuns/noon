@@ -52,11 +52,11 @@ use std::{
 
 use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledFamilyAnimationChannel, CompiledScene,
-    CompiledTrack, ExecutionPatch, TransformGeometryPlan,
+    CompiledSpatialState, CompiledTrack, ExecutionPatch, TransformGeometryPlan,
 };
 use noon_core::{
-    continuous_time_map_interval, mapped_continuous_progress, FamilyAnimationState,
-    PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
+    continuous_time_map_interval, mapped_continuous_progress, mapped_continuous_progress_f64,
+    FamilyAnimationState, PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
@@ -664,6 +664,7 @@ impl SceneInstance {
             patch,
             ExecutionPatch::SetContent { .. }
                 | ExecutionPatch::SetTransform { .. }
+                | ExecutionPatch::SetSemanticTransform { .. }
                 | ExecutionPatch::SetStyle { .. }
         ) {
             self.apply_value_patch(patch)?;
@@ -958,6 +959,7 @@ impl SceneInstance {
         let object = match patch {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
@@ -992,6 +994,22 @@ impl SceneInstance {
                         Property::Position,
                         Property::Rotation,
                         Property::Scale,
+                    ],
+                );
+            }
+            ExecutionPatch::SetSemanticTransform { .. } => {
+                let compiled = &self.compiled.objects()[index];
+                self.frame.release_render_transform(index);
+                self.frame.objects[index].transform = compiled.base_transform;
+                self.frame.objects[index].spatial = compiled.spatial.clone();
+                self.reapply_properties(
+                    index,
+                    &[
+                        Property::Transform,
+                        Property::Position,
+                        Property::Rotation,
+                        Property::Scale,
+                        Property::WorldTransform,
                     ],
                 );
             }
@@ -1059,6 +1077,10 @@ impl SceneInstance {
                         self.frame.time,
                     )
                     .translation
+                }
+                Property::WorldTransform => {
+                    self.frame.objects[object_index].spatial =
+                        spatial_base_at_time(&self.compiled, object_index, self.frame.time);
                 }
                 Property::Rotation => {
                     self.frame.objects[object_index].transform.rotation = affine_base_at_time(
@@ -1443,6 +1465,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
             content: object.content.clone(),
             text_bounds: object.text_bounds,
             transform: affine_base_at_time(compiled, index, object.base_transform, time),
+            spatial: spatial_base_at_time(compiled, index, time),
             style: object.base_style,
             appearance: appearances[index],
         })
@@ -1518,10 +1541,11 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 13] = [
+const PROPERTY_ORDER: [Property; 14] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
+    Property::WorldTransform,
     Property::Position,
     Property::Rotation,
     Property::Scale,
@@ -1590,6 +1614,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
         content: object.content.clone(),
         text_bounds: object.text_bounds,
         transform: affine_base_at_time(compiled, object_index, object.base_transform, frame.time),
+        spatial: spatial_base_at_time(compiled, object_index, frame.time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     });
@@ -1630,6 +1655,7 @@ fn reset_object_frame(
         content: object.content.clone(),
         text_bounds: object.text_bounds,
         transform: affine_base_at_time(compiled, object_index, object.base_transform, time),
+        spatial: spatial_base_at_time(compiled, object_index, time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     };
@@ -1720,6 +1746,42 @@ fn affine_base_at_time(
     transform
 }
 
+fn spatial_base_at_time(
+    compiled: &CompiledScene,
+    object_index: usize,
+    time: f64,
+) -> Option<Box<CompiledSpatialState>> {
+    let mut spatial = compiled
+        .objects()
+        .get(object_index)?
+        .spatial
+        .as_deref()
+        .copied()?;
+    let channel = CompiledChannelKey::new(object_index as u32, Property::WorldTransform);
+    let tracks = compiled.channel_tracks(channel);
+    for track in tracks {
+        let TrackValues::WorldTransform { from, to } = track.values else {
+            unreachable!("compiled WorldTransform track has typed endpoints")
+        };
+        if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+            continue;
+        }
+        if let Some(progress) = world_track_progress(track, time) {
+            let (Some(from), Some(to)) = (from.world(), to.world()) else {
+                return None;
+            };
+            spatial.world = if progress <= 0.0 {
+                from
+            } else if progress >= 1.0 {
+                to
+            } else {
+                from.interpolate(to, progress)?
+            };
+        }
+    }
+    Some(Box::new(spatial))
+}
+
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {
     let mut low = 0;
     let mut high = tracks.len();
@@ -1791,6 +1853,44 @@ fn apply_group_to_row(
         return changed;
     }
 
+    if group.channel.property == Property::WorldTransform {
+        let latest = &tracks[group.cursor - 1];
+        if latest.reconciled && time >= latest.timing.start_time + latest.timing.duration {
+            return false;
+        }
+        let selected = tracks[..group.cursor]
+            .iter()
+            .rev()
+            .find_map(|track| world_track_progress(track, time).map(|progress| (track, progress)));
+        let Some((track, progress)) = selected else {
+            return false;
+        };
+        let TrackValues::WorldTransform { from, to } = &track.values else {
+            unreachable!("validated WorldTransform track has world endpoints");
+        };
+        let Some(from) = from.world() else {
+            return false;
+        };
+        let Some(to) = to.world() else {
+            return false;
+        };
+        let value = if progress <= 0.0 {
+            from
+        } else if progress >= 1.0 {
+            to
+        } else if let Some(value) = from.interpolate(to, progress) {
+            value
+        } else {
+            return false;
+        };
+        return apply_evaluated_value(
+            &mut row,
+            Property::WorldTransform,
+            EvaluatedValue::WorldTransform(value),
+            false,
+        );
+    }
+
     let selected = if group.mapped {
         tracks[..group.cursor]
             .iter()
@@ -1836,6 +1936,10 @@ fn apply_group_to_row(
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
+            Property::WorldTransform => row
+                .spatial
+                .as_ref()
+                .map(|spatial| EvaluatedValue::WorldTransform(spatial.world)),
             Property::Presence | Property::ZIndex | Property::Transform => None,
         };
         return base.is_some_and(|value| {
@@ -1943,6 +2047,15 @@ fn apply_evaluated_value(
             row.style.opacity = value;
             changed
         }
+        (Property::WorldTransform, EvaluatedValue::WorldTransform(value)) => {
+            let spatial = row
+                .spatial
+                .as_mut()
+                .expect("validated WorldTransform track has spatial state");
+            let changed = spatial.world != value;
+            spatial.world = value;
+            changed
+        }
         _ => unreachable!("compiled track value type must match its property"),
     }
 }
@@ -1952,6 +2065,7 @@ enum EvaluatedValue {
     Scalar(f32),
     Vec2(Vec2),
     Color(Option<Color>),
+    WorldTransform(noon_core::SemanticWorldTransform3D),
 }
 
 // A prepared morph owns its fixed rendering frame alongside ordinary semantic
@@ -2419,6 +2533,20 @@ fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
     mapped_continuous_progress(track.timing, &track.time_map, time)
 }
 
+fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
+    if time < track.timing.start_time {
+        return None;
+    }
+    if track.timing.is_instant() {
+        return Some(1.0);
+    }
+    if track.time_map.is_identity() {
+        let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0);
+        return Some(track.timing.easing.evaluate_f64(raw));
+    }
+    mapped_continuous_progress_f64(track.timing, &track.time_map, time)
+}
+
 fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
     interpolate_track_values(&track.values, progress)
         .expect("compiled continuous track carries an interpolable value kind")
@@ -2443,6 +2571,10 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
         TrackValues::Color { from, to } => Some(EvaluatedValue::Color(interpolate_optional_color(
             *from, *to, progress,
         ))),
+        TrackValues::WorldTransform { from, to } => Some(EvaluatedValue::WorldTransform(
+            from.world()?
+                .interpolate(to.world()?, f64::from(progress))?,
+        )),
         TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }

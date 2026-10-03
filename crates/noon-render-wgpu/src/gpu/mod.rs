@@ -9,6 +9,8 @@ mod path_batching;
 mod presentation;
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod inset_capture;
+mod mesh;
+pub use mesh::{SpatialPrepareError, SpatialUploadStats};
 mod raster_image_gpu;
 mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
@@ -473,6 +475,7 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
@@ -750,6 +753,7 @@ impl GpuRenderer {
             create_path_msaa_target(device, target_format, viewport_size);
 
         Self {
+            spatial: mesh::SpatialGpuState::default(),
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,
@@ -804,6 +808,24 @@ impl GpuRenderer {
     pub fn set_camera(&mut self, queue: &wgpu::Queue, camera: Camera2D) {
         self.camera = camera;
         self.write_camera_uniform(queue);
+    }
+
+    /// Derive mesh residency and effective camera uniforms from the same runtime
+    /// publication consumed by retained 2D/text preparation. No authored store is
+    /// consulted here and no frame motion rebuilds immutable vertices.
+    pub fn prepare_spatial(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &noon_runtime::RendererPublication<'_>,
+    ) -> Result<SpatialUploadStats, SpatialPrepareError> {
+        self.spatial.prepare(
+            device,
+            queue,
+            self.target_format,
+            self.viewport_size,
+            publication,
+        )
     }
 
     pub fn set_viewport(
@@ -1426,6 +1448,12 @@ impl GpuRenderer {
         } else {
             ordered_render_sample_count(prepared.path_batches)
         };
+        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let load = if self.spatial.is_active() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(clear_color)
+        };
         let stats = if sample_count == 1 {
             // Analytic SDF primitives already use derivative-based edge coverage. When
             // no visible vector path participates in painter order, avoid 4x sample
@@ -1435,7 +1463,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -1465,7 +1493,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: Some(scene_view),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Discard,
                 },
             })];
@@ -1488,10 +1516,26 @@ impl GpuRenderer {
             }
         };
         let mut stats = stats;
+        stats += spatial_stats;
         if finalize {
             stats += self.finalize_frame(encoder, view, overlay);
         }
         stats
+    }
+
+    fn encode_spatial(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &wgpu::TextureView,
+        clear: wgpu::Color,
+        samples: u32,
+    ) -> DrawStats {
+        if samples == 1 {
+            self.spatial.encode(encoder, scene, None, clear, samples)
+        } else {
+            self.spatial
+                .encode(encoder, &self.path_msaa_view, Some(scene), clear, samples)
+        }
     }
 
     pub(crate) fn finalize_frame(
@@ -2272,6 +2316,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.25)),
@@ -2281,6 +2326,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::line(
@@ -2293,6 +2339,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(
@@ -2326,6 +2373,7 @@ mod tests {
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
+                    spatial: None,
                     text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style {
@@ -2339,6 +2387,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.2)),

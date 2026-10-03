@@ -22,7 +22,10 @@ pub(crate) fn prepare_geometry(
         options.buff,
         options.sharpness,
         |node, authored| {
-            let mut transform = authored.transform;
+            let mut transform = authored
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?;
             if let Some(execution) =
                 execution.filter(|execution| execution.semantic_object_is_reachable(node))
             {

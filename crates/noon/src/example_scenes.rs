@@ -46,6 +46,7 @@ pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+pub mod spatial_mesh;
 pub mod specialized_geometry;
 pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]

@@ -59,7 +59,10 @@ pub enum SemanticInitialAnimationError {
 impl std::fmt::Display for SemanticInitialAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidOrigin(origin) => write!(formatter, "initial animation origin must be finite: {origin}"),
+            Self::InvalidOrigin(origin) => write!(
+                formatter,
+                "initial animation origin must be finite: {origin}"
+            ),
             Self::Schedule(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
@@ -126,9 +129,14 @@ impl std::fmt::Display for SemanticInitialAnimationError {
                 node.generation()
             ),
             Self::TooManyTracks(count) => {
-                write!(formatter, "initial animation contains too many tracks: {count}")
+                write!(
+                    formatter,
+                    "initial animation contains too many tracks: {count}"
+                )
             }
-            Self::Compiled(error) => write!(formatter, "initial track installation failed: {error}"),
+            Self::Compiled(error) => {
+                write!(formatter, "initial track installation failed: {error}")
+            }
         }
     }
 }
@@ -367,6 +375,16 @@ fn lower_object_track_values(
             TrackValues::Object {
                 from: lower_transform_endpoint(store, animation, *from)?,
                 to: lower_transform_endpoint(store, animation, *to)?,
+            },
+        ),
+        (
+            SemanticObjectTrackProperty::WorldTransform,
+            SemanticObjectTrackValues::WorldTransform { from, to },
+        ) => (
+            Property::WorldTransform,
+            TrackValues::WorldTransform {
+                from: noon_core::WorldTransformTrackEndpoint::from_world(*from),
+                to: noon_core::WorldTransformTrackEndpoint::from_world(*to),
             },
         ),
         _ => return Err(SemanticInitialAnimationError::InvalidLeaf { animation }),

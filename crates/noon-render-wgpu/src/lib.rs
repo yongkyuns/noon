@@ -2938,6 +2938,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content: noon_core::ObjectContentRef::Geometry(geometry),
@@ -5004,6 +5005,7 @@ mod structural_execution_delta_tests {
 
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.1)),

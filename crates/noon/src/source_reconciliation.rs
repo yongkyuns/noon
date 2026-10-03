@@ -7,8 +7,7 @@ use std::{collections::HashSet, error::Error};
 
 use noon_core::{
     SceneRevision, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticStoreIdentity, SemanticTransactionNodeRef,
-    SourceIdentity,
+    SemanticObjectState, SemanticStoreIdentity, SemanticTransactionNodeRef, SourceIdentity,
 };
 
 use crate::{AuthoringError, ExecutionSessionPublicationError, Scene};
@@ -501,28 +500,8 @@ fn stage_object_delta(
         transaction.replace_content(object, candidate.content);
         changed = true;
     }
-    if current.transform.translation != candidate.transform.translation {
-        transaction.set_property(
-            object,
-            SemanticObjectProperty::Translation,
-            candidate.transform.translation,
-        );
-        changed = true;
-    }
-    if current.transform.scale != candidate.transform.scale {
-        transaction.set_property(
-            object,
-            SemanticObjectProperty::Scale,
-            candidate.transform.scale,
-        );
-        changed = true;
-    }
-    if current.transform.rotation_z != candidate.transform.rotation_z {
-        transaction.set_property(
-            object,
-            SemanticObjectProperty::RotationZ,
-            candidate.transform.rotation_z,
-        );
+    if current.transform != candidate.transform {
+        transaction.set_object_transform(object, candidate.transform);
         changed = true;
     }
     if current.style != candidate.style {

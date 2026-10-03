@@ -55,10 +55,15 @@ pub fn effective_boolean_geometry_options(
                     UnsupportedAuthoringOperation::EffectivePathRenderOverride,
                 ));
             }
+            let authored = state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?;
             state.transform = crate::semantic_mobject::semantic_transform_with_effective_affine(
-                state.transform,
+                authored,
                 observed.object.transform,
-            );
+            )
+            .into();
         }
         Ok(state)
     })

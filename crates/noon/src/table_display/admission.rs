@@ -487,7 +487,10 @@ fn bounds_at_states(
             crate::semantic_mobject::layout_for_content(
                 &object.integration_store().borrow(),
                 state.content,
-                state.transform,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
             )?
             .ok_or(TableAuthoringError::InvalidStructure)
         })
@@ -711,7 +714,7 @@ fn publish_prepared_text_table(
                     .zip(transforms)
                     .map(|((item, handle), transform)| {
                         let mut state = SemanticObjectState::new(*handle);
-                        state.transform = transform;
+                        state.transform = transform.into();
                         state.style = item.style.clone();
                         if let Some(baseline) = item.presentation_baseline {
                             state.set_text_presentation_baseline(baseline);

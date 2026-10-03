@@ -202,7 +202,7 @@ mod tests {
         let result = store.with_raster_image_rgba8(2, 1, pixels, |store, handle| {
             failed = Some(handle);
             let mut state = SemanticObjectState::new(SemanticImageContent::new(handle));
-            state.transform.rotation_z = f64::NAN;
+            state.transform.orientation = crate::SemanticOrientation::Planar(f64::NAN);
             let mut transaction = SemanticMutationTransaction::new();
             transaction.add_node(SemanticNodeCreation::object(state));
             transaction.apply(store).map_err(Error::from)

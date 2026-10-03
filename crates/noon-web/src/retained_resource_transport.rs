@@ -508,7 +508,14 @@ impl RetainedResourceBundle {
             let resource = geometries
                 .get(handle)
                 .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
-            let GeometryResource::VectorPath(path) = resource;
+            let path = match resource {
+                GeometryResource::VectorPath(path) => path,
+                GeometryResource::Mesh(_) => {
+                    return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
+                        handle.into(),
+                    ));
+                }
+            };
             geometry_entries.push(TransportGeometryEntry {
                 handle: handle.into(),
                 path: path.as_ref().clone(),
@@ -1546,6 +1553,7 @@ pub enum RetainedResourceTransportError {
     UnknownGeometry(TransportGeometryResourceHandle),
     DuplicateText(TransportTextResourceHandle),
     DuplicateGeometry(TransportGeometryResourceHandle),
+    UnsupportedMeshGeometry(TransportGeometryResourceHandle),
     DuplicateFont { face_key: String, face_index: u32 },
     MissingGeometry(TransportGeometryResourceHandle),
     MissingFont { face_key: String, face_index: u32 },
@@ -1612,6 +1620,11 @@ impl fmt::Display for RetainedResourceTransportError {
             Self::DuplicateGeometry(handle) => write!(
                 formatter,
                 "duplicate retained geometry resource {}@{}",
+                handle.id, handle.version
+            ),
+            Self::UnsupportedMeshGeometry(handle) => write!(
+                formatter,
+                "2D retained resource transport cannot encode mesh geometry {}@{}",
                 handle.id, handle.version
             ),
             Self::DuplicateFont {

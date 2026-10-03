@@ -91,6 +91,12 @@ jobs:
             cargo test -p noon-native native_surface_smoke_presents_affine_continuation_endpoint \
               -- --ignored --nocapture --test-threads=1
 
+      - name: Present retained spatial meshes through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_spatial_mesh_frame \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Present ordered Rust callback continuation through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

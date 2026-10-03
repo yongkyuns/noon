@@ -452,3 +452,52 @@ fn property_transaction_writes_only_target_slot_with_large_unrelated_scene() {
     assert_eq!(store.last_mutation_stats().slots_written, 1);
     assert_eq!(result.impacts().len(), 2);
 }
+
+#[test]
+fn complete_spatial_transform_publishes_atomically() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let transform = crate::SemanticTransform {
+        translation: SemanticVec3::new(2.0, 3.0, 4.0),
+        scale: SemanticVec3::new(1.0, 2.0, 3.0),
+        orientation: crate::SemanticOrientation::Spatial(
+            crate::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.75)
+                .expect("valid rotation"),
+        ),
+    };
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(target, transform);
+
+    let result = transaction.apply(&mut store).expect("valid transform");
+
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform,
+        transform
+    );
+    assert_eq!(result.impacts().len(), 1);
+}
+
+#[test]
+fn invalid_complete_transform_is_rejected_without_publication() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before = store.semantic_object_state_checked(target).unwrap().clone();
+    let invalid = crate::SemanticTransform {
+        translation: SemanticVec3::new(f64::NAN, 0.0, 0.0),
+        ..crate::SemanticTransform::default()
+    };
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(target, invalid);
+
+    assert!(matches!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidObjectTransform { index: 0, object }) if object == target.into()
+    ));
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before
+    );
+}

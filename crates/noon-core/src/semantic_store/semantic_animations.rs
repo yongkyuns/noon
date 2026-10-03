@@ -10,6 +10,7 @@ pub enum SemanticObjectTrackProperty {
     Presence,
     ZIndex,
     Transform,
+    WorldTransform,
     Position,
     Rotation,
     Scale,
@@ -48,6 +49,10 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
         from: R,
         to: R,
     },
+    WorldTransform {
+        from: crate::SemanticWorldTransform3D,
+        to: crate::SemanticWorldTransform3D,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +62,7 @@ enum SemanticObjectTrackValueKind {
     Vec3,
     Color,
     Object,
+    WorldTransform,
 }
 
 impl SemanticObjectTrackProperty {
@@ -64,6 +70,7 @@ impl SemanticObjectTrackProperty {
         match self {
             Self::Presence => SemanticObjectTrackValueKind::Bool,
             Self::Transform => SemanticObjectTrackValueKind::Object,
+            Self::WorldTransform => SemanticObjectTrackValueKind::WorldTransform,
             Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
             Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
             Self::ZIndex
@@ -89,6 +96,7 @@ impl<R> SemanticObjectTrackValues<R> {
             Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
             Self::Color { .. } => SemanticObjectTrackValueKind::Color,
             Self::Object { .. } => SemanticObjectTrackValueKind::Object,
+            Self::WorldTransform { .. } => SemanticObjectTrackValueKind::WorldTransform,
         }
     }
 }
@@ -662,6 +670,15 @@ pub(crate) fn validate_object_property_track<R>(
                     || !color.blue.is_finite()
                     || !color.alpha.is_finite()
             }) {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::WorldTransform { from, to } => {
+            if crate::SemanticWorldTransform3D::new(from.translation, from.rotation, from.scale)
+                .is_none()
+                || crate::SemanticWorldTransform3D::new(to.translation, to.rotation, to.scale)
+                    .is_none()
+            {
                 return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
             }
         }

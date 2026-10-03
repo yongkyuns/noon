@@ -235,6 +235,7 @@ mod operation_selection_tests {
         semantics.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -244,6 +245,7 @@ mod operation_selection_tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -268,6 +270,7 @@ mod operation_selection_tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -277,6 +280,7 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -286,6 +290,7 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(99),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),

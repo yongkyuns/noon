@@ -75,6 +75,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
         objects: vec![
             FrameObjectState {
                 id: ObjectId::new(0),
+                spatial: None,
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::path(
                     source().with_morph_target(morph_target),
@@ -90,6 +91,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
             },
             FrameObjectState {
                 id: ObjectId::new(1),
+                spatial: None,
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::path(static_mega_path())),
                 text_bounds: None,

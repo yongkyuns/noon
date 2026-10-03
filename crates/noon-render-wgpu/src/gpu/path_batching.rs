@@ -261,6 +261,7 @@ mod tests {
         let mut frame = FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                spatial: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::path(path)),

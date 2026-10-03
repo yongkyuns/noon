@@ -11,6 +11,7 @@ fn frame() -> FrameState {
         .into_iter()
         .enumerate()
         .map(|(index, z_index)| FrameObjectState {
+            spatial: None,
             id: ObjectId::new(40 + index as u64),
             z_index,
             content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),

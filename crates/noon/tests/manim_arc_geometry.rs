@@ -18,7 +18,10 @@ fn retained_path(options: Options) -> VectorPath {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources
                 .get(resources.current_handle(*id).unwrap())
-                .unwrap();
+                .unwrap()
+            else {
+                panic!("expected retained path geometry resource")
+            };
             (**path).clone()
         }
         other => panic!("expected retained path geometry, got {other:?}"),

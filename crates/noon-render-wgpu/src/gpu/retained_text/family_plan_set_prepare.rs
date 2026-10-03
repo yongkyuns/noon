@@ -943,6 +943,7 @@ mod tests {
 
     fn semantic_object(id: u64, content: ObjectContentRef) -> FrameObjectState {
         FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content,

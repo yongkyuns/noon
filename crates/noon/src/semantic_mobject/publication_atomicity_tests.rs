@@ -1,7 +1,7 @@
 //! Fail after resource import, not merely at constructor argument preflight.
 use super::*;
 use crate::{ExecutionSession, ExecutionSessionPublicationError, LiveSessionError, Scene};
-use noon_core::{FrameEpoch, GeometryResourceHandle};
+use noon_core::{FrameEpoch, GeometryResourceHandle, SemanticObjectProperty};
 
 fn path_options() -> ManimGeometryOptions {
     ManimGeometryOptions::path(

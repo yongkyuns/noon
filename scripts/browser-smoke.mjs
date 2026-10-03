@@ -31,6 +31,7 @@ await mkdir(artifactDir, { recursive: true });
 // the shared Python corpus. These fixtures protect renderer-specific raster work.
 const examples = [
   { name: "Animated priority", factory: "createDirectAnimatedPrioritySmokeRenderer", objectCount: 2, duration: 3.25 },
+  { name: "Spatial mesh", factory: "createDirectSpatialMeshSmokeRenderer", objectCount: 3, duration: 2 },
   { name: "Path alignment", factory: "createDirectPathAlignmentSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Boolean geometry", factory: "createDirectBooleanGeometrySmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Path construction", factory: "createDirectPathConstructionSmokeRenderer", objectCount: 2, duration: 0.2 },
@@ -780,6 +781,18 @@ try {
         assert.ok(colors.orange > 10, `MarkupText: expected visible orange foreground span, got ${colors.orange}`);
         assert.ok(colors.upperInk > 20 && colors.lowerInk > 20,
           `MarkupText: expected ink on both multiline rows, got ${JSON.stringify(colors)}`);
+      }
+
+      if (example.name === "Spatial mesh") {
+        const center = pixelAt(screenshot, 0.5, 0.5);
+        if (Math.abs(time - latestEnd * 0.35) < 1e-6) {
+          assert.ok(center[0] > center[2] * 1.5,
+            `Spatial mesh: nearer animated mesh should occlude the rear mesh, got ${center}`);
+        }
+        if (time === latestEnd) {
+          assert.ok(center[2] > center[0] * 1.5,
+            `Spatial mesh: rear mesh should become visible after the front mesh moves behind it, got ${center}`);
+        }
       }
 
       if (

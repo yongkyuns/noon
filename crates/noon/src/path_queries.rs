@@ -218,11 +218,20 @@ pub(crate) fn content_path(
         StoredGeometry::Rectangle { size } => GeometryRef::Rectangle { size },
         StoredGeometry::Line { start, end } => GeometryRef::Line { start, end },
         StoredGeometry::Resource(handle) => {
-            let GeometryResource::VectorPath(path) = store
+            match store
                 .geometry_resources()
                 .get(handle)
-                .ok_or(AuthoringError::MissingGeometryResource(handle))?;
-            return Ok(std::borrow::Cow::Borrowed(path));
+                .ok_or(AuthoringError::MissingGeometryResource(handle))?
+            {
+                GeometryResource::VectorPath(path) => {
+                    return Ok(std::borrow::Cow::Borrowed(path));
+                }
+                GeometryResource::Mesh(_) => {
+                    return Err(AuthoringError::Unsupported(
+                        UnsupportedAuthoringOperation::PathQueryContent,
+                    ));
+                }
+            }
         }
     };
     Ok(std::borrow::Cow::Owned(
@@ -283,7 +292,10 @@ pub fn effective_path_query(
         .semantic_object_state_checked(object.node_id())
         .map_err(AuthoringError::from)?;
     let transform = crate::semantic_mobject::semantic_transform_with_effective_affine(
-        state.transform,
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
         observed
             .render_transform
             .unwrap_or(observed.object.transform),
@@ -308,6 +320,13 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.node_id())
             .map_err(AuthoringError::from)?;
-        prepare_content(&store, state.content, state.transform)
+        prepare_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 }
