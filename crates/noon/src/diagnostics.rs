@@ -72,10 +72,38 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                 });
             let center = bounds.map(Rect::center).unwrap_or(transform.translation);
             let opacity = object.style.opacity * object.appearance;
+            let spatial = object.spatial.as_deref().map(|state| {
+                let world = state.world;
+                let projection = state.camera_projection.map(|projection| match projection {
+                    noon_core::SemanticProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    } => {
+                        json!({ "kind": "perspective", "vertical_fov_radians": vertical_fov_radians,
+                            "near": near, "far": far })
+                    }
+                    noon_core::SemanticProjection3D::Orthographic { height, near, far } => {
+                        json!({ "kind": "orthographic", "height": height,
+                            "near": near, "far": far })
+                    }
+                });
+                json!({
+                    "translation": [world.translation.x, world.translation.y, world.translation.z],
+                    "rotation_wxyz": world.rotation.components(),
+                    "scale": [world.scale.x, world.scale.y, world.scale.z],
+                    "camera_projection": projection,
+                    "material": if state.material == noon_core::SemanticSpatialMaterial::PointLit {
+                        "point_lit"
+                    } else { "unlit" },
+                    "point_light": state.point_light,
+                })
+            });
             json!({
                 "id": object.id.get(), "present": frame.is_present(index),
                 "center": [center.x, center.y], "bounds": bounds_json(bounds),
                 "transform": transform,
+                "spatial": spatial,
                 "fill": paint_json(object.style.fill, opacity),
                 "stroke": paint_json(object.style.stroke, opacity),
                 "stroke_width": object.style.stroke_width,
@@ -98,6 +126,27 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
 mod tests {
     use super::*;
     use crate::{AnimationOptions, LiveProgramStatus, RateFunction, RustHostCallbackTable, Scene};
+
+    #[test]
+    fn spatial_capture_reads_exact_effective_pose_and_light_material() {
+        let mut session = crate::example_scenes::spatial_surface::lighting_session().unwrap();
+        session.advance_to(0.5).unwrap();
+        let before = session.publication_context();
+        let capture = execution_frame_value(&session);
+        let rows = capture["objects"].as_array().unwrap();
+        let light = rows
+            .iter()
+            .find(|row| row["spatial"]["point_light"] == true)
+            .unwrap();
+        assert_eq!(light["spatial"]["translation"], json!([0.5, 0.0, 5.0]));
+        assert!(rows
+            .iter()
+            .any(|row| row["spatial"]["material"] == "point_lit"));
+        assert!(rows
+            .iter()
+            .any(|row| row["spatial"]["camera_projection"]["far"] == 30.0));
+        assert_eq!(session.publication_context(), before);
+    }
 
     #[test]
     fn debug_capture_reads_the_current_shared_frame_without_advancing_it() {

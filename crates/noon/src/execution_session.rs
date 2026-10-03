@@ -172,6 +172,11 @@ pub(crate) enum SemanticCompositionRequest {
         complete_priority: bool,
         options: AnimationOptions,
     },
+    WorldTransform {
+        target: SemanticNodeId,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    },
     FamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
@@ -295,6 +300,7 @@ impl SemanticCompositionRequest {
     const fn direct_leaf_target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { source, .. }
+            | Self::WorldTransform { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
@@ -1408,6 +1414,17 @@ impl ExecutionSession {
             .with_additional_timeline(self.signal_timeline.wake_state())
     }
 
+    /// Bound a realtime sample to the current authored continuation endpoint.
+    /// Internal track boundaries do not stop a sample; explicit seek/advance calls
+    /// retain their ordinary timeline semantics.
+    pub fn bounded_realtime_target(&self, requested_time: f64) -> f64 {
+        self.pending_segment_completion
+            .as_ref()
+            .map_or(requested_time, |pending| {
+                requested_time.min(pending.end_time)
+            })
+    }
+
     /// Whether looping playback must revisit authored timeline history after the
     /// current runtime wake state settles.
     ///
@@ -1538,6 +1555,7 @@ impl ExecutionSession {
                 style: row.style,
                 appearance: row.appearance,
                 reveal: *frame.reveals.get(index)?,
+                world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
             })
         })?;
         let family_animations =
@@ -1592,6 +1610,7 @@ impl ExecutionSession {
         segment = segment.with_completion_token(token);
         self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
+            segment.end_time(),
             store.scene_revision(),
             PendingSegmentCompletionKind {
                 lifecycle_root: None,
@@ -1896,6 +1915,7 @@ impl ExecutionSession {
         segment = segment.with_completion_token(token);
         self.pending_segment_completion = Some(PendingSegmentCompletion::new(
             token,
+            segment.end_time(),
             store.scene_revision(),
             PendingSegmentCompletionKind {
                 lifecycle_root: None,
@@ -2149,6 +2169,16 @@ impl ExecutionSession {
                     *options,
                 );
                 Ok(animation)
+            }
+            SemanticCompositionRequest::WorldTransform {
+                target,
+                transform,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
+                Ok(declaration.create_world_transform_animation(*target, *transform, *options))
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,
@@ -2869,6 +2899,12 @@ impl ExecutionSession {
                 }
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
+            }
+            SemanticCompositionRequest::WorldTransform { target, transform, options } => {
+                if !self.reachability.is_object_reachable(*target) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                Ok(declaration.create_world_transform_animation(*target, *transform, *options))
             }
             SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -3703,6 +3739,7 @@ impl ExecutionSession {
                     style: row.style,
                     appearance: row.appearance,
                     reveal: *frame.reveals.get(index)?,
+                    world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
                 })
             },
         )?;
@@ -3738,6 +3775,10 @@ impl ExecutionSession {
                                 style: row.style,
                                 appearance: row.appearance,
                                 reveal: *frame.reveals.get(index)?,
+                                world_transform: row
+                                    .spatial
+                                    .as_deref()
+                                    .map(|spatial| spatial.world),
                             })
                         },
                     )
@@ -3778,6 +3819,10 @@ impl ExecutionSession {
                                 style: row.style,
                                 appearance: row.appearance,
                                 reveal: *frame.reveals.get(index)?,
+                                world_transform: row
+                                    .spatial
+                                    .as_deref()
+                                    .map(|spatial| spatial.world),
                             })
                         },
                     )
@@ -4104,6 +4149,7 @@ impl ExecutionSession {
             self.next_segment_sequence = next_segment_sequence;
             self.pending_segment_completion = Some(PendingSegmentCompletion::new(
                 token,
+                segment.end_time(),
                 activation_scene_revision,
                 PendingSegmentCompletionKind {
                     lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
@@ -4501,6 +4547,8 @@ mod tests {
         assert_eq!(segment.start_time(), 3.0);
         assert_eq!(segment.duration(), 1.5);
         assert_eq!(segment.end_time(), 4.5);
+        assert_eq!(session.bounded_realtime_target(4.0), 4.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 4.5);
         assert_eq!(
             session.segment_state(segment).timeline(),
             TimelineWakeState::Continuous
@@ -4512,6 +4560,62 @@ mod tests {
         session.complete_segment(&mut store, segment).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(session.frame().objects[0].transform.translation.x, 6.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 100.0);
+        session.advance_to(4.5441).unwrap();
+        assert_eq!(session.frame().time, 4.5441);
+    }
+
+    #[test]
+    fn bounded_realtime_target_crosses_internal_sequence_endpoint_but_clamps_at_continuation_end() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+
+        let mut first_state = store.semantic_object_state_checked(object).unwrap().clone();
+        first_state.transform.translation.x = 2.0;
+        let first_target = store.insert_semantic_object(first_state);
+        let first = store
+            .insert_semantic_transform_animation(
+                object,
+                first_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        let mut second_state = store.semantic_object_state_checked(object).unwrap().clone();
+        second_state.transform.translation.x = 6.0;
+        let second_target = store.insert_semantic_object(second_state);
+        let second = store
+            .insert_semantic_transform_animation(
+                object,
+                second_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let sequence = store
+            .insert_semantic_sequence_animation(&[first, second], AnimationOptions::new())
+            .unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(&store, sequence, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(segment.start_time(), 0.0);
+        assert_eq!(segment.end_time(), 3.0);
+        assert_eq!(session.bounded_realtime_target(2.0), 2.0);
+        assert_eq!(session.bounded_realtime_target(100.0), 3.0);
+
+        session.advance_to(3.25).unwrap();
+        assert_eq!(session.frame().time, 3.25);
+        session.seek(0.5).unwrap();
+        assert_eq!(session.frame().time, 0.5);
     }
 
     #[test]

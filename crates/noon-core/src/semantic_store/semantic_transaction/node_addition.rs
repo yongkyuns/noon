@@ -260,7 +260,7 @@ pub(super) fn preflight_add_node(
                 || !state.style.is_finite()
                 || !state.z_index().is_finite()
                 || !state.role().is_valid()
-                || !state.camera_declaration_is_valid()
+                || !state.spatial_declaration_is_valid()
                 || state
                     .decimal_number()
                     .is_some_and(|number| !number.is_valid())

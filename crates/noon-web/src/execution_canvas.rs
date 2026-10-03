@@ -989,6 +989,10 @@ mod wasm {
                 self.source.advance_interactions(wall_time_ms / 1_000.0)?;
                 return Ok(self.source.session().wake_state().frame_pending());
             };
+            // A late host callback stops at the authored play/wait endpoint.
+            // Internal track events remain traversable in one sample. Interactions
+            // still use wall time, independently of authored time.
+            let target_time = self.source.session().bounded_realtime_target(target_time);
             let (pending, camera, outcome) = {
                 let direct = &mut self.source;
                 let outcome = direct.drive_to(target_time)?;

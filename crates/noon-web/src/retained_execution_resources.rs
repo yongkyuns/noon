@@ -34,6 +34,7 @@ impl InstalledRetainedExecutionMirror {
             resources.text_handle_remap(),
         );
         wire.extend_installed_image_handles(&resources.image_handle_remap());
+        wire.extend_installed_geometry_handles(&resources.geometry_handle_remap());
         Ok(Self {
             wire,
             resources,
@@ -104,6 +105,17 @@ impl InstalledRetainedExecutionMirror {
 
     pub const fn camera(&self) -> Camera2DState {
         self.wire.camera()
+    }
+
+    /// Exact source execution context carried by the currently installed frame.
+    pub const fn publication_context(&self) -> noon_core::PublicationContext {
+        self.wire.publication_context()
+    }
+
+    /// Camera3D is resolved from the transported effective object row. The 2D
+    /// `camera()` remains the inspection/HUD camera only.
+    pub fn camera_3d_object(&self) -> Option<&noon_runtime::FrameObjectState> {
+        self.wire.camera_3d_object()
     }
 
     pub fn inset_2d_views(&self) -> &[noon_core::Inset2DViewState] {
@@ -182,6 +194,8 @@ impl InstalledRetainedExecutionMirror {
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
+        self.wire
+            .remove_installed_geometry_handles(retirements.geometries.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -202,6 +216,9 @@ impl InstalledRetainedExecutionMirror {
         let text_handles = additions.text_handle_remap();
         let superseded_text_handles = additions.superseded_text_handles().to_vec();
         self.wire.extend_installed_text_handles(&text_handles);
+        let geometry_handles = additions.geometry_handle_remap();
+        self.wire
+            .extend_installed_geometry_handles(&geometry_handles);
 
         let render_rollback = match (
             additions.render_geometry_session(),
@@ -217,6 +234,8 @@ impl InstalledRetainedExecutionMirror {
                         self.wire
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
+                        self.wire
+                            .remove_installed_geometry_handles(geometry_handles.keys());
                         return Err(error.into());
                     }
                 }
@@ -231,6 +250,8 @@ impl InstalledRetainedExecutionMirror {
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                self.wire
+                    .remove_installed_geometry_handles(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -243,6 +264,8 @@ impl InstalledRetainedExecutionMirror {
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                self.wire
+                    .remove_installed_geometry_handles(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -257,6 +280,8 @@ impl InstalledRetainedExecutionMirror {
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                self.wire
+                    .remove_installed_geometry_handles(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -267,6 +292,8 @@ impl InstalledRetainedExecutionMirror {
             self.wire
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
+            self.wire
+                .remove_installed_geometry_handles(geometry_handles.keys());
             if let Some(rollback) = render_rollback {
                 self.wire.rollback_installed_render_geometries(rollback);
             }
@@ -279,6 +306,8 @@ impl InstalledRetainedExecutionMirror {
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
+        self.wire
+            .remove_installed_geometry_handles(retirements.geometries.iter());
         self.wire
             .remove_installed_text_handles(superseded_text_handles.iter());
         self.family.commit_prepared(prepared_family);
@@ -307,6 +336,15 @@ impl InstalledRetainedExecutionMirror {
                 > 0
             {
                 return Err(RetainedResourceTransportError::RetiredLiveText(*text).into());
+            }
+        }
+        for geometry in &delta.resource_retirements.geometries {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Geometry(*geometry))
+                > 0
+            {
+                return Err(RetainedResourceTransportError::RetiredLiveGeometry(*geometry).into());
             }
         }
         Ok(())
@@ -492,6 +530,22 @@ impl InstalledRetainedExecutionMirror {
                     });
                 }
             }
+            if let TransportObjectContent::Geometry {
+                resource: Some(geometry),
+                ..
+            } = object.content
+            {
+                if self
+                    .resources
+                    .geometry_handle_remap()
+                    .get(&geometry)
+                    .is_none()
+                {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownGeometryResource(geometry).into(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -553,8 +607,8 @@ impl From<serde_json::Error> for InstalledExecutionError {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectId, RateFunction,
-        Transform2D, Vec2, VectorPath,
+        FamilyAnimationMode, FamilyAnimationState, GeometryRef, MeshResource, ObjectId,
+        RateFunction, Transform2D, Vec2, VectorPath,
     };
 
     use super::*;
@@ -582,6 +636,427 @@ mod tests {
             .add_many(&[(&first).into(), (&second).into()])
             .unwrap();
         SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+    }
+
+    #[test]
+    fn actual_surface_player_binds_mesh_before_worker_install_and_keeps_motion_local() {
+        let session = noon::example_scenes::spatial_surface::session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 81).unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
+                .unwrap();
+        let initial = player.initial_delta_json().unwrap();
+        let envelope: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        let mesh_row = envelope
+            .retained
+            .objects
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.content,
+                    TransportObjectContent::Geometry {
+                        geometry: GeometryRef::External(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let mesh_id = mesh_row.object;
+        let TransportObjectContent::Geometry {
+            resource: Some(source),
+            ..
+        } = mesh_row.content
+        else {
+            panic!("mesh source must be version-qualified before publication");
+        };
+        mirror.apply_json(&initial).unwrap();
+        let local = mirror.resources().geometry_handle_remap()[&source];
+        let resource = mirror.resources().geometries().get(local).unwrap();
+        let noon_core::GeometryResource::Mesh(mesh) = resource else {
+            panic!("mesh payload must stay an indexed mesh");
+        };
+        let retained = std::sync::Arc::clone(mesh);
+        let midpoint = player.seek_delta_json(0.5).unwrap().unwrap();
+        let update: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&midpoint).unwrap();
+        assert_eq!(update.retained.objects.len(), 1);
+        assert_eq!(update.retained.objects[0].object, mesh_id);
+        assert!(update.resource_additions.is_none());
+        mirror.apply_json(&midpoint).unwrap();
+        let current = mirror
+            .frame()
+            .unwrap()
+            .objects
+            .iter()
+            .find(|row| row.id == mesh_id)
+            .unwrap();
+        let angle = noon_core::SemanticRotation3D::from_axis_angle(
+            noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+            0.3,
+        )
+        .unwrap();
+        for (actual, expected) in current
+            .world_transform()
+            .unwrap()
+            .rotation
+            .components()
+            .into_iter()
+            .zip(angle.components())
+        {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+        let noon_core::GeometryResource::Mesh(mesh) =
+            mirror.resources().geometries().get(local).unwrap()
+        else {
+            panic!("motion must preserve mesh resource");
+        };
+        assert!(std::sync::Arc::ptr_eq(&retained, mesh));
+
+        let mut invalid = envelope;
+        let row = invalid
+            .retained
+            .objects
+            .iter_mut()
+            .find(|row| row.object == mesh_id)
+            .unwrap();
+        let TransportObjectContent::Geometry { resource, .. } = &mut row.content else {
+            unreachable!()
+        };
+        *resource = None;
+        let mut fresh =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
+                .unwrap();
+        assert!(
+            fresh.apply_family(invalid).is_err(),
+            "wire reference validation remains strict"
+        );
+        assert!(fresh.frame().is_none());
+    }
+
+    #[test]
+    fn mesh_payload_is_resolved_by_exact_transport_handle_into_worker_frame() {
+        let mut source_geometries = noon_core::GeometryResourceArena::new();
+        let source = source_geometries.insert_mesh(
+            MeshResource::new(
+                vec![
+                    noon_core::SemanticVec3::new(0.25, 0.5, -3.0),
+                    noon_core::SemanticVec3::new(1.0, 0.0, 4.0),
+                    noon_core::SemanticVec3::new(-2.0, 1.0, 1.5),
+                ],
+                None,
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        );
+        let resources = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [source],
+            &noon_core::TextResourceArena::new(),
+            &source_geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        let transport = crate::TransportGeometryResourceHandle::from(source);
+        {
+            let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(
+                &resources.encode_binary().unwrap(),
+            )
+            .unwrap();
+            let local_handle = mirror.resources.geometry_handle_remap()[&transport];
+            let source_context = noon_core::PublicationContext::new(
+                noon_core::SceneRevision::new(44),
+                noon_core::ExecutionRevision::new(12),
+                noon_core::FrameEpoch::new(7),
+            );
+            let delta = RetainedExecutionDeltaEnvelope {
+                channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
+                protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
+                session: 77,
+                sequence: 0,
+                publication_context: source_context,
+                snapshot: true,
+                time: 0.0,
+                camera: Camera2DState::default(),
+                inset_2d_views: Vec::new(),
+                objects: vec![crate::RetainedTransportObjectState {
+                    slot: crate::TransportSlotId {
+                        slot: 0,
+                        generation: 0,
+                    },
+                    order: 0,
+                    object: ObjectId::new(90),
+                    z_index: 0.0,
+                    content: TransportObjectContent::Geometry {
+                        geometry: GeometryRef::External(source.id),
+                        resource: Some(transport),
+                    },
+                    transform: Transform2D::IDENTITY,
+                    spatial: Some(crate::TransportSpatialState {
+                        translation: [1.0 / 3.0, -1.0e20, 5.5],
+                        rotation_wxyz: [0.9238795325112867, 0.0, 0.3826834323650898, 0.0],
+                        scale: [0.5, 1.25, 2.0],
+                        camera_projection: None,
+                        material: crate::TransportSpatialMaterial::PointLit,
+                        point_light: false,
+                    }),
+                    style: noon_core::Style::default(),
+                    appearance: 1.0,
+                    text_bounds: None,
+                    presence: true,
+                    reveal: 1.0,
+                    morph: 0.0,
+                    render_geometry: None,
+                    render_transform: None,
+                    render_geometry_resource: None,
+                }],
+                object_patches: Vec::new(),
+                removed_slots: Vec::new(),
+                painter_order: None,
+            };
+            let spatial_auxiliary = |slot: u32,
+                                     object: u64,
+                                     translation: [f64; 3],
+                                     camera_projection: Option<crate::TransportProjection3D>,
+                                     point_light: bool| {
+                crate::RetainedTransportObjectState {
+                    slot: crate::TransportSlotId {
+                        slot,
+                        generation: 0,
+                    },
+                    order: slot,
+                    object: ObjectId::new(object),
+                    z_index: 0.0,
+                    content: TransportObjectContent::Geometry {
+                        geometry: GeometryRef::circle(0.1),
+                        resource: None,
+                    },
+                    transform: Transform2D::IDENTITY,
+                    spatial: Some(crate::TransportSpatialState {
+                        translation,
+                        rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+                        scale: [1.0; 3],
+                        camera_projection,
+                        material: crate::TransportSpatialMaterial::Unlit,
+                        point_light,
+                    }),
+                    style: noon_core::Style::default(),
+                    appearance: 1.0,
+                    text_bounds: None,
+                    presence: true,
+                    reveal: 1.0,
+                    morph: 0.0,
+                    render_geometry: None,
+                    render_transform: None,
+                    render_geometry_resource: None,
+                }
+            };
+            let mut delta = delta;
+            delta.objects.push(spatial_auxiliary(
+                1,
+                91,
+                [0.0, 0.0, 8.0],
+                Some(crate::TransportProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 0.1,
+                    far: 100.0,
+                }),
+                false,
+            ));
+            delta
+                .objects
+                .push(spatial_auxiliary(2, 92, [3.0, 4.0, 5.0], None, true));
+            mirror.apply(delta).unwrap();
+            assert_eq!(mirror.publication_context(), source_context);
+            assert_eq!(
+                mirror.frame().unwrap().objects[0].content.geometry(),
+                Some(&GeometryRef::External(local_handle.id))
+            );
+            let source_world = mirror.frame().unwrap().objects[0]
+                .world_transform()
+                .expect("spatial mesh retains its source world transform");
+            assert_eq!(source_world.translation.x, 1.0 / 3.0);
+            assert_eq!(source_world.translation.y, -1.0e20);
+            assert_eq!(source_world.scale.z, 2.0);
+            assert_eq!(
+                mirror.frame().unwrap().objects[0]
+                    .spatial
+                    .as_deref()
+                    .unwrap()
+                    .material,
+                noon_core::SemanticSpatialMaterial::PointLit
+            );
+            assert_eq!(mirror.camera_3d_object().unwrap().object, ObjectId::new(91));
+            let light = mirror.frame().unwrap().objects.iter().find(|object| {
+                object
+                    .spatial
+                    .as_deref()
+                    .is_some_and(|spatial| spatial.point_light)
+            });
+            assert_eq!(
+                light.unwrap().world_transform().unwrap().translation,
+                noon_core::SemanticVec3::new(3.0, 4.0, 5.0)
+            );
+            assert!(mirror.resources.geometries().get(local_handle).is_some());
+
+            let replacement_source = source_geometries.insert_mesh(
+                noon_core::MeshResource::new(
+                    vec![
+                        noon_core::SemanticVec3::new(-1.0, 2.0, 3.0),
+                        noon_core::SemanticVec3::new(4.0, -5.0, 6.0),
+                        noon_core::SemanticVec3::new(7.0, 8.0, -9.0),
+                    ],
+                    None,
+                    vec![0, 2, 1],
+                )
+                .unwrap(),
+            );
+            let replacement_transport =
+                crate::TransportGeometryResourceHandle::from(replacement_source);
+            let additions = RetainedResourceBundle::capture_additions_with_geometries(
+                [],
+                [replacement_source],
+                &noon_core::TextResourceArena::new(),
+                &source_geometries,
+                &noon_core::FontResourceArena::new(),
+                &crate::RetainedResourceInventory::default(),
+            )
+            .unwrap();
+
+            let replacement = RetainedFamilyExecutionDeltaEnvelope {
+                retained: RetainedExecutionDeltaEnvelope {
+                    channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
+                    protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
+                    session: 77,
+                    sequence: 1,
+                    publication_context: noon_core::PublicationContext::new(
+                        noon_core::SceneRevision::new(44),
+                        noon_core::ExecutionRevision::new(12),
+                        noon_core::FrameEpoch::new(8),
+                    ),
+                    snapshot: false,
+                    time: 0.5,
+                    camera: Camera2DState::default(),
+                    inset_2d_views: Vec::new(),
+                    objects: vec![crate::RetainedTransportObjectState {
+                        slot: crate::TransportSlotId {
+                            slot: 0,
+                            generation: 0,
+                        },
+                        order: 0,
+                        object: ObjectId::new(90),
+                        z_index: 0.0,
+                        content: TransportObjectContent::Geometry {
+                            geometry: GeometryRef::External(replacement_source.id),
+                            resource: Some(replacement_transport),
+                        },
+                        transform: Transform2D::IDENTITY,
+                        spatial: Some(crate::TransportSpatialState {
+                            translation: [-2.0, 4.5, 7.25],
+                            rotation_wxyz: [0.8660254037844386, 0.0, 0.5, 0.0],
+                            scale: [1.5, 0.75, 2.25],
+                            camera_projection: None,
+                            material: crate::TransportSpatialMaterial::Unlit,
+                            point_light: false,
+                        }),
+                        style: noon_core::Style::default(),
+                        appearance: 1.0,
+                        text_bounds: None,
+                        presence: true,
+                        reveal: 1.0,
+                        morph: 0.0,
+                        render_geometry: None,
+                        render_transform: None,
+                        render_geometry_resource: None,
+                    }],
+                    object_patches: Vec::new(),
+                    removed_slots: Vec::new(),
+                    painter_order: None,
+                },
+                family_states: Vec::new(),
+                family_plans: Vec::new(),
+                resource_additions: Some(additions),
+                resource_retirements: crate::RetainedResourceRetirements {
+                    geometries: vec![transport],
+                    ..Default::default()
+                },
+                transient_presentations: Vec::new(),
+                selection_overlay: None,
+                pointer_view: None,
+            };
+            mirror.apply_family(replacement).unwrap();
+            assert_eq!(
+                mirror.publication_context().frame_epoch().get(),
+                8,
+                "resource and effective spatial replacement share one publication"
+            );
+            assert_eq!(mirror.resources().geometry_count(), 1);
+            let replacement_local =
+                mirror.resources.geometry_handle_remap()[&replacement_transport];
+            let Some(noon_core::GeometryResource::Mesh(mesh)) =
+                mirror.resources.geometries().get(replacement_local)
+            else {
+                panic!("incrementally installed mesh was not retained");
+            };
+            assert_eq!(mesh.positions()[1].y, -5.0);
+
+            let path_replacement = RetainedFamilyExecutionDeltaEnvelope {
+                retained: RetainedExecutionDeltaEnvelope {
+                    channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
+                    protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
+                    session: 77,
+                    sequence: 2,
+                    publication_context: noon_core::PublicationContext::new(
+                        noon_core::SceneRevision::new(44),
+                        noon_core::ExecutionRevision::new(12),
+                        noon_core::FrameEpoch::new(9),
+                    ),
+                    snapshot: false,
+                    time: 1.0,
+                    camera: Camera2DState::default(),
+                    inset_2d_views: Vec::new(),
+                    objects: vec![crate::RetainedTransportObjectState {
+                        slot: crate::TransportSlotId {
+                            slot: 0,
+                            generation: 0,
+                        },
+                        order: 0,
+                        object: ObjectId::new(90),
+                        z_index: 0.0,
+                        content: TransportObjectContent::Geometry {
+                            geometry: GeometryRef::circle(1.0),
+                            resource: None,
+                        },
+                        transform: Transform2D::IDENTITY,
+                        spatial: None,
+                        style: noon_core::Style::default(),
+                        appearance: 1.0,
+                        text_bounds: None,
+                        presence: true,
+                        reveal: 1.0,
+                        morph: 0.0,
+                        render_geometry: None,
+                        render_transform: None,
+                        render_geometry_resource: None,
+                    }],
+                    object_patches: Vec::new(),
+                    removed_slots: Vec::new(),
+                    painter_order: None,
+                },
+                family_states: Vec::new(),
+                family_plans: Vec::new(),
+                resource_additions: None,
+                resource_retirements: crate::RetainedResourceRetirements {
+                    geometries: vec![replacement_transport],
+                    ..Default::default()
+                },
+                transient_presentations: Vec::new(),
+                selection_overlay: None,
+                pointer_view: None,
+            };
+            mirror.apply_family(path_replacement).unwrap();
+            assert_eq!(mirror.resources().geometry_count(), 0);
+        }
     }
 
     fn family_state(progress: f64) -> FamilyAnimationState {
@@ -990,6 +1465,7 @@ mod tests {
                 protocol_version: initial.protocol_version,
                 session: initial.session,
                 sequence: 1,
+                publication_context: initial.publication_context,
                 snapshot: false,
                 time: 2.0,
                 camera: initial.camera,
@@ -1043,6 +1519,7 @@ mod tests {
             protocol_version: initial.protocol_version,
             session: initial.session,
             sequence: 1,
+            publication_context: initial.publication_context,
             snapshot: false,
             time: 0.5,
             camera: initial.camera,

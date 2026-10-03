@@ -2,6 +2,7 @@ use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
+use noon_runtime::{FrameChanges, FrameState};
 
 mod derived_display;
 mod overlay;
@@ -826,6 +827,37 @@ impl GpuRenderer {
             self.viewport_size,
             publication,
         )
+    }
+
+    /// Prepare spatial draws from an already-installed worker frame and its
+    /// immutable geometry arena. The supplied context is the worker's exact
+    /// installed publication context, so spatial uploads share the same
+    /// stale/retry semantics as the runtime-owned publication path.
+    pub fn prepare_spatial_with_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        context: noon_core::PublicationContext,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        geometry_resources: &dyn noon_core::GeometryResourceLookup,
+    ) -> Result<SpatialUploadStats, SpatialPrepareError> {
+        self.spatial.prepare_with_resources(
+            device,
+            queue,
+            self.target_format,
+            self.viewport_size,
+            context,
+            frame,
+            changes,
+            geometry_resources,
+        )
+    }
+
+    /// Start a new installed retained session whose source publication context
+    /// may begin at an earlier frame epoch than the session just replaced.
+    pub fn reset_spatial_publication_context(&mut self) {
+        self.spatial.reset_publication_context();
     }
 
     pub fn set_viewport(

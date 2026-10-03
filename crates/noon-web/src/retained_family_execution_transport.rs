@@ -907,6 +907,7 @@ mod tests {
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,
             sequence,
+            publication_context: noon_core::PublicationContext::default(),
             snapshot,
             time: 0.0,
             camera: Camera2DState::default(),
@@ -921,8 +922,10 @@ mod tests {
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
+                    resource: None,
                 },
                 transform: Transform2D::IDENTITY,
+                spatial: None,
                 style: Style::default(),
                 appearance: 1.0,
                 text_bounds: None,

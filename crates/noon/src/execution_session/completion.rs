@@ -6,7 +6,7 @@ use noon_compile::{
 use noon_core::{
     stage_semantic_scene_lifecycle_membership, ReactiveValue, SemanticFadeDirection,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
-    SemanticSignalValue, SemanticStore,
+    SemanticSignalValue, SemanticStore, SemanticTransform,
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -413,6 +413,17 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        let final_world_transform_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::WorldTransform { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -433,6 +444,14 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::ContentMorph { content } => {
                     if final_content_entries.get(&entry.semantic_object) == Some(&index) {
                         semantic.replace_content(entry.semantic_object, *content);
+                    }
+                }
+                SemanticAnimationCompletion::WorldTransform { value } => {
+                    if final_world_transform_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.set_object_transform(
+                            entry.semantic_object,
+                            SemanticTransform::from(*value),
+                        );
                     }
                 }
                 SemanticAnimationCompletion::Fill { .. }

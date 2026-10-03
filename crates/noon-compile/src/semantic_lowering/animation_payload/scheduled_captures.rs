@@ -217,6 +217,9 @@ fn apply_effective_track_endpoint(
         (Property::Reveal, TrackValues::Scalar { from, to }) => {
             value.reveal = if at_end { *to } else { *from };
         }
+        (Property::WorldTransform, TrackValues::WorldTransform { from, to }) => {
+            value.world_transform = Some((if at_end { *to } else { *from }).world()?);
+        }
         (Property::Morph, TrackValues::PreparedMorph { .. }) | (Property::Presence, _) => {}
         (Property::Transform, _) => return None,
         _ => return None,

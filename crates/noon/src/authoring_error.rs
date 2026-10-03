@@ -47,6 +47,8 @@ pub enum UnsupportedAuthoringOperation {
     ExternalGeometry,
     /// 2D layout and boundary queries do not project spatial mesh geometry.
     SpatialMeshBounds2D,
+    /// World edits currently require mesh, camera, or light content.
+    WorldAffineContent,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
     /// This operation cannot retain the requested world-axis deformation.
@@ -81,6 +83,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",
+            Self::WorldAffineContent => "world affine edits require mesh, camera, or light content",
             Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
@@ -253,7 +256,7 @@ impl std::fmt::Display for AuthoringError {
                 write!(f, "unknown or stale raster image resource {handle:?}")
             }
             Self::CameraRequiresEmptyScene(_) => {
-                f.write_str("2D camera frame must be created before scene content")
+                f.write_str("camera must be created before scene content")
             }
             Self::InvalidCameraAutoFrame(reason) => {
                 write!(f, "invalid camera auto-frame: {reason}")

@@ -4,8 +4,9 @@ use std::{
 };
 
 use noon_core::{
-    Camera2DState, GeometryRef, Inset2DViewState, ObjectContentRef, ObjectId, Rect, Style,
-    TextResourceHandle, Transform2D,
+    Camera2DState, GeometryRef, Inset2DViewState, ObjectContentRef, ObjectId, PublicationContext,
+    Rect, SemanticProjection3D, SemanticRotation3D, SemanticSpatialMaterial, SemanticVec3,
+    SemanticWorldTransform3D, Style, TextResourceHandle, Transform2D,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 11;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -47,10 +48,156 @@ pub enum TransportObjectContent {
     },
     Geometry {
         geometry: GeometryRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<crate::TransportGeometryResourceHandle>,
     },
     Text {
         text: TransportTextResourceHandle,
     },
+}
+
+/// Exact f64 spatial declaration carried only across the Python-worker boundary.
+/// It is reconstructed into the ordinary compiled spatial row on receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransportSpatialState {
+    pub translation: [f64; 3],
+    pub rotation_wxyz: [f64; 4],
+    pub scale: [f64; 3],
+    pub camera_projection: Option<TransportProjection3D>,
+    pub material: TransportSpatialMaterial,
+    pub point_light: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransportProjection3D {
+    Perspective {
+        vertical_fov_radians: f64,
+        near: f64,
+        far: f64,
+    },
+    Orthographic {
+        height: f64,
+        near: f64,
+        far: f64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportSpatialMaterial {
+    #[default]
+    Unlit,
+    PointLit,
+}
+
+impl TransportSpatialState {
+    fn from_compiled(value: noon_compile::CompiledSpatialState) -> Self {
+        let world = value.world;
+        let camera_projection = value.camera_projection.map(|projection| match projection {
+            SemanticProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => TransportProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            },
+            SemanticProjection3D::Orthographic { height, near, far } => {
+                TransportProjection3D::Orthographic { height, near, far }
+            }
+        });
+        Self {
+            translation: [
+                world.translation.x,
+                world.translation.y,
+                world.translation.z,
+            ],
+            rotation_wxyz: world.rotation.components(),
+            scale: [world.scale.x, world.scale.y, world.scale.z],
+            camera_projection,
+            material: match value.material {
+                SemanticSpatialMaterial::Unlit => TransportSpatialMaterial::Unlit,
+                SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,
+            },
+            point_light: value.point_light,
+        }
+    }
+
+    fn is_valid(self) -> bool {
+        let [w, x, y, z] = self.rotation_wxyz;
+        let Some(rotation) = SemanticRotation3D::from_validated_components(w, x, y, z) else {
+            return false;
+        };
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(
+                self.translation[0],
+                self.translation[1],
+                self.translation[2],
+            ),
+            rotation,
+            SemanticVec3::new(self.scale[0], self.scale[1], self.scale[2]),
+        )
+        .is_some()
+            && self
+                .camera_projection
+                .is_none_or(|projection| match projection {
+                    TransportProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    } => SemanticProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    }
+                    .is_valid(),
+                    TransportProjection3D::Orthographic { height, near, far } => {
+                        SemanticProjection3D::Orthographic { height, near, far }.is_valid()
+                    }
+                })
+    }
+
+    fn into_compiled(self) -> Option<noon_compile::CompiledSpatialState> {
+        if !self.is_valid() {
+            return None;
+        }
+        let [w, x, y, z] = self.rotation_wxyz;
+        let rotation = SemanticRotation3D::from_validated_components(w, x, y, z)?;
+        let world = SemanticWorldTransform3D::new(
+            SemanticVec3::new(
+                self.translation[0],
+                self.translation[1],
+                self.translation[2],
+            ),
+            rotation,
+            SemanticVec3::new(self.scale[0], self.scale[1], self.scale[2]),
+        )?;
+        let camera_projection = self.camera_projection.map(|projection| match projection {
+            TransportProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => SemanticProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            },
+            TransportProjection3D::Orthographic { height, near, far } => {
+                SemanticProjection3D::Orthographic { height, near, far }
+            }
+        });
+        Some(noon_compile::CompiledSpatialState {
+            world,
+            camera_projection,
+            material: match self.material {
+                TransportSpatialMaterial::Unlit => SemanticSpatialMaterial::Unlit,
+                TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
+            },
+            point_light: self.point_light,
+        })
+    }
 }
 
 impl From<&ObjectContentRef> for TransportObjectContent {
@@ -62,6 +209,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
             },
             ObjectContentRef::Geometry(geometry) => Self::Geometry {
                 geometry: geometry.clone(),
+                resource: None,
             },
             ObjectContentRef::Text(text) => Self::Text {
                 text: TransportTextResourceHandle::from_source_handle(*text),
@@ -79,6 +227,8 @@ pub struct RetainedTransportObjectState {
     pub z_index: f64,
     pub content: TransportObjectContent,
     pub transform: Transform2D,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<TransportSpatialState>,
     pub style: Style,
     pub appearance: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +292,8 @@ pub struct RetainedExecutionDeltaEnvelope {
     pub protocol_version: u32,
     pub session: u32,
     pub sequence: u64,
+    /// Exact runtime publication authority associated with these effective rows.
+    pub publication_context: PublicationContext,
     pub snapshot: bool,
     pub time: f64,
     #[serde(default)]
@@ -171,13 +323,20 @@ pub enum RetainedExecutionTransportError {
     UnsupportedVersion(u32),
     InvalidTime(f64),
     SequenceExhausted,
-    SessionRequiresSnapshot { session: u32, sequence: u64 },
-    SequenceGap { expected: u64, actual: u64 },
+    SessionRequiresSnapshot {
+        session: u32,
+        sequence: u64,
+    },
+    SequenceGap {
+        expected: u64,
+        actual: u64,
+    },
     IncrementalBeforeSnapshot,
     StructuralChangeRequiresSnapshot,
     FrameShapeMismatch,
     InvalidObjectIndex(usize),
-    UnsupportedSpatialObject(ObjectId),
+    InvalidSpatialState(TransportSlotId),
+    MultipleCamera3D,
     InvalidZIndex(TransportSlotId),
     InvalidOrder(u32),
     DuplicateSlot(TransportSlotId),
@@ -191,15 +350,32 @@ pub enum RetainedExecutionTransportError {
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
     InvalidInset2DView(ObjectId),
+    StalePublicationContext {
+        received: PublicationContext,
+        installed: PublicationContext,
+    },
     UnknownTextResource(TransportTextResourceHandle),
+    UnknownGeometryResource(crate::TransportGeometryResourceHandle),
+    InvalidGeometryResourceReference(TransportSlotId),
 }
 
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedSpatialObject(object) => write!(
+            Self::InvalidSpatialState(slot) => write!(
                 formatter,
-                "spatial object {object:?} is not supported by the planar worker transport"
+                "retained slot {}:{} has invalid spatial state",
+                slot.slot, slot.generation
+            ),
+            Self::MultipleCamera3D => formatter.write_str(
+                "retained execution snapshot contains more than one effective Camera3D row",
+            ),
+            Self::StalePublicationContext {
+                received,
+                installed,
+            } => write!(
+                formatter,
+                "retained publication context {received:?} precedes installed context {installed:?}",
             ),
             Self::UnknownImageResource(handle) => {
                 write!(formatter, "unknown raster image resource {handle:?}")
@@ -306,6 +482,16 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 "unknown retained transport text resource {}@{}",
                 handle.id, handle.version
             ),
+            Self::UnknownGeometryResource(handle) => write!(
+                formatter,
+                "unknown retained geometry resource {}@{}",
+                handle.id, handle.version
+            ),
+            Self::InvalidGeometryResourceReference(slot) => write!(
+                formatter,
+                "retained slot {}:{} has an invalid external geometry resource reference",
+                slot.slot, slot.generation
+            ),
         }
     }
 }
@@ -409,18 +595,25 @@ impl RetainedExecutionDeltaEncoder {
         Ok(object)
     }
 
-    pub fn encode_snapshot(
+    pub fn encode_snapshot_with_context(
         &mut self,
         frame: &FrameState,
         camera: Camera2DState,
+        publication_context: PublicationContext,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
-        self.encode_snapshot_indices(frame, camera, 0..frame.objects.len())
+        self.encode_snapshot_indices_with_context(
+            frame,
+            camera,
+            publication_context,
+            0..frame.objects.len(),
+        )
     }
 
-    pub fn encode_snapshot_indices(
+    pub fn encode_snapshot_indices_with_context(
         &mut self,
         frame: &FrameState,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         indices: impl IntoIterator<Item = usize>,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
@@ -452,6 +645,7 @@ impl RetainedExecutionDeltaEncoder {
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
             sequence,
+            publication_context,
             snapshot: true,
             time: frame.time,
             camera,
@@ -463,23 +657,31 @@ impl RetainedExecutionDeltaEncoder {
         })
     }
 
-    pub fn encode_incremental(
+    pub fn encode_incremental_with_context(
         &mut self,
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
-        self.encode_incremental_inner(frame, changes, camera, None)
+        self.encode_incremental_inner(frame, changes, camera, publication_context, None)
     }
 
-    pub fn encode_incremental_with_painter_order(
+    pub fn encode_incremental_with_painter_order_and_context(
         &mut self,
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         painter_order: &[u32],
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
-        self.encode_incremental_inner(frame, changes, camera, Some(painter_order))
+        self.encode_incremental_inner(
+            frame,
+            changes,
+            camera,
+            publication_context,
+            Some(painter_order),
+        )
     }
 
     fn encode_incremental_inner(
@@ -487,6 +689,7 @@ impl RetainedExecutionDeltaEncoder {
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         painter_order: Option<&[u32]>,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
@@ -505,7 +708,7 @@ impl RetainedExecutionDeltaEncoder {
                 .filter_map(|(index, order)| order.map(|_| index))
                 .collect::<Vec<_>>();
             return self
-                .encode_snapshot_indices(frame, camera, indices)
+                .encode_snapshot_indices_with_context(frame, camera, publication_context, indices)
                 .map(Some);
         }
         if changes.is_empty() {
@@ -642,6 +845,7 @@ impl RetainedExecutionDeltaEncoder {
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
             sequence,
+            publication_context,
             snapshot: false,
             time: frame.time,
             camera,
@@ -674,7 +878,10 @@ pub struct RetainedExecutionFrameMirror {
     resource_session: Option<u32>,
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    geometry_handles:
+        HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
     camera: Camera2DState,
+    publication_context: PublicationContext,
     inset_2d_views: Vec<Inset2DViewState>,
     frame: Option<FrameState>,
     painter_order: Vec<u32>,
@@ -701,6 +908,24 @@ impl RetainedExecutionFrameMirror {
     ) {
         for handle in handles {
             self.image_handles.remove(handle);
+        }
+    }
+    pub(crate) fn extend_installed_geometry_handles(
+        &mut self,
+        additions: &HashMap<
+            crate::TransportGeometryResourceHandle,
+            noon_core::GeometryResourceHandle,
+        >,
+    ) {
+        self.geometry_handles
+            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+    }
+    pub(crate) fn remove_installed_geometry_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a crate::TransportGeometryResourceHandle>,
+    ) {
+        for handle in handles {
+            self.geometry_handles.remove(handle);
         }
     }
     pub(crate) fn with_installed_resources(
@@ -748,8 +973,15 @@ impl RetainedExecutionFrameMirror {
                 .ok_or(RetainedExecutionTransportError::UnknownImageResource(
                     *image,
                 )),
-            TransportObjectContent::Geometry { geometry } => {
-                Ok(ObjectContentRef::Geometry(geometry.clone()))
+            TransportObjectContent::Geometry { geometry, resource } => {
+                if let Some(resource) = resource {
+                    let local = self.geometry_handles.get(resource).ok_or(
+                        RetainedExecutionTransportError::UnknownGeometryResource(*resource),
+                    )?;
+                    Ok(ObjectContentRef::Geometry(GeometryRef::External(local.id)))
+                } else {
+                    Ok(ObjectContentRef::Geometry(geometry.clone()))
+                }
             }
             TransportObjectContent::Text { text } => self
                 .text_handles
@@ -808,15 +1040,31 @@ impl RetainedExecutionFrameMirror {
     ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
         validate_object_state(object)?;
         let content = self.resolve_content(&object.content)?;
-        Ok(frame_object(object, content))
+        frame_object(object, content)
     }
 
     pub const fn camera(&self) -> Camera2DState {
         self.camera
     }
 
+    /// Exact source runtime context of the currently installed worker frame.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.publication_context
+    }
+
     pub fn inset_2d_views(&self) -> &[Inset2DViewState] {
         &self.inset_2d_views
+    }
+
+    /// Resolve the effective Camera3D from the transported semantic row.
+    /// The separate `camera` envelope field remains the 2D inspection/HUD view.
+    pub fn camera_3d_object(&self) -> Option<&FrameObjectState> {
+        self.frame.as_ref()?.objects.iter().find(|object| {
+            object
+                .spatial
+                .as_deref()
+                .is_some_and(|state| state.camera_projection.is_some())
+        })
     }
 
     pub fn painter_order(&self) -> &[u32] {
@@ -868,6 +1116,14 @@ impl RetainedExecutionFrameMirror {
             .sequence
             .checked_add(1)
             .ok_or(RetainedExecutionTransportError::SequenceExhausted)?;
+        if self.session == Some(delta.session)
+            && publication_context_is_stale(delta.publication_context, self.publication_context)
+        {
+            return Err(RetainedExecutionTransportError::StalePublicationContext {
+                received: delta.publication_context,
+                installed: self.publication_context,
+            });
+        }
         let changes = if delta.snapshot {
             self.apply_snapshot(&delta)?;
             FrameChanges::all()
@@ -876,6 +1132,7 @@ impl RetainedExecutionFrameMirror {
         };
         self.session = Some(delta.session);
         self.next_sequence = next_sequence;
+        self.publication_context = delta.publication_context;
         self.camera = delta.camera;
         self.inset_2d_views = delta.inset_2d_views.clone();
         if let Some(frame) = &mut self.frame {
@@ -976,6 +1233,7 @@ impl RetainedExecutionFrameMirror {
                 ));
             }
         }
+        validate_single_camera(objects.iter().map(|object| (object.object, object.spatial)))?;
 
         let render_geometries = objects
             .iter()
@@ -985,7 +1243,7 @@ impl RetainedExecutionFrameMirror {
             .iter()
             .map(|object| {
                 self.resolve_content(&object.content)
-                    .map(|content| frame_object(object, content))
+                    .and_then(|content| frame_object(object, content))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
@@ -1140,6 +1398,26 @@ impl RetainedExecutionFrameMirror {
             &seen_removed,
             &seen_slots,
         )?;
+        let mut camera_rows = frame
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !removed_indices_contains_slot(&self.slots, &seen_removed, *index))
+            .map(|(_, object)| {
+                (
+                    object.id,
+                    object
+                        .spatial
+                        .as_deref()
+                        .copied()
+                        .map(TransportSpatialState::from_compiled),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for object in &delta.objects {
+            camera_rows.insert(object.object, object.spatial);
+        }
+        validate_single_camera(camera_rows.into_iter())?;
         let added_indices = updates
             .iter()
             .filter_map(|(index, added, _, _, _)| {
@@ -1156,14 +1434,14 @@ impl RetainedExecutionFrameMirror {
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame.objects.push(frame_object(object, content));
+                frame.objects.push(frame_object(object, content)?);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content);
+                frame.objects[index] = frame_object(object, content)?;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -1348,11 +1626,6 @@ fn transport_object(
         .objects
         .get(index)
         .ok_or(RetainedExecutionTransportError::InvalidObjectIndex(index))?;
-    if object.spatial.is_some() {
-        return Err(RetainedExecutionTransportError::UnsupportedSpatialObject(
-            object.id,
-        ));
-    }
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
@@ -1365,6 +1638,11 @@ fn transport_object(
         z_index: object.z_index,
         content: (&object.content).into(),
         transform: object.transform,
+        spatial: object
+            .spatial
+            .as_deref()
+            .copied()
+            .map(TransportSpatialState::from_compiled),
         style: object.style,
         appearance: object.appearance,
         text_bounds: object.text_bounds,
@@ -1379,11 +1657,30 @@ fn transport_object(
         render_transform: frame.render_transforms[index],
         render_geometry_resource,
     };
-    validate_object_state(&state)?;
+    // Resource-aware encoding binds versioned source handles after this typed
+    // row is captured. Validate the complete reference at the wire boundary.
+    validate_object_fields(&state)?;
     Ok(state)
 }
 
 fn validate_object_state(
+    object: &RetainedTransportObjectState,
+) -> Result<(), RetainedExecutionTransportError> {
+    if let TransportObjectContent::Geometry { geometry, resource } = &object.content {
+        match (geometry, resource) {
+            (GeometryRef::External(id), Some(handle)) if handle.id == id.get() => {}
+            (GeometryRef::External(_), _) | (_, Some(_)) => {
+                return Err(
+                    RetainedExecutionTransportError::InvalidGeometryResourceReference(object.slot),
+                );
+            }
+            (_, None) => {}
+        }
+    }
+    validate_object_fields(object)
+}
+
+fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
     if !object.z_index.is_finite() {
@@ -1400,6 +1697,11 @@ fn validate_object_state(
                 object.slot,
             ));
         }
+    }
+    if object.spatial.is_some_and(|spatial| !spatial.is_valid()) {
+        return Err(RetainedExecutionTransportError::InvalidSpatialState(
+            object.slot,
+        ));
     }
     if object.render_geometry.is_some() && object.render_geometry_resource.is_some() {
         return Err(RetainedExecutionTransportError::AmbiguousRenderGeometry(
@@ -1430,12 +1732,48 @@ fn validate_object_state(
     Ok(())
 }
 
+fn validate_single_camera(
+    rows: impl IntoIterator<Item = (ObjectId, Option<TransportSpatialState>)>,
+) -> Result<(), RetainedExecutionTransportError> {
+    let mut camera = None;
+    for (object, spatial) in rows {
+        if spatial.is_some_and(|state| state.camera_projection.is_some()) {
+            if camera.replace(object).is_some() {
+                return Err(RetainedExecutionTransportError::MultipleCamera3D);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn publication_context_is_stale(
+    received: PublicationContext,
+    installed: PublicationContext,
+) -> bool {
+    received.frame_epoch().get() < installed.frame_epoch().get()
+        || (received.frame_epoch() == installed.frame_epoch() && received != installed)
+}
+
+fn removed_indices_contains_slot(
+    slots: &[TransportSlotId],
+    removed: &HashSet<TransportSlotId>,
+    index: usize,
+) -> bool {
+    slots.get(index).is_some_and(|slot| removed.contains(slot))
+}
+
 fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
-) -> FrameObjectState {
-    FrameObjectState {
-        spatial: None,
+) -> Result<FrameObjectState, RetainedExecutionTransportError> {
+    let spatial = match object.spatial {
+        Some(spatial) => Some(spatial.into_compiled().ok_or(
+            RetainedExecutionTransportError::InvalidSpatialState(object.slot),
+        )?),
+        None => None,
+    };
+    Ok(FrameObjectState {
+        spatial: spatial.map(Box::new),
         z_index: object.z_index,
         id: object.object,
         content,
@@ -1443,7 +1781,7 @@ fn frame_object(
         style: object.style,
         appearance: object.appearance,
         text_bounds: object.text_bounds,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1538,29 +1876,188 @@ mod tests {
     }
 
     #[test]
-    fn planar_worker_transport_rejects_spatial_rows_without_consuming_sequence() {
+    fn worker_transport_round_trips_effective_spatial_pose_camera_and_material() {
         let mut frame = mixed_frame();
+        let rotation = noon_core::SemanticRotation3D::from_axis_angle(
+            noon_core::SemanticVec3::new(1.0, 2.0, -3.0),
+            0.731,
+        )
+        .unwrap();
         frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
-            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(1.0 / 3.0, -1.0e60, 1.0e-100),
+                rotation,
+                noon_core::SemanticVec3::new(0.75, 2.0, 1.25),
+            )
+            .unwrap(),
             camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
                 vertical_fov_radians: 1.0,
                 near: 0.1,
                 far: 30.0,
             }),
+            material: noon_core::SemanticSpatialMaterial::PointLit,
+            point_light: false,
         }));
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
-        assert_eq!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
-            Err(RetainedExecutionTransportError::UnsupportedSpatialObject(
-                ObjectId::new(11)
-            ))
+        let publication_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(9_007_199_254_740_999),
+            noon_core::ExecutionRevision::new(9_007_199_254_741_001),
+            noon_core::FrameEpoch::new(9_007_199_254_741_003),
         );
-        frame.objects[0].spatial = None;
-        let retry = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+        let snapshot = encoder
+            .encode_snapshot_with_context(&frame, Camera2DState::default(), publication_context)
             .unwrap();
-        assert_eq!(retry.sequence, 0);
-        assert!(retry.snapshot);
+        let wire = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: RetainedExecutionDeltaEnvelope = serde_json::from_slice(&wire).unwrap();
+        let mut mirror = test_mirror();
+        assert_eq!(
+            mirror.apply(decoded).unwrap().0,
+            RetainedTransportApplyOutcome::Applied
+        );
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        assert_eq!(mirror.publication_context(), snapshot.publication_context);
+        assert_eq!(
+            mirror.camera_3d_object().unwrap().camera_projection(),
+            frame.objects[0].camera_projection()
+        );
+        assert_eq!(
+            mirror.frame().unwrap().objects[0]
+                .world_transform()
+                .unwrap()
+                .rotation
+                .components(),
+            rotation.components()
+        );
+    }
+
+    #[test]
+    fn invalid_spatial_snapshot_is_rejected_without_installing_frame() {
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut delta = encoder
+            .encode_snapshot_with_context(
+                &mixed_frame(),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        delta.objects[0].spatial = Some(TransportSpatialState {
+            translation: [0.0; 3],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: Some(TransportProjection3D::Perspective {
+                vertical_fov_radians: f64::NAN,
+                near: 0.1,
+                far: 30.0,
+            }),
+            material: TransportSpatialMaterial::Unlit,
+            point_light: false,
+        });
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        assert!(matches!(
+            mirror.apply(delta),
+            Err(RetainedExecutionTransportError::InvalidSpatialState(_))
+        ));
+        assert!(mirror.frame().is_none());
+    }
+
+    #[test]
+    fn incremental_spatial_world_track_replaces_one_effective_row_atomically() {
+        let mut start = mixed_frame();
+        start.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: Some(noon_core::SemanticProjection3D::Orthographic {
+                height: 8.0,
+                near: 0.1,
+                far: 100.0,
+            }),
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+        }));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(9);
+        let start_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(3),
+            noon_core::ExecutionRevision::new(8),
+            noon_core::FrameEpoch::new(8),
+        );
+        let mut snapshot = encoder
+            .encode_snapshot_with_context(&start, Camera2DState::default(), start_context)
+            .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        mirror.apply(snapshot).unwrap();
+        assert_eq!(mirror.publication_context(), start_context);
+
+        let mut end = start.clone();
+        end.time = 0.75;
+        end.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(2.25, -4.5, 7.0),
+                noon_core::SemanticRotation3D::from_axis_angle(
+                    noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
+                    0.8,
+                )
+                .unwrap(),
+                noon_core::SemanticVec3::new(1.0, 2.0, 0.5),
+            )
+            .unwrap(),
+            camera_projection: start.objects[0].camera_projection(),
+            material: noon_core::SemanticSpatialMaterial::PointLit,
+            point_light: false,
+        }));
+        let end_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(3),
+            noon_core::ExecutionRevision::new(8),
+            noon_core::FrameEpoch::new(9),
+        );
+        let delta = encoder
+            .encode_incremental_with_context(
+                &end,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                end_context,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.objects.len(), 1);
+        assert!(delta.object_patches.is_empty());
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(mirror.publication_context(), end_context);
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.frame().unwrap(), &end);
+        assert_eq!(
+            mirror.camera_3d_object().unwrap().world_transform(),
+            end.objects[0].world_transform()
+        );
+
+        let mut stale_context = encoder
+            .encode_incremental_with_context(
+                &end,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                start_context,
+            )
+            .unwrap()
+            .unwrap();
+        stale_context.publication_context = start_context;
+        assert!(matches!(
+            mirror.apply(stale_context),
+            Err(RetainedExecutionTransportError::StalePublicationContext { .. })
+        ));
+        assert_eq!(mirror.publication_context(), end_context);
+
+        let mut next_session = RetainedExecutionDeltaEncoder::new(10);
+        let replacement_session = next_session
+            .encode_snapshot_with_context(
+                &end,
+                Camera2DState::default(),
+                noon_core::PublicationContext::new(
+                    noon_core::SceneRevision::new(1),
+                    noon_core::ExecutionRevision::new(1),
+                    noon_core::FrameEpoch::new(1),
+                ),
+            )
+            .unwrap();
+        mirror.apply(replacement_session).unwrap();
+        assert_eq!(mirror.publication_context().frame_epoch().get(), 1);
     }
 
     #[test]
@@ -1568,7 +2065,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let delta = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         assert_eq!(delta.objects.len(), 2);
         assert_eq!(delta.objects[0].order, 0);
@@ -1596,7 +2097,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(41);
         let mut initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let view = Inset2DViewState {
             camera_frame: ObjectId::new(11),
@@ -1619,10 +2124,11 @@ mod tests {
         next_frame.time = 0.25;
         next_frame.objects[0].transform.translation.x = 0.5;
         let mut invalid = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &next_frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1645,7 +2151,11 @@ mod tests {
     fn wire_text_requires_an_installed_resource_remap() {
         let frame = mixed_frame();
         let delta = RetainedExecutionDeltaEncoder::new(4)
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = RetainedExecutionFrameMirror::default();
         assert!(matches!(
@@ -1660,7 +2170,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(8);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1669,10 +2183,11 @@ mod tests {
         updated.time = 0.5;
         updated.objects[0].content = ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 1.0));
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &updated,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1687,7 +2202,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(81);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let slot = initial.objects[0].slot;
         let object = initial.objects[0].object;
@@ -1715,10 +2234,11 @@ mod tests {
         next.objects[0].style.fill = Some(Color::WHITE);
         next.morphs[0] = 0.25;
         let mut delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &next,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1753,7 +2273,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(9);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1762,10 +2286,11 @@ mod tests {
         updated.time = 0.5;
         updated.objects[1].transform.translation = Vec2::new(2.0, -1.0);
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &updated,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1785,16 +2310,21 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(19);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let reorder = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &frame,
                 &FrameChanges::painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[1, 0],
             )
             .unwrap()
@@ -1825,10 +2355,11 @@ mod tests {
         let structural =
             FrameChanges::with_structure(vec![0, 2], vec![2], vec![0]).with_painter_order(0..2);
         let replace = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &replaced,
                 &structural,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[2, 1],
             )
             .unwrap()
@@ -1860,7 +2391,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(29);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1871,10 +2406,11 @@ mod tests {
         let changes =
             FrameChanges::with_structure(vec![1], Vec::new(), vec![1]).with_painter_order(1..2);
         let delta = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &removed,
                 &changes,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0],
             )
             .unwrap()
@@ -1895,7 +2431,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(23);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1903,7 +2443,13 @@ mod tests {
         let removed = FrameChanges::with_structure(vec![0, 1], Vec::new(), vec![0, 1])
             .with_painter_order(0..2);
         let empty = encoder
-            .encode_incremental_with_painter_order(&frame, &removed, Camera2DState::default(), &[])
+            .encode_incremental_with_painter_order_and_context(
+                &frame,
+                &removed,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                &[],
+            )
             .unwrap()
             .unwrap();
         mirror.apply(empty).unwrap();
@@ -1928,10 +2474,11 @@ mod tests {
         let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![0, 1, 2], vec![0, 1])
             .with_painter_order(0..2);
         let replacement = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &replaced,
                 &structural,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[2],
             )
             .unwrap()
@@ -1942,10 +2489,11 @@ mod tests {
 
         replaced.objects[2].appearance = 0.5;
         let mut later = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &replaced,
                 &FrameChanges::objects(vec![2]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1960,7 +2508,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(31);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1971,10 +2523,11 @@ mod tests {
         let structural =
             FrameChanges::with_structure(vec![0], vec![0], vec![0]).with_painter_order(0..1);
         let delta = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &readded,
                 &structural,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0, 1],
             )
             .unwrap()
@@ -1996,7 +2549,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(10);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -2008,10 +2565,11 @@ mod tests {
             version: 1,
         });
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2025,7 +2583,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(3);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -2033,10 +2595,11 @@ mod tests {
         let mut changed = frame.clone();
         changed.objects[1].content = ObjectContentRef::Geometry(GeometryRef::circle(0.5));
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2054,7 +2617,11 @@ mod tests {
         frame.render_geometries[1] = Some(Arc::new(GeometryRef::circle(0.25)));
         let mut encoder = RetainedExecutionDeltaEncoder::new(1);
         assert!(matches!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
+            encoder.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default()
+            ),
             Err(RetainedExecutionTransportError::TextRenderGeometry(_))
         ));
     }
@@ -2065,7 +2632,11 @@ mod tests {
         let mut encoder = RetainedExecutionDeltaEncoder::new(37);
         let mut mirror = test_mirror();
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         mirror.apply(initial).unwrap();
 
@@ -2079,10 +2650,11 @@ mod tests {
         frame.render_geometries[0] = Some(path.clone());
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         let first = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2094,10 +2666,11 @@ mod tests {
         frame.time = 0.5;
         frame.morphs[0] = 0.5;
         let reused = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2116,10 +2689,11 @@ mod tests {
                 .line_to(Vec2::new(2.0, 0.0)),
         )));
         let changed = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2132,10 +2706,11 @@ mod tests {
         frame.render_geometries[0] = None;
         frame.render_transforms[0] = None;
         let cleared = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2149,10 +2724,11 @@ mod tests {
         frame.render_geometries[0] = Some(path);
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         let reentered = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2180,14 +2756,19 @@ mod tests {
             frame.morphs[0] = time as f32;
             let delta = if step == 0 || step == 3 {
                 encoder
-                    .encode_snapshot(&frame, Camera2DState::default())
+                    .encode_snapshot_with_context(
+                        &frame,
+                        Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
+                    )
                     .unwrap()
             } else {
                 encoder
-                    .encode_incremental(
+                    .encode_incremental_with_context(
                         &frame,
                         &FrameChanges::objects(vec![0]),
                         Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
                     )
                     .unwrap()
                     .unwrap()
@@ -2214,7 +2795,11 @@ mod tests {
         frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(path)));
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         assert!(matches!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
+            encoder.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default()
+            ),
             Err(RetainedExecutionTransportError::MissingCompiledRenderResource(_))
         ));
     }
@@ -2227,7 +2812,11 @@ mod tests {
         mirror
             .apply(
                 encoder
-                    .encode_snapshot(&frame, Camera2DState::default())
+                    .encode_snapshot_with_context(
+                        &frame,
+                        Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
+                    )
                     .unwrap(),
             )
             .unwrap();
@@ -2235,10 +2824,11 @@ mod tests {
         changed.time = 0.5;
         changed.objects[1].transform.translation.x = 2.0;
         let mut valid = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1, 0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -2263,7 +2853,11 @@ mod tests {
         let mut encoder =
             RetainedExecutionDeltaEncoder::with_render_geometries(5, resources.clone());
         let delta = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror_with_render_geometries(4, resources);
         assert!(matches!(
@@ -2278,7 +2872,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let mut delta = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let id = crate::retained_resource_transport::render_geometry_id(7, 2_200_000);
         assert!(id > (1_u64 << 53));

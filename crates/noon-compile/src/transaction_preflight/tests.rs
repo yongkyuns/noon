@@ -448,6 +448,8 @@ fn added_spatial_object_accepts_transform_and_world_track_in_same_sparse_batch()
     object.spatial = Some(Box::new(crate::CompiledSpatialState {
         world,
         camera_projection: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
     }));
     let endpoint = noon_core::WorldTransformTrackEndpoint::from_world(world);
     let transaction = ExecutionMutationTransaction::from_mutations([
@@ -489,6 +491,8 @@ fn spatial_transaction_rejects_camera_scale_and_planar_pose_mutations() {
             near: 0.1,
             far: 100.0,
         }),
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
     }));
     let endpoint = |scale| {
         noon_core::WorldTransformTrackEndpoint::from_world(

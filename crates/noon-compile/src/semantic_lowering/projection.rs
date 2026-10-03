@@ -367,6 +367,12 @@ pub enum SemanticLoweringError {
     UnsupportedCameraScale {
         node: SemanticNodeId,
     },
+    UnsupportedPointLightScale {
+        node: SemanticNodeId,
+    },
+    UnsupportedSpatialMaterial {
+        node: SemanticNodeId,
+    },
     InvalidSemanticTransform {
         node: SemanticNodeId,
     },
@@ -431,6 +437,18 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::UnsupportedCameraScale { node } => write!(
                 formatter,
                 "Camera3D object {}:{} must use unit scale",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedPointLightScale { node } => write!(
+                formatter,
+                "PointLight3D object {}:{} must use unit scale",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedSpatialMaterial { node } => write!(
+                formatter,
+                "semantic object {}:{} uses a spatial material without mesh content",
                 node.slot(),
                 node.generation()
             ),
@@ -674,6 +692,7 @@ pub(super) fn object_requires_spatial_lowering(
     store: &SemanticStore,
 ) -> bool {
     state.role() == noon_core::SemanticObjectRole::Camera3D
+        || state.role() == noon_core::SemanticObjectRole::PointLight3D
         || object_has_mesh_content(state, store)
         || matches!(
             state.transform.orientation,
@@ -688,8 +707,15 @@ pub(super) fn lower_object_state(
 ) -> Result<LoweredObjectState, SemanticLoweringError> {
     let mesh_content = object_has_mesh_content(state, store);
     let is_camera_3d = state.role() == noon_core::SemanticObjectRole::Camera3D;
+    let is_point_light = state.role() == noon_core::SemanticObjectRole::PointLight3D;
+    if state.spatial_material() == noon_core::SemanticSpatialMaterial::PointLit && !mesh_content {
+        return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
+    }
     if is_camera_3d && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {
         return Err(SemanticLoweringError::UnsupportedCameraScale { node: semantic_id });
+    }
+    if is_point_light && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {
+        return Err(SemanticLoweringError::UnsupportedPointLightScale { node: semantic_id });
     }
     if !state.transform.is_valid() {
         return Err(SemanticLoweringError::InvalidSemanticTransform { node: semantic_id });
@@ -703,11 +729,13 @@ pub(super) fn lower_object_state(
         Some(crate::CompiledSpatialState {
             world,
             camera_projection: state.camera_projection(),
+            material: state.spatial_material(),
+            point_light: is_point_light,
         })
     } else {
         None
     };
-    let base_transform = if is_camera_3d || mesh_content {
+    let base_transform = if is_camera_3d || is_point_light || mesh_content {
         Transform2D::IDENTITY
     } else if state.transform.planar_rotation().is_some() {
         lower_semantic_transform(semantic_id, state)?

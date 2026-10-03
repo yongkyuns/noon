@@ -2200,6 +2200,19 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
+        from _noon_spatial import WorldTransformTo, _bulk
+        if isinstance(animation, WorldTransformTo):
+            target = animation.mobject
+            if target._scene is not self:
+                raise ValueError("WorldTransformTo target must belong to this Scene")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
+                raise NotImplementedError("world endpoints support duration and rate function options")
+            builder.appendWorldTransform(
+                target._semantic_handle, _bulk(animation.endpoint),
+                float(child.run_time), str(child.rate_func),
+            )
+            return
         cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
         if cyclic_replace is not None:
             append_leaf(builder, cyclic_replace, child_kwargs)

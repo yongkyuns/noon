@@ -31,6 +31,8 @@ pub struct EffectiveAnimationProperties {
     pub style: Style,
     pub appearance: f32,
     pub reveal: f32,
+    /// Effective world pose when the row is spatial (mesh, light, or camera).
+    pub world_transform: Option<noon_core::SemanticWorldTransform3D>,
 }
 
 /// Exact authored reconciliation performed when one execution channel is released.
@@ -56,6 +58,10 @@ pub enum SemanticAnimationCompletion {
     RevealLifecycle { remove: bool },
     /// Exact authored endpoint for the bounded shared analytic content morph.
     ContentMorph { content: SemanticObjectContent },
+    /// Exact authored endpoint for one typed world-pose animation.
+    WorldTransform {
+        value: noon_core::SemanticWorldTransform3D,
+    },
     /// Execution-only affine lifecycle channel. Authored object properties remain unchanged.
     Release,
 }
@@ -74,6 +80,7 @@ pub(super) fn completion_at_endpoint(
                 | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::ContentMorph { .. }
+                | SemanticAnimationCompletion::WorldTransform { .. }
         )
     {
         SemanticAnimationCompletion::Release
@@ -529,6 +536,35 @@ where
         ) {
             continue;
         }
+        if let SemanticScheduledAnimationPayload::WorldTransformTo { transform } = leaf.payload {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let from = from.world_transform.ok_or(
+                SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                },
+            )?;
+            push_published_channel(
+                leaf,
+                world_transform_channel(from, transform),
+                &mut driven,
+                &mut tracks,
+            )?;
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -701,6 +737,9 @@ where
             continue;
         }
         let (target_state, interpolation, complete_priority) = match leaf.payload {
+            SemanticScheduledAnimationPayload::WorldTransformTo { .. } => {
+                unreachable!("world transform payload was lowered above")
+            }
             SemanticScheduledAnimationPayload::SubsetDisplayMember { .. } => {
                 unreachable!("subset display payload was lowered above")
             }
@@ -798,6 +837,21 @@ where
     Ok(SemanticAffineAnimationTrackProjection { tracks })
 }
 
+pub(super) fn world_transform_channel(
+    from: noon_core::SemanticWorldTransform3D,
+    to: noon_core::SemanticWorldTransform3D,
+) -> LoweredAffineChannel {
+    LoweredAffineChannel {
+        property: Property::WorldTransform,
+        conflict_property: SemanticObjectProperty::Translation,
+        completion: SemanticAnimationCompletion::WorldTransform { value: to },
+        values: TrackValues::WorldTransform {
+            from: noon_core::WorldTransformTrackEndpoint::from_world(from),
+            to: noon_core::WorldTransformTrackEndpoint::from_world(to),
+        },
+    }
+}
+
 fn validate_leaf_matches_declaration(
     store: &SemanticStore,
     leaf: &SemanticScheduledAnimationLeaf,
@@ -806,6 +860,15 @@ fn validate_leaf_matches_declaration(
         .semantic_animation_state(leaf.animation)
         .map_err(SemanticAffineAnimationTrackError::Animation)?;
     match animation.intent() {
+        SemanticAnimationIntent::WorldTransformTo { target, transform }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::WorldTransformTo {
+                        transform: *transform,
+                    } =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,
@@ -2356,6 +2419,11 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
                 driven.get(&(object, slot)).copied()
             }
         })
+    } else if property == Property::WorldTransform {
+        (0..=morph_slot)
+            .filter(|slot| *slot != reveal_slot)
+            .find_map(|slot| driven.get(&(object, slot)).copied())
+            .filter(|owner| *owner != animation)
     } else if property == Property::Reveal {
         // Reveal is a renderer scalar over the retained geometry selected by the
         // affine/morph channels. It conflicts with another reveal driver through
@@ -2465,6 +2533,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         }
     }
 
@@ -2579,6 +2648,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         };
         let phases = lower_passing_flash_phases(&source, from, 0.25).unwrap();
         assert_eq!(phases.len(), 3);
@@ -2709,6 +2779,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         };
         let channels = lower_indicate_channels(
             &source,
@@ -2898,6 +2969,7 @@ mod tests {
                     style: current,
                     appearance: 1.0,
                     reveal: 1.0,
+                    world_transform: None,
                 })
             },
         )
@@ -3142,6 +3214,7 @@ mod tests {
             },
             appearance: 1.0,
             reveal: 1.0,
+            world_transform: None,
         };
 
         let predeclared = lower_semantic_affine_animation_tracks(

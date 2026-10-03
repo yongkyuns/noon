@@ -1,7 +1,7 @@
 use crate::{Color, GeometryRef, SemanticImageContent, SemanticProjection3D, TextResourceHandle};
 use crate::{
-    SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
-    SemanticTransform, SemanticVec3, StoredGeometry,
+    SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticSpatialMaterial,
+    SemanticSpatialProperties, SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
 };
 use std::sync::Arc;
 
@@ -250,6 +250,7 @@ pub enum SemanticObjectRole {
     Ordinary,
     Camera2D,
     Camera3D,
+    PointLight3D,
     Inset2DView(SemanticInset2DViewRole),
     ArrowShaft(SemanticArrowShaftRole),
     ArrowEndTip,
@@ -273,6 +274,7 @@ impl SemanticObjectRole {
             Self::Ordinary
             | Self::Camera2D
             | Self::Camera3D
+            | Self::PointLight3D
             | Self::Inset2DView(_)
             | Self::ArrowEndTip
             | Self::ArrowStartTip
@@ -384,9 +386,9 @@ pub struct SemanticObjectState {
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
     click_indicate: Option<Arc<SemanticClickIndicate>>,
-    /// Projection metadata is allocated only for declared 3D cameras; world
-    /// pose remains the ordinary authored transform above.
-    camera_projection: Option<Arc<SemanticProjection3D>>,
+    /// Camera projection and non-default spatial material share one optional
+    /// immutable payload. Ordinary objects keep no spatial metadata allocation.
+    spatial_properties: Option<Arc<SemanticSpatialProperties>>,
 }
 
 /// Typed authored `click -> Indicate` declaration for one analytic object.
@@ -450,7 +452,7 @@ impl SemanticObjectState {
             bar_metadata: None,
             signal_bindings: Vec::new(),
             click_indicate: None,
-            camera_projection: None,
+            spatial_properties: None,
         }
     }
 
@@ -475,7 +477,7 @@ impl SemanticObjectState {
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
             click_indicate: self.click_indicate.clone(),
-            camera_projection: self.camera_projection.clone(),
+            spatial_properties: self.spatial_properties.clone(),
         }
     }
 
@@ -504,7 +506,34 @@ impl SemanticObjectState {
     }
 
     pub fn camera_projection(&self) -> Option<SemanticProjection3D> {
-        self.camera_projection.as_deref().copied()
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.camera_projection())
+    }
+
+    pub fn spatial_material(&self) -> SemanticSpatialMaterial {
+        self.spatial_properties
+            .as_deref()
+            .map_or(SemanticSpatialMaterial::Unlit, |properties| {
+                properties.material()
+            })
+    }
+
+    pub fn spatial_properties(&self) -> Option<SemanticSpatialProperties> {
+        self.spatial_properties.as_deref().copied()
+    }
+
+    fn update_spatial_properties(
+        &mut self,
+        camera_projection: Option<SemanticProjection3D>,
+        material: SemanticSpatialMaterial,
+    ) {
+        let properties = SemanticSpatialProperties::new(camera_projection, material);
+        self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
+    }
+
+    pub fn set_spatial_material(&mut self, material: SemanticSpatialMaterial) {
+        self.update_spatial_properties(self.camera_projection(), material);
     }
 
     /// Set the projection for a Camera3D declaration. The role is authored
@@ -516,7 +545,7 @@ impl SemanticObjectState {
         if projection.is_some_and(|value| !value.is_valid()) {
             return Err(SemanticCameraDeclarationError::InvalidProjection);
         }
-        self.camera_projection = projection.map(Arc::new);
+        self.update_spatial_properties(projection, self.spatial_material());
         Ok(())
     }
 
@@ -531,6 +560,23 @@ impl SemanticObjectState {
             (_, None) => true,
             (_, Some(_)) => false,
         }
+    }
+
+    /// Validate all optional spatial declarations attached to this ordinary
+    /// semantic object, including the effective pose constraints for a point light.
+    pub fn spatial_declaration_is_valid(&self) -> bool {
+        self.camera_declaration_is_valid()
+            && (self.role != SemanticObjectRole::PointLight3D
+                || (self.transform.world_transform().is_some()
+                    && self.transform.scale == SemanticVec3::new(1.0, 1.0, 1.0)))
+            && (self.spatial_material() != SemanticSpatialMaterial::PointLit
+                || [
+                    self.transform.scale.x,
+                    self.transform.scale.y,
+                    self.transform.scale.z,
+                ]
+                .into_iter()
+                .all(|scale| scale != 0.0))
     }
 
     pub(crate) fn camera_transform_is_valid(&self, transform: SemanticTransform) -> bool {
@@ -818,8 +864,8 @@ mod tests {
             .unwrap();
         let cloned = receiver.clone();
         assert!(Arc::ptr_eq(
-            receiver.camera_projection.as_ref().unwrap(),
-            cloned.camera_projection.as_ref().unwrap()
+            receiver.spatial_properties.as_ref().unwrap(),
+            cloned.spatial_properties.as_ref().unwrap()
         ));
 
         let mut target = SemanticObjectState::new(StoredGeometry::Rectangle {
@@ -830,6 +876,34 @@ mod tests {
         assert_eq!(copied.role(), SemanticObjectRole::Camera3D);
         assert_eq!(copied.camera_projection(), Some(valid_camera_projection()));
         assert!(copied.camera_declaration_is_valid());
+    }
+
+    #[test]
+    fn spatial_properties_share_optional_allocation_and_validate_point_light_pose() {
+        let mut ordinary = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        assert!(ordinary.spatial_properties.is_none());
+        ordinary.set_spatial_material(SemanticSpatialMaterial::PointLit);
+        assert_eq!(
+            ordinary.spatial_material(),
+            SemanticSpatialMaterial::PointLit
+        );
+        assert!(ordinary.spatial_properties.is_some());
+
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(valid_camera_projection()))
+            .unwrap();
+        camera.set_spatial_material(SemanticSpatialMaterial::PointLit);
+        assert_eq!(camera.camera_projection(), Some(valid_camera_projection()));
+        assert_eq!(camera.spatial_material(), SemanticSpatialMaterial::PointLit);
+        assert!(camera.camera_declaration_is_valid());
+
+        let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        light.set_role(SemanticObjectRole::PointLight3D);
+        assert!(light.spatial_declaration_is_valid());
+        light.transform.scale = SemanticVec3::new(1.0, 0.0, 1.0);
+        assert!(!light.spatial_declaration_is_valid());
     }
 
     #[test]

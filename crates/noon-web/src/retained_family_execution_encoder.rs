@@ -233,6 +233,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
+                    && previous.spatial == row.spatial
                     && previous.appearance == row.appearance
                     && previous.text_bounds == row.text_bounds
                     && previous.presence == row.presence
@@ -314,12 +315,27 @@ impl RetainedFamilyExecutionDeltaEncoder {
         // runtime lease. The receiver has a separate geometry arena, so encode
         // only touched paths as self-contained immutable content. Unchanged
         // objects are absent from an incremental delta.
+        let mut mesh_geometry_handles =
+            std::collections::BTreeSet::<noon_core::GeometryResourceHandle>::new();
         for object in &mut envelope.retained.objects {
-            if let crate::TransportObjectContent::Geometry { geometry } = &mut object.content {
-                resolve_external_geometry(geometry, geometries)?;
+            if let crate::TransportObjectContent::Geometry { geometry, resource } =
+                &mut object.content
+            {
+                let source_handle = resolve_external_geometry(geometry, geometries)?;
+                *resource = source_handle.map(Into::into);
+                if let Some(handle) = source_handle {
+                    let transport = crate::TransportGeometryResourceHandle::from(handle);
+                    if !self.resources.contains_geometry(transport) {
+                        mesh_geometry_handles.insert(handle);
+                    }
+                }
             }
             if let Some(geometry) = &mut object.render_geometry {
-                resolve_external_geometry(geometry, geometries)?;
+                if let Some(handle) = resolve_external_geometry(geometry, geometries)? {
+                    return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
+                        handle.into(),
+                    ));
+                }
             }
         }
         let new_images = envelope
@@ -395,15 +411,20 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let pending_render = staged.finish();
         let staged_roots = self.resource_roots.stage(&envelope.retained);
         let retirements = self.resource_roots.retirements(&staged_roots);
-        if new_texts.is_empty() && new_images.is_empty() && updates.is_empty() {
+        if new_texts.is_empty()
+            && new_images.is_empty()
+            && mesh_geometry_handles.is_empty()
+            && updates.is_empty()
+        {
             envelope.resource_retirements = retirements;
             self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
             pending_render.commit(self);
             return Ok(());
         }
 
-        let mut additions = RetainedResourceBundle::capture_additions(
+        let mut additions = RetainedResourceBundle::capture_additions_with_geometries(
             new_texts,
+            mesh_geometry_handles,
             texts,
             geometries,
             fonts,
@@ -455,6 +476,11 @@ impl RetainedFamilyExecutionDeltaEncoder {
         retirements: &RetainedResourceRetirements,
     ) {
         self.resources.forget_root_retirements(retirements);
+        for geometry in &retirements.geometries {
+            if !self.geometry_references.contains_key(geometry) {
+                self.resources.forget_geometry(*geometry);
+            }
+        }
         for text in &retirements.texts {
             if let Some(TextClosure { geometries, fonts }) = self.text_closures.remove(text) {
                 for geometry in geometries {
@@ -480,13 +506,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
         self.resource_roots.commit(staged);
     }
 
-    pub fn encode_snapshot(
+    pub fn encode_snapshot_with_context(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
-        let retained = self.retained.encode_snapshot(frame.retained, camera)?;
+        let retained = self.retained.encode_snapshot_with_context(
+            frame.retained,
+            camera,
+            publication_context,
+        )?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?;
         self.plan_index_remap = (0..plans.len())
             .map(|index| (index, index as u32))
@@ -496,13 +527,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Ok(envelope)
     }
 
-    pub fn encode_planned_snapshot(
+    pub fn encode_planned_snapshot_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
-        let retained = self.retained.encode_snapshot(frame.retained, camera)?;
+        let retained = self.retained.encode_snapshot_with_context(
+            frame.retained,
+            camera,
+            publication_context,
+        )?;
         let envelope =
             RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
         self.compact_planned_snapshot(envelope, plans)
@@ -511,17 +547,19 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// Encode an authoritative snapshot for the execution rows that still own a
     /// live slot. The family sidecar uses the same exact row selection as the base
     /// retained envelope, so retired rows cannot reappear through plan state.
-    pub fn encode_planned_snapshot_indices(
+    pub fn encode_planned_snapshot_indices_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
         indices: impl IntoIterator<Item = usize>,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let indices = indices.into_iter().collect::<Vec<_>>();
-        let retained = self.retained.encode_snapshot_indices(
+        let retained = self.retained.encode_snapshot_indices_with_context(
             frame.retained,
             camera,
+            publication_context,
             indices.iter().copied(),
         )?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::planned_snapshot_indices(
@@ -535,18 +573,22 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// `plans` are normally used only by the initial snapshot. They are supplied here
     /// as well because the base retained encoder may legitimately promote an
     /// `FrameChanges::all()` update to an authoritative snapshot.
-    pub fn encode_incremental(
+    pub fn encode_incremental_with_context(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        let Some(retained) = self
-            .retained
-            .encode_incremental(frame.retained, changes, camera)?
+        let Some(retained) = self.retained.encode_incremental_with_context(
+            frame.retained,
+            changes,
+            camera,
+            publication_context,
+        )?
         else {
             return Ok(None);
         };
@@ -560,19 +602,23 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Ok(Some(envelope))
     }
 
-    pub fn encode_planned_incremental(
+    pub fn encode_planned_incremental_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
         let staged = self.stage_plan_mappings(frame, plans, changes.object_indices())?;
-        let Some(retained) = self
-            .retained
-            .encode_incremental(frame.retained, changes, camera)?
+        let Some(retained) = self.retained.encode_incremental_with_context(
+            frame.retained,
+            changes,
+            camera,
+            publication_context,
+        )?
         else {
             return Ok(None);
         };
@@ -603,12 +649,13 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// Encode one sparse family-aware update with a compact painter-order splice.
     /// Newly admitted rows may begin an active family animation in this same atomic
     /// delta; their plan descriptor is appended before their state references it.
-    pub fn encode_planned_incremental_with_painter_order(
+    pub fn encode_planned_incremental_with_painter_order_and_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
         painter_order: &[u32],
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
@@ -616,12 +663,15 @@ impl RetainedFamilyExecutionDeltaEncoder {
         // Validate before the base encoder advances its sequence. The final
         // family rows must follow that encoder's coalesced membership decision.
         self.stage_plan_mappings(frame, plans, changes.object_indices())?;
-        let Some(retained) = self.retained.encode_incremental_with_painter_order(
-            frame.retained,
-            changes,
-            camera,
-            painter_order,
-        )?
+        let Some(retained) = self
+            .retained
+            .encode_incremental_with_painter_order_and_context(
+                frame.retained,
+                changes,
+                camera,
+                publication_context,
+                painter_order,
+            )?
         else {
             return Ok(None);
         };
@@ -763,9 +813,9 @@ impl RetainedFamilyExecutionDeltaEncoder {
 fn resolve_external_geometry(
     geometry: &mut GeometryRef,
     resources: &(impl GeometryResourceLookup + ?Sized),
-) -> Result<(), RetainedResourceTransportError> {
+) -> Result<Option<noon_core::GeometryResourceHandle>, RetainedResourceTransportError> {
     let GeometryRef::External(id) = geometry else {
-        return Ok(());
+        return Ok(None);
     };
     let handle = resources
         .current_handle(*id)
@@ -773,16 +823,13 @@ fn resolve_external_geometry(
     let resource = resources
         .get(handle)
         .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
-    let path = match resource {
-        GeometryResource::VectorPath(path) => path,
-        GeometryResource::Mesh(_) => {
-            return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
-                handle.into(),
-            ));
+    match resource {
+        GeometryResource::VectorPath(path) => {
+            *geometry = GeometryRef::VectorPath(path.as_ref().clone());
+            Ok(None)
         }
-    };
-    *geometry = GeometryRef::VectorPath(path.as_ref().clone());
-    Ok(())
+        GeometryResource::Mesh(_) => Ok(Some(handle)),
+    }
 }
 
 fn remap_family_state_indices(
@@ -966,8 +1013,12 @@ mod tests {
             pointer_view: None,
         };
         let mut snapshot = wrap(
-            base.encode_snapshot(&frame, Camera2DState::default())
-                .unwrap(),
+            base.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap(),
         );
         compactor.compact_dense_rows(&mut snapshot);
         assert_eq!(snapshot.retained.objects.len(), 128);
@@ -976,10 +1027,11 @@ mod tests {
         frame.time = 0.5;
         frame.morphs.fill(0.3);
         let mut seed = wrap(
-            base.encode_incremental(
+            base.encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects((0..128).collect()),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap(),
@@ -992,10 +1044,11 @@ mod tests {
         frame.morphs.fill(0.4);
         frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(4.0));
         let full = wrap(
-            base.encode_incremental(
+            base.encode_incremental_with_context(
                 &frame,
                 &FrameChanges::objects((0..128).collect()),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap(),
@@ -1023,13 +1076,14 @@ mod tests {
         let images = noon_core::RasterImageResourceArena::new();
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
         let mut snapshot = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         encoder
@@ -1048,13 +1102,14 @@ mod tests {
                 .line_to(noon_core::Vec2::new(3.0, 1.0)),
         )));
         let mut resnapshot = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         encoder
@@ -1081,13 +1136,14 @@ mod tests {
         let images = noon_core::RasterImageResourceArena::new();
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
         let mut initial = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         encoder
@@ -1102,7 +1158,7 @@ mod tests {
             )));
             frame.render_transforms[0] = Some(Transform2D::IDENTITY);
             let mut delta = encoder
-                .encode_incremental(
+                .encode_incremental_with_context(
                     &RetainedFamilyFrame {
                         retained: &frame,
                         family_animations: &states,
@@ -1110,6 +1166,7 @@ mod tests {
                     &[],
                     &FrameChanges::objects(vec![0]),
                     Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -1146,7 +1203,7 @@ mod tests {
         frame.render_geometries[0] = None;
         frame.render_transforms[0] = None;
         let mut removal = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -1154,6 +1211,7 @@ mod tests {
                 &[],
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1185,7 +1243,7 @@ mod tests {
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         frame.objects[1].content = ObjectContentRef::Text(missing_text);
         let mut failed = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -1193,6 +1251,7 @@ mod tests {
                 &[],
                 &FrameChanges::objects(vec![0, 1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1215,6 +1274,7 @@ mod tests {
 
         retry.retained.objects[1].content = crate::TransportObjectContent::Geometry {
             geometry: GeometryRef::circle(2.0),
+            resource: None,
         };
         encoder
             .attach_resource_additions(&mut retry, [], &texts, &geometries, &fonts, &images)
@@ -1295,13 +1355,14 @@ mod tests {
         frame.objects[1].content = ObjectContentRef::Text(second);
         let states = [None, None];
         let mut initial = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &RetainedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         encoder
@@ -1319,7 +1380,7 @@ mod tests {
         for index in 0..2 {
             frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
             let mut delta = encoder
-                .encode_incremental(
+                .encode_incremental_with_context(
                     &RetainedFamilyFrame {
                         retained: &frame,
                         family_animations: &states,
@@ -1327,6 +1388,7 @@ mod tests {
                     &[],
                     &FrameChanges::objects(vec![index]),
                     Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -1357,7 +1419,7 @@ mod tests {
         for cycle in 0..32 {
             frame.objects[0].content = ObjectContentRef::Text(first);
             let mut delta = encoder
-                .encode_incremental(
+                .encode_incremental_with_context(
                     &RetainedFamilyFrame {
                         retained: &frame,
                         family_animations: &states,
@@ -1365,6 +1427,7 @@ mod tests {
                     &[],
                     &FrameChanges::objects(vec![0]),
                     Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -1404,7 +1467,7 @@ mod tests {
 
             frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
             let mut removal = encoder
-                .encode_incremental(
+                .encode_incremental_with_context(
                     &RetainedFamilyFrame {
                         retained: &frame,
                         family_animations: &states,
@@ -1412,6 +1475,7 @@ mod tests {
                     &[],
                     &FrameChanges::objects(vec![0]),
                     Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -1464,10 +1528,11 @@ mod tests {
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(17);
 
         let snapshot = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert!(snapshot.retained.snapshot);
@@ -1476,11 +1541,12 @@ mod tests {
         assert_eq!(snapshot.family_states.len(), 2);
 
         let incremental = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1502,21 +1568,23 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(19);
         let snapshot = encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert_eq!(snapshot.family_states[0].family_plan_index, Some(0));
         assert_eq!(snapshot.family_states[1].family_plan_index, Some(0));
 
         let incremental = encoder
-            .encode_planned_incremental(
+            .encode_planned_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1535,10 +1603,11 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(20);
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &initial,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
@@ -1550,11 +1619,12 @@ mod tests {
             family_plan_indices: &appended_indices,
         };
         let delta = encoder
-            .encode_planned_incremental(
+            .encode_planned_incremental_with_context(
                 &appended,
                 &plans,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1579,7 +1649,7 @@ mod tests {
             render_transforms: Vec::new(),
         };
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &empty,
                     family_animations: &[],
@@ -1587,13 +1657,14 @@ mod tests {
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         let (plan, frame, states) = fixture();
         let plan_indices = [Some(0), Some(0)];
         let delta = encoder
-            .encode_planned_incremental_with_painter_order(
+            .encode_planned_incremental_with_painter_order_and_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -1603,6 +1674,7 @@ mod tests {
                 &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
                     .with_painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0, 1],
             )
             .unwrap()
@@ -1629,14 +1701,21 @@ mod tests {
             family_plan_indices: &[None, None],
         };
         encoder
-            .encode_planned_snapshot_indices(&planned, &[], Camera2DState::default(), [0])
+            .encode_planned_snapshot_indices_with_context(
+                &planned,
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                [0],
+            )
             .unwrap();
         let delta = encoder
-            .encode_planned_incremental_with_painter_order(
+            .encode_planned_incremental_with_painter_order_and_context(
                 &planned,
                 &[],
                 &FrameChanges::with_structure(vec![1], vec![1], vec![1]).with_painter_order(1..1),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0],
             )
             .unwrap()
@@ -1663,7 +1742,7 @@ mod tests {
             render_transforms: Vec::new(),
         };
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &empty,
                     family_animations: &[],
@@ -1671,6 +1750,7 @@ mod tests {
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
@@ -1678,7 +1758,7 @@ mod tests {
         let plans = vec![plan; 1_024];
         let plan_indices = [Some(1_023), Some(1_023)];
         let delta = encoder
-            .encode_planned_incremental_with_painter_order(
+            .encode_planned_incremental_with_painter_order_and_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -1688,6 +1768,7 @@ mod tests {
                 &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
                     .with_painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0, 1],
             )
             .unwrap()
@@ -1715,10 +1796,11 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(21);
         let snapshot = encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &inactive,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert!(snapshot.family_plans.is_empty());
@@ -1737,28 +1819,31 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(23);
         encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         assert!(encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::default(),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default()
             )
             .unwrap()
             .is_none());
         let next = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1774,19 +1859,21 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(31);
         encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         let replacement = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::all(),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();

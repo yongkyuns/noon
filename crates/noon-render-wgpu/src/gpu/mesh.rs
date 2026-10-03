@@ -6,7 +6,7 @@ use super::{create_buffer_with_data, DrawStats};
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceHandle, GeometryResourceLookup, MeshResource,
-    SemanticCamera3D, SemanticVec3, SemanticWorldTransform3D,
+    SemanticCamera3D, SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D,
 };
 use noon_runtime::{FrameChanges, FrameState, RendererPublication};
 use std::{
@@ -21,12 +21,13 @@ pub struct SpatialUploadStats {
     pub geometry_bytes: usize,
     pub instance_bytes: usize,
     pub camera_bytes: usize,
+    pub light_bytes: usize,
     pub resident_meshes: usize,
     pub resident_instances: usize,
 }
 impl SpatialUploadStats {
     pub const fn bytes_uploaded(self) -> usize {
-        self.geometry_bytes + self.instance_bytes + self.camera_bytes
+        self.geometry_bytes + self.instance_bytes + self.camera_bytes + self.light_bytes
     }
 }
 
@@ -40,6 +41,9 @@ pub enum SpatialPrepareError {
     UnrepresentableVertex,
     TransparentMesh(usize),
     MeshStroke(usize),
+    MissingPointLight,
+    MultiplePointLights,
+    PointLitMeshNeedsNormals(usize),
     BufferLimit,
     StalePublication,
 }
@@ -63,6 +67,17 @@ struct Instance {
     normals: [[f32; 4]; 3],
     color: [f32; 4],
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+struct LightUniform {
+    position_enabled: [f32; 4],
+    color_intensity: [f32; 4],
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PointLight {
+    position: [f32; 3],
+    color_intensity: [f32; 4],
+}
 
 #[derive(Debug)]
 struct ResidentMesh {
@@ -75,11 +90,13 @@ struct ResidentMesh {
 struct Draw {
     handle: GeometryResourceHandle,
     instance: usize,
+    material: SemanticSpatialMaterial,
 }
 struct StagedDraw {
     handle: GeometryResourceHandle,
     mesh: Arc<MeshResource>,
     instance: Instance,
+    material: SemanticSpatialMaterial,
 }
 #[derive(Debug)]
 struct GpuState {
@@ -89,6 +106,8 @@ struct GpuState {
     pipeline_msaa: wgpu::RenderPipeline,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
+    light: wgpu::Buffer,
+    light_value: Option<PointLight>,
     instances: wgpu::Buffer,
     instance_capacity: usize,
     depth: wgpu::TextureView,
@@ -102,6 +121,9 @@ pub(super) struct SpatialGpuState {
     gpu: Option<GpuState>,
     draws: BTreeMap<usize, Draw>,
     cameras: BTreeMap<usize, SemanticCamera3D>,
+    light_object: Option<usize>,
+    light: Option<PointLight>,
+    point_lit_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
     instances: Vec<Instance>,
@@ -111,6 +133,10 @@ pub(super) struct SpatialGpuState {
 }
 
 impl SpatialGpuState {
+    pub fn reset_publication_context(&mut self) {
+        self.last_publication = None;
+    }
+
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -119,12 +145,36 @@ impl SpatialGpuState {
         viewport: [u32; 2],
         publication: &RendererPublication<'_>,
     ) -> Result<SpatialUploadStats, SpatialPrepareError> {
-        if self.last_publication.is_some_and(|applied| {
-            super::retained_text::publication_is_stale(publication.context(), applied)
-        }) {
+        self.prepare_with_resources(
+            device,
+            queue,
+            format,
+            viewport,
+            publication.context(),
+            publication.frame(),
+            publication.changes(),
+            publication.geometry_resources(),
+        )
+    }
+
+    pub fn prepare_with_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        viewport: [u32; 2],
+        context: noon_core::PublicationContext,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        geometry_resources: &dyn GeometryResourceLookup,
+    ) -> Result<SpatialUploadStats, SpatialPrepareError> {
+        if self
+            .last_publication
+            .is_some_and(|applied| super::retained_text::publication_is_stale(context, applied))
+        {
             return Err(SpatialPrepareError::StalePublication);
         }
-        let retry = self.last_publication == Some(publication.context());
+        let retry = self.last_publication == Some(context);
         if retry && self.viewport == viewport {
             return Ok(SpatialUploadStats {
                 resident_meshes: self.meshes.len(),
@@ -138,11 +188,11 @@ impl SpatialGpuState {
             queue,
             format,
             viewport,
-            publication.frame(),
-            if retry { &clean } else { publication.changes() },
-            publication.geometry_resources(),
+            frame,
+            if retry { &clean } else { changes },
+            geometry_resources,
         )?;
-        self.last_publication = Some(publication.context());
+        self.last_publication = Some(context);
         Ok(result)
     }
 
@@ -173,13 +223,58 @@ impl SpatialGpuState {
                 .collect()
         };
         let mut cameras = self.cameras.clone(); // at most one admitted camera
+        let touched_existing_light = self
+            .light_object
+            .is_some_and(|index| indices.contains(&index));
+        let mut light_object = if touched_existing_light {
+            None
+        } else {
+            self.light_object
+        };
+        let mut point_light = if touched_existing_light {
+            None
+        } else {
+            self.light
+        };
         let mut staged = Vec::new();
         for &index in &indices {
             cameras.remove(&index);
+            if light_object == Some(index) {
+                light_object = None;
+                point_light = None;
+            }
             let mut draw = None;
             if let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) {
                 if let Some(spatial) = object.spatial.as_deref() {
-                    if let Some(projection) = spatial.camera_projection {
+                    if spatial.point_light {
+                        if light_object.is_some() {
+                            return Err(SpatialPrepareError::MultiplePointLights);
+                        }
+                        let color = object
+                            .style
+                            .fill
+                            .ok_or(SpatialPrepareError::InvalidWorld(index))?;
+                        let intensity = color.alpha * object.style.opacity * object.appearance;
+                        let light = PointLight {
+                            position: [
+                                spatial.world.translation.x as f32,
+                                spatial.world.translation.y as f32,
+                                spatial.world.translation.z as f32,
+                            ],
+                            color_intensity: [color.red, color.green, color.blue, intensity],
+                        };
+                        if light
+                            .position
+                            .iter()
+                            .chain(light.color_intensity.iter())
+                            .any(|value| !value.is_finite())
+                            || !(0.0..=1.0).contains(&intensity)
+                        {
+                            return Err(SpatialPrepareError::InvalidWorld(index));
+                        }
+                        light_object = Some(index);
+                        point_light = Some(light);
+                    } else if let Some(projection) = spatial.camera_projection {
                         let camera = SemanticCamera3D::new(
                             spatial.world.translation,
                             spatial.world.rotation,
@@ -194,6 +289,9 @@ impl SpatialGpuState {
                         let Some(GeometryResource::Mesh(mesh)) = resources.get(handle) else {
                             return Err(SpatialPrepareError::MissingMesh(index));
                         };
+                        if spatial.material == SemanticSpatialMaterial::PointLit {
+                            validate_point_lit_normals(mesh, index)?;
+                        }
                         if object.style.stroke.is_some() && object.style.stroke_width > 0.0 {
                             return Err(SpatialPrepareError::MeshStroke(index));
                         }
@@ -206,13 +304,17 @@ impl SpatialGpuState {
                         if alpha != 1.0 {
                             return Err(SpatialPrepareError::TransparentMesh(index));
                         }
-                        let instance =
-                            instance(spatial.world, [color.red, color.green, color.blue, alpha])
-                                .ok_or(SpatialPrepareError::InvalidWorld(index))?;
+                        let instance = instance(
+                            spatial.world,
+                            [color.red, color.green, color.blue, alpha],
+                            spatial.material,
+                        )
+                        .ok_or(SpatialPrepareError::InvalidWorld(index))?;
                         draw = Some(StagedDraw {
                             handle,
                             mesh: mesh.clone(),
                             instance,
+                            material: spatial.material,
                         });
                     }
                 }
@@ -229,6 +331,25 @@ impl SpatialGpuState {
                     isize::from(draw.is_some()) - isize::from(self.draws.contains_key(index))
                 })
                 .sum::<isize>();
+        let mut remaining_point_lit_draws = self.point_lit_draws;
+        for (index, draw) in &staged {
+            if self
+                .draws
+                .get(index)
+                .is_some_and(|draw| draw.material == SemanticSpatialMaterial::PointLit)
+            {
+                remaining_point_lit_draws -= 1;
+            }
+            if draw
+                .as_ref()
+                .is_some_and(|draw| draw.material == SemanticSpatialMaterial::PointLit)
+            {
+                remaining_point_lit_draws += 1;
+            }
+        }
+        if remaining_point_lit_draws > 0 && point_light.is_none() {
+            return Err(SpatialPrepareError::MissingPointLight);
+        }
         let matrix = match cameras.values().next().copied() {
             Some(camera) => Some(
                 lower_matrix(
@@ -359,6 +480,7 @@ impl SpatialGpuState {
                     Draw {
                         handle: staged.handle,
                         instance: slot,
+                        material: staged.material,
                     },
                 );
             } else if let Some(old) = previous {
@@ -381,6 +503,21 @@ impl SpatialGpuState {
                     queue.write_buffer(&gpu.camera, 0, bytemuck::cast_slice(&matrix));
                     stats.camera_bytes = size_of_val(&matrix);
                 }
+            }
+            if point_light != gpu.light_value {
+                let uniform =
+                    point_light.map_or_else(LightUniform::default, |light| LightUniform {
+                        position_enabled: [
+                            light.position[0],
+                            light.position[1],
+                            light.position[2],
+                            1.0,
+                        ],
+                        color_intensity: light.color_intensity,
+                    });
+                queue.write_buffer(&gpu.light, 0, bytemuck::bytes_of(&uniform));
+                stats.light_bytes = size_of::<LightUniform>();
+                gpu.light_value = point_light;
             }
             if needed > gpu.instance_capacity {
                 gpu.instances = device.create_buffer(&wgpu::BufferDescriptor {
@@ -415,6 +552,9 @@ impl SpatialGpuState {
                 }
             }
         }
+        self.light_object = light_object;
+        self.light = point_light;
+        self.point_lit_draws = remaining_point_lit_draws;
         self.viewport = viewport;
         self.camera_matrix = matrix;
         self.initialized = true;
@@ -552,7 +692,11 @@ fn lower_matrix(values: [f64; 16]) -> Option<[f32; 16]> {
         .all(|value| value.is_finite())
         .then_some(result)
 }
-fn instance(world: SemanticWorldTransform3D, color: [f32; 4]) -> Option<Instance> {
+fn instance(
+    world: SemanticWorldTransform3D,
+    color: [f32; 4],
+    material: SemanticSpatialMaterial,
+) -> Option<Instance> {
     let matrix = lower_matrix(world.world_matrix()?)?;
     let mut normals = [[0.0; 4]; 3];
     for (i, scale) in [world.scale.x, world.scale.y, world.scale.z]
@@ -564,12 +708,20 @@ fn instance(world: SemanticWorldTransform3D, color: [f32; 4]) -> Option<Instance
         let axis = world
             .rotation
             .rotate_vector(SemanticVec3::new(axis[0], axis[1], axis[2]))?;
+        // A singular transform has no normal inverse. Unlit meshes do not read
+        // this attribute, so use a zero reciprocal for collapsed axes; PointLit
+        // poses are rejected before staging and therefore always have a true
+        // inverse-transpose normal basis.
         let reciprocal = if scale == 0. { 0. } else { 1. / scale };
         normals[i] = [
             (axis.x * reciprocal) as f32,
             (axis.y * reciprocal) as f32,
             (axis.z * reciprocal) as f32,
-            0.,
+            if material == SemanticSpatialMaterial::PointLit {
+                1.0
+            } else {
+                0.0
+            },
         ];
     }
     normals
@@ -583,14 +735,23 @@ fn instance(world: SemanticWorldTransform3D, color: [f32; 4]) -> Option<Instance
             color,
         })
 }
+fn validate_point_lit_normals(
+    mesh: &MeshResource,
+    object_index: usize,
+) -> Result<(), SpatialPrepareError> {
+    if !mesh.has_usable_normals() {
+        return Err(SpatialPrepareError::PointLitMeshNeedsNormals(object_index));
+    }
+    Ok(())
+}
 fn lower_vertices(mesh: &MeshResource) -> Result<Vec<Vertex>, SpatialPrepareError> {
     mesh.positions()
         .iter()
         .enumerate()
         .map(|(index, point)| {
-            let normal = mesh
-                .normals()
-                .map_or(SemanticVec3::ZERO, |normals| normals[index]);
+            let normal = mesh.normals().map_or(SemanticVec3::ZERO, |normals| {
+                normalize_normal(normals[index])
+            });
             let vertex = Vertex {
                 position: [point.x as f32, point.y as f32, point.z as f32],
                 normal: [normal.x as f32, normal.y as f32, normal.z as f32],
@@ -605,6 +766,15 @@ fn lower_vertices(mesh: &MeshResource) -> Result<Vec<Vertex>, SpatialPrepareErro
         })
         .collect()
 }
+fn normalize_normal(value: SemanticVec3) -> SemanticVec3 {
+    let largest = value.x.abs().max(value.y.abs()).max(value.z.abs());
+    if largest == 0.0 || !largest.is_finite() {
+        return SemanticVec3::ZERO;
+    }
+    let scaled = SemanticVec3::new(value.x / largest, value.y / largest, value.z / largest);
+    let length = scaled.x.hypot(scaled.y).hypot(scaled.z);
+    SemanticVec3::new(scaled.x / length, scaled.y / length, scaled.z / length)
+}
 
 impl GpuState {
     fn new(
@@ -615,16 +785,28 @@ impl GpuState {
     ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon mesh camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let camera = create_buffer_with_data(
             device,
@@ -633,13 +815,26 @@ impl GpuState {
             bytemuck::cast_slice(&[0.0_f32; 16]),
             wgpu::BufferUsages::UNIFORM,
         );
+        let light = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon effective spatial point light"),
+            bytemuck::bytes_of(&LightUniform::default()),
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
         let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Noon mesh camera"),
             layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light.as_entire_binding(),
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon mesh pipeline layout"),
@@ -665,6 +860,8 @@ impl GpuState {
             pipeline_msaa,
             camera,
             camera_group,
+            light,
+            light_value: None,
             instances,
             instance_capacity: 0,
             depth: depth(device, viewport, 1),
@@ -758,7 +955,11 @@ fn pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::InstanceRanges;
+    use super::{instance, validate_point_lit_normals, InstanceRanges, SpatialPrepareError};
+    use noon_core::{
+        MeshResource, SemanticRotation3D, SemanticSpatialMaterial, SemanticVec3,
+        SemanticWorldTransform3D,
+    };
 
     #[test]
     fn contiguous_membership_stays_one_range_and_holes_split_and_rejoin_locally() {
@@ -790,5 +991,39 @@ mod tests {
         assert!(ranges.insert(0));
         assert!(ranges.insert(599));
         assert_eq!(ranges.iter().collect::<Vec<_>>(), vec![(0, 600)]);
+    }
+
+    #[test]
+    fn point_lit_instances_use_inverse_transpose_normals_and_validated_sources() {
+        let world = SemanticWorldTransform3D::new(
+            SemanticVec3::ZERO,
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(2.0, 1.0, 0.5),
+        )
+        .unwrap();
+        let instance = instance(
+            world,
+            [0.5, 0.25, 0.0, 1.0],
+            SemanticSpatialMaterial::PointLit,
+        )
+        .unwrap();
+        assert_eq!(instance.normals[0], [0.5, 0.0, 0.0, 1.0]);
+        assert_eq!(instance.normals[1], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(instance.normals[2], [0.0, 0.0, 2.0, 1.0]);
+
+        let without_normals = MeshResource::new(
+            vec![
+                SemanticVec3::ZERO,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap();
+        assert_eq!(
+            validate_point_lit_normals(&without_normals, 3),
+            Err(SpatialPrepareError::PointLitMeshNeedsNormals(3))
+        );
     }
 }

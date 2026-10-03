@@ -11,11 +11,12 @@ use std::{
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceLookup, FontVariationSetting,
     GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
-    GeometryResourceLookup, GlyphRun, PositionedGlyph, Rect, StrokeCap, StrokeJoin, Style,
-    TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke, TextLayoutArtifact,
-    TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem, TextResource,
-    TextResourceArena, TextResourceHandle, TextResourceLookup, TextResourceReplacementStaging,
-    TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Transform2D, Vec2, VectorPath,
+    GeometryResourceLookup, GlyphRun, MeshResource, PositionedGlyph, Rect, StrokeCap, StrokeJoin,
+    Style, TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke,
+    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
+    TextResource, TextResourceArena, TextResourceHandle, TextResourceLookup,
+    TextResourceReplacementStaging, TextSourceKind, TextSourceSpan, TextVectorItem,
+    TextVectorStyle, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,12 +26,15 @@ pub(crate) mod incremental_render;
 
 /// One-shot resource channel paired with `noon.execution.retained`.
 ///
-/// Frame deltas carry only small text handles. This bundle transfers the immutable
-/// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
-/// retained scene is installed. Python never owns or serializes these payloads.
+/// Frame deltas carry resource handles. This bundle transfers immutable shaped text,
+/// vector-decoration geometry, typed spatial meshes, and exact OpenType buffers
+/// across the Python-worker boundary when a retained scene is installed.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 10;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 11;
 const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
+const MAX_TRANSPORT_MESH_VERTICES: usize = 500_000;
+const MAX_TRANSPORT_MESH_INDICES: usize = 3_000_000;
+const MAX_TRANSPORT_MESH_BYTES: usize = 64 * 1024 * 1024;
 
 /// A reusable arena slot qualified by its occupant generation.
 pub(crate) fn render_geometry_id(slot: u32, generation: u32) -> u64 {
@@ -66,11 +70,13 @@ pub struct RetainedResourceRetirements {
     pub images: Vec<TransportImageResourceHandle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<TransportTextResourceHandle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub geometries: Vec<TransportGeometryResourceHandle>,
 }
 
 impl RetainedResourceRetirements {
     pub(crate) fn is_empty(&self) -> bool {
-        self.images.is_empty() && self.texts.is_empty()
+        self.images.is_empty() && self.texts.is_empty() && self.geometries.is_empty()
     }
 
     pub(crate) fn validate(&self) -> Result<(), RetainedResourceTransportError> {
@@ -79,6 +85,9 @@ impl RetainedResourceRetirements {
         }
         if self.texts.iter().collect::<HashSet<_>>().len() != self.texts.len() {
             return Err(RetainedResourceTransportError::DuplicateRetiredText);
+        }
+        if self.geometries.iter().collect::<HashSet<_>>().len() != self.geometries.len() {
+            return Err(RetainedResourceTransportError::DuplicateRetiredGeometry);
         }
         Ok(())
     }
@@ -320,6 +329,9 @@ impl RetainedResourceInventory {
             .get(&(handle.arena, handle.id))
             .is_some_and(|installed| *installed == handle)
     }
+    pub(crate) fn contains_geometry(&self, handle: TransportGeometryResourceHandle) -> bool {
+        self.geometries.contains(&handle)
+    }
     pub(crate) fn forget_root_retirements(&mut self, retirements: &RetainedResourceRetirements) {
         for image in &retirements.images {
             self.images.remove(image);
@@ -426,14 +438,22 @@ impl RetainedResourceBundle {
             && self.render_geometry_resources.is_none()
     }
 
-    pub(crate) fn capture_additions(
+    pub(crate) fn capture_additions_with_geometries(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
+        geometry_resource_handles: impl IntoIterator<Item = GeometryResourceHandle>,
         texts: &(impl TextResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
         installed: &RetainedResourceInventory,
     ) -> Result<Self, RetainedResourceTransportError> {
-        Self::capture_filtered(text_handles, texts, geometries, fonts, Some(installed))
+        Self::capture_filtered(
+            text_handles,
+            geometry_resource_handles,
+            texts,
+            geometries,
+            fonts,
+            Some(installed),
+        )
     }
 
     pub fn capture(
@@ -442,11 +462,12 @@ impl RetainedResourceBundle {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<Self, RetainedResourceTransportError> {
-        Self::capture_filtered(text_handles, texts, geometries, fonts, None)
+        Self::capture_filtered(text_handles, [], texts, geometries, fonts, None)
     }
 
     fn capture_filtered(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
+        explicit_geometry_handles: impl IntoIterator<Item = GeometryResourceHandle>,
         texts: &(impl TextResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
@@ -462,6 +483,13 @@ impl RetainedResourceBundle {
             })
             .collect::<BTreeSet<_>>();
         let mut geometry_handles = BTreeSet::new();
+        geometry_handles.extend(explicit_geometry_handles.into_iter().filter(|handle| {
+            installed.is_none_or(|inventory| {
+                !inventory
+                    .geometries
+                    .contains(&TransportGeometryResourceHandle::from(*handle))
+            })
+        }));
         let mut font_entries = BTreeMap::<(String, u32), TransportFontEntry>::new();
         let mut text_entries = Vec::with_capacity(text_handles.len());
 
@@ -472,6 +500,14 @@ impl RetainedResourceBundle {
                 )
             })?;
             for vector in resource.vector_items.iter() {
+                if !matches!(
+                    geometries.get(vector.geometry),
+                    Some(GeometryResource::VectorPath(_))
+                ) {
+                    return Err(RetainedResourceTransportError::InvalidText(
+                        "text vector decoration must reference a vector path".into(),
+                    ));
+                }
                 let transport = TransportGeometryResourceHandle::from(vector.geometry);
                 if installed.is_none_or(|inventory| !inventory.geometries.contains(&transport)) {
                     geometry_handles.insert(vector.geometry);
@@ -504,21 +540,33 @@ impl RetainedResourceBundle {
         }
 
         let mut geometry_entries = Vec::with_capacity(geometry_handles.len());
+        let mut mesh_payload_bytes = 0usize;
         for handle in geometry_handles {
             let resource = geometries
                 .get(handle)
                 .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
-            let path = match resource {
-                GeometryResource::VectorPath(path) => path,
-                GeometryResource::Mesh(_) => {
-                    return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
+            let geometry = match resource {
+                GeometryResource::VectorPath(path) => {
+                    TransportGeometryPayload::VectorPath(path.as_ref().clone())
+                }
+                GeometryResource::Mesh(mesh) => {
+                    add_mesh_payload_budget(
                         handle.into(),
-                    ));
+                        mesh.positions().len(),
+                        mesh.normals().map_or(0, |values| values.len()),
+                        mesh.indices().len(),
+                        &mut mesh_payload_bytes,
+                    )?;
+                    TransportGeometryPayload::Mesh {
+                        positions: mesh.positions().to_vec(),
+                        normals: mesh.normals().map(|values| values.to_vec()),
+                        indices: mesh.indices().to_vec(),
+                    }
                 }
             };
             geometry_entries.push(TransportGeometryEntry {
                 handle: handle.into(),
-                path: path.as_ref().clone(),
+                geometry,
             });
         }
 
@@ -587,6 +635,7 @@ impl RetainedResourceBundle {
     }
 
     pub fn encode_binary(&self) -> Result<Vec<u8>, RetainedResourceTransportError> {
+        self.validate_protocol()?;
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(self, &mut bytes)
             .map_err(|error| RetainedResourceTransportError::Encode(error.to_string()))?;
@@ -636,8 +685,9 @@ impl RetainedResourceBundle {
                     entry.handle,
                 ));
             }
-            let local = geometries.insert_path(entry.path);
-            geometry_handles.insert(entry.handle, local);
+            let handle = entry.handle;
+            let local = install_geometry(&mut geometries, entry)?;
+            geometry_handles.insert(handle, local);
         }
 
         let font_bytes = self
@@ -657,6 +707,16 @@ impl RetainedResourceBundle {
         for entry in self.texts {
             if text_handles.contains_key(&entry.handle) {
                 return Err(RetainedResourceTransportError::DuplicateText(entry.handle));
+            }
+            for vector in &entry.resource.vector_items {
+                let local = geometry_handles.get(&vector.geometry).copied().ok_or(
+                    RetainedResourceTransportError::MissingGeometry(vector.geometry),
+                )?;
+                if !matches!(geometries.get(local), Some(GeometryResource::VectorPath(_))) {
+                    return Err(RetainedResourceTransportError::InvalidText(
+                        "text vector decoration must reference a vector path".into(),
+                    ));
+                }
             }
             let resource = entry.resource.into_core(&geometry_handles)?;
             for run in resource.runs.iter() {
@@ -765,6 +825,58 @@ impl RetainedResourceBundle {
                 self.protocol_version,
             ));
         }
+        let mut geometry_handles = HashSet::with_capacity(self.geometries.len());
+        let mut mesh_payload_bytes = 0usize;
+        for entry in &self.geometries {
+            if !geometry_handles.insert(entry.handle) {
+                return Err(RetainedResourceTransportError::DuplicateGeometry(
+                    entry.handle,
+                ));
+            }
+            match &entry.geometry {
+                TransportGeometryPayload::VectorPath(path) if !path.is_finite() => {
+                    return Err(RetainedResourceTransportError::InvalidGeometry(
+                        entry.handle,
+                    ));
+                }
+                TransportGeometryPayload::Mesh {
+                    positions,
+                    normals,
+                    indices,
+                } if positions.len() > MAX_TRANSPORT_MESH_VERTICES
+                    || indices.len() > MAX_TRANSPORT_MESH_INDICES
+                    || positions.is_empty()
+                    || indices.is_empty()
+                    || !indices.len().is_multiple_of(3)
+                    || positions.iter().any(|position| !position.is_finite())
+                    || normals.as_ref().is_some_and(|values| {
+                        values.len() != positions.len()
+                            || values.iter().any(|normal| !normal.is_finite())
+                    })
+                    || indices
+                        .iter()
+                        .any(|index| *index as usize >= positions.len()) =>
+                {
+                    return Err(RetainedResourceTransportError::InvalidGeometry(
+                        entry.handle,
+                    ));
+                }
+                TransportGeometryPayload::Mesh {
+                    positions,
+                    normals,
+                    indices,
+                } => {
+                    add_mesh_payload_budget(
+                        entry.handle,
+                        positions.len(),
+                        normals.as_ref().map_or(0, Vec::len),
+                        indices.len(),
+                        &mut mesh_payload_bytes,
+                    )?;
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 }
@@ -832,6 +944,12 @@ impl InstalledRetainedResources {
 
     pub fn geometries(&self) -> &dyn GeometryResourceLookup {
         self
+    }
+
+    pub(crate) fn geometry_handle_remap(
+        &self,
+    ) -> HashMap<TransportGeometryResourceHandle, GeometryResourceHandle> {
+        self.geometry_handles.clone()
     }
 
     pub fn fonts(&self) -> &dyn FontResourceLookup {
@@ -908,8 +1026,9 @@ impl InstalledRetainedResources {
                     entry.handle,
                 ));
             }
-            let local = geometries.insert_path(entry.path);
-            geometry_handles.insert(entry.handle, local);
+            let handle = entry.handle;
+            let local = install_geometry(&mut geometries, entry)?;
+            geometry_handles.insert(handle, local);
         }
         for entry in &bundle.texts {
             for vector in &entry.resource.vector_items {
@@ -947,6 +1066,22 @@ impl InstalledRetainedResources {
         for entry in bundle.texts {
             if text_handle_remap.contains_key(&entry.handle) {
                 return Err(RetainedResourceTransportError::DuplicateText(entry.handle));
+            }
+            for vector in &entry.resource.vector_items {
+                let local = geometry_handles.get(&vector.geometry).copied().ok_or(
+                    RetainedResourceTransportError::MissingGeometry(vector.geometry),
+                )?;
+                let is_path =
+                    matches!(geometries.get(local), Some(GeometryResource::VectorPath(_)))
+                        || matches!(
+                            self.geometries.get(local),
+                            Some(GeometryResource::VectorPath(_))
+                        );
+                if !is_path {
+                    return Err(RetainedResourceTransportError::InvalidText(
+                        "text vector decoration must reference a vector path".into(),
+                    ));
+                }
             }
             let resource = entry.resource.into_core(&geometry_handles)?;
             for run in resource.runs.iter() {
@@ -1151,6 +1286,19 @@ impl InstalledRetainedResources {
         }
         for text in &retirements.texts {
             self.retire_text(*text);
+        }
+        for transport in &retirements.geometries {
+            if let Some(local) = self.geometry_handles.get(transport).copied() {
+                if self
+                    .geometry_references
+                    .get(&local)
+                    .copied()
+                    .unwrap_or_default()
+                    == 0
+                {
+                    self.retire_geometry(local);
+                }
+            }
         }
     }
 
@@ -1412,6 +1560,12 @@ impl PreparedRetainedResourceAdditions {
         self.text_handle_remap.clone()
     }
 
+    pub(crate) fn geometry_handle_remap(
+        &self,
+    ) -> HashMap<TransportGeometryResourceHandle, GeometryResourceHandle> {
+        self.installed.geometry_handles.clone()
+    }
+
     pub(crate) fn superseded_text_handles(&self) -> &[TransportTextResourceHandle] {
         &self.superseded_text_handles
     }
@@ -1541,8 +1695,10 @@ impl FontResourceLookup for InstalledRetainedResources {
 pub enum RetainedResourceTransportError {
     DuplicateRetiredImage,
     DuplicateRetiredText,
+    DuplicateRetiredGeometry,
     RetiredLiveImage(TransportImageResourceHandle),
     RetiredLiveText(TransportTextResourceHandle),
+    RetiredLiveGeometry(TransportGeometryResourceHandle),
     UnknownImage(TransportImageResourceHandle),
     DuplicateImage(TransportImageResourceHandle),
     InvalidImage(String),
@@ -1554,6 +1710,8 @@ pub enum RetainedResourceTransportError {
     DuplicateText(TransportTextResourceHandle),
     DuplicateGeometry(TransportGeometryResourceHandle),
     UnsupportedMeshGeometry(TransportGeometryResourceHandle),
+    InvalidGeometry(TransportGeometryResourceHandle),
+    GeometryPayloadLimit(TransportGeometryResourceHandle),
     DuplicateFont { face_key: String, face_index: u32 },
     MissingGeometry(TransportGeometryResourceHandle),
     MissingFont { face_key: String, face_index: u32 },
@@ -1571,11 +1729,17 @@ impl fmt::Display for RetainedResourceTransportError {
         match self {
             Self::DuplicateRetiredImage => formatter.write_str("duplicate retired raster image"),
             Self::DuplicateRetiredText => formatter.write_str("duplicate retired text resource"),
+            Self::DuplicateRetiredGeometry => {
+                formatter.write_str("duplicate retired geometry resource")
+            }
             Self::RetiredLiveImage(handle) => {
                 write!(formatter, "retired live raster image {handle:?}")
             }
             Self::RetiredLiveText(handle) => {
                 write!(formatter, "retired live text resource {handle:?}")
+            }
+            Self::RetiredLiveGeometry(handle) => {
+                write!(formatter, "retired live geometry resource {handle:?}")
             }
             Self::UnknownImage(handle) => {
                 write!(formatter, "unknown raster image resource {handle:?}")
@@ -1624,7 +1788,17 @@ impl fmt::Display for RetainedResourceTransportError {
             ),
             Self::UnsupportedMeshGeometry(handle) => write!(
                 formatter,
-                "2D retained resource transport cannot encode mesh geometry {}@{}",
+                "retained render-geometry specialization cannot encode mesh resource {}@{}",
+                handle.id, handle.version
+            ),
+            Self::InvalidGeometry(handle) => write!(
+                formatter,
+                "invalid retained geometry payload {}@{}",
+                handle.id, handle.version
+            ),
+            Self::GeometryPayloadLimit(handle) => write!(
+                formatter,
+                "retained geometry payload {}@{} exceeds transport limits",
                 handle.id, handle.version
             ),
             Self::DuplicateFont {
@@ -1666,7 +1840,75 @@ struct TransportTextEntry {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TransportGeometryEntry {
     handle: TransportGeometryResourceHandle,
-    path: VectorPath,
+    geometry: TransportGeometryPayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TransportGeometryPayload {
+    VectorPath(VectorPath),
+    Mesh {
+        positions: Vec<noon_core::SemanticVec3>,
+        normals: Option<Vec<noon_core::SemanticVec3>>,
+        indices: Vec<u32>,
+    },
+}
+
+fn add_mesh_payload_budget(
+    handle: TransportGeometryResourceHandle,
+    positions: usize,
+    normals: usize,
+    indices: usize,
+    total: &mut usize,
+) -> Result<(), RetainedResourceTransportError> {
+    if positions > MAX_TRANSPORT_MESH_VERTICES || indices > MAX_TRANSPORT_MESH_INDICES {
+        return Err(RetainedResourceTransportError::GeometryPayloadLimit(handle));
+    }
+    let bytes = positions
+        .checked_add(normals)
+        .and_then(|count| count.checked_mul(std::mem::size_of::<noon_core::SemanticVec3>()))
+        .and_then(|bytes| {
+            indices
+                .checked_mul(std::mem::size_of::<u32>())
+                .and_then(|index_bytes| bytes.checked_add(index_bytes))
+        })
+        .and_then(|bytes| total.checked_add(bytes))
+        .filter(|&bytes| bytes <= MAX_TRANSPORT_MESH_BYTES)
+        .ok_or(RetainedResourceTransportError::GeometryPayloadLimit(handle))?;
+    *total = bytes;
+    Ok(())
+}
+
+fn install_geometry(
+    arena: &mut GeometryResourceArena,
+    entry: TransportGeometryEntry,
+) -> Result<GeometryResourceHandle, RetainedResourceTransportError> {
+    match entry.geometry {
+        TransportGeometryPayload::VectorPath(path) => {
+            if !path.is_finite() {
+                return Err(RetainedResourceTransportError::InvalidGeometry(
+                    entry.handle,
+                ));
+            }
+            Ok(arena.insert_path(path))
+        }
+        TransportGeometryPayload::Mesh {
+            positions,
+            normals,
+            indices,
+        } => {
+            if positions.len() > MAX_TRANSPORT_MESH_VERTICES
+                || indices.len() > MAX_TRANSPORT_MESH_INDICES
+            {
+                return Err(RetainedResourceTransportError::GeometryPayloadLimit(
+                    entry.handle,
+                ));
+            }
+            let mesh = MeshResource::new(positions, normals, indices)
+                .map_err(|_| RetainedResourceTransportError::InvalidGeometry(entry.handle))?;
+            Ok(arena.insert_mesh(mesh))
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2301,6 +2543,82 @@ mod tests {
     use noon::{MathTypst, Scene, Typst};
     use noon_core::TextSourceKind;
 
+    #[test]
+    fn mesh_resource_payload_round_trips_as_one_generation_qualified_resource() {
+        let mut source = GeometryResourceArena::new();
+        let mesh = MeshResource::new(
+            vec![
+                noon_core::SemanticVec3::new(0.125, -2.5, 9.0),
+                noon_core::SemanticVec3::new(1.0 / 7.0, 3.0, -4.0),
+                noon_core::SemanticVec3::new(-8.0, 0.25, 2.0),
+            ],
+            Some(vec![
+                noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+                noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+                noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+            ]),
+            vec![0, 1, 2],
+        )
+        .unwrap();
+        let original = mesh.clone();
+        let source_handle = source.insert_mesh(mesh);
+        let bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [source_handle],
+            &TextResourceArena::new(),
+            &source,
+            &FontResourceArena::new(),
+            &RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        assert_eq!(bundle.geometry_count(), 1);
+
+        let decoded =
+            RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap()).unwrap();
+        let installed = decoded.install().unwrap();
+        let transport_handle = TransportGeometryResourceHandle::from(source_handle);
+        let local = installed.geometry_handle_remap()[&transport_handle];
+        let GeometryResource::Mesh(received) = installed.geometries().get(local).unwrap() else {
+            panic!("transported mesh was installed as a non-mesh resource")
+        };
+        assert_eq!(received.as_ref(), &original);
+    }
+
+    #[test]
+    fn malformed_mesh_payload_and_aggregate_mesh_budget_are_rejected() {
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_mesh(
+            MeshResource::new(vec![noon_core::SemanticVec3::ZERO; 3], None, vec![0, 1, 2]).unwrap(),
+        );
+        let mut bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [handle],
+            &TextResourceArena::new(),
+            &source,
+            &FontResourceArena::new(),
+            &RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        if let TransportGeometryPayload::Mesh { indices, .. } = &mut bundle.geometries[0].geometry {
+            *indices = vec![0, 1, 9];
+        }
+        assert!(matches!(
+            bundle.install(),
+            Err(RetainedResourceTransportError::InvalidGeometry(_))
+        ));
+
+        let mut total = 0;
+        let limit = MAX_TRANSPORT_MESH_BYTES;
+        assert!(
+            add_mesh_payload_budget(handle.into(), 500_000, 500_000, 3_000_000, &mut total).is_ok()
+        );
+        assert!(total <= limit);
+        assert!(matches!(
+            add_mesh_payload_budget(handle.into(), 500_000, 500_000, 3_000_000, &mut total),
+            Err(RetainedResourceTransportError::GeometryPayloadLimit(_))
+        ));
+    }
+
     fn text_handles(objects: &[noon::Mobject]) -> Vec<TextResourceHandle> {
         objects
             .iter()
@@ -2412,8 +2730,9 @@ mod tests {
         let second_transport = TransportTextResourceHandle::from_source_handle(handles[1]);
         let mut installed = base.install().unwrap();
         let first_local = installed.resolve_text_handle(first_transport).unwrap();
-        let mut addition = RetainedResourceBundle::capture_additions(
+        let mut addition = RetainedResourceBundle::capture_additions_with_geometries(
             handles.iter().copied(),
+            [],
             source.text_resources(),
             source.geometry_resources(),
             source.font_resources(),
@@ -2439,8 +2758,9 @@ mod tests {
         assert!(TextResourceLookup::get(&installed, first_local).is_some());
         assert!(TextResourceLookup::get(&installed, second_local).is_some());
 
-        let repeated = RetainedResourceBundle::capture_additions(
+        let repeated = RetainedResourceBundle::capture_additions_with_geometries(
             handles,
+            [],
             source.text_resources(),
             source.geometry_resources(),
             source.font_resources(),
@@ -2484,8 +2804,9 @@ mod tests {
                 .replace(first.id, resource(&value.to_string()))
                 .unwrap();
             let next_transport = TransportTextResourceHandle::from_source_handle(next);
-            let mut addition = RetainedResourceBundle::capture_additions(
+            let mut addition = RetainedResourceBundle::capture_additions_with_geometries(
                 [next],
+                [],
                 &source,
                 &geometries,
                 &fonts,
@@ -2539,8 +2860,9 @@ mod tests {
         let mut installed = base.install().unwrap();
         let first = source.insert(resource("1")).unwrap();
         let first_transport = TransportTextResourceHandle::from_source_handle(first);
-        let mut addition = RetainedResourceBundle::capture_additions(
+        let mut addition = RetainedResourceBundle::capture_additions_with_geometries(
             [first],
+            [],
             &source,
             &geometries,
             &fonts,
@@ -2560,8 +2882,9 @@ mod tests {
                 .replace(first.id, resource(&value.to_string()))
                 .unwrap();
             let next_transport = TransportTextResourceHandle::from_source_handle(next);
-            let mut addition = RetainedResourceBundle::capture_additions(
+            let mut addition = RetainedResourceBundle::capture_additions_with_geometries(
                 [next],
+                [],
                 &source,
                 &geometries,
                 &fonts,
@@ -2629,8 +2952,9 @@ mod tests {
             .replace(original.id, resource("next-0".to_owned()))
             .unwrap();
         let first_transport = TransportTextResourceHandle::from_source_handle(first);
-        let mut first_addition = RetainedResourceBundle::capture_additions(
+        let mut first_addition = RetainedResourceBundle::capture_additions_with_geometries(
             [first],
+            [],
             &source,
             &geometries,
             &fonts,
@@ -2657,8 +2981,9 @@ mod tests {
         let second = source
             .replace(handles[1].id, resource("next-1".to_owned()))
             .unwrap();
-        let mut invalid_addition = RetainedResourceBundle::capture_additions(
+        let mut invalid_addition = RetainedResourceBundle::capture_additions_with_geometries(
             [first, second],
+            [],
             &source,
             &geometries,
             &fonts,

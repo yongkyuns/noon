@@ -82,6 +82,7 @@ pub(crate) struct PendingSegmentCompletionKind {
 #[derive(Clone, Debug)]
 pub(crate) struct PendingSegmentCompletion {
     pub token: ExecutionSegmentToken,
+    pub end_time: f64,
     pub activation_scene_revision: noon_core::SceneRevision,
     pub kind: PendingSegmentCompletionKind,
     affected_objects: std::collections::HashSet<SemanticNodeId>,
@@ -90,6 +91,7 @@ pub(crate) struct PendingSegmentCompletion {
 impl PendingSegmentCompletion {
     pub(crate) fn new(
         token: ExecutionSegmentToken,
+        end_time: f64,
         activation_scene_revision: noon_core::SceneRevision,
         kind: PendingSegmentCompletionKind,
     ) -> Self {
@@ -100,6 +102,7 @@ impl PendingSegmentCompletion {
             .collect();
         Self {
             token,
+            end_time,
             activation_scene_revision,
             kind,
             affected_objects,

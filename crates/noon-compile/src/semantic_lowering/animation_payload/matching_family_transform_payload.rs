@@ -208,6 +208,7 @@ mod tests {
                 style: noon_core::Style::default(),
                 appearance: 1.0,
                 reveal: 1.0,
+                world_transform: None,
             },
             tracks: Vec::new(),
         };
