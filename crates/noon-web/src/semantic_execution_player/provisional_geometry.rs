@@ -363,7 +363,7 @@ impl SemanticExecutionPlayer {
         // is discarded immediately; the actual path remains the result content.
         let mut visual =
             noon_core::SemanticObjectState::new(noon_core::StoredGeometry::Circle { radius: 0.0 });
-        visual.transform = transform;
+        visual.transform = transform.into();
         visual.style = style;
         noon_compile::lower_semantic_visual_values(&visual)
             .map_err(|error| AuthoringFailure::unclassified("callback.provisional_visual", &error))
@@ -374,12 +374,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         expected_token: CallbackPhaseToken,
         local: noon_core::SemanticLocalNodeToken,
-    ) -> Result<noon_core::SemanticTransform2_5D, AuthoringFailure> {
+    ) -> Result<noon_core::SemanticTransform, AuthoringFailure> {
         self.read_callback_provisional(expected_token, local, |prepared| {
             prepared
                 .object_state(local)
                 .map(|state| state.transform)
-                .or_else(|_| prepared.pending_path_transform(local))
+                .or_else(|_| prepared.pending_path_transform(local).map(Into::into))
                 .map_err(|error| {
                     AuthoringFailure::unclassified("callback.provisional_geometry_read", &error)
                 })

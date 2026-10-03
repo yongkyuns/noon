@@ -130,7 +130,15 @@ fn updates_preserve_a_ninety_degree_axes_basis() {
         .semantic_object_state_checked(node)
         .unwrap()
         .clone();
-    assert!((state.transform.rotation_z - std::f64::consts::FRAC_PI_2).abs() < 1.0e-9);
+    assert!(
+        (state
+            .transform
+            .planar_rotation()
+            .expect("planar orientation")
+            - std::f64::consts::FRAC_PI_2)
+            .abs()
+            < 1.0e-9
+    );
     assert!(state.transform.scale.x > 0.0);
     assert!(state.transform.scale.y > 0.0);
 }

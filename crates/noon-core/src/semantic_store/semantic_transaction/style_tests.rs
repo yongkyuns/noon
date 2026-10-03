@@ -88,7 +88,8 @@ fn unchanged_style_is_a_noop_and_invalid_style_fails_atomically() {
             .semantic_object_state_checked(other)
             .unwrap()
             .transform
-            .rotation_z,
+            .planar_rotation()
+            .unwrap(),
         0.0
     );
     assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -118,7 +119,8 @@ fn unchanged_style_is_a_noop_and_invalid_style_fails_atomically() {
             .semantic_object_state_checked(other)
             .unwrap()
             .transform
-            .rotation_z,
+            .planar_rotation()
+            .unwrap(),
         0.0
     );
     assert_eq!(store.last_mutation_stats().slots_written, 0);

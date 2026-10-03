@@ -545,7 +545,7 @@ pub(crate) fn semantic_text_state(
     baseline: Option<noon_core::TextPresentationBaseline>,
 ) -> noon_core::SemanticObjectState {
     let mut state = noon_core::SemanticObjectState::new(handle);
-    state.transform = transform;
+    state.transform = transform.into();
     state.style = style;
     if let Some(baseline) = baseline {
         state.set_text_presentation_baseline(baseline);

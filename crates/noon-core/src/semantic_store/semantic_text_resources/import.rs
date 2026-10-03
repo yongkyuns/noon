@@ -16,6 +16,7 @@ pub enum SemanticTextImportError {
     Font(crate::FontResourceError),
     MissingGeometry(crate::GeometryResourceHandle),
     NonFiniteGeometry(crate::GeometryResourceHandle),
+    UnsupportedGeometry(crate::GeometryResourceHandle),
 }
 
 impl std::fmt::Display for SemanticTextImportError {
@@ -27,6 +28,9 @@ impl std::fmt::Display for SemanticTextImportError {
             Self::MissingGeometry(handle) => write!(f, "missing text vector dependency {handle:?}"),
             Self::NonFiniteGeometry(handle) => {
                 write!(f, "text vector dependency {handle:?} is not finite")
+            }
+            Self::UnsupportedGeometry(handle) => {
+                write!(f, "text dependency {handle:?} is not vector path geometry")
             }
         }
     }
@@ -142,9 +146,14 @@ impl SemanticStore {
             }
         }
         for vector in resource.vector_items.iter() {
-            let GeometryResource::VectorPath(path) = geometries
+            let resource = geometries
                 .get(vector.geometry)
                 .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+            let GeometryResource::VectorPath(path) = resource else {
+                return Err(SemanticTextImportError::UnsupportedGeometry(
+                    vector.geometry,
+                ));
+            };
             if !path.is_finite() {
                 return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry));
             }
@@ -160,9 +169,12 @@ impl SemanticStore {
         let mut imported = std::collections::HashMap::new();
         for vector in std::sync::Arc::make_mut(&mut resource.vector_items) {
             vector.geometry = *imported.entry(vector.geometry).or_insert_with(|| {
-                let GeometryResource::VectorPath(path) = geometries
+                let resource = geometries
                     .get(vector.geometry)
                     .expect("vector dependency preflighted");
+                let GeometryResource::VectorPath(path) = resource else {
+                    unreachable!("preflight rejects non-path geometry")
+                };
                 self.geometry_resources.insert_path(path.as_ref().clone())
             });
         }

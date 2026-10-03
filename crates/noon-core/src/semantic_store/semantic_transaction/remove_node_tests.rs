@@ -161,7 +161,8 @@ fn transaction_rejects_mutating_a_node_it_also_removes() {
             .semantic_object_state_checked(target)
             .unwrap()
             .transform
-            .rotation_z,
+            .planar_rotation()
+            .unwrap(),
         0.0
     );
     assert_eq!(store.last_mutation_stats().slots_written, 0);

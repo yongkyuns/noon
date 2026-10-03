@@ -36,8 +36,8 @@ use noon_core::{
     FontFaceIdentity, FontResource, FontResourceArena, FontResourceHandle, FontResourceKey,
     FontResourceLookup, GeometryId, GeometryResource, GeometryResourceArena,
     GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef, Rect,
-    RetainedFamilyAnimationPlan, SemanticStore, TextResource, TextResourceHandle,
-    TextResourceLookup,
+    RetainedFamilyAnimationPlan, SemanticOrientation, SemanticStore, SemanticTransform,
+    SemanticVec3, TextResource, TextResourceHandle, TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -53,6 +53,7 @@ pub struct DynamicProperties {
     pub presence: bool,
     pub z_index: bool,
     pub transform: bool,
+    pub world_transform: bool,
     pub position: bool,
     pub rotation: bool,
     pub scale: bool,
@@ -71,6 +72,7 @@ impl DynamicProperties {
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
+            Property::WorldTransform => self.world_transform = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
@@ -88,6 +90,7 @@ impl DynamicProperties {
         self.presence
             || self.z_index
             || self.transform
+            || self.world_transform
             || self.position
             || self.rotation
             || self.scale
@@ -108,6 +111,8 @@ pub struct CompiledObject {
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
     pub text_bounds: Option<Rect>,
     pub base_transform: Transform2D,
+    /// Optional renderer-independent spatial pose and camera declaration.
+    pub spatial: Option<Box<CompiledSpatialState>>,
     pub base_style: Style,
     /// Derived finite painter priority; family traversal breaks equal-priority ties.
     pub base_z_index: f64,
@@ -115,6 +120,13 @@ pub struct CompiledObject {
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
     pub live: bool,
+}
+
+/// Compact optional 3D state shared by semantic lowering and runtime publication.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledSpatialState {
+    pub world: noon_core::SemanticWorldTransform3D,
+    pub camera_projection: Option<noon_core::SemanticProjection3D>,
 }
 
 /// One sparse tracker-to-effective-text execution declaration.
@@ -140,6 +152,7 @@ impl CompiledObject {
             content: content.into(),
             text_bounds: None,
             base_transform,
+            spatial: None,
             base_style,
             base_z_index: 0.0,
             dynamic: DynamicProperties::default(),
@@ -268,6 +281,11 @@ fn geometry_resources_equal(left: &GeometryResource, right: &GeometryResource) -
         (GeometryResource::VectorPath(left), GeometryResource::VectorPath(right)) => {
             Arc::ptr_eq(left, right) || left == right
         }
+        (GeometryResource::Mesh(left), GeometryResource::Mesh(right)) => {
+            Arc::ptr_eq(left, right) || left == right
+        }
+        (GeometryResource::VectorPath(_), GeometryResource::Mesh(_))
+        | (GeometryResource::Mesh(_), GeometryResource::VectorPath(_)) => false,
     }
 }
 
@@ -1016,7 +1034,8 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ReplaySealed => formatter.write_str("sealed replay is read-only; discard its retention before editing"),
+            Self::ReplaySealed => formatter
+                .write_str("sealed replay is read-only; discard its retention before editing"),
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
             }
@@ -1033,7 +1052,9 @@ impl std::fmt::Display for CompilePatchError {
                 owner.get(),
                 edge.get()
             ),
-            Self::InvalidZIndex(id) => write!(formatter, "object {} has non-finite z-index", id.get()),
+            Self::InvalidZIndex(id) => {
+                write!(formatter, "object {} has non-finite z-index", id.get())
+            }
             Self::InvalidFamilyAnimation => {
                 formatter.write_str("invalid family animation plan, timing, or mapping")
             }
@@ -1093,7 +1114,9 @@ impl std::fmt::Display for CompilePatchError {
                 "object {} content carries invalid or mismatched text bounds",
                 object.get()
             ),
-            Self::Resource(error) => write!(formatter, "content replacement resource failed: {error}"),
+            Self::Resource(error) => {
+                write!(formatter, "content replacement resource failed: {error}")
+            }
             Self::DiscontinuousPresence { previous, next } => write!(
                 formatter,
                 "presence track {} does not hand off continuously to track {}",
@@ -1176,6 +1199,7 @@ impl CompiledScene {
                         | Property::Appearance
                         | Property::Reveal
                         | Property::Morph
+                        | Property::WorldTransform
                         | Property::ZIndex
                 )
             {
@@ -1234,6 +1258,11 @@ impl CompiledScene {
             if !object.base_z_index.is_finite() {
                 return Err(CompileError::InvalidZIndex(object.id));
             }
+            if !valid_compiled_spatial(object.spatial.as_deref()) {
+                return Err(CompileError::InvalidTrack(
+                    noon_core::TimelineError::InvalidWorldTransformValues,
+                ));
+            }
             let index =
                 u32::try_from(index).map_err(|_| CompileError::TooManyObjects(object_count))?;
             if object_indices.insert(object.id, index).is_some() {
@@ -1250,6 +1279,11 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
+            if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
+                return Err(CompileError::InvalidTrack(
+                    noon_core::TimelineError::InvalidWorldTransformValues,
+                ));
+            }
             reject_geometry_track_on_text(&objects[object_index as usize], track).map_err(
                 |(track, property)| CompileError::GeometryTrackTargetsText { track, property },
             )?;
@@ -1611,9 +1645,25 @@ impl CompiledScene {
                     .unwrap_or(&existing.content);
                 authored != content || existing.text_bounds != *text_bounds
             }),
-            ExecutionPatch::SetTransform { object, transform } => self
-                .object_index(*object)
-                .is_none_or(|index| self.objects[index as usize].base_transform != *transform),
+            ExecutionPatch::SetTransform { object, transform } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize].spatial.is_some()
+                        || self.objects[index as usize].base_transform != *transform
+                })
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                self.object_index(*object).is_none_or(|index| {
+                    lower_semantic_transform_patch(
+                        *object,
+                        self.objects[index as usize].spatial.as_deref(),
+                        *transform,
+                    )
+                    .is_none_or(|(base, spatial)| {
+                        self.objects[index as usize].base_transform != base
+                            || self.objects[index as usize].spatial.as_deref() != spatial.as_ref()
+                    })
+                })
+            }
             ExecutionPatch::SetZIndex { object, value } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_z_index != *value),
@@ -1816,8 +1866,30 @@ impl CompiledScene {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                if self.objects[index as usize].spatial.is_some() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
                 validate_transform(*object, *transform).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_transform = *transform;
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let (base_transform, spatial) = lower_semantic_transform_patch(
+                    *object,
+                    self.objects[index as usize].spatial.as_deref(),
+                    *transform,
+                )
+                .ok_or(CompilePatchError::InvalidObjectState {
+                    object: *object,
+                    field: ObjectStateField::Transform,
+                })?;
+                self.objects[index as usize].base_transform = base_transform;
+                self.objects[index as usize].spatial = spatial.map(Box::new);
             }
             ExecutionPatch::SetStyle { object, style } => {
                 let index = self
@@ -1981,6 +2053,7 @@ impl CompiledScene {
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::WorldTransform
                             | Property::ZIndex
                     )
                 {
@@ -2022,6 +2095,14 @@ impl CompiledScene {
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
+        if !valid_track_for_spatial(
+            track,
+            self.objects[object_index as usize].spatial.as_deref(),
+        ) {
+            return Err(CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues,
+            ));
+        }
         reject_geometry_track_on_text(&self.objects[object_index as usize], track).map_err(
             |(track, property)| CompilePatchError::GeometryTrackTargetsText { track, property },
         )?;
@@ -2273,9 +2354,106 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
     validate_z_index(object.id, object.base_z_index)?;
+    if !valid_compiled_spatial(object.spatial.as_deref()) {
+        return Err(CompilePatchError::InvalidObjectState {
+            object: object.id,
+            field: ObjectStateField::Transform,
+        });
+    }
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
+}
+
+fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
+    let Some(spatial) = spatial else {
+        return true;
+    };
+    let world = spatial.world;
+    noon_core::SemanticWorldTransform3D::new(world.translation, world.rotation, world.scale)
+        .is_some()
+        && spatial
+            .camera_projection
+            .is_none_or(noon_core::SemanticProjection3D::is_valid)
+        && (spatial.camera_projection.is_none() || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+}
+
+fn valid_track_for_spatial(
+    track: &TrackDefinition,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    if spatial.is_some() {
+        if matches!(
+            track.property,
+            Property::Transform
+                | Property::Position
+                | Property::Rotation
+                | Property::Scale
+                | Property::Morph
+        ) {
+            return false;
+        }
+    } else if track.property == Property::WorldTransform {
+        return false;
+    }
+    if track.property == Property::WorldTransform {
+        valid_world_track_for_spatial(&track.values, spatial)
+    } else {
+        true
+    }
+}
+
+fn valid_world_track_for_spatial(
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    let Some(spatial) = spatial else {
+        return false;
+    };
+    let TrackValues::WorldTransform { from, to } = values else {
+        return false;
+    };
+    let (Some(from), Some(to)) = (from.world(), to.world()) else {
+        return false;
+    };
+    spatial.camera_projection.is_none()
+        || (from.scale == SemanticVec3::new(1.0, 1.0, 1.0)
+            && to.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+}
+
+fn lower_semantic_transform_patch(
+    object: ObjectId,
+    spatial: Option<&CompiledSpatialState>,
+    transform: SemanticTransform,
+) -> Option<(Transform2D, Option<CompiledSpatialState>)> {
+    if !transform.is_valid() {
+        return None;
+    }
+    if let Some(spatial) = spatial {
+        if spatial.camera_projection.is_some()
+            && transform.scale != SemanticVec3::new(1.0, 1.0, 1.0)
+        {
+            return None;
+        }
+        return Some((
+            Transform2D::IDENTITY,
+            Some(CompiledSpatialState {
+                world: transform.world_transform()?,
+                camera_projection: spatial.camera_projection,
+            }),
+        ));
+    }
+    if matches!(transform.orientation, SemanticOrientation::Spatial(_)) {
+        return None;
+    }
+    let planar = transform.as_planar()?;
+    let lowered = Transform2D {
+        translation: Vec2::new(planar.translation.x as f32, planar.translation.y as f32),
+        rotation: planar.rotation_z as f32,
+        scale: Vec2::new(planar.scale.x as f32, planar.scale.y as f32),
+    };
+    validate_transform(object, lowered).ok()?;
+    Some((lowered, None))
 }
 
 fn track_insertion_position(tracks: &[CompiledTrack], track: &CompiledTrack) -> usize {
@@ -2328,17 +2506,18 @@ const fn property_rank(property: Property) -> u8 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
-        Property::Position => 2,
-        Property::Rotation => 3,
-        Property::Scale => 4,
-        Property::Fill => 5,
-        Property::Stroke => 6,
-        Property::StrokeWidth => 7,
-        Property::Opacity => 8,
-        Property::Appearance => 9,
-        Property::Reveal => 10,
-        Property::Morph => 11,
-        Property::ZIndex => 12,
+        Property::WorldTransform => 2,
+        Property::Position => 3,
+        Property::Rotation => 4,
+        Property::Scale => 5,
+        Property::Fill => 6,
+        Property::Stroke => 7,
+        Property::StrokeWidth => 8,
+        Property::Opacity => 9,
+        Property::Appearance => 10,
+        Property::Reveal => 11,
+        Property::Morph => 12,
+        Property::ZIndex => 13,
     }
 }
 
@@ -2633,6 +2812,7 @@ mod tests {
                 appearance: false,
                 reveal: false,
                 morph: false,
+                world_transform: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
@@ -2992,6 +3172,7 @@ mod tests {
                 appearance: false,
                 reveal: true,
                 morph: false,
+                world_transform: false,
             }
         );
     }
@@ -3682,5 +3863,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn camera_world_track_requires_unit_scale_and_spatial_state_is_validated() {
+        let id = noon_core::ObjectId::new(1);
+        let camera = CompiledObject {
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 0.1,
+                    far: 100.0,
+                }),
+            })),
+            ..CompiledObject::new(
+                id,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let endpoint = |scale| {
+            noon_core::WorldTransformTrackEndpoint::from_world(
+                noon_core::SemanticWorldTransform3D::new(
+                    noon_core::SemanticVec3::ZERO,
+                    noon_core::SemanticRotation3D::IDENTITY,
+                    scale,
+                )
+                .unwrap(),
+            )
+        };
+        let track = TrackDefinition {
+            id: TrackId::new(1),
+            object: id,
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: endpoint(noon_core::SemanticVec3::new(1.0, 1.0, 1.0)),
+                to: endpoint(noon_core::SemanticVec3::new(2.0, 1.0, 1.0)),
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        assert!(matches!(
+            CompiledScene::compile_objects(vec![camera.clone()], std::slice::from_ref(&track)),
+            Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
+        let mut compiled = CompiledScene::compile_objects(vec![camera.clone()], &[]).unwrap();
+        assert!(matches!(
+            compiled.apply_execution_patch(&ExecutionPatch::AddTrack(track)),
+            Err(CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
+
+        let malformed = CompiledObject {
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 2.0,
+                    far: 1.0,
+                }),
+            })),
+            ..camera
+        };
+        assert!(matches!(
+            CompiledScene::compile_objects(vec![malformed], &[]),
+            Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
     }
 }

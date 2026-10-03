@@ -500,6 +500,12 @@ fn map_object_track_values<R, T>(
             from: map(from),
             to: map(to),
         },
+        SemanticObjectTrackValues::WorldTransform { from, to } => {
+            SemanticObjectTrackValues::WorldTransform {
+                from: *from,
+                to: *to,
+            }
+        }
     }
 }
 

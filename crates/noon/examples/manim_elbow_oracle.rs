@@ -20,7 +20,10 @@ fn observation(width: f32, angle: f32) -> Value {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources
                 .get(resources.current_handle(*id).unwrap())
-                .unwrap();
+                .unwrap()
+            else {
+                panic!("expected Elbow vector path resource")
+            };
             (**path).clone()
         }
         other => panic!("expected Elbow path geometry, got {other:?}"),

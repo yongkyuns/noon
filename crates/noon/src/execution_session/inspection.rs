@@ -66,7 +66,11 @@ impl ExecutionSession {
     pub fn inspection_camera(&self) -> Result<Camera2DState, PointerFrameError> {
         self.inspection
             .adjustment
-            .resolve(self.camera().map_err(PointerFrameError::Camera)?)
+            .resolve(
+                self.camera_2d()
+                    .map_err(PointerFrameError::Camera)?
+                    .unwrap_or_default(),
+            )
             .map_err(PointerFrameError::Inspection)
     }
 

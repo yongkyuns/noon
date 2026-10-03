@@ -269,7 +269,7 @@ fn proposed_pending_state_matches_commit_after_canceled_creation() {
     let prepared = transaction.prepare(&mut store).unwrap();
     let proposed = prepared.proposed_object_state(kept).unwrap();
     assert_eq!(proposed.insertion_order(), 1);
-    assert_eq!(proposed.transform.rotation_z, 0.5);
+    assert_eq!(proposed.transform.planar_rotation().unwrap(), 0.5);
     let result = prepared.commit();
     assert_eq!(result.resolve(canceled), None);
     let kept = result.resolve(kept).unwrap();

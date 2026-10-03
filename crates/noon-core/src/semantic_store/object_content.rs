@@ -1,7 +1,7 @@
-use crate::{Color, GeometryRef, SemanticImageContent, TextResourceHandle};
+use crate::{Color, GeometryRef, SemanticImageContent, SemanticProjection3D, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
-    SemanticTransform2_5D, StoredGeometry,
+    SemanticTransform, SemanticVec3, StoredGeometry,
 };
 use std::sync::Arc;
 
@@ -249,6 +249,7 @@ pub enum SemanticObjectRole {
     #[default]
     Ordinary,
     Camera2D,
+    Camera3D,
     Inset2DView(SemanticInset2DViewRole),
     ArrowShaft(SemanticArrowShaftRole),
     ArrowEndTip,
@@ -271,6 +272,7 @@ impl SemanticObjectRole {
             Self::FunctionPlot(range) => range.is_valid(),
             Self::Ordinary
             | Self::Camera2D
+            | Self::Camera3D
             | Self::Inset2DView(_)
             | Self::ArrowEndTip
             | Self::ArrowStartTip
@@ -364,7 +366,7 @@ impl SemanticSignalBinding {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticObjectState {
     pub content: SemanticObjectContent,
-    pub transform: SemanticTransform2_5D,
+    pub transform: SemanticTransform,
     pub style: SemanticStyle,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
@@ -382,6 +384,9 @@ pub struct SemanticObjectState {
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
     click_indicate: Option<Arc<SemanticClickIndicate>>,
+    /// Projection metadata is allocated only for declared 3D cameras; world
+    /// pose remains the ordinary authored transform above.
+    camera_projection: Option<Arc<SemanticProjection3D>>,
 }
 
 /// Typed authored `click -> Indicate` declaration for one analytic object.
@@ -436,7 +441,7 @@ impl SemanticObjectState {
     pub fn new(content: impl Into<SemanticObjectContent>) -> Self {
         Self {
             content: content.into(),
-            transform: SemanticTransform2_5D::default(),
+            transform: SemanticTransform::default(),
             style: SemanticStyle::default(),
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
@@ -445,6 +450,7 @@ impl SemanticObjectState {
             bar_metadata: None,
             signal_bindings: Vec::new(),
             click_indicate: None,
+            camera_projection: None,
         }
     }
 
@@ -469,6 +475,7 @@ impl SemanticObjectState {
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
             click_indicate: self.click_indicate.clone(),
+            camera_projection: self.camera_projection.clone(),
         }
     }
 
@@ -494,6 +501,40 @@ impl SemanticObjectState {
 
     pub fn set_role(&mut self, role: SemanticObjectRole) {
         self.role = role;
+    }
+
+    pub fn camera_projection(&self) -> Option<SemanticProjection3D> {
+        self.camera_projection.as_deref().copied()
+    }
+
+    /// Set the projection for a Camera3D declaration. The role is authored
+    /// separately with `set_role`; admission checks that both agree.
+    pub fn set_camera_projection(
+        &mut self,
+        projection: Option<SemanticProjection3D>,
+    ) -> Result<(), SemanticCameraDeclarationError> {
+        if projection.is_some_and(|value| !value.is_valid()) {
+            return Err(SemanticCameraDeclarationError::InvalidProjection);
+        }
+        self.camera_projection = projection.map(Arc::new);
+        Ok(())
+    }
+
+    /// Whether role and optional projection metadata form a complete camera
+    /// declaration suitable for semantic publication.
+    pub fn camera_declaration_is_valid(&self) -> bool {
+        match (self.role, self.camera_projection()) {
+            (SemanticObjectRole::Camera3D, Some(projection)) => {
+                projection.is_valid() && self.camera_transform_is_valid(self.transform)
+            }
+            (SemanticObjectRole::Camera3D, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        }
+    }
+
+    pub(crate) fn camera_transform_is_valid(&self, transform: SemanticTransform) -> bool {
+        transform.world_transform().is_some() && transform.scale == SemanticVec3::new(1.0, 1.0, 1.0)
     }
 
     pub const fn text_presentation_baseline(&self) -> Option<TextPresentationBaseline> {
@@ -553,6 +594,20 @@ impl SemanticObjectState {
         self.presentation.insertion_order = insertion_order;
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticCameraDeclarationError {
+    InvalidProjection,
+}
+
+impl std::fmt::Display for SemanticCameraDeclarationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidProjection => f.write_str("camera projection is invalid"),
+        }
+    }
+}
+impl std::error::Error for SemanticCameraDeclarationError {}
 
 /// Renderer-independent lowered content referenced by one compiled object slot.
 ///
@@ -710,6 +765,83 @@ mod tests {
         assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         state.set_role(SemanticObjectRole::Camera2D);
         assert_eq!(state.role(), SemanticObjectRole::Camera2D);
+    }
+
+    fn valid_camera_projection() -> SemanticProjection3D {
+        SemanticProjection3D::Perspective {
+            vertical_fov_radians: 1.0,
+            near: 0.1,
+            far: 100.0,
+        }
+    }
+
+    #[test]
+    fn camera_declaration_requires_a_valid_projection_only_for_camera3d() {
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        assert!(state.camera_declaration_is_valid());
+        state.set_role(SemanticObjectRole::Camera3D);
+        assert!(!state.camera_declaration_is_valid());
+
+        let invalid = SemanticProjection3D::Orthographic {
+            height: 1.0,
+            near: 2.0,
+            far: 2.0,
+        };
+        assert_eq!(
+            state.set_camera_projection(Some(invalid)),
+            Err(SemanticCameraDeclarationError::InvalidProjection)
+        );
+        assert_eq!(state.camera_projection(), None);
+        assert!(!state.camera_declaration_is_valid());
+
+        state
+            .set_camera_projection(Some(valid_camera_projection()))
+            .unwrap();
+        assert!(state.camera_declaration_is_valid());
+        state.transform.scale = SemanticVec3::new(1.0, 2.0, 1.0);
+        assert!(!state.camera_declaration_is_valid());
+        state.transform.scale = SemanticVec3::new(1.0, 1.0, 1.0);
+        state.transform.translation.x = f64::NAN;
+        assert!(!state.camera_declaration_is_valid());
+        state.transform.translation.x = 0.0;
+        assert!(state.camera_declaration_is_valid());
+        state.set_role(SemanticObjectRole::Ordinary);
+        assert!(!state.camera_declaration_is_valid());
+    }
+
+    #[test]
+    fn camera_projection_clone_and_visual_copy_keep_receiver_declaration() {
+        let mut receiver = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        receiver.set_role(SemanticObjectRole::Camera3D);
+        receiver
+            .set_camera_projection(Some(valid_camera_projection()))
+            .unwrap();
+        let cloned = receiver.clone();
+        assert!(Arc::ptr_eq(
+            receiver.camera_projection.as_ref().unwrap(),
+            cloned.camera_projection.as_ref().unwrap()
+        ));
+
+        let mut target = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(2.0, 3.0),
+        });
+        target.set_role(SemanticObjectRole::Camera2D);
+        let copied = receiver.with_visual_state_from(&target);
+        assert_eq!(copied.role(), SemanticObjectRole::Camera3D);
+        assert_eq!(copied.camera_projection(), Some(valid_camera_projection()));
+        assert!(copied.camera_declaration_is_valid());
+    }
+
+    #[test]
+    fn inconsistent_camera_declaration_is_rejected_atomically_on_admission() {
+        let mut store = crate::SemanticStore::new();
+        let before = store.len();
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state.set_role(SemanticObjectRole::Camera3D);
+        let mut transaction = crate::SemanticMutationTransaction::new();
+        transaction.add_node(crate::SemanticNodeCreation::object(state));
+        assert!(transaction.apply(&mut store).is_err());
+        assert_eq!(store.len(), before);
     }
 
     #[test]

@@ -639,6 +639,7 @@ pub(super) fn duplicate_mutation_error(
 ) -> SemanticMutationTransactionError {
     let pending = match key {
         SemanticMutationKey::ObjectProperty { object, .. }
+        | SemanticMutationKey::ObjectTransform(object)
         | SemanticMutationKey::ObjectContent(object)
         | SemanticMutationKey::ClickIndicate(object)
         | SemanticMutationKey::ObjectBarMetadata(object)
@@ -685,7 +686,8 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
         }
-        SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
+        SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target)) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
         SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {

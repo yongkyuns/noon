@@ -95,6 +95,7 @@ impl SemanticExecutionIndex {
                 SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
+                | SemanticMutationImpact::ObjectTransform { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
@@ -121,8 +122,9 @@ impl SemanticExecutionIndex {
     /// Top-level scene order and family depth-first order come from `SemanticStore`.
     /// Shared/aliased leaves are emitted once at their first visible occurrence.
     /// Mixed content remains in the target `SemanticObjectContent` handle domain;
-    /// high-precision transform/style values are explicitly compacted to the current
-    /// f32/2D execution values. Authored native-reactive property bindings remain
+    /// spatial transforms retain f64 world values, while planar transforms and
+    /// styles are explicitly compacted to their execution representation.
+    /// Authored native-reactive property bindings remain
     /// semantic-identity declarations for the later execution-slot lowering step.
     /// No migration-era retained-content or dense retained scene mirror participates
     /// in this boundary.
@@ -177,7 +179,7 @@ impl SemanticExecutionIndex {
                     .ok_or(SemanticLoweringError::MissingSemanticObjectState(
                         semantic_id,
                     ))?;
-                pending.push((semantic_id, lower_object_state(semantic_id, state)?));
+                pending.push((semantic_id, lower_object_state(semantic_id, state, store)?));
             }
         }
 
@@ -195,6 +197,7 @@ impl SemanticExecutionIndex {
                 content: state.content,
                 base_transform: state.base_transform,
                 base_style: state.base_style,
+                spatial: state.spatial,
                 presentation: state.presentation,
                 signal_bindings: state.signal_bindings,
                 decimal_number: state.decimal_number,
@@ -288,6 +291,8 @@ pub struct SemanticExecutionObject {
     pub base_transform: Transform2D,
     /// Current compact solid-paint execution style.
     pub base_style: Style,
+    /// Optional high precision 3D pose/camera declaration.
+    pub spatial: Option<crate::CompiledSpatialState>,
     /// Stable painter-order metadata remains independent from transform/style.
     pub presentation: SemanticPresentation,
     /// Ordered authored signal drivers. Signal identity remains semantic here; the
@@ -339,6 +344,7 @@ impl std::fmt::Display for SemanticExecutionField {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
     Store(SemanticStoreError),
+    SceneOperation(noon_core::SemanticSceneOperationError),
     /// A visible object leaf came from a migration-only legacy/state-less path
     /// instead of carrying target `SemanticObjectState` directly.
     MissingSemanticObjectState(SemanticNodeId),
@@ -355,6 +361,15 @@ pub enum SemanticLoweringError {
         field: SemanticExecutionField,
         resource: u64,
     },
+    UnsupportedSpatialOrientation {
+        node: SemanticNodeId,
+    },
+    UnsupportedCameraScale {
+        node: SemanticNodeId,
+    },
+    InvalidSemanticTransform {
+        node: SemanticNodeId,
+    },
     InvalidGraphDependency {
         root: SemanticNodeId,
         edge: GraphEdgeId,
@@ -368,10 +383,17 @@ impl From<SemanticStoreError> for SemanticLoweringError {
     }
 }
 
+impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
+    fn from(value: noon_core::SemanticSceneOperationError) -> Self {
+        Self::SceneOperation(value)
+    }
+}
+
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Store(error) => error.fmt(formatter),
+            Self::SceneOperation(error) => error.fmt(formatter),
             Self::MissingSemanticObjectState(id) => write!(
                 formatter,
                 "semantic execution lowering requires target object state for visible node {}:{}",
@@ -400,6 +422,24 @@ impl std::fmt::Display for SemanticLoweringError {
                 node.slot(),
                 node.generation()
             ),
+            Self::UnsupportedSpatialOrientation { node } => write!(
+                formatter,
+                "semantic object {}:{} has a spatial orientation that cannot be projected into the 2D execution transform",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedCameraScale { node } => write!(
+                formatter,
+                "Camera3D object {}:{} must use unit scale",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidSemanticTransform { node } => write!(
+                formatter,
+                "semantic object {}:{} has an invalid world transform",
+                node.slot(),
+                node.generation()
+            ),
             Self::InvalidGraphDependency { root, edge, reason } => write!(
                 formatter,
                 "semantic graph root {}:{} edge {} has invalid endpoint dependency: {reason}",
@@ -415,6 +455,7 @@ impl std::error::Error for SemanticLoweringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Store(error) => Some(error),
+            Self::SceneOperation(error) => Some(error),
             _ => None,
         }
     }
@@ -606,26 +647,81 @@ fn lower_graph_dependencies(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct LoweredObjectState {
+pub(super) struct LoweredObjectState {
     content: SemanticObjectContent,
-    base_transform: Transform2D,
-    base_style: Style,
+    pub(super) base_transform: Transform2D,
+    pub(super) base_style: Style,
     presentation: SemanticPresentation,
     signal_bindings: Vec<SemanticSignalBinding>,
     decimal_number: Option<noon_core::SemanticDecimalNumber>,
+    pub(super) spatial: Option<crate::CompiledSpatialState>,
 }
 
-fn lower_object_state(
+pub(super) fn object_has_mesh_content(state: &SemanticObjectState, store: &SemanticStore) -> bool {
+    match state.content {
+        noon_core::SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) => {
+            matches!(
+                store.geometry_resources().get(handle),
+                Some(noon_core::GeometryResource::Mesh(_))
+            )
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn object_requires_spatial_lowering(
+    state: &SemanticObjectState,
+    store: &SemanticStore,
+) -> bool {
+    state.role() == noon_core::SemanticObjectRole::Camera3D
+        || object_has_mesh_content(state, store)
+        || matches!(
+            state.transform.orientation,
+            noon_core::SemanticOrientation::Spatial(_)
+        )
+}
+
+pub(super) fn lower_object_state(
     semantic_id: SemanticNodeId,
     state: &SemanticObjectState,
+    store: &SemanticStore,
 ) -> Result<LoweredObjectState, SemanticLoweringError> {
+    let mesh_content = object_has_mesh_content(state, store);
+    let is_camera_3d = state.role() == noon_core::SemanticObjectRole::Camera3D;
+    if is_camera_3d && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {
+        return Err(SemanticLoweringError::UnsupportedCameraScale { node: semantic_id });
+    }
+    if !state.transform.is_valid() {
+        return Err(SemanticLoweringError::InvalidSemanticTransform { node: semantic_id });
+    }
+    let has_spatial = object_requires_spatial_lowering(state, store);
+    let spatial = if has_spatial {
+        let world = state
+            .transform
+            .world_transform()
+            .ok_or(SemanticLoweringError::InvalidSemanticTransform { node: semantic_id })?;
+        Some(crate::CompiledSpatialState {
+            world,
+            camera_projection: state.camera_projection(),
+        })
+    } else {
+        None
+    };
+    let base_transform = if is_camera_3d || mesh_content {
+        Transform2D::IDENTITY
+    } else if state.transform.planar_rotation().is_some() {
+        lower_semantic_transform(semantic_id, state)?
+    } else {
+        return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
+    };
     Ok(LoweredObjectState {
         content: state.content,
-        base_transform: lower_semantic_transform(semantic_id, state)?,
+        base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
         presentation: state.presentation(),
         signal_bindings: state.signal_bindings().to_vec(),
         decimal_number: state.decimal_number().cloned(),
+        spatial,
     })
 }
 
@@ -649,6 +745,7 @@ pub enum SemanticExecutionValueError {
         field: SemanticExecutionField,
         resource: u64,
     },
+    SpatialOrientationUnsupported,
 }
 
 impl std::fmt::Display for SemanticExecutionValueError {
@@ -663,6 +760,9 @@ impl std::fmt::Display for SemanticExecutionValueError {
             }
             Self::UnsupportedPaintResource { field, resource } => {
                 write!(formatter, "unsupported {field} paint resource {resource}")
+            }
+            Self::SpatialOrientationUnsupported => {
+                formatter.write_str("spatial orientation cannot be lowered to a 2D transform")
             }
         }
     }
@@ -684,6 +784,9 @@ impl SemanticExecutionValueError {
                     resource,
                 }
             }
+            Self::SpatialOrientationUnsupported => {
+                SemanticLoweringError::UnsupportedSpatialOrientation { node }
+            }
         }
     }
 }
@@ -691,16 +794,17 @@ impl SemanticExecutionValueError {
 pub(crate) fn lower_semantic_transform_value(
     state: &SemanticObjectState,
 ) -> Result<Transform2D, SemanticExecutionValueError> {
+    let rotation = state
+        .transform
+        .planar_rotation()
+        .ok_or(SemanticExecutionValueError::SpatialOrientationUnsupported)?;
     Ok(Transform2D {
         translation: lower_vector_xy(
             SemanticExecutionField::Translation,
             state.transform.translation,
         )?,
         scale: lower_vector_xy(SemanticExecutionField::Scale, state.transform.scale)?,
-        rotation: lower_scalar_f32(
-            SemanticExecutionField::RotationZ,
-            state.transform.rotation_z,
-        )?,
+        rotation: lower_scalar_f32(SemanticExecutionField::RotationZ, rotation)?,
     })
 }
 
@@ -916,7 +1020,7 @@ mod tests {
         let mut state = circle(2.0);
         state.transform.translation = SemanticVec3::new(4.5, -3.25, 12.0);
         state.transform.scale = SemanticVec3::new(2.0, 0.5, 7.0);
-        state.transform.rotation_z = 0.75;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(0.75);
         state.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.2, 0.4, 0.6, 0.8)));
         state.style.fill_opacity = 0.25;
         state.style.stroke_width = 3.5;

@@ -19,7 +19,9 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
         prepared.mutations().iter().all(|mutation| {
             matches!(
                 mutation,
-                SemanticMutation::SetProperty { .. } | SemanticMutation::ReplaceStyle { .. }
+                SemanticMutation::SetProperty { .. }
+                    | SemanticMutation::SetObjectTransform { .. }
+                    | SemanticMutation::ReplaceStyle { .. }
             )
         })
     }

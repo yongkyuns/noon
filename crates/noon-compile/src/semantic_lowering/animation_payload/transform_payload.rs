@@ -143,6 +143,20 @@ pub(super) fn validate_transform_payload_shape(
     target: &noon_core::SemanticObjectState,
     options: ResolvedAnimationOptions,
 ) -> Result<(), TransformPayloadValidationIssue> {
+    let source_rotation =
+        source
+            .transform
+            .planar_rotation()
+            .ok_or(TransformPayloadValidationIssue::DepthChange(
+                SemanticAffineAnimationField::RotationZ,
+            ))?;
+    let target_rotation =
+        target
+            .transform
+            .planar_rotation()
+            .ok_or(TransformPayloadValidationIssue::DepthChange(
+                SemanticAffineAnimationField::RotationZ,
+            ))?;
     if options.remover || options.introducer {
         return Err(TransformPayloadValidationIssue::Lifecycle {
             remover: options.remover,
@@ -175,7 +189,7 @@ pub(super) fn validate_transform_payload_shape(
         && (source.content != target.content
             || source.style != target.style
             || source.transform.scale != target.transform.scale
-            || source.transform.rotation_z != target.transform.rotation_z
+            || source_rotation != target_rotation
             || source.z_index() != target.z_index())
     {
         return Err(TransformPayloadValidationIssue::PathArcPayload);

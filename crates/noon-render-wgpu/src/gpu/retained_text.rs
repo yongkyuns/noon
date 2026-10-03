@@ -2157,6 +2157,13 @@ impl RetainedFramePreparer {
                 return frame.is_present(index)
                     && self.fast_text_only.get(index).copied().unwrap_or(false);
             }
+            // Spatial rows are prepared by the 3D renderer and deliberately have
+            // no 2D scratch slot. Their pose/style changes must not force the
+            // retained vector stream to rebuild (or ask it to resolve a mesh as
+            // a VectorPath).
+            if object.spatial.is_some() {
+                return true;
+            }
             let Some(scratch_slot) = self.scratch_slots.get(index).and_then(|slot| *slot) else {
                 return false;
             };
@@ -2596,6 +2603,13 @@ impl RetainedFramePreparer {
                 geometry_only = false;
                 continue;
             }
+            if object.spatial.is_some() {
+                // Meshes and Camera3D declarations belong exclusively to the
+                // spatial pass. They share publication ordering with this
+                // preparer, but are not retained planar geometry.
+                geometry_only = false;
+                continue;
+            }
             if !frame.is_present(object_index) {
                 geometry_only = false;
                 continue;
@@ -2708,6 +2722,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: scratch_id,
             content: ObjectContentRef::Geometry(geometry),
@@ -2744,7 +2759,10 @@ impl RetainedFramePreparer {
     ) -> Result<(), RetainedPrepareError> {
         let GeometryResource::VectorPath(path) = geometries
             .get(vector.geometry)
-            .ok_or(RetainedPrepareError::MissingGeometryResource)?;
+            .ok_or(RetainedPrepareError::MissingGeometryResource)?
+        else {
+            return Err(RetainedPrepareError::MissingGeometryResource);
+        };
         let path = transform_path(path, vector.transform, Vec2::ZERO);
         let style = resolved_text_vector_style(object_style, vector);
         let scratch_slot = self.push_geometry(
@@ -2858,7 +2876,10 @@ fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> S
     }
 }
 
-fn publication_is_stale(received: PublicationContext, applied: PublicationContext) -> bool {
+pub(super) fn publication_is_stale(
+    received: PublicationContext,
+    applied: PublicationContext,
+) -> bool {
     received.frame_epoch().get() < applied.frame_epoch().get()
         || (received.frame_epoch() == applied.frame_epoch() && received != applied)
 }
@@ -3001,7 +3022,10 @@ fn resolve_geometry_ref(
         .ok_or(RetainedPrepareError::MissingGeometryResource)?;
     let GeometryResource::VectorPath(path) = geometries
         .get(handle)
-        .ok_or(RetainedPrepareError::MissingGeometryResource)?;
+        .ok_or(RetainedPrepareError::MissingGeometryResource)?
+    else {
+        return Err(RetainedPrepareError::MissingGeometryResource);
+    };
     Ok(GeometryRef::VectorPath(path.as_ref().clone()))
 }
 
@@ -3752,13 +3776,19 @@ impl GpuRenderer {
         let sample_count = retained_sample_count(prepared.render_items);
         let inset_stats =
             self.encode_inset_captures(encoder, prepared, text_state, sample_count)?;
+        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let load = if self.spatial.is_active() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(clear_color)
+        };
         let color_attachments = if sample_count == 1 {
             [Some(wgpu::RenderPassColorAttachment {
                 view: scene_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })]
@@ -3768,7 +3798,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: Some(scene_view),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Discard,
                 },
             })]
@@ -3798,6 +3828,7 @@ impl GpuRenderer {
             &mut rendered_insets,
         )?;
         drop(pass);
+        stats.geometry += spatial_stats;
         stats += inset_stats;
         if finalize {
             stats.geometry += self.finalize_frame(encoder, view, overlay);
@@ -4264,6 +4295,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
                         content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -4273,6 +4305,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
@@ -4312,6 +4345,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
                         content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -4321,6 +4355,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
@@ -4596,6 +4631,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(id),
                 content: ObjectContentRef::Geometry(GeometryRef::path(
@@ -5252,6 +5288,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(3),
             content: ObjectContentRef::Image(image),

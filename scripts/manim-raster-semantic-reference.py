@@ -22,9 +22,11 @@ from manim import config, tempconfig
 from manim.camera.camera import Camera
 from manim.camera.moving_camera import MovingCamera
 from manim.camera.multi_camera import MultiCamera
+from manim.camera.three_d_camera import ThreeDCamera
 from manim.renderer.cairo_renderer import CairoRenderer
 from manim.scene.moving_camera_scene import MovingCameraScene
 from manim.scene.zoomed_scene import ZoomedScene
+from manim.scene.three_d_scene import ThreeDScene
 
 PINNED_MANIM_VERSION = "0.21.0"
 CAIRO_STROKE_WIDTH_SCALE = 0.01
@@ -168,7 +170,7 @@ def _scene_state(
     animation_time: float,
 ) -> dict[str, Any]:
     objects = [_object_state(mobject, index) for index, mobject in enumerate(scene.mobjects)]
-    return {
+    state = {
         "engine": "manim",
         "frame_index": frame_index,
         "time": scene_time,
@@ -176,6 +178,10 @@ def _scene_state(
         "present_object_count": len(objects),
         "objects": objects,
     }
+    oracle_state = getattr(scene, "noon_oracle_state", None)
+    if callable(oracle_state):
+        state["oracle"] = oracle_state()
+    return state
 
 
 def _load_source(source_path: Path):
@@ -197,7 +203,8 @@ def _render_fixture(
     # that contract explicitly, including ZoomedScene's MultiCamera, while the
     # semantic oracle still intercepts frame materialization.
     camera_class = (
-        MultiCamera if issubclass(scene_class, ZoomedScene)
+        ThreeDCamera if issubclass(scene_class, ThreeDScene)
+        else MultiCamera if issubclass(scene_class, ZoomedScene)
         else MovingCamera if issubclass(scene_class, MovingCameraScene)
         else Camera
     )

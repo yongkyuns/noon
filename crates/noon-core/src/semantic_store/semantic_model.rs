@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, PathCommand, StrokeCap, StrokeJoin, Style, Vec2, VectorPath};
+use crate::{
+    Color, PathCommand, SemanticRotation3D, SemanticWorldTransform3D, StrokeCap, StrokeJoin, Style,
+    Vec2, VectorPath,
+};
 
-/// High-precision authoring vector. The current renderer remains 2D/f32; this
-/// type prevents frontend compatibility from being constrained by that backend.
+/// High-precision authoring vector. Renderers explicitly lower the semantic
+/// coordinates to their GPU representation when preparing affected objects.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SemanticVec3 {
     pub x: f64,
@@ -68,6 +71,108 @@ impl Default for SemanticTransform2_5D {
             scale: SemanticVec3::new(1.0, 1.0, 1.0),
             rotation_z: 0.0,
         }
+    }
+}
+
+/// The single authored object transform. Planar rotation keeps its original
+/// scalar angle (including unwrapped endpoints); spatial rotation is a unit
+/// quaternion and cannot be silently projected into 2D.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticTransform {
+    pub translation: SemanticVec3,
+    pub scale: SemanticVec3,
+    pub orientation: SemanticOrientation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticOrientation {
+    Planar(f64),
+    Spatial(SemanticRotation3D),
+}
+
+impl Default for SemanticTransform {
+    fn default() -> Self {
+        Self {
+            translation: SemanticVec3::ZERO,
+            scale: SemanticVec3::new(1.0, 1.0, 1.0),
+            orientation: SemanticOrientation::Planar(0.0),
+        }
+    }
+}
+
+impl From<SemanticTransform2_5D> for SemanticTransform {
+    fn from(value: SemanticTransform2_5D) -> Self {
+        Self {
+            translation: value.translation,
+            scale: value.scale,
+            orientation: SemanticOrientation::Planar(value.rotation_z),
+        }
+    }
+}
+
+impl SemanticTransform {
+    pub fn planar_rotation(self) -> Option<f64> {
+        match self.orientation {
+            SemanticOrientation::Planar(value) => Some(value),
+            SemanticOrientation::Spatial(_) => None,
+        }
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.translation.is_finite()
+            && self.scale.is_finite()
+            && match self.orientation {
+                SemanticOrientation::Planar(angle) => angle.is_finite(),
+                SemanticOrientation::Spatial(rotation) => rotation.is_valid(),
+            }
+    }
+
+    /// Return the exact 2.5D projection only for planar orientation.
+    pub fn as_planar(self) -> Option<SemanticTransform2_5D> {
+        let SemanticOrientation::Planar(rotation_z) = self.orientation else {
+            return None;
+        };
+        Some(SemanticTransform2_5D {
+            translation: self.translation,
+            scale: self.scale,
+            rotation_z,
+        })
+    }
+
+    pub fn world_transform(self) -> Option<SemanticWorldTransform3D> {
+        if !self.is_valid() {
+            return None;
+        }
+        let rotation = match self.orientation {
+            SemanticOrientation::Planar(angle) => {
+                SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 0.0, 1.0), angle)?
+            }
+            SemanticOrientation::Spatial(rotation) => rotation,
+        };
+        Some(SemanticWorldTransform3D {
+            translation: self.translation,
+            rotation,
+            scale: self.scale,
+        })
+    }
+
+    /// Transform an authored local z=0 point and return its actual xy result.
+    pub fn transform_xy(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !self.is_valid() || !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        if matches!(self.orientation, SemanticOrientation::Planar(_)) {
+            // Preserve the existing 2D scalar path exactly: this keeps authored
+            // unwrapped angle behavior and avoids constructing/normalizing a
+            // quaternion for every point in a layout or bounds query.
+            let planar = self.as_planar()?;
+            let result = planar.transform_xy(x, y);
+            return (result.0.is_finite() && result.1.is_finite()).then_some(result);
+        }
+        let point = self
+            .world_transform()?
+            .transform_point(SemanticVec3::new(x, y, 0.0))?;
+        Some((point.x, point.y))
     }
 }
 
@@ -519,5 +624,55 @@ mod tests {
         let bounds = semantic_path_bounds(&path, 0.5);
         assert_eq!(bounds.layout.unwrap().min_y, -0.25);
         assert_eq!(bounds.conservative.unwrap().max_y, 0.25);
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    #[test]
+    fn planar_transform_preserves_unwrapped_angle_and_2d_mapping() {
+        let transform = SemanticTransform {
+            translation: SemanticVec3::new(2.0, -3.0, 4.0),
+            scale: SemanticVec3::new(2.0, 3.0, 1.0),
+            orientation: SemanticOrientation::Planar(std::f64::consts::TAU + 0.25),
+        };
+        let planar = transform.as_planar().expect("planar transform");
+        assert_eq!(planar.rotation_z, std::f64::consts::TAU + 0.25);
+        let expected = planar.transform_xy(1.0, 0.0);
+        let actual = transform.transform_xy(1.0, 0.0).expect("transformed point");
+        assert_eq!(
+            actual, expected,
+            "planar fast path must be bit-for-bit compatible"
+        );
+        let (x, y) = actual;
+        assert!((x - (2.0 + 2.0 * 0.25f64.cos())).abs() < 1.0e-12);
+        assert!((y - (-3.0 + 2.0 * 0.25f64.sin())).abs() < 1.0e-12);
+
+        let overflowing = SemanticTransform {
+            translation: SemanticVec3::new(f64::MAX, 0.0, 0.0),
+            ..transform
+        };
+        assert_eq!(overflowing.transform_xy(f64::MAX, 0.0), None);
+        assert_eq!(transform.transform_xy(f64::INFINITY, 0.0), None);
+    }
+
+    #[test]
+    fn spatial_transform_cannot_be_projected_to_planar_and_xy_uses_3d_orientation() {
+        let rotation = SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .expect("valid rotation");
+        let transform = SemanticTransform {
+            translation: SemanticVec3::new(1.0, 2.0, 3.0),
+            scale: SemanticVec3::new(1.0, 1.0, 1.0),
+            orientation: SemanticOrientation::Spatial(rotation),
+        };
+        assert!(transform.as_planar().is_none());
+        let (x, y) = transform.transform_xy(0.0, 1.0).expect("transformed point");
+        assert!((x - 1.0).abs() < 1.0e-12);
+        assert!((y - 2.0).abs() < 1.0e-12);
     }
 }

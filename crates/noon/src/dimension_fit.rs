@@ -242,8 +242,11 @@ pub(crate) fn replacement_transaction(
         let previous = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        let Ok((local_x, local_y)) = world_scale_factors(previous.transform.rotation_z, x, y)
-        else {
+        let planar = previous
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        let Ok((local_x, local_y)) = world_scale_factors(planar.rotation_z, x, y) else {
             let path = crate::family_affine::world_scaled_path(
                 store,
                 previous,

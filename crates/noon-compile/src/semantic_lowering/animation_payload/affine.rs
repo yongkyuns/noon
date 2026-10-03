@@ -405,8 +405,17 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 target.slot(),
                 target.generation()
             ),
-            Self::PriorityCompletionTimeMap { animation, error } => write!(formatter, "priority completion for {animation:?} has unsupported timing: {error}"),
-            Self::MultiplePriorityDrivers { first_animation, next_animation } => write!(formatter, "conflicting priority completions: {first_animation:?} and {next_animation:?}"),
+            Self::PriorityCompletionTimeMap { animation, error } => write!(
+                formatter,
+                "priority completion for {animation:?} has unsupported timing: {error}"
+            ),
+            Self::MultiplePriorityDrivers {
+                first_animation,
+                next_animation,
+            } => write!(
+                formatter,
+                "conflicting priority completions: {first_animation:?} and {next_animation:?}"
+            ),
             Self::MultipleDrivers {
                 first_animation,
                 next_animation,
@@ -1100,7 +1109,13 @@ pub(super) fn lower_affine_channels(
             error,
         }
     })?;
-    let rotation = target.transform.rotation_z;
+    let rotation =
+        target
+            .transform
+            .planar_rotation()
+            .ok_or(AffinePayloadIssue::TargetValueOutOfRange(
+                SemanticAffineAnimationField::RotationZ,
+            ))?;
     if !rotation.is_finite() || rotation.abs() > f32::MAX as f64 {
         return Err(AffinePayloadIssue::TargetValueOutOfRange(
             SemanticAffineAnimationField::RotationZ,
@@ -1139,7 +1154,7 @@ pub(super) fn lower_affine_channels(
         },
         SemanticAnimationCompletion::Property {
             property: SemanticObjectProperty::RotationZ,
-            value: SemanticSignalValue::Scalar(target.transform.rotation_z),
+            value: SemanticSignalValue::Scalar(rotation),
         },
         from.transform.rotation != to.rotation,
         &mut channels,
@@ -2399,9 +2414,10 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Appearance => 7,
         Property::Reveal => 8,
         Property::Transform => 9,
-        Property::Morph => 10,
-        Property::ZIndex => 11,
-        Property::Presence => 12,
+        Property::WorldTransform => 10,
+        Property::Morph => 11,
+        Property::ZIndex => 12,
+        Property::Presence => 13,
     };
     (object.get(), slot)
 }
@@ -2797,7 +2813,7 @@ mod tests {
         let target = visible_object(&mut store);
         let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
         target_state.transform.translation = SemanticVec3::new(10.0, -3.0, 0.0);
-        target_state.transform.rotation_z = 1.25;
+        target_state.transform.orientation = noon_core::SemanticOrientation::Planar(1.25);
         target_state.transform.scale = SemanticVec3::new(2.0, 0.5, 1.0);
         let target_state = store.insert_semantic_object(target_state);
         let animation = store
@@ -3144,7 +3160,7 @@ mod tests {
         let target = visible_object(&mut store);
 
         let mut rotation_state = store.semantic_object_state_checked(target).unwrap().clone();
-        rotation_state.transform.rotation_z = 0.5;
+        rotation_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.5);
         let rotation_state = store.insert_semantic_object(rotation_state);
         let rotation = store
             .insert_semantic_transform_animation(target, rotation_state, AnimationOptions::new())

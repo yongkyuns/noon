@@ -68,6 +68,46 @@ impl RateFunction {
             }
         }
     }
+
+    /// Evaluate the same rate function in f64 for high-precision world tracks.
+    pub fn evaluate_f64(self, progress: f64) -> f64 {
+        let p = progress.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => p,
+            Self::Smooth => manim_smooth_f64(p),
+            Self::RushInto => 2.0 * manim_smooth_f64(p / 2.0),
+            Self::RushFrom => 2.0 * manim_smooth_f64(p / 2.0 + 0.5) - 1.0,
+            Self::ThereAndBack => manim_smooth_f64(if p < 0.5 { 2.0 * p } else { 2.0 * (1.0 - p) }),
+            Self::EaseInOutCubic => {
+                if p < 0.5 {
+                    4.0 * p * p * p
+                } else {
+                    1.0 - (-2.0 * p + 2.0).powi(3) / 2.0
+                }
+            }
+            Self::StepStart => {
+                if p <= 0.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            Self::StepEnd => {
+                if p < 1.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+        }
+    }
+}
+
+fn manim_smooth_f64(progress: f64) -> f64 {
+    const INFLECTION: f64 = 10.0;
+    let sigmoid = |value: f64| 1.0 / (1.0 + (-value).exp());
+    let error = sigmoid(-INFLECTION / 2.0);
+    ((sigmoid(INFLECTION * (progress - 0.5)) - error) / (1.0 - 2.0 * error)).clamp(0.0, 1.0)
 }
 
 fn manim_smooth(progress: f32) -> f32 {
@@ -87,6 +127,8 @@ pub enum Property {
     /// Exact painter priority, changed only by an instantaneous event.
     ZIndex,
     Transform,
+    /// Full f64 world-space TRS animation for spatial execution rows.
+    WorldTransform,
     Position,
     Rotation,
     Scale,
@@ -107,6 +149,7 @@ pub enum ValueKind {
     Vec2,
     Color,
     Object,
+    WorldTransform,
 }
 
 impl Property {
@@ -115,6 +158,7 @@ impl Property {
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
+            Self::WorldTransform => ValueKind::WorldTransform,
             Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation
@@ -146,6 +190,38 @@ pub struct TransformTrackEndpoint {
     pub geometry: GeometryRef,
     pub transform: Transform2D,
     pub style: Style,
+}
+
+/// Serde-compatible f64 TRS endpoint. Quaternion components are stored in
+/// `(w, x, y, z)` order and validated before a track is admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldTransformTrackEndpoint {
+    pub translation: crate::SemanticVec3,
+    pub rotation: [f64; 4],
+    pub scale: crate::SemanticVec3,
+}
+
+impl WorldTransformTrackEndpoint {
+    pub fn from_world(value: crate::SemanticWorldTransform3D) -> Self {
+        Self {
+            translation: value.translation,
+            rotation: value.rotation.components(),
+            scale: value.scale,
+        }
+    }
+
+    pub fn world(self) -> Option<crate::SemanticWorldTransform3D> {
+        crate::SemanticWorldTransform3D::new(
+            self.translation,
+            crate::SemanticRotation3D::from_components(
+                self.rotation[0],
+                self.rotation[1],
+                self.rotation[2],
+                self.rotation[3],
+            )?,
+            self.scale,
+        )
+    }
 }
 
 impl TransformTrackEndpoint {
@@ -214,6 +290,10 @@ pub enum TrackValues {
         from: TransformTrackEndpoint,
         to: TransformTrackEndpoint,
     },
+    WorldTransform {
+        from: WorldTransformTrackEndpoint,
+        to: WorldTransformTrackEndpoint,
+    },
 }
 
 impl TrackValues {
@@ -226,6 +306,7 @@ impl TrackValues {
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
+            Self::WorldTransform { .. } => ValueKind::WorldTransform,
         }
     }
 
@@ -316,6 +397,16 @@ impl TrackValues {
             Self::Object { from, to } => {
                 validate_object_track_value(object, property, TrackValueEndpoint::From, from)?;
                 validate_object_track_value(object, property, TrackValueEndpoint::To, to)
+            }
+            Self::WorldTransform { from, to } => {
+                if property != Property::WorldTransform
+                    || from.world().is_none()
+                    || to.world().is_none()
+                {
+                    Err(TimelineError::InvalidWorldTransformValues)
+                } else {
+                    Ok(())
+                }
             }
             _ => Ok(()),
         }
@@ -431,6 +522,7 @@ pub enum TimelineError {
         endpoint: TrackValueEndpoint,
         field: ObjectStateField,
     },
+    InvalidWorldTransformValues,
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
 }
@@ -491,6 +583,9 @@ impl std::fmt::Display for TimelineError {
             } => write!(
                 formatter,
                 "non-finite {field} state in {endpoint} object value for {property:?}"
+            ),
+            Self::InvalidWorldTransformValues => formatter.write_str(
+                "world transform track requires finite translation and scale and normalized quaternion endpoints",
             ),
             Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
             Self::InstantTrackCannotUseTimeMap(property) => write!(

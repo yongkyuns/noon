@@ -83,7 +83,7 @@ impl ManimBarChartOptions {
             Some(_) => {
                 return Err(CoordinateAuthoringError::InvalidOptions(
                     "bar chart y_range requires two or three values",
-                ))
+                ));
             }
         };
         Ok(Self::new(values, y_range, x_length, y_length))
@@ -305,8 +305,15 @@ fn prepare_value_update(
                 );
                 target = fresh.into();
             } else {
-                let bounds = boundary_for_content(store, state.content, state.transform)?
-                    .ok_or(AuthoringError::MissingLayoutBounds(node))?;
+                let bounds = boundary_for_content(
+                    store,
+                    state.content,
+                    state
+                        .transform
+                        .as_planar()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
+                )?
+                .ok_or(AuthoringError::MissingLayoutBounds(node))?;
                 let center = (
                     (bounds.min_x + bounds.max_x) * 0.5,
                     (bounds.min_y + bounds.max_y) * 0.5,
@@ -333,7 +340,10 @@ fn prepare_value_update(
                     old_edge - edge * (bounds.max_y - bounds.min_y) * factor * 0.5,
                 );
                 match crate::dimension_fit::world_scale_factors(
-                    state.transform.rotation_z,
+                    state
+                        .transform
+                        .planar_rotation()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
                     1.0,
                     factor,
                 ) {
@@ -384,7 +394,7 @@ fn fresh_bar(
     });
     state.transform.translation = translation;
     state.transform.scale = scale;
-    state.transform.rotation_z = rotation;
+    state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
     state.style.fill_opacity = metadata.fill_opacity;
     state.style.stroke_width = metadata.stroke_width;
     state.style.stroke = Some(SemanticPaint::Solid(noon_core::WHITE));
@@ -532,7 +542,7 @@ fn prepare_chart(
         });
         state.transform.translation = translation;
         state.transform.scale = scale;
-        state.transform.rotation_z = rotation_z;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation_z);
         state.style = style;
         state.set_bar_metadata(Some(Arc::new(SemanticBarMetadata {
             value,

@@ -33,7 +33,8 @@ fn mixed_value_property_and_subscription_changes_commit_together() {
             .semantic_object_state_checked(target)
             .unwrap()
             .transform
-            .rotation_z,
+            .planar_rotation()
+            .unwrap(),
         0.5
     );
     assert_eq!(
@@ -91,7 +92,8 @@ fn invalid_late_subscription_rolls_back_earlier_changes() {
             .semantic_object_state_checked(target)
             .unwrap()
             .transform
-            .rotation_z,
+            .planar_rotation()
+            .unwrap(),
         0.0
     );
     assert!(store

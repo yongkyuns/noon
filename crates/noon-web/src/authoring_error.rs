@@ -466,6 +466,13 @@ impl From<noon::TextPartAuthoringError> for AuthoringFailure {
             noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
                 AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
             }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::UnsupportedGeometry(
+                _,
+            )) => AuthoringFailure::new(
+                "unsupported_operation",
+                "text_parts.unsupported_geometry",
+                error,
+            ),
             noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
                 AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
             }
@@ -524,6 +531,11 @@ impl From<noon_core::SemanticTextImportError> for AuthoringFailure {
             E::MissingGeometry(_) => {
                 Self::new("missing_resource", "text_import.missing_geometry", error)
             }
+            E::UnsupportedGeometry(_) => Self::new(
+                "unsupported_operation",
+                "text_import.unsupported_geometry",
+                error,
+            ),
             E::NonFiniteGeometry(_) => {
                 Self::new("invalid_input", "text_import.non_finite_geometry", error)
             }

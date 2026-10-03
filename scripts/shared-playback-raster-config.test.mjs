@@ -17,7 +17,9 @@ const repoRoot = path.resolve("playback-test-repository");
 const oracle = { version: "0.21.0", frame_rate: 30, source: "fixture.py" };
 const matching = { id: "matching-shapes-reordered", scene: "MatchingShapesReordered", expected_duration: 2.2 };
 const other = { id: "other", scene: "Other", expected_duration: 1 };
-const fullManifest = { reference: oracle, fixtures: [matching, other] };
+const direct = { id: "direct-rust", scene: "RustFixture", expected_duration: 1,
+  direct_factory: "createDirectSpatialMeshSmokeRenderer" };
+const fullManifest = { reference: oracle, fixtures: [matching, other, direct] };
 const focusedManifest = { reference: oracle, fixtures: [matching] };
 const focusedPath = path.resolve("outside-repository", "focused.json");
 
@@ -45,6 +47,12 @@ test("default manifest retains the full corpus, even with a focused baseline", a
   const result = await load();
   assert.deepEqual(result.fixtures, [matching, other]);
   assert.deepEqual(result.backends, ["webgpu", "webgl"]);
+});
+
+test("Python cadence pass excludes direct factories instead of executing their Manim reference source", async () => {
+  const result = await load();
+  assert.ok(result.fixtures.every(fixture => !fixture.direct_factory));
+  await assert.rejects(load({ NOON_SHARED_PLAYBACK_FIXTURES: direct.id }), /unknown playback fixture/);
 });
 
 test("absolute focused manifest selects exactly the dense-run fixture", async () => {
@@ -112,16 +120,22 @@ test("shared playback passes fixture preparation metadata through the canonical 
   };
   const baseline = { fixtures: [] };
   const reference = { fixtures: [] };
+  const sourceReads = [];
   const dependencies = [assert, baseline, reference, path, repoRoot, fullManifest,
-    async () => "from manim import *\nclass Example(Scene): pass\n", rasterFixtureSource, page];
+    async filename => {
+      sourceReads.push(filename);
+      return "from manim import *\nclass Example(Scene): pass\n";
+    }, rasterFixtureSource, page];
   const plain = { id: "plain", scene: "Example", expected_duration: 1 };
   const latex = { ...plain, id: "latex", requires_latex: true };
-  for (const fixture of [plain, latex]) {
+  const worker = { ...plain, id: "worker", source: "reference.py", noon_source: "worker.py" };
+  for (const fixture of [plain, latex, worker]) {
     baseline.fixtures = [{ ...fixture, expectedDuration: 1, backends: { webgpu: { samples: [{}] } } }];
     reference.fixtures = [{ id: fixture.id, frame_count: 1, frames: [{ time: 0 }] }];
     await assert.rejects(qualify(...dependencies, fixture, "http://example.test"), stopAfterLoad);
   }
-  assert.equal(loadedSources.length, 2);
+  assert.equal(loadedSources.length, 3);
+  assert.equal(sourceReads[2], path.join(repoRoot, "worker.py"));
   assert.doesNotMatch(loadedSources[0], /await prepare_latex\(\)/);
   assert.match(loadedSources[1], /await prepare_latex\(\)/);
 });

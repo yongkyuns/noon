@@ -46,9 +46,17 @@ pub enum SemanticCompiledSceneError {
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPresentation { node } => write!(formatter,"semantic object {}:{} contains a non-finite z-index",node.slot(),node.generation()),
+            Self::InvalidPresentation { node } => write!(
+                formatter,
+                "semantic object {}:{} contains a non-finite z-index",
+                node.slot(),
+                node.generation()
+            ),
             Self::TooManyObjects(count) => {
-                write!(formatter, "semantic projection contains too many objects: {count}")
+                write!(
+                    formatter,
+                    "semantic projection contains too many objects: {count}"
+                )
             }
             Self::TooManyGraphDependencies(count) => write!(
                 formatter,
@@ -83,7 +91,10 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::UnknownNumericSignal { node, signal } => write!(
                 formatter,
                 "semantic numeric object {}:{} references unlowered scalar signal {}:{}",
-                node.slot(), node.generation(), signal.slot(), signal.generation()
+                node.slot(),
+                node.generation(),
+                signal.slot(),
+                signal.generation()
             ),
         }
     }
@@ -175,6 +186,7 @@ fn materialize_semantic_projection(
             content,
             text_bounds,
             base_transform: object.base_transform,
+            spatial: object.spatial.map(Box::new),
             base_style: object.base_style,
             base_z_index: object.presentation.z_index,
             dynamic: DynamicProperties::default(),
@@ -366,16 +378,32 @@ pub(super) fn lower_content(
     resources: &mut CompiledResources,
 ) -> Result<(ObjectContentRef, Option<Rect>), SemanticCompiledSceneError> {
     match content {
-        SemanticObjectContent::Geometry(content) => lower_semantic_geometry_value(content, store)
-            .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
-            .map_err(|error| match error {
-                SemanticGeometryValueError::InvalidAnalyticGeometry => {
-                    SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+        SemanticObjectContent::Geometry(content) => {
+            if let (StoredGeometry::Resource(handle), Some(store)) = (content, store) {
+                if matches!(
+                    store.geometry_resources().get(handle),
+                    Some(GeometryResource::Mesh(_))
+                ) {
+                    resources
+                        .capture_geometry_from_arena(store.geometry_resources(), handle)
+                        .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
+                    return Ok((
+                        ObjectContentRef::Geometry(GeometryRef::External(handle.id)),
+                        None,
+                    ));
                 }
-                SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
-                    SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
-                }
-            }),
+            }
+            lower_semantic_geometry_value(content, store)
+                .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
+                .map_err(|error| match error {
+                    SemanticGeometryValueError::InvalidAnalyticGeometry => {
+                        SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+                    }
+                    SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
+                        SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
+                    }
+                })
+        }
         SemanticObjectContent::Image(image) => {
             let store = store.ok_or(SemanticCompiledSceneError::Resource {
                 node,
@@ -444,6 +472,7 @@ pub(crate) fn lower_semantic_geometry_value(
                 Some(GeometryResource::VectorPath(path)) => {
                     Ok(GeometryRef::path(path.as_ref().clone()))
                 }
+                Some(GeometryResource::Mesh(_)) => Ok(GeometryRef::External(resource.id)),
                 None => Err(SemanticGeometryValueError::UnsupportedGeometryResource(
                     resource,
                 )),

@@ -1755,7 +1755,14 @@ mod wasm {
         /// Read authored rotation directly, without lowering to a wire value.
         #[wasm_bindgen(getter)]
         pub fn rotation(&self) -> Result<f64, JsValue> {
-            Ok(self.handle.state().map_err(js_error)?.transform.rotation_z)
+            self.handle
+                .state()
+                .map_err(js_error)?
+                .transform
+                .planar_rotation()
+                .ok_or_else(|| {
+                    JsValue::from_str("rotation getter is unsupported for spatial orientation")
+                })
         }
 
         #[wasm_bindgen(getter, js_name = centerX)]
@@ -2110,7 +2117,15 @@ mod tests {
         handle.rotate(0.2).unwrap();
         assert_eq!(handle.state().unwrap().transform.scale.x, 1.1);
         assert_eq!(handle.state().unwrap().transform.scale.y, 0.9);
-        assert_eq!(handle.state().unwrap().transform.rotation_z, 0.2);
+        assert_eq!(
+            handle
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.2
+        );
     }
 
     #[test]
@@ -2136,7 +2151,14 @@ mod tests {
         assert!((handle.state().unwrap().transform.translation.x - 2.5).abs() < 1e-12);
         assert!((handle.state().unwrap().transform.translation.y + 0.5).abs() < 1e-12);
         assert!(
-            (handle.state().unwrap().transform.rotation_z - std::f64::consts::FRAC_PI_2).abs()
+            (handle
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation")
+                - std::f64::consts::FRAC_PI_2)
+                .abs()
                 < 1e-12
         );
     }
@@ -2405,7 +2427,15 @@ mod tests {
         assert_eq!(base.center().unwrap(), (0.0, 0.0));
         assert_eq!(target.state().unwrap().transform.translation.x, -1.0);
         assert_eq!(target.state().unwrap().transform.scale.x, 0.3);
-        assert_eq!(target.state().unwrap().transform.rotation_z, 0.4);
+        assert_eq!(
+            target
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.4
+        );
         assert_eq!(target.fill_opacity().unwrap(), 0.5);
         let Some(SemanticPaint::Solid(fill)) = target.state().unwrap().style.fill else {
             panic!("target must retain a solid fill");

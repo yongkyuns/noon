@@ -555,6 +555,7 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -564,6 +565,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -587,6 +589,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -596,6 +599,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -669,6 +673,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Text(text),
@@ -687,6 +692,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Text(text),

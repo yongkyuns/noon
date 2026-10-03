@@ -161,7 +161,7 @@ impl ManimArrow {
                 return Err(ArrowScaleError::InvalidComponentRole {
                     node: self.shaft().node_id(),
                     expected: "Arrow shaft",
-                })
+                });
             }
         };
         if self.end_tip().state()?.role() != SemanticObjectRole::ArrowEndTip {
@@ -398,13 +398,16 @@ fn reposition_tip(
         let ((translation_x, translation_y), rotation) =
             crate::semantic_mobject::rotate_affine_about_point(
                 (state.transform.translation.x, state.transform.translation.y),
-                state.transform.rotation_z,
+                state
+                    .transform
+                    .planar_rotation()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
                 angle,
                 old_apex,
             )?;
         state.transform.translation.x = translation_x;
         state.transform.translation.y = translation_y;
-        state.transform.rotation_z = rotation;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
     }
     state.transform.translation.x += new_apex.0 - old_apex.0;
     state.transform.translation.y += new_apex.1 - old_apex.1;
@@ -422,8 +425,12 @@ fn set_line_world_endpoints(
     end: (f64, f64),
     name: &str,
 ) -> Result<(), AuthoringError> {
-    let start = inverse_transform_point(state.transform, start, name)?;
-    let end = inverse_transform_point(state.transform, end, name)?;
+    let transform = state
+        .transform
+        .as_planar()
+        .ok_or(AuthoringError::NonFiniteObjectState)?;
+    let start = inverse_transform_point(transform, start, name)?;
+    let end = inverse_transform_point(transform, end, name)?;
     state.content = StoredGeometry::Line {
         start: lower_point(&format!("{name} start"), start)?,
         end: lower_point(&format!("{name} end"), end)?,

@@ -13,6 +13,7 @@ const STATIC_FRAMES: u64 = 128;
 fn static_geometry_frame() -> FrameState {
     let objects = (0..STATIC_OBJECTS)
         .map(|index| FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(index as u64),
             content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
@@ -102,6 +103,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         time: 0.0,
         objects: (0..STATIC_OBJECTS)
             .map(|index| FrameObjectState {
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
                 content: ObjectContentRef::Text(text),
@@ -275,6 +277,7 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
     frame.objects.push(FrameObjectState {
+        spatial: None,
         z_index: 0.0,
         id: ObjectId::new(STATIC_OBJECTS as u64),
         content: ObjectContentRef::Text(text),
@@ -370,6 +373,7 @@ fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
     let mut frame = static_geometry_frame();
     for index in 0..TEXT_OBJECTS {
         frame.objects.push(FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new((STATIC_OBJECTS + index) as u64),
             content: ObjectContentRef::Text(text),

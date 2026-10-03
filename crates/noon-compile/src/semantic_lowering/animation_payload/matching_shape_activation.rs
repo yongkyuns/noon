@@ -102,7 +102,10 @@ impl std::fmt::Display for PreparedMatchingShapeActivationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidActivationStart(value) => {
-                write!(formatter, "matching-shape activation start must be finite, got {value}")
+                write!(
+                    formatter,
+                    "matching-shape activation start must be finite, got {value}"
+                )
             }
             Self::FamilyLeaves { root } => write!(
                 formatter,
@@ -163,7 +166,8 @@ impl std::fmt::Display for PreparedMatchingShapeActivationError {
             Self::MissingSourceKey { node } => write!(
                 formatter,
                 "matching-source leaf {}:{} has no single compiler-authored source key",
-                node.slot(), node.generation()
+                node.slot(),
+                node.generation()
             ),
             Self::ShapeKey { node, error } => write!(
                 formatter,
@@ -397,7 +401,7 @@ mod tests {
         let handle = store.insert_geometry_path(path).unwrap();
         let mut state =
             noon_core::SemanticObjectState::new(noon_core::StoredGeometry::Resource(handle));
-        state.transform.rotation_z = rotation_z;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation_z);
         store.insert_semantic_object(state)
     }
 

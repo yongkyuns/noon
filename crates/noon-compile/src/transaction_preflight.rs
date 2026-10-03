@@ -75,8 +75,14 @@ fn effective_track_interval(
 
 #[derive(Clone, Copy)]
 enum ObjectOverlay {
-    Present { index: u32, is_text: bool },
-    Removed { index: u32 },
+    Present {
+        index: u32,
+        is_text: bool,
+        spatial: Option<crate::CompiledSpatialState>,
+    },
+    Removed {
+        index: u32,
+    },
 }
 
 /// A transaction-local sparse overlay. It reads untouched identity and channel
@@ -116,6 +122,48 @@ impl PreflightOverlay {
                 }
                 index
             }
+        }
+    }
+
+    fn spatial(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<crate::CompiledSpatialState> {
+        match self.objects.get(&id).copied() {
+            Some(ObjectOverlay::Present { spatial, .. }) => spatial,
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                scene.objects[index as usize].spatial.as_deref().copied()
+            }
+        }
+    }
+
+    fn set_spatial(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        spatial: Option<crate::CompiledSpatialState>,
+    ) {
+        if let Some(ObjectOverlay::Present {
+            spatial: current, ..
+        }) = self.objects.get_mut(&id)
+        {
+            *current = spatial;
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    index,
+                    is_text: scene.objects[index as usize].text().is_some(),
+                    spatial,
+                },
+            );
         }
     }
 
@@ -274,6 +322,7 @@ pub(super) fn preflight_transaction_with_resources(
                     ObjectOverlay::Present {
                         index,
                         is_text: object.text().is_some(),
+                        spatial: object.spatial.as_deref().copied(),
                     },
                 );
             }
@@ -325,11 +374,13 @@ pub(super) fn preflight_transaction_with_resources(
                         });
                     }
                 }
+                let spatial = overlay.spatial(scene, *object);
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
+                        spatial,
                     },
                 );
             }
@@ -337,7 +388,28 @@ pub(super) fn preflight_transaction_with_resources(
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
+                if overlay.spatial(scene, *object).is_some() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
                 validate_transform(*object, *transform).map_err(map_object_state_error)?;
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let spatial = overlay.spatial(scene, *object);
+                let Some((_, next_spatial)) =
+                    super::lower_semantic_transform_patch(*object, spatial.as_ref(), *transform)
+                else {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                };
+                overlay.set_spatial(scene, *object, next_spatial);
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -398,6 +470,12 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                let spatial = overlay.spatial(scene, track.object);
+                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidWorldTransformValues,
+                    ));
+                }
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let shadow = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(shadow));
@@ -429,6 +507,12 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                let spatial = overlay.spatial(scene, track.object);
+                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidWorldTransformValues,
+                    ));
+                }
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let replacement = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(replacement));
@@ -486,6 +570,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::WorldTransform
                             | Property::ZIndex
                     )
                 {

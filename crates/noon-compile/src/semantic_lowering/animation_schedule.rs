@@ -490,7 +490,10 @@ impl std::fmt::Display for SemanticAnimationScheduleError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidStartTime(value) => {
-                write!(formatter, "semantic animation start time must be finite, got {value}")
+                write!(
+                    formatter,
+                    "semantic animation start time must be finite, got {value}"
+                )
             }
             Self::Animation(error) => error.fmt(formatter),
             Self::Options { animation, error } => write!(

@@ -145,6 +145,40 @@ function sampleFrames(frameTimes, fixture) {
   return sampleRasterFrames(frameTimes, manifest.sample_fractions, fixture?.sample_times);
 }
 
+async function assertSpatialMeshOracle(semantic, samples) {
+  const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
+  for (const sample of samples) {
+    const frame = byIndex.get(sample.frameIndex);
+    assert.ok(frame?.oracle, `spatial-mesh-depth: missing numeric Manim state at ${sample.time}`);
+    const { camera, red_center: red, blue_center: blue } = frame.oracle;
+    assert.ok(Math.abs(red[2] - (1 - sample.time)) < 1e-6,
+      `spatial-mesh-depth: red world z at ${sample.time} must follow 1-t; got ${red[2]}`);
+    assert.ok(Math.abs(blue[2]) < 1e-6,
+      `spatial-mesh-depth: blue world z must stay at zero; got ${blue[2]}`);
+    assert.ok(Math.abs(camera.frame_center[0] - sample.time * 0.125) < 1e-6,
+      `spatial-mesh-depth: camera center x at ${sample.time}; got ${camera.frame_center[0]}`);
+    assert.ok(Math.abs(camera.phi) < 1e-6 && Math.abs(Math.cos(camera.theta)) < 1e-6,
+      "spatial-mesh-depth: camera must face the XY triangle plane");
+    assert.ok(Math.abs(camera.focal_distance - 5) < 1e-6,
+      "spatial-mesh-depth: Manim focal distance must match the authored camera");
+    assert.ok(Math.abs(camera.zoom - 4 / (5 * Math.tan(0.5))) < 1e-6,
+      "spatial-mesh-depth: Manim zoom must match the perspective frame height");
+
+    if (Math.abs(sample.time - 0.5) < 1e-9 || sample.time >= 1.5) {
+      const png = PNG.sync.read(await readFile(sample.referencePath));
+      const offset = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+      const [redPixel, , bluePixel] = png.data.subarray(offset, offset + 3);
+      if (Math.abs(sample.time - 0.5) < 1e-9) {
+        assert.ok(redPixel > bluePixel * 1.5,
+          `spatial-mesh-depth: nearer red triangle must win Manim depth at t=${sample.time}`);
+      } else {
+        assert.ok(bluePixel > redPixel * 1.5,
+          `spatial-mesh-depth: rear blue triangle must win after the red depth crossing at t=${sample.time}`);
+      }
+    }
+  }
+}
+
 async function renderManimReferences() {
   verifyManimVersion();
   await mkdir(semanticRoot, { recursive: true });
@@ -217,6 +251,9 @@ async function renderManimReferences() {
       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
       sample.referencePath = outputPath;
     }
+    if (fixture.id === "spatial-mesh-depth") {
+      await assertSpatialMeshOracle(semanticFixture, samples);
+    }
     results.set(fixture.id, { fixture, frames, frameTimes, samples });
   }
   return results;
@@ -231,6 +268,93 @@ async function prepareHostCapturePage(page) {
 }
 
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
+  if (fixture.direct_factory) {
+    const loaded = await page.evaluate(async ({ factory }) => {
+      const canvas = document.querySelector("#scene");
+      canvas.width = 960;
+      canvas.height = 540;
+      const wasm = await import("./pkg/noon_web.js");
+      await wasm.default();
+      const renderer = await wasm[factory](canvas.transferControlToOffscreen());
+      renderer.resize(960, 540);
+      window.noonSpatialMeshOracle = renderer;
+      renderer.directWakeDirectiveJson(0);
+      let presented = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (renderer.render()) { presented = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      return { kind: "direct_typed_execution", rendererBackend: renderer.rendererBackend(),
+        objectCount: renderer.objectCount(), presented, time: renderer.time() };
+    }, { factory: fixture.direct_factory });
+    assert.equal(loaded.kind, "direct_typed_execution", `${fixture.id}: canonical Rust/WASM scene`);
+    assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
+    assert.equal(loaded.presented, true, `${fixture.id}: initial direct frame not presented`);
+    const captures = [];
+    for (const sample of referenceResult.samples) {
+      const metrics = await page.evaluate(async ({ time, initialPresented }) => {
+        const renderer = window.noonSpatialMeshOracle;
+        let presented = initialPresented;
+        if (time > 0) {
+          renderer.advanceDirectRealtime(time * 1000);
+          presented = false;
+          for (let attempt = 0; attempt < 60; attempt += 1) {
+            if (renderer.render()) { presented = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        }
+        return { error: null, presented, time: renderer.time(), objectCount: renderer.objectCount() };
+      }, { time: sample.time, initialPresented: loaded.presented });
+      assert.equal(metrics.error, null, `${fixture.id}: direct render error at ${sample.time}`);
+      assert.equal(metrics.presented, true, `${fixture.id}: direct frame not presented at ${sample.time}`);
+      assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
+        `${fixture.id}: direct logical time mismatch at ${sample.time}`);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      const outputPath = path.join(fixtureDir, `${sample.label}.png`);
+      await page.locator("#scene").screenshot({ path: outputPath });
+      const debugFrame = await page.evaluate(() =>
+        JSON.parse(window.noonSpatialMeshOracle.debugSelectionFrameJson()));
+      assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+      captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
+    }
+    const completed = await page.evaluate(async () => {
+      const renderer = window.noonSpatialMeshOracle;
+      renderer.advanceDirectRealtime(2000);
+      let presented = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (renderer.render()) { presented = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      return { authoredDuration: renderer.time(), objectCount: renderer.objectCount(), presented };
+    });
+    assert.equal(completed.authoredDuration, fixture.expected_duration,
+      `${fixture.id}: typed Rust/WASM duration`);
+    assert.equal(completed.objectCount, 3, `${fixture.id}: camera plus shared mesh instances`);
+    assert.equal(completed.presented, true, `${fixture.id}: endpoint not presented`);
+    const forwardMidpoint = captures.find(capture => Math.abs(capture.time - 0.5) < 1e-9);
+    assert.ok(forwardMidpoint, `${fixture.id}: requires a forward midpoint capture`);
+    await page.evaluate(async () => {
+      const renderer = window.noonSpatialMeshOracle;
+      renderer.seekDirect(0.5);
+      let presented = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (renderer.render()) { presented = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      if (!presented) throw new Error("direct spatial mesh reseek was not presented");
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+    const reseekPath = path.join(fixtureDir, "reseek-midpoint.png");
+    await page.locator("#scene").screenshot({ path: reseekPath });
+    const forwardPixels = PNG.sync.read(await readFile(forwardMidpoint.noonPath)).data;
+    const reseekPixels = PNG.sync.read(await readFile(reseekPath)).data;
+    assert.deepEqual(
+      reseekPixels,
+      forwardPixels,
+      `${fixture.id}: direct midpoint seek must reproduce its forward-sampled raster`,
+    );
+    return { duration: completed.authoredDuration, objectCount: completed.objectCount, captures };
+  }
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
     { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },

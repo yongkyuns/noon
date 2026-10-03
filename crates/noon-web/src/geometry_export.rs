@@ -25,6 +25,9 @@ pub(crate) fn mobject_fields(
             .ok_or("unknown or stale geometry resource")?
         {
             GeometryResource::VectorPath(path) => GeometryRef::path((**path).clone()),
+            GeometryResource::Mesh(_) => {
+                return Err("2D geometry export does not support mesh resources".into());
+            }
         },
     };
     // These synchronous observations use the existing shared scalar projections.

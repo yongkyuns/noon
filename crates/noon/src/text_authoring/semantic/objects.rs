@@ -383,7 +383,7 @@ pub(crate) fn semantic_text_state(
     style: noon_core::SemanticStyle,
 ) -> noon_core::SemanticObjectState {
     let mut state = noon_core::SemanticObjectState::new(handle);
-    state.transform = transform;
+    state.transform = transform.into();
     state.style = style;
     state
 }

@@ -770,9 +770,17 @@ fn resolve_external_geometry(
     let handle = resources
         .current_handle(*id)
         .ok_or(RetainedResourceTransportError::UnknownGeometryId(*id))?;
-    let GeometryResource::VectorPath(path) = resources
+    let resource = resources
         .get(handle)
         .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
+    let path = match resource {
+        GeometryResource::VectorPath(path) => path,
+        GeometryResource::Mesh(_) => {
+            return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
+                handle.into(),
+            ));
+        }
+    };
     *geometry = GeometryRef::VectorPath(path.as_ref().clone());
     Ok(())
 }
@@ -856,6 +864,7 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -865,6 +874,7 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -895,6 +905,7 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: first.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -904,6 +915,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    spatial: None,
                     z_index: 0.0,
                     id: second.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -928,6 +940,7 @@ mod tests {
         let template = frame.objects[0].clone();
         frame.objects = (0..128)
             .map(|index| FrameObjectState {
+                spatial: None,
                 id: ObjectId::new(index + 1),
                 ..template.clone()
             })

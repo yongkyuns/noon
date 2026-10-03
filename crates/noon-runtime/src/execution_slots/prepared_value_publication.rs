@@ -13,6 +13,12 @@ enum PreparedAuthoredValueWrite {
         transform: Transform2D,
         changes_execution: bool,
     },
+    SemanticTransform {
+        object_index: usize,
+        base_transform: Transform2D,
+        spatial: Option<noon_compile::CompiledSpatialState>,
+        changes_execution: bool,
+    },
     Style {
         object_index: usize,
         style: Style,
@@ -23,7 +29,9 @@ enum PreparedAuthoredValueWrite {
 impl PreparedAuthoredValueWrite {
     const fn object_index(self) -> usize {
         match self {
-            Self::Transform { object_index, .. } | Self::Style { object_index, .. } => object_index,
+            Self::Transform { object_index, .. }
+            | Self::SemanticTransform { object_index, .. }
+            | Self::Style { object_index, .. } => object_index,
         }
     }
 
@@ -33,6 +41,9 @@ impl PreparedAuthoredValueWrite {
                 changes_execution, ..
             }
             | Self::Style {
+                changes_execution, ..
+            }
+            | Self::SemanticTransform {
                 changes_execution, ..
             } => changes_execution,
         }
@@ -74,7 +85,9 @@ impl SceneInstance {
         if transaction.mutations().iter().any(|patch| {
             !matches!(
                 patch,
-                ExecutionPatch::SetTransform { .. } | ExecutionPatch::SetStyle { .. }
+                ExecutionPatch::SetTransform { .. }
+                    | ExecutionPatch::SetSemanticTransform { .. }
+                    | ExecutionPatch::SetStyle { .. }
             )
         }) {
             return Ok(None);
@@ -103,6 +116,7 @@ impl SceneInstance {
         for patch in final_value_writes(transaction) {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
+                ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
                 _ => return Ok(None),
             };
@@ -126,6 +140,21 @@ impl SceneInstance {
                     style: *style,
                     changes_execution,
                 },
+                (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
+                    let (base_transform, spatial) = self
+                        .compiled
+                        .prepare_semantic_transform_value(object_index as u32, *transform)
+                        .ok_or(noon_compile::CompilePatchError::InvalidObjectState {
+                            object,
+                            field: noon_core::ObjectStateField::Transform,
+                        })?;
+                    PreparedAuthoredValueWrite::SemanticTransform {
+                        object_index,
+                        base_transform,
+                        spatial,
+                        changes_execution,
+                    }
+                }
                 _ => unreachable!("ordinary value publication classified above"),
             });
         }
@@ -192,6 +221,41 @@ impl SceneInstance {
                             Property::Position,
                             Property::Rotation,
                             Property::Scale,
+                        ],
+                    );
+                }
+                PreparedAuthoredValueWrite::SemanticTransform {
+                    base_transform,
+                    spatial,
+                    object_index,
+                    ..
+                } => {
+                    self.compiled.commit_prepared_semantic_transform_value(
+                        object_index as u32,
+                        base_transform,
+                        spatial,
+                    );
+                    self.frame.release_render_transform(object_index);
+                    self.frame.objects[object_index].transform = base_transform;
+                    if let (Some(current), Some(next)) = (
+                        self.frame.objects[object_index].spatial.as_deref_mut(),
+                        spatial,
+                    ) {
+                        *current = next;
+                    } else {
+                        debug_assert_eq!(
+                            self.frame.objects[object_index].spatial.is_some(),
+                            spatial.is_some()
+                        );
+                    }
+                    self.reapply_properties(
+                        object_index,
+                        &[
+                            Property::Transform,
+                            Property::Position,
+                            Property::Rotation,
+                            Property::Scale,
+                            Property::WorldTransform,
                         ],
                     );
                 }

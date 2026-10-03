@@ -173,7 +173,8 @@ impl Scene {
             translation: SemanticVec3::from_vec2(options.camera_frame_start),
             scale: SemanticVec3::new(options.zoom_factor, options.zoom_factor, 1.0),
             ..SemanticTransform2_5D::default()
-        };
+        }
+        .into();
         frame.style = SemanticStyle {
             fill: None,
             stroke: Some(SemanticPaint::Solid(Color::WHITE)),
@@ -444,7 +445,15 @@ mod tests {
                 .replace_content(object.node_id(), StoredGeometry::Circle { radius: 1.0 });
             assert!(scene.apply_semantic_transaction(transaction).is_err());
             assert_eq!(scene.revision(), before);
-            assert_eq!(object.state().unwrap().transform.rotation_z, 0.0);
+            assert_eq!(
+                object
+                    .state()
+                    .unwrap()
+                    .transform
+                    .planar_rotation()
+                    .unwrap_or(f64::NAN),
+                0.0
+            );
         }
         // Direct node construction must also see a frame edited later in the batch.
         let mut add_and_break = SemanticMutationTransaction::new();

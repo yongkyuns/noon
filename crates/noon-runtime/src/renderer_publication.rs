@@ -137,28 +137,52 @@ impl std::fmt::Display for DerivedDisplayPublicationError {
                 "transient presentation anchor {anchor_object_index} is outside stable frame object count {object_count}"
             ),
             Self::AnchorNotPresent(index) => {
-                write!(formatter, "transient presentation anchor {index} is not present in this frame")
+                write!(
+                    formatter,
+                    "transient presentation anchor {index} is not present in this frame"
+                )
             }
             Self::DuplicateOccurrence(index) => {
-                write!(formatter, "transient presentation occurrence index {index} is duplicated")
+                write!(
+                    formatter,
+                    "transient presentation occurrence index {index} is duplicated"
+                )
             }
             Self::InvalidZIndex(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid z-index")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid z-index"
+                )
             }
             Self::InvalidTransform(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid transform")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid transform"
+                )
             }
             Self::InvalidStyle(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid style")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid style"
+                )
             }
             Self::InvalidAppearance(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid appearance")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid appearance"
+                )
             }
             Self::InvalidReveal(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid reveal")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid reveal"
+                )
             }
             Self::InvalidMorph(index) => {
-                write!(formatter, "transient presentation occurrence {index} has invalid morph")
+                write!(
+                    formatter,
+                    "transient presentation occurrence {index} has invalid morph"
+                )
             }
         }
     }
@@ -441,6 +465,7 @@ mod derived_display_tests {
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                 text_bounds: None,
                 transform: Transform2D::IDENTITY,
+                spatial: None,
                 style: Style::default(),
                 appearance: 1.0,
             }],

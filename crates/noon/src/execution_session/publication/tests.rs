@@ -1,9 +1,10 @@
 use super::*;
 use noon_compile::semantic_execution_object_id;
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticMutationImpact, SemanticNodeCreation, SemanticObjectProperty, SemanticObjectState,
-    SemanticStyle, SemanticVec3, StoredGeometry,
+    AnimationOptions, GeometryRef, GeometryResourceLookup, MeshResource, RateFunction,
+    SemanticAnimationIntent, SemanticAnimationState, SemanticMutationImpact, SemanticNodeCreation,
+    SemanticObjectProperty, SemanticObjectState, SemanticOrientation, SemanticRotation3D,
+    SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
 };
 
 fn fixture(count: usize) -> (SemanticStore, ExecutionSession, Vec<SemanticNodeId>) {
@@ -47,8 +48,11 @@ fn one_local_batch_publishes_one_coherent_context_and_only_affected_row() {
     let (mut store, mut session, nodes) = fixture(100_000);
     let node = nodes[123];
     let before = session.publication_context();
-    let mut tx = translation(node, 4.0);
-    tx.set_property(node, SemanticObjectProperty::RotationZ, 0.5);
+    let mut transform = store.semantic_object_state_checked(node).unwrap().transform;
+    transform.translation.x = 4.0;
+    transform.orientation = SemanticOrientation::Planar(0.5);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_object_transform(node, transform);
     tx.replace_style(
         node,
         SemanticStyle {
@@ -79,6 +83,174 @@ fn one_local_batch_publishes_one_coherent_context_and_only_affected_row() {
     assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
     assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn one_spatial_transform_publishes_one_mesh_row_and_invalid_batch_is_atomic() {
+    let mut store = SemanticStore::new();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+            SemanticVec3::new(1.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let resource = store.insert_geometry_mesh(mesh);
+    let first =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+    let second =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+    store.attach_to_scene(first).unwrap();
+    store.attach_to_scene(second).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let rotation =
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4).unwrap();
+    let mut transform = store
+        .semantic_object_state_checked(first)
+        .unwrap()
+        .transform;
+    transform.translation = SemanticVec3::new(2.0, 3.0, 4.0);
+    transform.orientation = SemanticOrientation::Spatial(rotation);
+    let expected_world = transform.world_transform().unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(first, transform);
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+
+    let effective = session.effective_semantic_object(&store, first).unwrap();
+    assert_eq!(effective.object.world_transform(), Some(expected_world));
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(session.runtime.last_patch_stats().objects_recomputed, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+
+    let mut component_edit = SemanticMutationTransaction::new();
+    component_edit.set_property(
+        first,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(5.0, 6.0, 7.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, component_edit)
+        .unwrap();
+    assert_eq!(
+        session
+            .effective_semantic_object(&store, first)
+            .unwrap()
+            .object
+            .world_transform()
+            .unwrap()
+            .translation,
+        SemanticVec3::new(5.0, 6.0, 7.0)
+    );
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+
+    let before_publication = session.publication_context();
+    let before_first = store
+        .semantic_object_state_checked(first)
+        .unwrap()
+        .transform;
+    let mut invalid = store
+        .semantic_object_state_checked(second)
+        .unwrap()
+        .transform;
+    invalid.orientation = SemanticOrientation::Planar(f64::NAN);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(first, SemanticTransform::default());
+    transaction.set_object_transform(second, invalid);
+    assert!(session
+        .apply_semantic_transaction(&mut store, transaction)
+        .is_err());
+    assert_eq!(session.publication_context(), before_publication);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(first)
+            .unwrap()
+            .transform,
+        before_first
+    );
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn live_mesh_admission_publishes_spatial_pose_and_resource_and_rejects_domain_change_atomically() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    store.attach_to_scene(root).unwrap();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+            SemanticVec3::new(1.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.insert_geometry_mesh(mesh.clone());
+    let rotation =
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4).unwrap();
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.transform.translation = SemanticVec3::new(2.0, 3.0, 4.0);
+    state.transform.orientation = SemanticOrientation::Spatial(rotation);
+    let expected_world = state.transform.world_transform().unwrap();
+    let object = store.insert_semantic_object(state);
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let mut admission = SemanticMutationTransaction::new();
+    admission.add_member(root, object);
+    session
+        .apply_semantic_transaction(&mut store, admission)
+        .unwrap();
+
+    let effective = session.effective_semantic_object(&store, object).unwrap();
+    assert_eq!(effective.object.world_transform(), Some(expected_world));
+    let GeometryRef::External(resource_id) = session.frame().objects[0].content.geometry().unwrap()
+    else {
+        panic!("spatial mesh admission must retain its geometry resource reference")
+    };
+    let retained_handle = session
+        .geometry_resources()
+        .current_handle(*resource_id)
+        .expect("admitted mesh resource handle");
+    assert_eq!(
+        session.geometry_resources().get(retained_handle),
+        Some(&noon_core::GeometryResource::Mesh(std::sync::Arc::new(
+            mesh
+        )))
+    );
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        session.last_structural_publication_stats().entered_objects,
+        1
+    );
+    assert_eq!(session.runtime.last_patch_stats().objects_recomputed, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+
+    let before_context = session.publication_context();
+    let before_frame = session.frame().clone();
+    let before_state = store.semantic_object_state_checked(object).unwrap().clone();
+    let mut cross_domain = SemanticMutationTransaction::new();
+    cross_domain.replace_content(object, StoredGeometry::Circle { radius: 1.0 });
+    assert!(matches!(
+        session.apply_semantic_transaction(&mut store, cross_domain),
+        Err(ExecutionSessionPublicationError::Lowering(_))
+    ));
+    assert_eq!(session.publication_context(), before_context);
+    assert_eq!(session.frame(), &before_frame);
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap(),
+        &before_state
+    );
+    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]

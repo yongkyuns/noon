@@ -794,6 +794,14 @@ impl SemanticStore {
         Ok(self.geometry_resources.insert_path(path))
     }
 
+    /// Admit a validated immutable mesh into this store's resource namespace.
+    pub fn insert_geometry_mesh(
+        &mut self,
+        mesh: crate::MeshResource,
+    ) -> crate::GeometryResourceHandle {
+        self.geometry_resources.insert_mesh(mesh)
+    }
+
     /// Admit a path whose finiteness was proven by the owning prepared
     /// transaction. This is crate-private so ordinary callers retain the
     /// fallible validation boundary above.
@@ -816,6 +824,27 @@ impl SemanticStore {
         E: From<crate::GeometryResourceError>,
     {
         self.with_geometry_paths([path], |store, handles| publish(store, handles[0]))
+    }
+
+    /// Admit one validated mesh for an atomic semantic publication. If the
+    /// publication fails, the unpublished resource is retired with the same
+    /// arena lifecycle used by path batches.
+    pub fn with_geometry_mesh<T, E>(
+        &mut self,
+        mesh: crate::MeshResource,
+        publish: impl FnOnce(&mut Self, crate::GeometryResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
+        let handle = self.insert_geometry_mesh(mesh);
+        let result = publish(self, handle);
+        if result.is_err() {
+            self.geometry_resources
+                .remove(handle.id)
+                .expect("an unpublished fresh mesh remains removable");
+        }
+        result
     }
 
     /// Admit a local batch of immutable paths for one atomic transaction. Any
@@ -1719,6 +1748,143 @@ mod tests {
 
     use super::*;
 
+    fn triangle_mesh() -> crate::MeshResource {
+        crate::MeshResource::new(
+            vec![
+                crate::SemanticVec3::ZERO,
+                crate::SemanticVec3::new(1.0, 0.0, 0.0),
+                crate::SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_mesh_object_publication_retires_the_unpublished_resource() {
+        let mut store = SemanticStore::new();
+        let before_resources = store.geometry_resources().len();
+        let before_nodes = store.len();
+        let result = store.with_geometry_mesh(triangle_mesh(), |store, handle| {
+            let mut transaction = crate::SemanticMutationTransaction::new();
+            transaction
+                .add_node(crate::SemanticNodeCreation::object(
+                    SemanticObjectState::new(StoredGeometry::Resource(handle)),
+                ))
+                .add_node(crate::SemanticNodeCreation::object(
+                    SemanticObjectState::new(StoredGeometry::Circle { radius: f32::NAN }),
+                ));
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(|_| crate::GeometryResourceError::UnknownResource(handle.id))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(store.geometry_resources().len(), before_resources);
+        assert_eq!(store.len(), before_nodes);
+    }
+
+    #[test]
+    fn mesh_admission_rejects_invalid_data_before_consuming_resources() {
+        let before = 0;
+        assert_eq!(
+            crate::MeshResource::new(
+                vec![crate::SemanticVec3::new(f64::INFINITY, 0.0, 0.0)],
+                None,
+                vec![0, 0, 0],
+            ),
+            Err(crate::MeshResourceError::NonFinitePosition)
+        );
+        let store = SemanticStore::new();
+        assert_eq!(store.geometry_resources().len(), before);
+    }
+
+    #[test]
+    fn cloned_mesh_resource_refs_are_remapped_and_share_the_immutable_arc() {
+        let mut store = SemanticStore::new();
+        let handle = store.insert_geometry_mesh(triangle_mesh());
+        let node = store
+            .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(handle)));
+        let cloned = store.clone();
+        let Some(StoredGeometry::Resource(cloned_handle)) = cloned
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .content
+            .geometry()
+        else {
+            panic!("mesh resource object content")
+        };
+        assert_ne!(handle.arena, cloned_handle.arena);
+        assert!(cloned.geometry_resources().get(handle).is_none());
+        let crate::GeometryResource::Mesh(original) =
+            store.geometry_resources().get(handle).unwrap()
+        else {
+            panic!("expected mesh")
+        };
+        let crate::GeometryResource::Mesh(copy) =
+            cloned.geometry_resources().get(cloned_handle).unwrap()
+        else {
+            panic!("expected mesh")
+        };
+        assert!(std::sync::Arc::ptr_eq(original, copy));
+    }
+
+    #[test]
+    fn stale_and_foreign_mesh_handles_are_rejected_for_object_publication() {
+        let mut store = SemanticStore::new();
+        let live = store.insert_geometry_mesh(triangle_mesh());
+        let stale = crate::GeometryResourceHandle {
+            version: live.version + 1,
+            ..live
+        };
+        let mut foreign_store = SemanticStore::new();
+        let foreign = foreign_store.insert_geometry_mesh(triangle_mesh());
+        assert_eq!((live.id, live.version), (foreign.id, foreign.version));
+        assert_ne!(live.arena, foreign.arena);
+
+        for handle in [stale, foreign] {
+            let mut transaction = crate::SemanticMutationTransaction::new();
+            transaction.add_node(crate::SemanticNodeCreation::object(
+                SemanticObjectState::new(StoredGeometry::Resource(handle)),
+            ));
+            assert!(transaction.apply(&mut store).is_err());
+        }
+        assert!(store.geometry_resources().get(live).is_some());
+    }
+
+    #[test]
+    fn mesh_resources_are_reclaimed_after_object_replacement_or_deletion() {
+        let mut store = SemanticStore::new();
+        let replaced = store.insert_geometry_mesh(triangle_mesh());
+        let mut add = crate::SemanticMutationTransaction::new();
+        add.add_node(crate::SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Resource(replaced)),
+        ));
+        let added = add.apply(&mut store).unwrap();
+        let crate::SemanticMutationImpact::NodeAdded { node: first } = added.impacts()[0] else {
+            panic!("expected node")
+        };
+
+        let mut replace = crate::SemanticMutationTransaction::new();
+        replace.replace_content(first, StoredGeometry::Circle { radius: 1.0 });
+        replace.apply(&mut store).unwrap();
+        assert!(store.geometry_resources().get(replaced).is_none());
+
+        let deleted = store.insert_geometry_mesh(triangle_mesh());
+        let mut add = crate::SemanticMutationTransaction::new();
+        add.add_node(crate::SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Resource(deleted)),
+        ));
+        let added = add.apply(&mut store).unwrap();
+        let crate::SemanticMutationImpact::NodeAdded { node: second } = added.impacts()[0] else {
+            panic!("expected node")
+        };
+        store.remove_node(second).unwrap();
+        assert!(store.geometry_resources().get(deleted).is_none());
+    }
+
     #[test]
     fn resources_are_store_scoped_and_clones_share_only_immutable_payloads() {
         use crate::{
@@ -1775,8 +1941,14 @@ mod tests {
         };
         assert_ne!(a.arena, c.arena);
         assert!(cloned.geometry_resources().get(a).is_none());
-        let GeometryResource::VectorPath(original) = first.geometry_resources().get(a).unwrap();
-        let GeometryResource::VectorPath(copied) = cloned.geometry_resources().get(c).unwrap();
+        let GeometryResource::VectorPath(original) = first.geometry_resources().get(a).unwrap()
+        else {
+            panic!("expected path")
+        };
+        let GeometryResource::VectorPath(copied) = cloned.geometry_resources().get(c).unwrap()
+        else {
+            panic!("expected path")
+        };
         assert!(Arc::ptr_eq(original, copied));
         assert_eq!(
             cloned

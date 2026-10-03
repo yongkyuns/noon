@@ -50,7 +50,7 @@ impl SemanticPendingPathObject {
 
     pub(crate) fn materialize(self, resource: GeometryResourceHandle) -> SemanticObjectState {
         let mut state = SemanticObjectState::new(StoredGeometry::Resource(resource));
-        state.transform = self.transform;
+        state.transform = self.transform.into();
         state.style = self.style;
         state.set_z_index(self.z_index);
         state.set_role(self.role);
@@ -256,10 +256,11 @@ pub(super) fn preflight_add_node(
         SemanticNodeCreation::Object { state, .. } => {
             if !state.transform.translation.is_finite()
                 || !state.transform.scale.is_finite()
-                || !state.transform.rotation_z.is_finite()
+                || !state.transform.is_valid()
                 || !state.style.is_finite()
                 || !state.z_index().is_finite()
                 || !state.role().is_valid()
+                || !state.camera_declaration_is_valid()
                 || state
                     .decimal_number()
                     .is_some_and(|number| !number.is_valid())

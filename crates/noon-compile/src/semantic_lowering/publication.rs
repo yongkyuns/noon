@@ -10,8 +10,7 @@ use noon_core::{
 };
 
 use super::{
-    lower_content, lower_scalar_f32, lower_semantic_geometry_value, lower_semantic_style,
-    lower_semantic_style_value, lower_semantic_transform, lower_semantic_transform_value,
+    lower_content, lower_scalar_f32, lower_semantic_style, lower_semantic_transform,
     semantic_execution_object_id, SemanticCompiledSceneError, SemanticExecutionField,
     SemanticExecutionIndex, SemanticExecutionReachability, SemanticExecutionReachabilityUpdate,
     SemanticExecutionValueError, SemanticGeometryValueError, SemanticLoweringError,
@@ -50,6 +49,14 @@ pub enum SemanticPublicationLoweringError {
     },
     UnsupportedCameraMembership {
         object: SemanticTransactionNodeRef,
+    },
+    PlannedObjectIdUnavailable {
+        object: SemanticTransactionNodeRef,
+    },
+    /// A live object cannot change between compact 2D and spatial execution
+    /// domains because that would require migrating its compiled header in place.
+    SpatialContentDomainChange {
+        object: SemanticNodeId,
     },
     UnsupportedNodeRemoval {
         node: SemanticNodeId,
@@ -100,6 +107,16 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             Self::UnsupportedCameraMembership { object } => write!(
                 f,
                 "semantic camera object {object:?} requires canonical camera publication"
+            ),
+            Self::PlannedObjectIdUnavailable { object } => write!(
+                f,
+                "semantic object {object:?} has no allocator-derived identity during live publication"
+            ),
+            Self::SpatialContentDomainChange { object } => write!(
+                f,
+                "semantic object {}:{} cannot change between planar and spatial content domains during live publication",
+                object.slot(),
+                object.generation()
             ),
             Self::UnsupportedNodeRemoval { node } => write!(
                 f,
@@ -432,6 +449,7 @@ fn validate_mutations(
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
+                | SemanticMutation::SetObjectTransform { .. }
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
@@ -920,7 +938,11 @@ fn collect_existing_exit_leaves(
         SemanticNodeKind::AuthoringObject => {
             let state = semantic.semantic_object_state();
             if state.is_some_and(|state| {
-                matches!(state.role(), noon_core::SemanticObjectRole::Camera2D)
+                matches!(
+                    state.role(),
+                    noon_core::SemanticObjectRole::Camera2D
+                        | noon_core::SemanticObjectRole::Camera3D
+                )
             }) {
                 return Err(
                     SemanticPublicationLoweringError::UnsupportedCameraMembership {
@@ -955,22 +977,26 @@ fn lower_prepared_entry(
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
     let state = prepared.proposed_object_state(object)?;
-    if matches!(state.role(), noon_core::SemanticObjectRole::Camera2D) {
+    let semantic_id = prepared
+        .planned_node_id(object)
+        .ok_or(SemanticPublicationLoweringError::PlannedObjectIdUnavailable { object })?;
+    if matches!(
+        state.role(),
+        noon_core::SemanticObjectRole::Camera2D | noon_core::SemanticObjectRole::Camera3D
+    ) {
         return Err(SemanticPublicationLoweringError::UnsupportedCameraMembership { object });
     }
     if !state.signal_bindings().is_empty() {
         return Err(SemanticPublicationLoweringError::UnsupportedReactiveMembership { object });
     }
     let (content, text_bounds) = match state.content {
-        SemanticObjectContent::Geometry(content) => (
-            lower_semantic_geometry_value(content, Some(prepared.store()))
-                .map_err(|error| SemanticPublicationLoweringError::PreparedGeometry {
-                    object,
-                    error,
-                })?
-                .into(),
-            None,
-        ),
+        SemanticObjectContent::Geometry(content) => lower_content(
+            semantic_id,
+            SemanticObjectContent::Geometry(content),
+            Some(prepared.store()),
+            resource_additions,
+        )
+        .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?,
         SemanticObjectContent::Image(image) => {
             let content = resource_additions
                 .capture_image(prepared.store(), image)
@@ -990,12 +1016,16 @@ fn lower_prepared_entry(
             .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
         }
     };
-    let transform = lower_semantic_transform_value(&state)
-        .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
-    let style = lower_semantic_style_value(&state)
-        .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
-    let mut compiled = CompiledObject::new(ObjectId::new(0), content, transform, style);
+    let lowered = super::projection::lower_object_state(semantic_id, &state, prepared.store())
+        .map_err(SemanticPublicationLoweringError::Value)?;
+    let mut compiled = CompiledObject::new(
+        ObjectId::new(0),
+        content,
+        lowered.base_transform,
+        lowered.base_style,
+    );
     compiled.text_bounds = text_bounds;
+    compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     Ok(PreparedEntry {
@@ -1003,6 +1033,16 @@ fn lower_prepared_entry(
         compiled,
         numeric_text,
     })
+}
+
+#[derive(Default)]
+struct PublicationDomains {
+    transform: bool,
+    style: bool,
+    content: bool,
+    z_index: bool,
+    numeric: bool,
+    semantic_transform: bool,
 }
 
 /// Lower only changed content/transform/style values already in this execution domain.
@@ -1020,7 +1060,7 @@ fn lower_semantic_publication(
     SemanticPublicationLoweringError,
 > {
     validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
-    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool, bool, bool)> = HashMap::new();
+    let mut domains: HashMap<SemanticNodeId, PublicationDomains> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
             SemanticMutation::SetProperty {
@@ -1033,29 +1073,34 @@ fn lower_semantic_publication(
                 match property {
                     SemanticObjectProperty::Translation
                     | SemanticObjectProperty::Scale
-                    | SemanticObjectProperty::RotationZ => flags.0 = true,
-                    _ => flags.1 = true,
+                    | SemanticObjectProperty::RotationZ => flags.transform = true,
+                    _ => flags.style = true,
+                }
+            }
+            SemanticMutation::SetObjectTransform { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().semantic_transform = true;
                 }
             }
             SemanticMutation::ReplaceContent { object, .. } => {
                 if let Some(object) = object.existing() {
-                    domains.entry(object).or_default().2 = true;
+                    domains.entry(object).or_default().content = true;
                 }
             }
             SemanticMutation::ReplaceDecimalNumber { object, .. } => {
                 if let Some(object) = object.existing() {
-                    domains.entry(object).or_default().4 = true;
+                    domains.entry(object).or_default().numeric = true;
                 }
             }
             SemanticMutation::ReplaceTextPresentationBaseline { .. } => {}
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
-                    domains.entry(object).or_default().3 = true;
+                    domains.entry(object).or_default().z_index = true;
                 }
             }
             SemanticMutation::ReplaceStyle { object, .. } => {
                 if let Some(object) = object.existing() {
-                    domains.entry(object).or_default().1 = true;
+                    domains.entry(object).or_default().style = true;
                 }
             }
             SemanticMutation::SetBarMetadata { .. } => {}
@@ -1087,10 +1132,10 @@ fn lower_semantic_publication(
             continue;
         };
         // Object-owned interaction/metadata declarations have no render-value patch.
-        let Some(&(transform, style, content, z_index, numeric)) = domains.get(&node) else {
+        let Some(flags) = domains.get(&node) else {
             continue;
         };
-        if numeric {
+        if flags.numeric {
             numeric_text.push(CompiledNumericTextDriverRevisionEntry {
                 object,
                 declaration: lower_numeric_text_driver(
@@ -1100,13 +1145,24 @@ fn lower_semantic_publication(
                 )?,
             });
         }
-        if z_index {
+        if flags.z_index {
             mutations.push(ExecutionPatch::SetZIndex {
                 object,
                 value: state.z_index(),
             });
         }
-        if content {
+        if flags.content {
+            let original = prepared
+                .store()
+                .semantic_object_state_checked(node)
+                .map_err(SemanticLoweringError::from)?;
+            if super::projection::object_has_mesh_content(original, prepared.store())
+                != super::projection::object_has_mesh_content(&state, prepared.store())
+            {
+                return Err(
+                    SemanticPublicationLoweringError::SpatialContentDomainChange { object: node },
+                );
+            }
             let (content, text_bounds) = lower_content(
                 node,
                 state.content,
@@ -1123,13 +1179,26 @@ fn lower_semantic_publication(
                 text_bounds,
             });
         }
-        if transform {
-            mutations.push(ExecutionPatch::SetTransform {
-                object,
-                transform: lower_semantic_transform(node, &state)?,
-            });
+        if flags.transform || flags.semantic_transform {
+            let prior = prepared
+                .store()
+                .semantic_object_state_checked(node)
+                .map_err(SemanticLoweringError::from)?;
+            let prior_is_spatial =
+                super::projection::object_requires_spatial_lowering(prior, prepared.store());
+            if flags.semantic_transform || prior_is_spatial {
+                mutations.push(ExecutionPatch::SetSemanticTransform {
+                    object,
+                    transform: state.transform,
+                });
+            } else {
+                mutations.push(ExecutionPatch::SetTransform {
+                    object,
+                    transform: lower_semantic_transform(node, &state)?,
+                });
+            }
         }
-        if style {
+        if flags.style {
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,

@@ -77,7 +77,7 @@ pub(crate) fn path_replacement_state(
     state.transform.translation.y = 0.;
     state.transform.scale.x = 1.;
     state.transform.scale.y = 1.;
-    state.transform.rotation_z = 0.;
+    state.transform.orientation = noon_core::SemanticOrientation::Planar(0.);
     Ok(state)
 }
 
@@ -247,7 +247,10 @@ pub(crate) fn world_path(
     let checked = |name, value| {
         crate::semantic_mobject::authoring_render_f64(name, value).map(|value| value as f32)
     };
-    let transform = state.transform;
+    let transform = state
+        .transform
+        .as_planar()
+        .ok_or(AuthoringError::NonFiniteObjectState)?;
     let transform = noon_core::Transform2D {
         translation: Vec2::new(
             checked("path translation x", transform.translation.x)?,
@@ -287,7 +290,14 @@ pub(crate) fn prepare_subcurve(
 ) -> Result<(SemanticObjectState, Option<VectorPath>), AuthoringError> {
     partial_interval(a, a)?;
     partial_interval(b, b)?;
-    let query = crate::path_queries::prepare_content(store, state.content, state.transform)?;
+    let query = crate::path_queries::prepare_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
+    )?;
     let closed = query.is_closed()?;
     // A singleton has no complete curve and retains its original content.
     if query.curve_count() == 0 {

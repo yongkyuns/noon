@@ -77,11 +77,13 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
-            Self::CallbackNotCoherent => formatter.write_str(
-                "required callbacks have not published a coherent endpoint frame",
-            ),
+            Self::CallbackNotCoherent => formatter
+                .write_str("required callbacks have not published a coherent endpoint frame"),
             Self::CallbackTerminated(termination) => {
-                write!(formatter, "required callback progression terminated: {termination:?}")
+                write!(
+                    formatter,
+                    "required callback progression terminated: {termination:?}"
+                )
             }
             Self::MissingLifecycleRoot(object) => write!(
                 formatter,
@@ -1550,7 +1552,7 @@ mod tests {
         updater.apply(&mut store).unwrap();
         let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
         target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
-        target_state.transform.rotation_z = 0.75;
+        target_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.75);
         let target = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(object, target, AnimationOptions::new())
