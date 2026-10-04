@@ -3,8 +3,9 @@ use crate::surface::normalize;
 use crate::{cylinder_mesh, SurfaceError, MAX_SURFACE_CELLS, MAX_SURFACE_VERTICES};
 use noon_core::{MeshResource, SemanticRotation3D, SemanticVec3};
 
-/// A closed cylindrical line with world-space endpoints. Thickness is its diameter.
-/// Geometry is prepared once; ordinary world transforms animate the retained resource.
+/// A closed cylindrical line with world-space endpoints. Like Manim's Line3D,
+/// `thickness` is the cylinder radius. Geometry is prepared once; ordinary world
+/// transforms animate the retained resource.
 pub fn line_3d_mesh(
     start: SemanticVec3,
     end: SemanticVec3,
@@ -32,7 +33,7 @@ pub fn line_3d_mesh(
         SemanticRotation3D::from_axis_angle(SemanticVec3::new(1.0, 0.0, 0.0), std::f64::consts::PI)
     }
     .ok_or(SurfaceError::NonFiniteNormal)?;
-    let mesh = cylinder_mesh(thickness * 0.5, length, segments)?;
+    let mesh = cylinder_mesh(thickness, length, segments)?;
     let positions = mesh
         .positions()
         .iter()
@@ -124,6 +125,27 @@ mod tests {
                 assert!((actual.y - expected.y).abs() < 1e-12);
                 assert!((actual.z - expected.z).abs() < 1e-12);
             }
+            let delta = SemanticVec3::new(end.x - start.x, end.y - start.y, end.z - start.z);
+            let direction = normalize(delta).unwrap();
+            let maximum_radius = p
+                .iter()
+                .map(|point| {
+                    let offset =
+                        SemanticVec3::new(point.x - start.x, point.y - start.y, point.z - start.z);
+                    let along =
+                        offset.x * direction.x + offset.y * direction.y + offset.z * direction.z;
+                    let perpendicular = SemanticVec3::new(
+                        offset.x - along * direction.x,
+                        offset.y - along * direction.y,
+                        offset.z - along * direction.z,
+                    );
+                    perpendicular
+                        .x
+                        .hypot(perpendicular.y)
+                        .hypot(perpendicular.z)
+                })
+                .fold(0.0, f64::max);
+            assert!((maximum_radius - 0.2).abs() < 1e-12);
             assert!(mesh.has_usable_normals());
         }
         assert!(line_3d_mesh(start, start, 0.2, 8).is_err());

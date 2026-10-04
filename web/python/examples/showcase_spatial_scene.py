@@ -26,7 +26,7 @@ class SpatialSceneShowcase(ThreeDScene):
         )
         marker.shift((0, 0, 0.75))
         light = self.point_light(
-            position=(3.8, -3.2, 5.0), color=Color(1.0, 0.91, 0.72), intensity=1.25,
+            position=(3.8, -3.2, 5.0), color=Color(1.0, 0.91, 0.72), intensity=1.0,
         )
 
         title = Typst("Point light on a parametric surface")

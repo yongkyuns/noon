@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareEffectiveFrames, rasterFixtureSource } from "./manim-raster-support.mjs";
+import {
+  compareEffectiveFrames,
+  dominantBorderRgba,
+  rasterFixtureSource,
+} from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("border background estimate ignores a colored corner outlier", () => {
+  const width = 5;
+  const height = 4;
+  const background = [12, 34, 56, 255];
+  const data = Buffer.alloc(width * height * 4);
+  for (let offset = 0; offset < data.length; offset += 4) {
+    data.set(background, offset);
+  }
+  data.set([255, 0, 0, 255], 0);
+  assert.deepEqual(dominantBorderRgba({ data, width, height }), background);
+});
 
 test("raster fixture adaptation leaves default sources without LaTeX preparation", () => {
   const source = "from manim import *\nclass Example(Scene):\n    pass\n";

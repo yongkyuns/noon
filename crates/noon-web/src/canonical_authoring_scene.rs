@@ -2631,6 +2631,24 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn live_create_manim_arrow(
+        &mut self,
+        options: noon::ManimArrowOptions,
+    ) -> Result<noon::ManimArrow, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_manim_arrow(options)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Arrow construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn live_create_image(
         &mut self,
         options: noon::ImageMobjectOptions,
@@ -7241,6 +7259,19 @@ mod wasm {
             self.inner
                 .live_create_manim_geometry(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
+        /// Publish one retained Arrow family through the current live session.
+        #[wasm_bindgen(js_name = liveCreateManimArrow)]
+        pub fn live_create_manim_arrow(
+            &mut self,
+            candidate: crate::WasmManimArrowOptions,
+        ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
+            let options = candidate.into_live_arrow_options()?;
+            self.inner
+                .live_create_manim_arrow(options)
+                .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
                 .map_err(typed_js_error)
         }
 

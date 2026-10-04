@@ -81,8 +81,8 @@ class LinearTransformationScene(VectorScene):
         self.basis_vector_stroke_width = float(basis_vector_stroke_width)
         self.background_plane_kwargs = dict(background_plane_kwargs or {})
         self.foreground_plane_kwargs = dict(foreground_plane_kwargs or {})
-        self.i_hat_color = i_hat_color or _base.color_from_hex("#FC6255")
-        self.j_hat_color = j_hat_color or _base.color_from_hex("#83C167")
+        self.i_hat_color = i_hat_color or _base.GREEN
+        self.j_hat_color = j_hat_color or _base.RED
         self._linear_transformation_kwargs = dict(kwargs)
         self.background_plane = None
         self.foreground_plane = None

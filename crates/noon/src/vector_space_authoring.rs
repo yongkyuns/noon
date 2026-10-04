@@ -5,7 +5,7 @@ use crate::{
     AuthoringError, CoordinateAuthoringError, ManimArrow, ManimArrowOptions, ManimNumberPlane,
     ManimNumberPlaneOptions, MobjectFamily, MobjectTarget, Scene, DEFAULT_ARROW_STROKE_WIDTH,
 };
-use noon_core::{Color, SemanticPaint, SemanticStyle, DEFAULT_FRAME_WIDTH, GREEN, GREY, RED};
+use noon_core::{Color, SemanticPaint, DEFAULT_FRAME_WIDTH, GREEN, GREY, RED};
 use std::rc::Rc;
 
 /// Small native configuration for the retained LTS building blocks.
@@ -24,8 +24,9 @@ impl Default for LinearTransformationOptions {
     fn default() -> Self {
         let mut background = ManimNumberPlaneOptions::default();
         background.axis_style.stroke = Some(SemanticPaint::Solid(GREY));
-        background.background_line_style =
-            muted_plane_style(crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE);
+        background.background_line_style.stroke = Some(SemanticPaint::Solid(GREY));
+        background.background_line_style.stroke_width =
+            crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE;
         background.faded_line_style = None;
         let frame_width = f64::from(DEFAULT_FRAME_WIDTH);
         let foreground = ManimNumberPlaneOptions {
@@ -38,15 +39,6 @@ impl Default for LinearTransformationOptions {
             foreground_plane: Some(foreground),
             show_basis_vectors: true,
         }
-    }
-}
-
-fn muted_plane_style(width: f64) -> SemanticStyle {
-    SemanticStyle {
-        fill: None,
-        stroke: Some(SemanticPaint::Solid(GREY)),
-        stroke_width: width,
-        ..SemanticStyle::default()
     }
 }
 
@@ -296,8 +288,10 @@ impl Scene {
             .map(|plane| self.add_vector_plane(plane))
             .transpose()?;
         let (basis_vectors, basis_arrows) = if options.show_basis_vectors {
-            let i_hat = add_basis_vector(self, 1.0, 0.0, RED)?;
-            let j_hat = add_basis_vector(self, 0.0, 1.0, GREEN)?;
+            // Manim VectorScene maps its X basis vector to GREEN_C and its Y
+            // basis vector to RED_C (the `X_COLOR` / `Y_COLOR` constants).
+            let i_hat = add_basis_vector(self, 1.0, 0.0, GREEN)?;
+            let j_hat = add_basis_vector(self, 0.0, 1.0, RED)?;
             let family = MobjectFamily::create(
                 Rc::clone(self.integration_store()),
                 &[
@@ -350,6 +344,24 @@ mod tests {
             .unwrap();
         assert!(setup.background_plane().is_some());
         assert!(setup.foreground_plane().is_some());
+        assert_eq!(
+            setup.basis_arrows()[0]
+                .shaft()
+                .state()
+                .unwrap()
+                .style
+                .stroke,
+            Some(SemanticPaint::Solid(GREEN)),
+        );
+        assert_eq!(
+            setup.basis_arrows()[1]
+                .shaft()
+                .state()
+                .unwrap()
+                .style
+                .stroke,
+            Some(SemanticPaint::Solid(RED)),
+        );
         let basis = setup.basis_vectors().unwrap();
         let store = scene.integration_store().borrow();
         let members = store
@@ -384,6 +396,19 @@ mod tests {
         let grid_state = store.semantic_object_state_checked(first_line).unwrap();
         assert_eq!(grid_state.style.stroke, Some(SemanticPaint::Solid(GREY)));
         assert!((grid_state.style.stroke_width - 0.01).abs() < 1e-12);
+        let plane_defaults = ManimNumberPlaneOptions::default();
+        assert_eq!(
+            grid_state.style.stroke_width_mode,
+            plane_defaults.background_line_style.stroke_width_mode
+        );
+        assert_eq!(
+            grid_state.style.stroke_cap,
+            plane_defaults.background_line_style.stroke_cap
+        );
+        assert_eq!(
+            grid_state.style.stroke_join,
+            plane_defaults.background_line_style.stroke_join
+        );
     }
 
     #[test]

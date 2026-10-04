@@ -189,6 +189,26 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("double_arrow", -1.0, 0.0, 1.0, 0.0) in calls
             assert ("publish", "double") in calls
 
+            # Static construction keeps the original host; continuation-time
+            # construction publishes through the active canonical session and
+            # retains that context on the newly wrapped target.
+            static_publishes = sum(call[0] == "publish" for call in calls)
+            live_context = types.SimpleNamespace(
+                liveCreateManimArrow=lambda options: (
+                    calls.append(("live_publish", options.kind))
+                    or FakeCreatedArrow(options.kind == "double")
+                )
+            )
+            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: (
+                live_context if kind == "Arrow" else None
+            )
+            live_arrow = arrows.Arrow((0.0, 0.0), (2.0, 0.0))
+            assert ("live_publish", "arrow") in calls
+            assert sum(call[0] == "publish" for call in calls) == static_publishes
+            assert live_arrow._canonical_live_target_context is live_context
+            assert len(live_arrow.submobjects) == 2
+            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: None
+
             # Python passes opaque Mobject handles into the Rust boundary constructor;
             # it never queries centers, anchors, or boundary coordinates itself.
             def endpoint(slot):

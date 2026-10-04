@@ -112,6 +112,38 @@ export function browserArgs(backend, { gpuMode = "software" } = {}) {
   ];
 }
 
+// Infer the canvas background from the modal exact RGBA value on the image
+// border. The first pixel may be occupied by a grid/path that reaches a corner.
+export function dominantBorderRgba({ data, width, height }) {
+  if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1
+      || !data || data.length !== width * height * 4) {
+    throw new Error("expected RGBA image data with positive integer dimensions");
+  }
+  const counts = new Map();
+  const addPixel = (pixelIndex) => {
+    const offset = pixelIndex * 4;
+    const rgba = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+    const key = rgba.join(",");
+    const entry = counts.get(key);
+    if (entry) entry.count += 1;
+    else counts.set(key, { rgba, count: 1 });
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    addPixel(x);
+    if (height > 1) addPixel((height - 1) * width + x);
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    addPixel(y * width);
+    if (width > 1) addPixel(y * width + width - 1);
+  }
+  let selected = null;
+  for (const entry of counts.values()) {
+    if (selected === null || entry.count > selected.count) selected = entry;
+  }
+  return selected.rgba;
+}
+
 export function isIdentifiedGpuAdapter(info) {
   if (!info || typeof info !== "object") return false;
   return [info.vendor, info.architecture, info.device, info.description]

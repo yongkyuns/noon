@@ -33,6 +33,14 @@ impl super::SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_manim_arrow(
+        &mut self,
+        options: noon::ManimArrowOptions,
+    ) -> Result<noon::ManimArrow, AuthoringFailure> {
+        self.with_live_session(|live| live.create_manim_arrow(options))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_mesh_family(
         &mut self,
         options: Vec<MeshOptions>,

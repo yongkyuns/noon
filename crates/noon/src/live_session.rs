@@ -6,6 +6,7 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod arrow;
 mod brace;
 mod camera_motion;
 mod coordinates;

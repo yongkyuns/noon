@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { browserArgs, rasterFixtureSource, sampleRasterFrames } from "./manim-raster-support.mjs";
+import {
+  browserArgs,
+  dominantBorderRgba,
+  rasterFixtureSource,
+  sampleRasterFrames,
+} from "./manim-raster-support.mjs";
 import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const { chromium } = playwright;
@@ -316,6 +321,26 @@ async function assertVectorSpaceOracle(semantic, samples) {
   }
 }
 
+function assertVectorSpaceFrame(frame, oracle, context) {
+  // These fixture colors identify the three ordinary Arrow families without
+  // depending on target-specific semantic IDs or leaf ordering.
+  for (const name of ["basis_i", "basis_j", "moving_vector"]) {
+    const expected = oracle[name];
+    const matchesColor = paint => paint && [paint.red, paint.green, paint.blue]
+      .every((channel, index) => Math.abs(channel - expected.color[index]) < 1e-6);
+    const rows = frame.objects.filter(row => row.present
+      && (matchesColor(row.stroke) || matchesColor(row.fill)));
+    assert.equal(rows.length, 2, `${context}: ${name} retains its shaft and tip`);
+    for (const [edge, operation] of [["min", Math.min], ["max", Math.max]]) {
+      for (let axis = 0; axis < 2; axis += 1) {
+        const actual = operation(...rows.map(row => row.bounds[edge][axis]));
+        assert.ok(Math.abs(actual - expected.bounds[edge][axis]) < 1e-5,
+          `${context}: ${name} ${edge}[${axis}] ${actual} differs from Manim ${expected.bounds[edge][axis]}`);
+      }
+    }
+  }
+}
+
 async function renderManimReferences() {
   verifyManimVersion();
   await mkdir(semanticRoot, { recursive: true });
@@ -391,6 +416,9 @@ async function renderManimReferences() {
       }
       await writeFile(outputPath, image);
       sample.referencePath = outputPath;
+      if (fixture.id.startsWith("vector-space-lts-")) {
+        sample.vectorOracle = semanticFixture.frames[sample.frameIndex].oracle;
+      }
     }
     if (fixture.id === "spatial-mesh-depth") {
       await assertSpatialMeshOracle(semanticFixture, samples);
@@ -596,7 +624,7 @@ async function captureNoonBackend(backend, references) {
 
 function pixelStats(buffer) {
   const png = PNG.sync.read(buffer);
-  const background = [png.data[0], png.data[1], png.data[2], png.data[3]];
+  const background = dominantBorderRgba(png);
   let changedPixels = 0;
   let minX = png.width;
   let minY = png.height;
@@ -714,6 +742,11 @@ async function compareAll(references, backendResults) {
         const actualBuffer = await readFile(capture.noonPath);
         const referenceStats = pixelStats(referenceBuffer);
         const noonStats = pixelStats(actualBuffer);
+        if (fixture.id.startsWith("vector-space-lts-")) {
+          const oracle = capture.vectorOracle;
+          assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
+          assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
+        }
         const diff = comparePng(referenceBuffer, actualBuffer);
         const diffPath = path.join(
           artifactRoot,

@@ -53,6 +53,16 @@ pub struct WasmManimArrowOptions {
 }
 
 impl WasmManimArrowOptions {
+    pub(crate) fn into_live_arrow_options(self) -> Result<noon::ManimArrowOptions, JsValue> {
+        match self.request {
+            ArrowRequest::Arrow(options) => Ok(options),
+            ArrowRequest::VectorField(_) => Err(invalid_input(
+                "vector_field.live_creation",
+                "live Arrow construction does not support ArrowVectorField",
+            )),
+        }
+    }
+
     fn arrow_options_mut(&mut self) -> Result<&mut noon::ManimArrowOptions, JsValue> {
         match &mut self.request {
             ArrowRequest::Arrow(options) => Ok(options),
@@ -433,6 +443,12 @@ pub struct WasmAuthoringArrowHandle {
 }
 
 impl WasmAuthoringArrowHandle {
+    pub(crate) fn from_manim_arrow(arrow: noon::ManimArrow) -> Self {
+        Self {
+            published: PublishedArrowRequest::Arrow(arrow),
+        }
+    }
+
     pub(crate) fn rebind_from_family_copy(
         &self,
         copied: &noon::FamilyCopy,
