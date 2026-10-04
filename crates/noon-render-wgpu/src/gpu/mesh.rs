@@ -2,6 +2,8 @@
 //! Local changes inspect only dirty execution rows. wgpu retains old buffers for
 //! already encoded/submitted work when resource references are dropped here.
 
+mod boundary;
+
 use super::spatial_path::{SpatialPathError, SpatialPathGpuState};
 use super::{create_buffer_with_data, DrawStats};
 use bytemuck::{Pod, Zeroable};
@@ -87,18 +89,25 @@ struct ResidentMesh {
     indices: wgpu::Buffer,
     index_count: u32,
     users: usize,
+    boundary: Option<(wgpu::Buffer, u32)>,
 }
 #[derive(Debug)]
 struct Draw {
     handle: GeometryResourceHandle,
     instance: usize,
     material: SemanticSpatialMaterial,
+    transparent: bool,
+    center: SemanticVec3,
+    stroke: Option<Instance>,
 }
 struct StagedDraw {
     handle: GeometryResourceHandle,
     mesh: Arc<MeshResource>,
     instance: Instance,
     material: SemanticSpatialMaterial,
+    transparent: bool,
+    center: SemanticVec3,
+    stroke: Option<Instance>,
 }
 #[derive(Debug)]
 struct GpuState {
@@ -106,6 +115,14 @@ struct GpuState {
     viewport: [u32; 2],
     pipeline: wgpu::RenderPipeline,
     pipeline_msaa: wgpu::RenderPipeline,
+    transparent_pipeline: wgpu::RenderPipeline,
+    transparent_pipeline_msaa: wgpu::RenderPipeline,
+    boundary_pipeline: wgpu::RenderPipeline,
+    boundary_pipeline_msaa: wgpu::RenderPipeline,
+    boundary_metrics: wgpu::Buffer,
+    boundary_metrics_value: Option<[f32; 4]>,
+    stroke_instances: Option<wgpu::Buffer>,
+    stroke_capacity: usize,
     camera: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
     light: wgpu::Buffer,
@@ -128,6 +145,9 @@ pub(super) struct SpatialGpuState {
     point_lit_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
+    transparent_draws: BTreeSet<usize>,
+    transparent_order: Vec<usize>,
+    stroked_draws: BTreeSet<usize>,
     instances: Vec<Instance>,
     free_instances: Vec<usize>,
     camera_matrix: Option<[f32; 16]>,
@@ -379,18 +399,64 @@ impl SpatialGpuState {
                         if spatial.material == SemanticSpatialMaterial::PointLit {
                             validate_point_lit_normals(mesh, index)?;
                         }
-                        if object.style.stroke.is_some() && object.style.stroke_width > 0.0 {
-                            return Err(SpatialPrepareError::MeshStroke(index));
-                        }
-                        let Some(color) = object.style.fill else {
-                            staged.push((index, None));
-                            continue;
-                        };
+                        let color = object.style.fill.unwrap_or(noon_core::Color::TRANSPARENT);
                         let alpha = color.alpha * object.style.opacity * object.appearance;
-                        // D2 has an explicit opaque policy; no silently incorrect alpha sorting.
-                        if alpha != 1.0 {
+                        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
                             return Err(SpatialPrepareError::TransparentMesh(index));
                         }
+                        // Object-depth ordering is well-defined for a retained
+                        // face family. Arbitrary multi-face translucent meshes
+                        // require a different ordering contract and remain rejected.
+                        if alpha > 0.0 && alpha < 1.0 && !single_face(mesh) {
+                            return Err(SpatialPrepareError::TransparentMesh(index));
+                        }
+                        let stroke = object
+                            .style
+                            .stroke
+                            .filter(|_| object.style.stroke_width > 0.0)
+                            .map(|color| {
+                                let alpha = color.alpha * object.style.opacity * object.appearance;
+                                let mut result = instance(
+                                    spatial.world,
+                                    [color.red, color.green, color.blue, alpha],
+                                    SemanticSpatialMaterial::Unlit,
+                                )
+                                .ok_or(SpatialPrepareError::InvalidWorld(index))?;
+                                let scale = match object.style.stroke_width_mode {
+                                    noon_core::StrokeWidthMode::ScreenSpace => 1.0,
+                                    noon_core::StrokeWidthMode::ScaleWithObject => spatial
+                                        .world
+                                        .scale
+                                        .x
+                                        .abs()
+                                        .max(spatial.world.scale.y.abs())
+                                        .max(spatial.world.scale.z.abs())
+                                        as f32,
+                                };
+                                result.normals[1][3] = object.style.stroke_width * scale;
+                                if !result.normals[1][3].is_finite()
+                                    || !alpha.is_finite()
+                                    || !(0.0..=1.0).contains(&alpha)
+                                {
+                                    return Err(SpatialPrepareError::MeshStroke(index));
+                                }
+                                Ok(result)
+                            })
+                            .transpose()?;
+                        if alpha == 0.0 && stroke.is_none() {
+                            staged.push((index, None));
+                            continue;
+                        }
+                        let bounds = mesh.bounds();
+                        let local_center = SemanticVec3::new(
+                            bounds.min.x * 0.5 + bounds.max.x * 0.5,
+                            bounds.min.y * 0.5 + bounds.max.y * 0.5,
+                            bounds.min.z * 0.5 + bounds.max.z * 0.5,
+                        );
+                        let center = spatial
+                            .world
+                            .transform_point(local_center)
+                            .ok_or(SpatialPrepareError::InvalidWorld(index))?;
                         let instance = instance(
                             spatial.world,
                             [color.red, color.green, color.blue, alpha],
@@ -402,6 +468,9 @@ impl SpatialGpuState {
                             mesh: mesh.clone(),
                             instance,
                             material: spatial.material,
+                            transparent: alpha < 1.0,
+                            center,
+                            stroke,
                         });
                     }
                 }
@@ -467,6 +536,25 @@ impl SpatialGpuState {
                         return Err(SpatialPrepareError::BufferLimit);
                     }
                     new_meshes.insert(draw.handle, (vertices, draw.mesh.clone()));
+                }
+            }
+        }
+        let mut new_boundaries = HashMap::new();
+        for (_, draw) in &staged {
+            if let Some(draw) = draw.as_ref().filter(|draw| draw.stroke.is_some()) {
+                if !self
+                    .meshes
+                    .get(&draw.handle)
+                    .is_some_and(|mesh| mesh.boundary.is_some())
+                    && !new_boundaries.contains_key(&draw.handle)
+                {
+                    let edges = boundary::vertices(&draw.mesh)?;
+                    if size_of_val(edges.as_slice()) > device.limits().max_buffer_size as usize
+                        || u32::try_from(edges.len()).is_err()
+                    {
+                        return Err(SpatialPrepareError::BufferLimit);
+                    }
+                    new_boundaries.insert(draw.handle, edges);
                 }
             }
         }
@@ -540,10 +628,38 @@ impl SpatialGpuState {
                     ),
                     index_count: mesh.indices().len() as u32,
                     users: 0,
+                    boundary: None,
                 },
             );
             stats.geometry_bytes += vertex_bytes.len() + index_bytes.len();
         }
+        for (handle, edges) in new_boundaries {
+            let bytes = bytemuck::cast_slice(&edges);
+            let buffer = if bytes.is_empty() {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Noon empty mesh boundary"),
+                    size: 4,
+                    usage: wgpu::BufferUsages::VERTEX,
+                    mapped_at_creation: false,
+                })
+            } else {
+                create_buffer_with_data(
+                    device,
+                    queue,
+                    Some("Noon immutable mesh boundary"),
+                    bytes,
+                    wgpu::BufferUsages::VERTEX,
+                )
+            };
+            self.meshes
+                .get_mut(&handle)
+                .expect("staged boundary resource")
+                .boundary = Some((buffer, edges.len() as u32));
+            stats.geometry_bytes += bytes.len();
+        }
+        let mut dirty_strokes = Vec::new();
+        let mut transparent_changed =
+            matrix != self.camera_matrix || changes.has_painter_order_change();
         let mut dirty = BTreeSet::new();
         let mut released = BTreeSet::new();
         for (index, staged) in staged {
@@ -552,15 +668,31 @@ impl SpatialGpuState {
                 .as_ref()
                 .zip(staged.as_ref())
                 .is_some_and(|(old, new)| old.handle == new.handle);
+            transparent_changed |= previous.as_ref().is_some_and(|draw| draw.transparent)
+                || staged.as_ref().is_some_and(|draw| draw.transparent);
+            self.transparent_draws.remove(&index);
+            self.stroked_draws.remove(&index);
+            let same_opaque_membership =
+                previous
+                    .as_ref()
+                    .zip(staged.as_ref())
+                    .is_some_and(|(old, new)| {
+                        old.handle == new.handle && !old.transparent && !new.transparent
+                    });
+            if let Some(old) = previous
+                .as_ref()
+                .filter(|old| !old.transparent && !same_opaque_membership)
+            {
+                self.mesh_instances
+                    .get_mut(&old.handle)
+                    .expect("resident opaque group")
+                    .remove(old.instance);
+            }
             if let Some(old) = previous.as_ref().filter(|_| !same_membership) {
                 self.meshes
                     .get_mut(&old.handle)
                     .expect("resident draw")
                     .users -= 1;
-                self.mesh_instances
-                    .get_mut(&old.handle)
-                    .expect("resident instance group")
-                    .remove(old.instance);
                 released.insert(old.handle);
             }
             if let Some(staged) = staged {
@@ -579,10 +711,19 @@ impl SpatialGpuState {
                         .get_mut(&staged.handle)
                         .expect("staged mesh")
                         .users += 1;
+                }
+                if !staged.transparent && !same_opaque_membership {
                     self.mesh_instances
                         .entry(staged.handle)
                         .or_default()
                         .insert(slot);
+                }
+                if staged.transparent {
+                    self.transparent_draws.insert(index);
+                }
+                if let Some(stroke) = staged.stroke {
+                    self.stroked_draws.insert(index);
+                    dirty_strokes.push((slot, stroke));
                 }
                 self.draws.insert(
                     index,
@@ -590,6 +731,9 @@ impl SpatialGpuState {
                         handle: staged.handle,
                         instance: slot,
                         material: staged.material,
+                        transparent: staged.transparent,
+                        center: staged.center,
+                        stroke: staged.stroke,
                     },
                 );
             } else if let Some(old) = previous {
@@ -600,6 +744,32 @@ impl SpatialGpuState {
             if self.meshes.get(&handle).is_some_and(|mesh| mesh.users == 0) {
                 self.meshes.remove(&handle);
                 self.mesh_instances.remove(&handle);
+            }
+        }
+        if transparent_changed {
+            self.transparent_order = self.transparent_draws.iter().copied().collect();
+            if let Some(camera) = cameras.values().next() {
+                let depth = |index: usize| {
+                    let p = self.draws[&index].center;
+                    camera
+                        .orientation
+                        .inverse()
+                        .rotate_vector(SemanticVec3::new(
+                            p.x - camera.position.x,
+                            p.y - camera.position.y,
+                            p.z - camera.position.z,
+                        ))
+                        .map_or(f64::INFINITY, |p| p.z)
+                };
+                // Camera looks along -Z: more negative view Z is drawn first.
+                self.transparent_order.sort_by(|a, b| {
+                    depth(*a).total_cmp(&depth(*b)).then_with(|| {
+                        let rank = |index: &usize| {
+                            self.paths.painter_rank(*index).unwrap_or(*index as u32)
+                        };
+                        rank(a).cmp(&rank(b)).then(a.cmp(b))
+                    })
+                });
             }
         }
         self.cameras = cameras;
@@ -627,6 +797,50 @@ impl SpatialGpuState {
                 queue.write_buffer(&gpu.light, 0, bytemuck::bytes_of(&uniform));
                 stats.light_bytes = size_of::<LightUniform>();
                 gpu.light_value = point_light;
+            }
+            let metrics = [
+                viewport[0] as f32,
+                viewport[1] as f32,
+                2.0 / camera.world_size.x,
+                2.0 / camera.world_size.y,
+            ];
+            if !self.stroked_draws.is_empty() && gpu.boundary_metrics_value != Some(metrics) {
+                queue.write_buffer(&gpu.boundary_metrics, 0, bytemuck::cast_slice(&metrics));
+                gpu.boundary_metrics_value = Some(metrics);
+                stats.camera_bytes += size_of_val(&metrics);
+            }
+            if !self.stroked_draws.is_empty()
+                && (gpu.stroke_instances.is_none() || needed > gpu.stroke_capacity)
+            {
+                gpu.stroke_instances = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Noon mesh boundary instances"),
+                    size: (capacity * size_of::<Instance>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                gpu.stroke_capacity = capacity;
+                dirty_strokes = self
+                    .stroked_draws
+                    .iter()
+                    .map(|index| {
+                        let draw = &self.draws[index];
+                        (draw.instance, draw.stroke.expect("stroked draw"))
+                    })
+                    .collect();
+            }
+            if let Some(buffer) = gpu.stroke_instances.as_ref() {
+                for (slot, stroke) in dirty_strokes {
+                    queue.write_buffer(
+                        buffer,
+                        (slot * size_of::<Instance>()) as u64,
+                        bytemuck::bytes_of(&stroke),
+                    );
+                    stats.instance_bytes += size_of::<Instance>();
+                }
+            }
+            if self.stroked_draws.is_empty() {
+                gpu.stroke_instances = None;
+                gpu.stroke_capacity = 0;
             }
             if needed > gpu.instance_capacity {
                 gpu.instances = device.create_buffer(&wgpu::BufferDescriptor {
@@ -670,6 +884,40 @@ impl SpatialGpuState {
         stats.resident_meshes = self.meshes.len();
         stats.resident_instances = self.draws.len() + self.paths.draw_count();
         Ok(stats)
+    }
+
+    fn encode_boundary<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        gpu: &'a GpuState,
+        draw: &Draw,
+        sample_count: u32,
+    ) -> usize {
+        if draw.stroke.is_none() {
+            return 0;
+        }
+        let Some((vertices, count)) = &self.meshes[&draw.handle].boundary else {
+            return 0;
+        };
+        if *count == 0 {
+            return 0;
+        }
+        pass.set_pipeline(if sample_count == 1 {
+            &gpu.boundary_pipeline
+        } else {
+            &gpu.boundary_pipeline_msaa
+        });
+        pass.set_bind_group(0, &gpu.camera_group, &[]);
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_vertex_buffer(
+            1,
+            gpu.stroke_instances
+                .as_ref()
+                .expect("stroke buffer")
+                .slice(..),
+        );
+        pass.draw(0..*count, draw.instance as u32..draw.instance as u32 + 1);
+        1
     }
 
     pub fn is_active(&self) -> bool {
@@ -735,7 +983,36 @@ impl SpatialGpuState {
                 }
             }
         }
+        for &index in &self.stroked_draws {
+            let draw = &self.draws[&index];
+            if !draw.transparent {
+                draw_calls += self.encode_boundary(&mut pass, gpu, draw, sample_count);
+            }
+        }
+        // Opaque world paths populate depth before translucent faces blend.
         draw_calls += self.paths.encode(&mut pass, sample_count);
+        for &index in &self.transparent_order {
+            let draw = &self.draws[&index];
+            let mesh = &self.meshes[&draw.handle];
+            if self.instances[draw.instance].color[3] > 0.0 {
+                pass.set_pipeline(if sample_count == 1 {
+                    &gpu.transparent_pipeline
+                } else {
+                    &gpu.transparent_pipeline_msaa
+                });
+                pass.set_bind_group(0, &gpu.camera_group, &[]);
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(1, gpu.instances.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(
+                    0..mesh.index_count,
+                    0,
+                    draw.instance as u32..draw.instance as u32 + 1,
+                );
+                draw_calls += 1;
+            }
+            draw_calls += self.encode_boundary(&mut pass, gpu, draw, sample_count);
+        }
         DrawStats {
             draw_calls,
             instances_drawn: self.draws.len() + self.paths.draw_count(),
@@ -856,6 +1133,26 @@ fn validate_point_lit_normals(
     }
     Ok(())
 }
+fn single_face(mesh: &MeshResource) -> bool {
+    match (mesh.positions().len(), mesh.indices().len()) {
+        (3, 3) => {
+            let mut indices = [mesh.indices()[0], mesh.indices()[1], mesh.indices()[2]];
+            indices.sort_unstable();
+            indices == [0, 1, 2]
+        }
+        (4, 6) => {
+            let indices = mesh.indices();
+            let mut first = [indices[0], indices[1], indices[2]];
+            let mut second = [indices[3], indices[4], indices[5]];
+            first.sort_unstable();
+            second.sort_unstable();
+            first.windows(2).all(|p| p[0] != p[1])
+                && second.windows(2).all(|p| p[0] != p[1])
+                && first.iter().filter(|i| second.contains(i)).count() == 2
+        }
+        _ => false,
+    }
+}
 fn lower_vertices(mesh: &MeshResource) -> Result<Vec<Vertex>, SpatialPrepareError> {
     mesh.positions()
         .iter()
@@ -909,6 +1206,16 @@ impl GpuState {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -934,6 +1241,13 @@ impl GpuState {
             bytemuck::bytes_of(&LightUniform::default()),
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
+        let boundary_metrics = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon mesh boundary viewport"),
+            bytemuck::cast_slice(&[1.0_f32; 4]),
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
         let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Noon mesh camera"),
             layout: &layout,
@@ -941,6 +1255,10 @@ impl GpuState {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: camera.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: boundary_metrics.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -957,8 +1275,8 @@ impl GpuState {
             label: Some("Noon retained mesh shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("mesh.wgsl").into()),
         });
-        let pipeline_msaa = pipeline(device, &pipeline_layout, &shader, format, 4);
-        let pipeline = pipeline(device, &pipeline_layout, &shader, format, 1);
+        let pipeline_msaa = pipeline(device, &pipeline_layout, &shader, format, 4, false, false);
+        let opaque_pipeline = pipeline(device, &pipeline_layout, &shader, format, 1, false, false);
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Noon empty mesh instances"),
             size: 4,
@@ -968,8 +1286,40 @@ impl GpuState {
         Self {
             device: device.clone(),
             viewport,
-            pipeline,
+            pipeline: opaque_pipeline,
             pipeline_msaa,
+            transparent_pipeline: pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                format,
+                1,
+                true,
+                false,
+            ),
+            transparent_pipeline_msaa: pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                format,
+                4,
+                true,
+                false,
+            ),
+            boundary_pipeline: pipeline(device, &pipeline_layout, &shader, format, 1, true, true),
+            boundary_pipeline_msaa: pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                format,
+                4,
+                true,
+                true,
+            ),
+            boundary_metrics,
+            boundary_metrics_value: None,
+            stroke_instances: None,
+            stroke_capacity: 0,
             camera,
             camera_group,
             light,
@@ -1010,9 +1360,13 @@ fn pipeline(
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
     count: u32,
+    transparent: bool,
+    boundary: bool,
 ) -> wgpu::RenderPipeline {
     const VERTEX: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    const EDGE: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 10 => Float32x2];
     const INSTANCE: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
         5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1020,13 +1374,17 @@ fn pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(if boundary { "vs_boundary" } else { "vs_main" }),
             compilation_options: Default::default(),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
+                    array_stride: if boundary {
+                        size_of::<boundary::EdgeVertex>()
+                    } else {
+                        size_of::<Vertex>()
+                    } as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &VERTEX,
+                    attributes: if boundary { &EDGE } else { &VERTEX },
                 }),
                 Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<Instance>() as u64,
@@ -1037,11 +1395,11 @@ fn pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(if boundary { "fs_boundary" } else { "fs_main" }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend: transparent.then_some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1051,10 +1409,18 @@ fn pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(true),
+            depth_write_enabled: Some(!transparent),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
-            bias: Default::default(),
+            bias: if boundary {
+                wgpu::DepthBiasState {
+                    constant: -1,
+                    slope_scale: 0.0,
+                    clamp: 0.0,
+                }
+            } else {
+                Default::default()
+            },
         }),
         multisample: wgpu::MultisampleState {
             count,

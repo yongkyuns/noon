@@ -298,6 +298,57 @@ impl RustHostCallbackContext<'_> {
         Ok(())
     }
 
+    /// Replace an object or family from the exact effective layout rows of this
+    /// phase. Rust computes every transform and projected bound before exposing
+    /// any write; later reads in the same callback see the staged replacement.
+    pub fn replace_layout(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), crate::CallbackLayoutError> {
+        let token = self.overlay.token();
+        let revision = token.publication().scene_revision();
+        self.session
+            .validate_callback_store(&source.integration_store().borrow(), token)?;
+        let mut rows: BTreeMap<SemanticNodeId, EffectiveObjectProperties> = BTreeMap::new();
+        let changes = crate::prepare_callback_layout_replace(
+            source,
+            target,
+            revision,
+            dimension,
+            stretch,
+            |node| {
+                if let Some(row) = self.overlay.object(node) {
+                    return Ok((row.transform, row.bounds));
+                }
+                if let Some(row) = rows.get(&node) {
+                    return Ok((row.transform, row.bounds));
+                }
+                let row = match self
+                    .session
+                    .required_callback_read(token, CallbackReadRequest::Object(node))?
+                {
+                    CallbackReadValue::Object(row) => row,
+                    CallbackReadValue::Scalar(_) => {
+                        unreachable!("object callback read returns object")
+                    }
+                };
+                rows.insert(node, row);
+                Ok((row.transform, row.bounds))
+            },
+        )?;
+        for (node, row) in rows {
+            self.overlay.cache_read_object(node, row);
+        }
+        for change in changes {
+            self.overlay
+                .set_transform_and_bounds(change.node, change.transform, change.bounds)?;
+        }
+        Ok(())
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }

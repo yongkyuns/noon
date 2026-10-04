@@ -299,6 +299,12 @@ pub enum SemanticAnimationIntent {
         timing: TrackTiming,
         time_map: CompositionTimeMap,
     },
+    /// Move an object's effective bounds center along a retained semantic vector path.
+    /// The path identity is resolved at activation; no sampled points are authored.
+    MoveAlongPath {
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+    },
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
     /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
@@ -411,6 +417,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::FamilyTransformTo { source, .. } => Some(*source),
             Self::ObjectPropertyTrack { target, .. }
+            | Self::MoveAlongPath { target, .. }
             | Self::TransformTo { target, .. }
             | Self::WorldTransformTo { target, .. }
             | Self::CameraProfileTo { target, .. }
@@ -435,6 +442,7 @@ impl SemanticAnimationIntent {
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
             Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -474,6 +482,7 @@ impl SemanticAnimationIntent {
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
@@ -497,6 +506,7 @@ impl SemanticAnimationIntent {
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
@@ -565,6 +575,7 @@ pub enum SemanticAnimationError {
     InvalidScalarTarget(f64),
     UnsupportedImageAnimation,
     InvalidObjectPropertyTrack,
+    InvalidMoveAlongPath,
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -638,6 +649,9 @@ impl std::fmt::Display for SemanticAnimationError {
             }
             Self::InvalidObjectPropertyTrack => formatter.write_str(
                 "object property track requires matching finite endpoints and valid exact timing",
+            ),
+            Self::InvalidMoveAlongPath => formatter.write_str(
+                "MoveAlongPath requires distinct live objects and a retained static vector path",
             ),
         }
     }
@@ -896,6 +910,43 @@ impl SemanticStore {
             SemanticTransformInterpolation::Affine,
             false,
             options,
+        )
+    }
+
+    /// Insert one exact authored path-motion declaration. The target's effective
+    /// bounds center follows a retained static 2D VectorPath captured at activation.
+    pub fn insert_semantic_move_along_path_animation(
+        &mut self,
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let target_state = self.semantic_object_state_checked(target)?;
+        let path_state = self.semantic_object_state_checked(path)?;
+        if target == path || target_state.content.image().is_some() {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        }
+        let Some(crate::StoredGeometry::Resource(handle)) = path_state.content.geometry() else {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        };
+        let Some(crate::GeometryResource::VectorPath(vector_path)) =
+            self.geometry_resources().get(handle)
+        else {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        };
+        if !vector_path.has_drawable_segments()
+            || vector_path.retained_command_count() > crate::MAX_PATH_MOTION_COMMANDS
+            || !path_state.signal_bindings().is_empty()
+        {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::MoveAlongPath { target, path },
+                options,
+            )),
         )
     }
 

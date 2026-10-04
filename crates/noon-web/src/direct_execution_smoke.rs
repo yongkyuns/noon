@@ -1153,3 +1153,40 @@ pub async fn create_zoomed_scene_renderer(
     let session = noon::example_scenes::zoomed_scene::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// Shared native camera cases through the ordinary direct execution host.
+#[wasm_bindgen(js_name = createDirectSpecialCameraSettingsRenderer)]
+pub async fn create_direct_special_camera_settings_renderer(
+    canvas: OffscreenCanvas,
+    case: &str,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    use noon::example_scenes::special_camera_settings::{self, CameraCase};
+    let case = CameraCase::from_name(case).ok_or_else(|| js_error("unknown camera case"))?;
+    if case.duration() == 0.0 {
+        let session = special_camera_settings::static_session(case).map_err(js_error)?;
+        WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    } else {
+        let program = special_camera_settings::program(case).map_err(js_error)?;
+        WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+    }
+}
+
+#[wasm_bindgen(js_name = createDirectFollowingGraphCameraRenderer)]
+pub async fn create_direct_following_graph_camera_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::following_graph_camera::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}
+
+#[wasm_bindgen(js_name = createDirectMovingZoomedSceneAroundRenderer)]
+pub async fn create_direct_moving_zoomed_scene_around_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::moving_zoomed_scene_around::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}

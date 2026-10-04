@@ -3,6 +3,18 @@ use crate::spatial_authoring::{publish_mesh_creation, publish_mesh_family};
 use crate::{AuthoringError, MeshOptions};
 
 impl LiveSession<'_> {
+    /// Atomically recolor one sampled surface through this session's publication owner.
+    pub fn set_surface_checkerboard(
+        &mut self,
+        surface: &crate::SurfaceFamily,
+        colors: [crate::Color; 2],
+        opacity: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_family(surface.family())?;
+        let transaction = surface.prepare_checkerboard_transaction(colors, opacity)?;
+        self.apply(transaction).map(|_| ())
+    }
+
     pub fn world_affine(
         &mut self,
         target: MobjectTarget<'_>,

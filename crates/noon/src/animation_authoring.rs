@@ -103,6 +103,26 @@ impl crate::Scene {
         )
     }
 
+    /// Declare exact bounds-center motion over a retained static path.
+    pub fn declare_move_along_path(
+        &self,
+        target: &Mobject,
+        path: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
+        self.require_object(path)
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::MoveAlongPath {
+                target: target.node_id(),
+                path: path.node_id(),
+            },
+            options,
+        )
+    }
+
     /// Declare one transient flash over an exact analytic Line.
     pub fn declare_passing_flash(
         &self,

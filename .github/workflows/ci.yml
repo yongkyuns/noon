@@ -24,6 +24,7 @@ on:
       - "crates/noon-web/src/semantic_execution_player/**"
       - "crates/noon-web/src/direct_execution_smoke.rs"
       - "scripts/spatial-surface-light-qualification.mjs"
+      - "scripts/special-camera-qualification.mjs"
       - "web/python/examples/noon_spatial_surface_lighting.py"
       - "crates/noon-render-wgpu/src/gpu/mesh*"
       - "crates/noon/src/example_scenes/spatial_surface.rs"
@@ -238,6 +239,13 @@ jobs:
           NOON_SPATIAL_SURFACE_BACKEND: ${{ matrix.backend }}
           NOON_SPATIAL_SURFACE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/spatial-surface-light
         run: node scripts/spatial-surface-light-qualification.mjs
+      - name: Qualify shared camera and surface-cell capability cases
+        if: matrix.backend == 'webgpu'
+        env:
+          NOON_CAMERA_ARTIFACTS: browser-smoke-artifacts/webgpu/special-camera
+        run: |
+          node scripts/special-camera-qualification.mjs
+          NOON_CAMERA_NO_JSPI=1 NOON_PAIRED_CASES=following_graph_camera-1.5,moving_zoomed_scene_around-9.5 node scripts/special-camera-qualification.mjs
       - name: Test camera backing-density invariance
         env:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}

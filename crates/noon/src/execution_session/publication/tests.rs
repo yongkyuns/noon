@@ -872,7 +872,6 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
     let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
-    store.attach_to_scene(other).unwrap();
     let mut initial = SemanticMutationTransaction::new();
     initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
     initial.apply(&mut store).unwrap();
@@ -903,12 +902,28 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
     let before = session.publication_context();
+    let before_authored_transform = store.semantic_object_state_checked(node).unwrap().transform;
+    let before_effective_transform = session.frame().objects[0].transform;
     for (target, time) in [(node, 0.5), (other, 1.0)] {
         let mut tx = SemanticMutationTransaction::new();
+        // A rejected callback revision also rolls back unrelated authored edits.
+        tx.set_property(
+            node,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(3.0, 0.0, 0.0),
+        );
         tx.add_updater(target, HostCallbackId::new(2), time, None);
         assert!(session.apply_semantic_transaction(&mut store, tx).is_err());
         assert_eq!(session.publication_context(), before);
         assert_eq!(store.scene_revision(), before.scene_revision());
+        assert_eq!(
+            store.semantic_object_state_checked(node).unwrap().transform,
+            before_authored_transform
+        );
+        assert_eq!(
+            session.frame().objects[0].transform,
+            before_effective_transform
+        );
     }
     let mut remove = SemanticMutationTransaction::new();
     remove.clear_updaters(node, 1.0);

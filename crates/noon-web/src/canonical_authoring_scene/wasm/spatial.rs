@@ -24,6 +24,31 @@ fn world_values(values: &[f64]) -> Result<noon::SemanticWorldTransform3D, JsValu
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = setSurfaceCheckerboard)]
+    pub fn set_surface_checkerboard(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        first: &[f64],
+        second: &[f64],
+        opacity: f64,
+    ) -> Result<(), JsValue> {
+        if first.len() != 4 || second.len() != 4 {
+            return Err(invalid(
+                "surface checkerboard colors require RGBA quadruples",
+            ));
+        }
+        let surface = family
+            .semantic_surface_family()?
+            .ok_or_else(|| invalid("checkerboard fills require a Surface family"))?;
+        let colors = [
+            crate::authoring_spatial::color(first[0], first[1], first[2], first[3])?,
+            crate::authoring_spatial::color(second[0], second[1], second[2], second[3])?,
+        ];
+        self.inner
+            .set_surface_checkerboard(surface, colors, opacity)
+            .map_err(js_error)
+    }
+
     /// Create a canonical indexed mesh through the cold Scene or active LiveSession owner.
     #[wasm_bindgen(js_name = createMesh)]
     pub fn create_mesh(
@@ -39,11 +64,13 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = createMeshFamily)]
     pub fn create_mesh_family(
         &mut self,
-        candidate: WasmMeshFamilyOptions,
+        mut candidate: WasmMeshFamilyOptions,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        candidate.retain_surface_roles()?;
         self.inner
             .create_mesh_family(candidate.options)
-            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .and_then(|family| noon::SurfaceFamily::from_family(family).map_err(Into::into))
+            .map(WasmAuthoringFamilyHandle::from_surface_family)
             .map_err(js_error)
     }
 

@@ -7,6 +7,21 @@ import _manim_plotting as plotting
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
 
 
+def _family_handle(slot, members=()):
+    """Build the Rust family-membership surface used by wrapper reconciliation."""
+    keys = [f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}" for handle, _ in members]
+    family = SimpleNamespace(semanticSlot=slot, semanticGeneration=1)
+    family.memberKeys = Mock(return_value=keys)
+    family.memberIsFamily = Mock(side_effect=lambda index: members[index][1])
+    family.memberFamily = Mock(side_effect=lambda index: members[index][0])
+    family.memberMobject = Mock(side_effect=lambda index: members[index][0])
+    return family
+
+
+def _handle(slot):
+    return SimpleNamespace(semanticSlot=slot, semanticGeneration=1)
+
+
 class Plan:
     def __init__(self):
         self.freed = 0
@@ -152,27 +167,25 @@ class PlottingAdapterTests(unittest.TestCase):
     def test_bar_chart_forwards_rust_default_sentinels_and_style(self):
         options = Mock()
         chart = Mock()
-        axes_family = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
-        bars_family = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
-                                      directMobjects=Mock(return_value=[]),
-                                      memberKeys=Mock(return_value=[]))
-        chart_family = SimpleNamespace(
-            semanticSlot=1, semanticGeneration=1,
-            memberKeys=Mock(return_value=["2:1", "3:1"]),
-        )
+        axis_shaft = _handle(10)
+        axis_ticks = _family_handle(11)
+        other_shaft = _handle(20)
+        other_ticks = _family_handle(21)
+        axis = _family_handle(12, [(axis_shaft, False), (axis_ticks, True)])
+        other_axis = _family_handle(13, [(other_shaft, False), (other_ticks, True)])
+        axes_family = _family_handle(2, [(axis, True), (other_axis, True)])
+        bars_family = _family_handle(3)
+        bars_family.directMobjects = Mock(return_value=[])
+        chart_family = _family_handle(1, [(axes_family, True), (bars_family, True)])
         chart.family.return_value = chart_family
         chart.axes.return_value = axes_family
         chart.bars.return_value = bars_family
-        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
-        )
-        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        axis.coordinateShaft = Mock(return_value=axis_shaft)
+        axis.coordinateTicks = Mock(return_value=axis_ticks)
+        axis.coordinateTickObjects = Mock(return_value=[])
+        other_axis.coordinateShaft = Mock(return_value=other_shaft)
+        other_axis.coordinateTicks = Mock(return_value=other_ticks)
+        other_axis.coordinateTickObjects = Mock(return_value=[])
         axes_family.coordinateAxis = Mock(side_effect=[axis, other_axis])
         chart.xLabels.return_value = None
         chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
@@ -195,27 +208,25 @@ class PlottingAdapterTests(unittest.TestCase):
         context = Mock()
         chart = Mock()
         options = Mock()
-        axes_family = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
-        bars_family = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
-                                      directMobjects=Mock(return_value=[]),
-                                      memberKeys=Mock(return_value=[]))
-        chart_family = SimpleNamespace(
-            semanticSlot=1, semanticGeneration=1,
-            memberKeys=Mock(return_value=["2:1", "3:1"]),
-        )
+        axis_shaft = _handle(10)
+        axis_ticks = _family_handle(11)
+        other_shaft = _handle(20)
+        other_ticks = _family_handle(21)
+        axis = _family_handle(12, [(axis_shaft, False), (axis_ticks, True)])
+        other_axis = _family_handle(13, [(other_shaft, False), (other_ticks, True)])
+        axes_family = _family_handle(2, [(axis, True), (other_axis, True)])
+        bars_family = _family_handle(3)
+        bars_family.directMobjects = Mock(return_value=[])
+        chart_family = _family_handle(1, [(axes_family, True), (bars_family, True)])
         chart.family.return_value = chart_family
         chart.axes.return_value = axes_family
         chart.bars.return_value = bars_family
-        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
-        )
-        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        axis.coordinateShaft = Mock(return_value=axis_shaft)
+        axis.coordinateTicks = Mock(return_value=axis_ticks)
+        axis.coordinateTickObjects = Mock(return_value=[])
+        other_axis.coordinateShaft = Mock(return_value=other_shaft)
+        other_axis.coordinateTicks = Mock(return_value=other_ticks)
+        other_axis.coordinateTickObjects = Mock(return_value=[])
         axes_family.coordinateAxis = Mock(side_effect=[axis, other_axis])
         chart.xLabels.return_value = None
         chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
@@ -235,25 +246,25 @@ class PlottingAdapterTests(unittest.TestCase):
 
     def test_bar_chart_copy_rebuilds_chart_and_child_wrappers_from_copied_family(self):
         source_chart = Mock()
-        source_family = SimpleNamespace(semanticSlot=1, semanticGeneration=1,
-                                        memberKeys=Mock(return_value=["2:1", "3:1"]))
-        source_axes = SimpleNamespace(semanticSlot=2, semanticGeneration=1,
-                                      memberKeys=Mock(return_value=["12:1", "13:1"]))
-        source_bars = SimpleNamespace(semanticSlot=3, semanticGeneration=1,
-                                      directMobjects=Mock(return_value=[]),
-                                      memberKeys=Mock(return_value=[]))
+        axis_shaft = _handle(10)
+        axis_ticks = _family_handle(11)
+        other_shaft = _handle(20)
+        other_ticks = _family_handle(21)
+        axis = _family_handle(12, [(axis_shaft, False), (axis_ticks, True)])
+        other_axis = _family_handle(13, [(other_shaft, False), (other_ticks, True)])
+        source_axes = _family_handle(2, [(axis, True), (other_axis, True)])
+        source_bars = _family_handle(3)
+        source_bars.directMobjects = Mock(return_value=[])
+        source_family = _family_handle(1, [(source_axes, True), (source_bars, True)])
         source_chart.family.return_value = source_family
         source_chart.axes.return_value = source_axes
         source_chart.bars.return_value = source_bars
-        axis = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=10, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=11, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["10:1", "11:1"]),
-        )
-        other_axis = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
-            coordinateShaft=Mock(return_value=SimpleNamespace(semanticSlot=20, semanticGeneration=1)),
-            coordinateTicks=Mock(return_value=SimpleNamespace(semanticSlot=21, semanticGeneration=1, memberKeys=Mock(return_value=[]))),
-            coordinateTickObjects=Mock(return_value=[]), memberKeys=Mock(return_value=["20:1", "21:1"]))
+        axis.coordinateShaft = Mock(return_value=axis_shaft)
+        axis.coordinateTicks = Mock(return_value=axis_ticks)
+        axis.coordinateTickObjects = Mock(return_value=[])
+        other_axis.coordinateShaft = Mock(return_value=other_shaft)
+        other_axis.coordinateTicks = Mock(return_value=other_ticks)
+        other_axis.coordinateTickObjects = Mock(return_value=[])
         source_axes.coordinateAxis = Mock(side_effect=[axis, other_axis])
         source_chart.xLabels.return_value = None
         source_chart.yLabels.return_value = SimpleNamespace(semanticSlot=40, semanticGeneration=1,
@@ -266,21 +277,18 @@ class PlottingAdapterTests(unittest.TestCase):
             source = plotting.BarChart((1, 2))
 
         copied_root = Mock()
-        copied_family = SimpleNamespace(semanticSlot=10, semanticGeneration=1,
-                                        memberKeys=Mock(return_value=[]),
-                                        barChart=Mock(name="copied_chart_handle"))
-        copied_axes = SimpleNamespace(semanticSlot=12, semanticGeneration=1,
-                                     memberKeys=Mock(return_value=[]))
-        copied_bars = SimpleNamespace(semanticSlot=13, semanticGeneration=1,
-                                     memberKeys=Mock(return_value=[]))
+        copied_axes = _family_handle(12)
+        copied_bars = _family_handle(13)
+        copied_bars.directMobjects = Mock(return_value=[])
+        copied_family = _family_handle(10, [(copied_axes, True), (copied_bars, True)])
+        copied_family.barChart = Mock(name="copied_chart_handle")
         def copied_family_for(source):
             mapped = {
                 id(source_family): copied_family,
                 id(source_axes): copied_axes,
                 id(source_bars): copied_bars,
             }.get(id(source))
-            return mapped if mapped is not None else SimpleNamespace(
-                semanticSlot=99, semanticGeneration=1, memberKeys=Mock(return_value=[]))
+            return mapped if mapped is not None else _family_handle(99)
         copied_root.familyFor.side_effect = copied_family_for
         copied_root.mobjectFor.side_effect = lambda _: SimpleNamespace(
             semanticSlot=11, semanticGeneration=1

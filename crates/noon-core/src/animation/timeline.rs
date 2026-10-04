@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Upper bound for one activation-time retained path-motion snapshot.
+pub const MAX_PATH_MOTION_COMMANDS: usize = 65_536;
 
 use crate::{
     object_state::{validate_geometry, validate_style, validate_transform},
@@ -276,6 +280,12 @@ pub enum TrackValues {
         to: Vec2,
         arc_angle: f64,
     },
+    /// Runtime-prepared arc-length motion over one activation-time path snapshot.
+    PathVec2 {
+        path: Arc<crate::VectorPath>,
+        path_transform: crate::Transform2D,
+        target_center_offset: Vec2,
+    },
     Color {
         from: Option<crate::Color>,
         to: Option<crate::Color>,
@@ -312,7 +322,7 @@ impl TrackValues {
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
-            Self::Vec2 { .. } | Self::ArcVec2 { .. } => ValueKind::Vec2,
+            Self::Vec2 { .. } | Self::ArcVec2 { .. } | Self::PathVec2 { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
@@ -365,6 +375,25 @@ impl TrackValues {
                     property,
                     value: *arc_angle,
                 })
+            }
+            Self::PathVec2 {
+                path,
+                path_transform,
+                target_center_offset,
+            } if property != Property::Position
+                || !path.is_finite()
+                || !path.has_drawable_segments()
+                || path.retained_command_count() > MAX_PATH_MOTION_COMMANDS
+                || !path_transform.translation.x.is_finite()
+                || !path_transform.translation.y.is_finite()
+                || !path_transform.rotation.is_finite()
+                || !path_transform.scale.x.is_finite()
+                || !path_transform.scale.y.is_finite()
+                || !target_center_offset.x.is_finite()
+                || !target_center_offset.y.is_finite()
+                || !path.has_finite_transformed_output(*path_transform, *target_center_offset) =>
+            {
+                Err(TimelineError::InvalidPathMotionValues(property))
             }
             Self::Color { from, to } => {
                 for (endpoint, color) in [
@@ -471,6 +500,16 @@ pub struct TrackTiming {
     pub start_time: f64,
     pub duration: f64,
     pub easing: RateFunction,
+    /// Evaluate this leaf's rate function at `1 - alpha`, as Manim's
+    /// `reverse_rate_function=True` does. Composition time maps remain outer
+    /// to this leaf-local rate function.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub reverse_rate_function: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl TrackTiming {
@@ -479,6 +518,7 @@ impl TrackTiming {
             start_time,
             duration,
             easing,
+            reverse_rate_function: false,
         }
     }
 
@@ -488,6 +528,33 @@ impl TrackTiming {
 
     pub const fn is_instant(self) -> bool {
         self.duration == 0.0
+    }
+
+    /// Apply the leaf-local rate function, including Manim's reverse input.
+    pub fn evaluate_progress(self, alpha: f32) -> f32 {
+        self.easing.evaluate(if self.reverse_rate_function {
+            1.0 - alpha
+        } else {
+            alpha
+        })
+    }
+
+    /// f64-preserving form used by spatial timelines.
+    pub fn evaluate_progress_f64(self, alpha: f64) -> f64 {
+        self.easing.evaluate_f64(if self.reverse_rate_function {
+            1.0 - alpha
+        } else {
+            alpha
+        })
+    }
+
+    /// The leaf's exact terminal interpolation progress.
+    pub fn terminal_progress(self) -> f32 {
+        self.evaluate_progress(1.0)
+    }
+
+    pub fn terminal_progress_f64(self) -> f64 {
+        self.evaluate_progress_f64(1.0)
     }
 }
 
@@ -521,6 +588,7 @@ pub enum TimelineError {
     },
     PreparedMorphPropertyMismatch(Property),
     ArcVec2PropertyMismatch(Property),
+    InvalidPathMotionValues(Property),
     InvalidScalarValues {
         property: Property,
         from: f32,
@@ -578,6 +646,10 @@ impl std::fmt::Display for TimelineError {
             Self::ArcVec2PropertyMismatch(property) => write!(
                 formatter,
                 "curved vector execution data can only drive Position, not {property:?}"
+            ),
+            Self::InvalidPathMotionValues(property) => write!(
+                formatter,
+                "retained path motion requires finite 2D geometry and can only drive Position, not {property:?}"
             ),
             Self::InvalidZIndexValues { from, to } => write!(
                 formatter,
@@ -687,6 +759,10 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     if matches!(&track.values, TrackValues::ArcVec2 { .. }) && track.property != Property::Position
     {
         return Err(TimelineError::ArcVec2PropertyMismatch(track.property));
+    }
+    if matches!(&track.values, TrackValues::PathVec2 { .. }) && track.property != Property::Position
+    {
+        return Err(TimelineError::InvalidPathMotionValues(track.property));
     }
     track
         .values
@@ -1097,6 +1173,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn path_motion_rejects_overflowing_transformed_cubic_hulls_and_accepts_zero_metric() {
+        let large_path =
+            std::sync::Arc::new(crate::VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(f32::MAX, 0.0),
+                Vec2::new(0.0, f32::MAX),
+                Vec2::ONE,
+            ));
+        let invalid = track(
+            Property::Position,
+            TrackValues::PathVec2 {
+                path: large_path,
+                path_transform: Transform2D {
+                    scale: Vec2::new(2.0, 1.0),
+                    ..Transform2D::IDENTITY
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing(),
+        );
+        assert_eq!(
+            validate_track_definition(&invalid),
+            Err(TimelineError::InvalidPathMotionValues(Property::Position))
+        );
+
+        // Zero scale is valid and gives the plan a deterministic all-zero metric.
+        let zero_metric = track(
+            Property::Position,
+            TrackValues::PathVec2 {
+                path: std::sync::Arc::new(
+                    crate::VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(4.0, 0.0)),
+                ),
+                path_transform: Transform2D {
+                    translation: Vec2::new(2.0, -1.0),
+                    scale: Vec2::ZERO,
+                    ..Transform2D::IDENTITY
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing(),
+        );
+        validate_track_definition(&zero_metric).unwrap();
     }
 
     #[test]

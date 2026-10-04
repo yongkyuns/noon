@@ -87,6 +87,7 @@ mod execution_session;
 mod family_affine;
 mod family_arrangement;
 mod family_authoring;
+mod family_callback_layout;
 mod family_callback_paint;
 mod family_callback_translation;
 mod family_copy;
@@ -209,6 +210,9 @@ pub use execution_session::{
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
+pub use family_callback_layout::{
+    prepare_callback_layout_replace, CallbackLayoutChange, CallbackLayoutError,
+};
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::FamilyCopy;
@@ -297,7 +301,7 @@ pub use source_reconciliation::{
     SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
     SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
 };
-pub use spatial_authoring::MeshOptions;
+pub use spatial_authoring::{MeshOptions, SurfaceFamily, SurfaceOptions};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 #[cfg(feature = "latex")]
@@ -338,7 +342,8 @@ pub mod prelude {
         CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshOptions, MeshResource,
         SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
         SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticVec3,
-        SemanticWorldTransform3D, SurfaceGrid, SurfaceSample, UvSurfacePlan,
+        SemanticWorldTransform3D, SurfaceFamily, SurfaceGrid, SurfaceOptions, SurfaceSample,
+        UvSurfacePlan,
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,

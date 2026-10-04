@@ -37,7 +37,7 @@ pub(crate) fn about(values: &[f64]) -> Result<Option<SemanticVec3>, JsValue> {
     }
 }
 
-fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Color, JsValue> {
+pub(crate) fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Color, JsValue> {
     let values = [red, green, blue, alpha];
     if values
         .iter()
@@ -263,6 +263,18 @@ impl WasmMeshFamilyOptions {
     pub fn len(&self) -> usize {
         self.options.len()
     }
+    pub(crate) fn retain_surface_roles(&mut self) -> Result<(), JsValue> {
+        if self.options.len() != self.cells.len() {
+            return Err(invalid(
+                "spatial.invalid_surface_roles",
+                "UV roles must correspond one-for-one with surface cells",
+            ));
+        }
+        for (options, cell) in self.options.iter_mut().zip(&self.cells) {
+            options.surface_uv_cell = Some(*cell);
+        }
+        Ok(())
+    }
     #[wasm_bindgen(js_name = setFill)]
     pub fn set_fill(
         &mut self,
@@ -285,6 +297,48 @@ impl WasmMeshFamilyOptions {
         }
         Ok(())
     }
+    #[wasm_bindgen(js_name = setStroke)]
+    pub fn set_stroke(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        width: f64,
+        opacity: f64,
+    ) -> Result<(), JsValue> {
+        let stroke = color(red, green, blue, alpha)?;
+        if !width.is_finite() || width < 0.0 {
+            return Err(invalid(
+                "spatial.invalid_stroke_width",
+                "stroke width must be finite and non-negative",
+            ));
+        }
+        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+            return Err(invalid(
+                "spatial.invalid_opacity",
+                "opacity must be finite and in [0, 1]",
+            ));
+        }
+        for options in &mut self.options {
+            options.style.stroke = Some(SemanticPaint::Solid(stroke));
+            options.style.stroke_width = width;
+            options.style.stroke_opacity = opacity;
+            options.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+        }
+        Ok(())
+    }
+    #[wasm_bindgen(js_name = setPointLit)]
+    pub fn set_point_lit(&mut self, enabled: bool) {
+        let material = if enabled {
+            SemanticSpatialMaterial::PointLit
+        } else {
+            SemanticSpatialMaterial::Unlit
+        };
+        for options in &mut self.options {
+            options.material = material;
+        }
+    }
     #[wasm_bindgen(js_name = setCheckerboard)]
     pub fn set_checkerboard(
         &mut self,
@@ -306,8 +360,14 @@ impl WasmMeshFamilyOptions {
         }
         let a = color(first[0], first[1], first[2], first[3])?;
         let b = color(second[0], second[1], second[2], second[3])?;
+        if self.options.len() != self.cells.len() {
+            return Err(invalid(
+                "spatial.invalid_surface_roles",
+                "UV roles must correspond one-for-one with surface cells",
+            ));
+        }
         for (options, [u, v]) in self.options.iter_mut().zip(&self.cells) {
-            paint(options, if (u + v) % 2 == 0 { a } else { b });
+            paint(options, if (u % 2 + v % 2) % 2 == 0 { a } else { b });
             options.style.fill_opacity = opacity;
         }
         Ok(())
@@ -408,11 +468,16 @@ impl WasmAuthoringStore {
     #[wasm_bindgen(js_name = createMeshFamily)]
     pub fn create_mesh_family(
         &self,
-        candidate: WasmMeshFamilyOptions,
+        mut candidate: WasmMeshFamilyOptions,
     ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-        noon::MobjectFamily::from_meshes(Rc::clone(&self.semantics), candidate.options)
-            .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
-            .map_err(js_error)
+        candidate.retain_surface_roles()?;
+        let family =
+            noon::MobjectFamily::from_meshes(Rc::clone(&self.semantics), candidate.options)
+                .map_err(js_error)?;
+        let surface = noon::SurfaceFamily::from_family(family).map_err(js_error)?;
+        Ok(crate::WasmAuthoringFamilyHandle::from_surface_family(
+            surface,
+        ))
     }
 }
 
@@ -482,6 +547,32 @@ impl WasmAuthoringMobjectHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = setFillByCheckerboard)]
+    pub fn set_fill_by_checkerboard(
+        &mut self,
+        first: &[f64],
+        second: &[f64],
+        opacity: f64,
+    ) -> Result<(), JsValue> {
+        if first.len() != 4 || second.len() != 4 {
+            return Err(invalid(
+                "spatial.invalid_color",
+                "checkerboard colors require RGBA quadruples",
+            ));
+        }
+        let first = color(first[0], first[1], first[2], first[3])?;
+        let second = color(second[0], second[1], second[2], second[3])?;
+        let surface = self.semantic_surface_family()?.ok_or_else(|| {
+            invalid(
+                "spatial.not_a_surface",
+                "checkerboard fills require a Surface family",
+            )
+        })?;
+        surface
+            .set_fill_by_checkerboard([first, second], opacity)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = shiftWorld)]
     pub fn shift_world(&mut self, x: f64, y: f64, z: f64) -> Result<(), JsValue> {
         self.semantic_family()?

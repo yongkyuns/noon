@@ -37,6 +37,8 @@ pub enum UnsupportedAuthoringOperation {
     CaptureRenderOverride,
     /// cannot capture a reactive binding into object state.
     CaptureReactiveBinding,
+    /// Surface checkerboard semantics require retained mesh leaves with UV roles.
+    SurfaceCellRole,
     /// target editor cannot capture a runtime style backed by a paint resource.
     CaptureResourcePaint,
     /// Manim color queries do not support resource paints.
@@ -75,6 +77,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureNonUnitAppearance => "object state capture cannot represent a non-unit effective appearance",
             Self::CaptureRenderOverride => "object state capture requires effective authored content without reveal or morph overrides",
             Self::CaptureReactiveBinding => "cannot capture a reactive binding into object state",
+            Self::SurfaceCellRole => "surface checkerboard requires retained mesh cells with UV roles",
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
@@ -116,10 +119,10 @@ pub enum AuthoringError {
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
     /// Camera auto-frame inputs cannot produce a finite representable viewport.
     InvalidCameraAutoFrame(&'static str),
-    /// An ambient camera-rotation input or sampled endpoint is not representable.
+    /// A camera-motion input or sampled endpoint is not representable.
     InvalidCameraMotionInput(&'static str),
-    /// A second ambient interval cannot begin while the camera has an open owner.
-    AmbientCameraMotionAlreadyActive,
+    /// A second camera-motion interval cannot begin while the camera has an open owner.
+    CameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
     UnresolvedCreatedNode(noon_core::SemanticLocalNodeToken),
     /// Existing shared domain cause.
@@ -293,8 +296,8 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("geometry, transform, and style must be finite")
             }
             Self::InvalidCameraMotionInput(message) => f.write_str(message),
-            Self::AmbientCameraMotionAlreadyActive => {
-                f.write_str("camera already has an open ambient rotation; stop it before beginning another")
+            Self::CameraMotionAlreadyActive => {
+                f.write_str("camera already has an open rotation; stop it before beginning another")
             }
             Self::NonFiniteTransform => f.write_str("compact transform must be finite"),
             Self::NonFiniteStyle => f.write_str("compact style must be finite"),

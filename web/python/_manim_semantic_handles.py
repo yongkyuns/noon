@@ -990,6 +990,14 @@ def _replace(
 ) -> _base.Mobject:
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("replacement target must be a Mobject")
+    from _manim_updaters import _canonical_phase_context
+
+    callback_context = _canonical_phase_context(self)
+    if callback_context is not None:
+        if getattr(mobject, "_scene", None) not in (None, callback_context._scene):
+            raise ValueError("callback replacement target belongs to another Scene")
+        callback_context.replace_layout(self, mobject, dim_to_match, stretch)
+        return self
     source, context = _dimension_fit_source(self, dim_to_match)
     target = _layout_anchor(mobject)
     if target is None:

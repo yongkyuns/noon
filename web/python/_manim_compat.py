@@ -590,6 +590,18 @@ class MoveToTarget:
         return _base.Transform(mobject, target, **kwargs)
 
 
+class Restore:
+    """Animate to the saved shared-semantic snapshot with ordinary Transform."""
+
+    def __new__(cls, mobject: object, **kwargs: Any):
+        if not isinstance(mobject, Mobject):
+            raise TypeError("Restore target must be a Mobject")
+        target = getattr(mobject, "saved_state", None)
+        if not isinstance(target, Mobject):
+            raise Exception("Trying to restore without having saved")
+        return _base.Transform(mobject, target, **kwargs)
+
+
 _FAMILY_COPY_METADATA = object()
 
 

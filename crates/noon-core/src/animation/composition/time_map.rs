@@ -320,14 +320,14 @@ pub fn mapped_continuous_progress(
         return Some(1.0);
     }
     if time >= timing.start_time + timing.duration {
-        return Some(1.0);
+        return Some(timing.terminal_progress());
     }
     let raw = ((time - timing.start_time) / timing.duration).clamp(0.0, 1.0) as f32;
     if time_map.is_identity() {
-        return Some(timing.easing.evaluate(raw));
+        return Some(timing.evaluate_progress(raw));
     }
     let sample = time_map.evaluate(raw);
-    sample.begun.then(|| timing.easing.evaluate(sample.alpha))
+    sample.begun.then(|| timing.evaluate_progress(sample.alpha))
 }
 
 /// f64-preserving variant for spatial values whose timeline cannot be rounded to shader precision.
@@ -339,17 +339,20 @@ pub fn mapped_continuous_progress_f64(
     if time < timing.start_time {
         return None;
     }
-    if timing.is_instant() || time >= timing.start_time + timing.duration {
+    if timing.is_instant() {
         return Some(1.0);
+    }
+    if time >= timing.start_time + timing.duration {
+        return Some(timing.terminal_progress_f64());
     }
     let raw = ((time - timing.start_time) / timing.duration).clamp(0.0, 1.0);
     if time_map.is_identity() {
-        return Some(timing.easing.evaluate_f64(raw));
+        return Some(timing.evaluate_progress_f64(raw));
     }
     let sample = time_map.evaluate_f64(raw);
     sample
         .begun
-        .then(|| timing.easing.evaluate_f64(sample.alpha))
+        .then(|| timing.evaluate_progress_f64(sample.alpha))
 }
 
 #[cfg(test)]
@@ -442,6 +445,18 @@ mod tests {
         assert_eq!(mapped_continuous_progress(timing, &map, 6.0), Some(1.0));
         let progress = mapped_continuous_progress(timing, &map, 5.0).unwrap();
         assert!(progress > 0.0 && progress < 1.0);
+    }
+
+    #[test]
+    fn reverse_rate_function_starts_at_target_and_finishes_at_source() {
+        let mut timing = TrackTiming::new(2.0, 4.0, RateFunction::Smooth);
+        timing.reverse_rate_function = true;
+        let map = CompositionTimeMap::identity();
+        assert_eq!(mapped_continuous_progress(timing, &map, 2.0), Some(1.0));
+        assert_eq!(mapped_continuous_progress(timing, &map, 6.0), Some(0.0));
+        assert_eq!(mapped_continuous_progress_f64(timing, &map, 6.0), Some(0.0));
+        let midpoint = mapped_continuous_progress(timing, &map, 4.0).unwrap();
+        assert!((midpoint - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

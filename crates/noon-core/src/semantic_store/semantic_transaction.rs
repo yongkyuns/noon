@@ -19,8 +19,8 @@ use crate::{
     SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
     SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency, SemanticTransform,
-    SemanticTransformInterpolation, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
-    TextPresentationBaseline, VectorPath,
+    SemanticTransformInterpolation, SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration,
+    SemanticVec3, StoredGeometry, TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -156,6 +156,8 @@ pub enum SemanticMutation {
         target: SemanticTransactionNodeRef,
         callback: HostCallbackId,
         active_from: f64,
+        inactive_from: Option<f64>,
+        endpoint_policy: SemanticUpdaterEndpointPolicy,
         position: Option<usize>,
     },
     RemoveUpdater {
@@ -956,6 +958,50 @@ impl SemanticMutationTransaction {
             target: target.into(),
             callback,
             active_from,
+            inactive_from: None,
+            endpoint_policy: SemanticUpdaterEndpointPolicy::Exclusive,
+            position,
+        });
+        self
+    }
+
+    /// Register one host-updater occurrence over a finite half-open interval.
+    /// The start is inclusive and the end is exclusive.
+    pub fn add_updater_interval(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        callback: HostCallbackId,
+        active_from: f64,
+        inactive_from: f64,
+        position: Option<usize>,
+    ) -> &mut Self {
+        self.add_updater_interval_with_endpoint_policy(
+            target,
+            callback,
+            active_from,
+            inactive_from,
+            SemanticUpdaterEndpointPolicy::Exclusive,
+            position,
+        )
+    }
+
+    /// Register one host-updater occurrence over a finite interval with explicit
+    /// endpoint behavior. Ordinary updater APIs use `Exclusive`.
+    pub fn add_updater_interval_with_endpoint_policy(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        callback: HostCallbackId,
+        active_from: f64,
+        inactive_from: f64,
+        endpoint_policy: SemanticUpdaterEndpointPolicy,
+        position: Option<usize>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::AddUpdater {
+            target: target.into(),
+            callback,
+            active_from,
+            inactive_from: Some(inactive_from),
+            endpoint_policy,
             position,
         });
         self
@@ -1195,6 +1241,26 @@ impl SemanticMutationTransaction {
             false,
             options,
         )
+    }
+
+    pub fn create_move_along_path_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        path: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::MoveAlongPath {
+                    target: target.into(),
+                    path: path.into(),
+                },
+                options,
+            ),
+        });
+        token
     }
 
     /// Stage a transform declaration with an explicit geometry interpolation contract.
@@ -2598,12 +2664,18 @@ impl SemanticMutationTransaction {
                     target,
                     callback,
                     active_from,
+                    inactive_from,
+                    endpoint_policy,
                     position,
                 } => {
                     catalog.ensure_authoring_node(*target, index)?;
-                    let registration =
-                        SemanticUpdaterRegistration::new(*callback, *active_from, None)
-                            .map_err(|_| invalid_updater_interval(index, *target))?;
+                    let registration = SemanticUpdaterRegistration::with_endpoint_policy(
+                        *callback,
+                        *active_from,
+                        *inactive_from,
+                        *endpoint_policy,
+                    )
+                    .map_err(|_| invalid_updater_interval(index, *target))?;
                     let registrations = staged_updaters
                         .entry(*target)
                         .or_insert_with(|| catalog.updater_registrations(*target));

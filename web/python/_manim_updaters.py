@@ -253,6 +253,31 @@ def canonical_callback_session_id(scene: _base.Scene) -> int | None:
     return None if session is None else session.session_id
 
 
+def reserve_composition_callback(
+    scene: _base.Scene, mobject: _base.Mobject, callback: Callable[..., Any]
+) -> int:
+    """Reserve a host callable for one Rust-scheduled composition interval.
+
+    Rust authors and activates the finite callback registration from the
+    composition child's compiled interval. This only supplies Python callable
+    identity and the callback target lookup table.
+    """
+    if not callable(callback):
+        raise TypeError("UpdateFromFunc callback must be callable")
+    if getattr(mobject, "_scene", None) is not scene:
+        raise ValueError("UpdateFromFunc target must belong to this Scene")
+    _semantic_key(mobject)
+    context = _canonical_context(mobject)
+    if context is None:
+        raise RuntimeError("UpdateFromFunc target has no canonical authoring context")
+    session = _canonical_session(scene, context)
+    callback_id, newly_reserved = session.callback_id(callback)
+    if newly_reserved:
+        session.commit_callback_id(callback, callback_id)
+    session.bind_target(mobject)
+    return callback_id
+
+
 def add_updater(
     self: _base.Mobject,
     update_function: Callable[..., Any],
@@ -744,31 +769,46 @@ class _CanonicalCallbackContext:
             raise RuntimeError("canonical callback sparse read returned the wrong typed value")
         return result
 
-    async def _read_scalar_async(self, key: tuple[int, int]) -> float:
-        """Read the same Rust-pinned phase without suspending a Python stack."""
+    async def _read_async(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
+        """Read one typed sparse value from the same Rust-pinned callback phase."""
         from js import noonReadSemanticContinuationCallback
 
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
-        request = {"request_id": request_id, "kind": "scalar_signal", "node": _phase_node_json(key)}
+        request = {"request_id": request_id, "kind": kind, "node": _phase_node_json(key)}
         raw = await engine_await(noonReadSemanticContinuationCallback(
             self._authoring_context,
             json.dumps(self.token, separators=(",", ":")),
             json.dumps(request, separators=(",", ":")),
         ), operation="callback.read")
         result = json.loads(str(raw))
-        if not isinstance(result, dict) or result.get("kind") != "scalar":
-            raise RuntimeError("canonical callback scalar prefetch returned the wrong typed value")
+        expected_kind = "scalar" if kind == "scalar_signal" else kind
+        if not isinstance(result, dict) or result.get("kind") != expected_kind:
+            raise RuntimeError("canonical callback prefetch returned the wrong typed value")
+        return result
+
+    async def _read_scalar_async(self, key: tuple[int, int]) -> float:
+        """Read a scalar from the same Rust-pinned phase without suspending Python."""
+        result = await self._read_async("scalar_signal", key)
         return _phase_number("scalar callback read", result.get("value"))
 
-    async def prefetch_captured_scalars(self, callbacks, tracker_type) -> None:
+    async def _read_object_async(self, key: tuple[int, int]) -> dict[str, Any]:
+        """Read and identity-check one object envelope from the pinned phase."""
+        result = await self._read_async("object", key)
+        item = result.get("object")
+        if not isinstance(item, dict) or _phase_node_key(item.get("node")) != key:
+            raise RuntimeError("canonical callback object read returned a foreign semantic node")
+        return item
+
+    async def prefetch_captured_phase_reads(self, callbacks, tracker_type) -> None:
         """Resolve direct and one-level producer captures without invoking Python code.
 
-        These are optional phase-local read hints, not authored signal values or
-        a callback dependency graph. Rust validates every read against the pinned
+        These are optional phase-local read hints, not authored values or a
+        callback dependency graph. Rust validates every read against the pinned
         token. Unused/invalid speculative reads must not change callback behavior;
-        defer their errors until an actual scalar read. Dynamic misses keep the
-        existing suspended-read contract instead of replaying callback effects.
+        defer errors until the callback actually reads that semantic value.
+        Dynamic misses keep the existing suspended-read contract instead of
+        replaying callback effects.
         """
         from types import FunctionType, MethodType
 
@@ -797,6 +837,29 @@ class _CanonicalCallbackContext:
             values.extend(function.__globals__[name] for name in function.__code__.co_names
                           if name in function.__globals__)
             for value in values:
+                if isinstance(value, _base.Mobject):
+                    # Family handles have a separate sparse read contract. This
+                    # prefetch is deliberately limited to ordinary typed rows.
+                    if inspect.getattr_static(value, "_semantic_family_handle", None) is not None:
+                        continue
+                    if _canonical_context(value) is not self._authoring_context:
+                        continue
+                    handle = inspect.getattr_static(value, "_semantic_handle", None)
+                    if handle is None or isinstance(handle, property):
+                        continue
+                    try:
+                        key = (int(handle.semanticSlot), int(handle.semanticGeneration))
+                    except (AttributeError, TypeError, ValueError, OverflowError):
+                        # Let the actual callback access report an unusable
+                        # captured handle; a speculative hint must not fail it.
+                        continue
+                    if key in self._frame_items or key in self._prefetch_errors:
+                        continue
+                    try:
+                        self._frame_items[key] = await self._read_object_async(key)
+                    except Exception as error:
+                        self._prefetch_errors[key] = error
+                    continue
                 if type(value) is not tracker_type:
                     continue
                 if inspect.getattr_static(value, "_canonical_context", None) is not self._authoring_context:
@@ -813,6 +876,8 @@ class _CanonicalCallbackContext:
                     self._prefetch_errors[key] = error
 
     def _object_item(self, key: tuple[int, int]) -> dict[str, Any]:
+        if key in self._prefetch_errors:
+            raise_engine_error(self._prefetch_errors[key], operation="callback.read")
         try:
             return self._frame_items[key]
         except KeyError:
@@ -903,7 +968,7 @@ class _CanonicalCallbackContext:
         from _noon_errors import engine_call
         rows = self._family_rows(family)
         def bounds_wire(row):
-            if row.bounds is None or not row.bounds_translation_only:
+            if row.bounds is None:
                 return None
             x0, y0, x1, y1 = row.bounds
             return {"min": {"x": x0, "y": y0}, "max": {"x": x1, "y": y1}}
@@ -928,6 +993,95 @@ class _CanonicalCallbackContext:
             row.transform = translated.transform
             row.bounds = translated.bounds
             row.bounds_translation_only = translated.bounds_translation_only
+            self.transform_changed(node, before, row)
+
+    def replace_layout(self, source, target, dim_to_match=0, stretch=False):
+        """Stage Rust-computed replacement over the callback's sparse read overlay."""
+        from _manim_semantic_handles import _layout_anchor
+        from _noon_errors import engine_call
+
+        source_anchor = _layout_anchor(source)
+        target_anchor = _layout_anchor(target)
+        if source_anchor is None or target_anchor is None:
+            raise RuntimeError("callback replace requires typed shared layout anchors")
+        revision = str(self.token["publication"]["scene_revision"])
+        keys = set()
+        for anchor in (source_anchor, target_anchor):
+            values = list(engine_call(self._operations.callbackLayoutKeys, anchor, revision))
+            if len(values) % 2:
+                raise RuntimeError("callback layout returned malformed typed semantic keys")
+            for index in range(0, len(values), 2):
+                keys.add((int(values[index]), int(values[index + 1])))
+
+        rows = {}
+        for node in sorted(keys):
+            row = self._rows.get(node)
+            if row is None and node in self._frame_items:
+                row = _PhasePropertyRow.from_wire(self._frame_items[node])
+            if row is None:
+                row = _PhasePropertyRow.from_wire(self._object_item(node))
+            rows[node] = row
+
+        payload = []
+        for node, row in rows.items():
+            transform = row.transform
+            bounds = row.bounds if row.bounds_translation_only else None
+            payload.extend((float(node[0]), float(node[1]),
+                transform.translation_x, transform.translation_y,
+                transform.scale_x, transform.scale_y, transform.rotation,
+                1.0 if bounds is not None else 0.0))
+            payload.extend(bounds if bounds is not None else (0.0, 0.0, 0.0, 0.0))
+        projected_rows = list(engine_call(
+            self._operations.callbackLayoutReplace,
+            source_anchor,
+            target_anchor,
+            revision,
+            [component for node in rows for component in node],
+            payload,
+            int(dim_to_match),
+            bool(stretch),
+            operation="Mobject.replace",
+        ))
+        stride = 12
+        if len(projected_rows) % stride:
+            raise RuntimeError("callback replace returned malformed typed layout rows")
+        changes = []
+        returned_nodes = set()
+        for index in range(0, len(projected_rows), stride):
+            slot, generation, tx, ty, sx, sy, rotation, bounds_flag, *bounds = projected_rows[index:index + stride]
+            if (not float(slot).is_integer() or not float(generation).is_integer()
+                    or bounds_flag not in (0.0, 1.0)):
+                raise RuntimeError("callback replace returned an invalid typed layout row")
+            node = (int(slot), int(generation))
+            if node not in rows or node in returned_nodes:
+                raise RuntimeError("callback replace returned an unread semantic node")
+            returned_nodes.add(node)
+            projected_transform = _PhaseTransform(
+                _phase_number("callback replacement translation.x", tx),
+                _phase_number("callback replacement translation.y", ty),
+                _phase_number("callback replacement rotation", rotation),
+                _phase_number("callback replacement scale.x", sx),
+                _phase_number("callback replacement scale.y", sy),
+            )
+            projected_bounds = (
+                tuple(_phase_number("callback replacement bound", value) for value in bounds)
+                if bounds_flag == 1.0 else None
+            )
+            projected = _PhasePropertyRow(
+                projected_transform,
+                rows[node].style,
+                projected_bounds,
+                projected_bounds is not None,
+            )
+            changes.append((node, projected))
+
+        self._rows.update(rows)
+        for node, projected in changes:
+            row = rows[node]
+            before = row.transform
+            row.transform = projected.transform
+            row.bounds = projected.bounds
+            row.bounds_translation_only = projected.bounds_translation_only
             self.transform_changed(node, before, row)
 
     def transform_changed(
@@ -1284,7 +1438,7 @@ def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
 
 
 def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContext | None:
-    scene = mobject._scene
+    scene = getattr(mobject, "_scene", None)
     if scene is None or mobject._object is None:
         return None
     context = _ACTIVE_CONTEXTS.get(id(scene))
@@ -1625,7 +1779,7 @@ async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any
     from _manim_reactive import ValueTracker
 
     callbacks = [session.callbacks[int(item["callback_id"])] for item in frame.get("invocations", [])]
-    await context.prefetch_captured_scalars(callbacks, ValueTracker)
+    await context.prefetch_captured_phase_reads(callbacks, ValueTracker)
     return context
 
 

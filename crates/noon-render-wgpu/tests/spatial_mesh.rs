@@ -1095,14 +1095,19 @@ fn mesh_fill_and_stroke_changes_preserve_residency_atomically() {
             })
             .unwrap();
         let stroke_publication = scene.take_renderer_publication();
-        assert!(matches!(
-            renderer.prepare_spatial(&device, &queue, &stroke_publication),
-            Err(SpatialPrepareError::MeshStroke(_))
-        ));
-        assert!(matches!(
-            renderer.prepare_spatial(&device, &queue, &stroke_publication),
-            Err(SpatialPrepareError::MeshStroke(_))
-        ));
+        let stroke_stats = renderer
+            .prepare_spatial(&device, &queue, &stroke_publication)
+            .unwrap();
+        assert_eq!(stroke_stats.rows_visited, 1);
+        assert!(
+            stroke_stats.geometry_bytes > 0,
+            "boundary geometry is derived once"
+        );
+        assert_eq!(stroke_stats.resident_meshes, 1);
+        let retry = renderer
+            .prepare_spatial(&device, &queue, &stroke_publication)
+            .unwrap();
+        assert_eq!(retry.bytes_uploaded(), 0);
         drop(stroke_publication);
 
         scene
@@ -1189,3 +1194,91 @@ fn many_shared_meshes_upload_only_the_changed_instance_and_batch_one_draw() {
 }
 
 use noon_core::Vec2;
+
+#[test]
+fn translucent_faces_sort_after_opaque_geometry_and_reorder_on_pose_changes() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+        else {
+            eprintln!("skipping spatial face qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let target = Target::new(&device);
+        let mut preparer = FramePreparer::new();
+        let (mut scene, index, near, _, far) = build_scene(false, false, false);
+        for node in [near, far] {
+            let object = index.execution_object_id(node).unwrap();
+            let mut style = scene
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == object)
+                .unwrap()
+                .style;
+            style.opacity = 0.5;
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+                .unwrap();
+        }
+        scene.seek(0.0).unwrap();
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        let first = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            first[0] > first[2],
+            "near red face must blend after far blue: {first:?}"
+        );
+        assert_eq!(initial.resident_meshes, 1);
+        scene.seek(1.0).unwrap();
+        let (moved, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        let second = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        assert!(
+            second[2] > second[0],
+            "blue must blend after red moved behind it: {second:?}"
+        );
+        assert_eq!(moved.geometry_bytes, 0);
+        scene.seek(0.0).unwrap();
+        let (_, replayed) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(pixel(&replayed, WIDTH / 2, HEIGHT / 2), first);
+        let settled = scene.take_renderer_publication();
+        assert_eq!(
+            renderer
+                .prepare_spatial(&device, &queue, &settled)
+                .unwrap()
+                .bytes_uploaded(),
+            0
+        );
+    });
+}

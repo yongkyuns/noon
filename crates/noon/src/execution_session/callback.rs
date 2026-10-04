@@ -156,7 +156,10 @@ pub(super) struct CallbackSchedule {
 #[derive(Clone, Debug)]
 struct CallbackSchedulePreview {
     time: f64,
+    // State carried forward after all boundaries at `time` are applied.
     active_occurrences: BTreeSet<(usize, usize)>,
+    // Registrations called at this frame, including one-shot inclusive endpoints.
+    invocation_occurrences: BTreeSet<(usize, usize)>,
 }
 
 impl CallbackSchedule {
@@ -197,10 +200,7 @@ impl CallbackSchedule {
             for index in self.plan.target_occurrences(target) {
                 let occurrence = self.plan.occurrence(index);
                 let activation = occurrence.activation();
-                if !self.detached_targets.contains(&target)
-                    && activation.active_from() <= time
-                    && activation.inactive_from().is_none_or(|end| time < end)
-                {
+                if !self.detached_targets.contains(&target) && activation.is_active_at(time) {
                     self.active_occurrences.insert((occurrence.order(), index));
                 }
             }
@@ -236,10 +236,7 @@ impl CallbackSchedule {
             let occurrence = self.plan.occurrence(index);
             let activation = occurrence.activation();
             let key = (occurrence.order(), index);
-            if live
-                && activation.active_from() <= time
-                && activation.inactive_from().is_none_or(|end| time < end)
-            {
+            if live && activation.is_active_at(time) {
                 self.active_occurrences.insert(key);
             } else {
                 self.active_occurrences.remove(&key);
@@ -256,6 +253,7 @@ impl CallbackSchedule {
             .filter(|&time| time >= current && time <= requested);
         let time = barrier.unwrap_or(requested);
         let mut active_occurrences = self.active_occurrences.clone();
+        let mut endpoint_occurrences = BTreeSet::new();
         for event in self
             .plan
             .events_after(self.processed_through)
@@ -273,13 +271,23 @@ impl CallbackSchedule {
                     }
                 }
                 SemanticHostCallbackEventKind::Deactivate => {
+                    let occurrence = self.plan.occurrence(index);
+                    if occurrence.activation().endpoint_policy()
+                        == noon_core::SemanticUpdaterEndpointPolicy::InvokeAtEnd
+                        && !self.detached_targets.contains(&occurrence.target())
+                    {
+                        endpoint_occurrences.insert(key);
+                    }
                     active_occurrences.remove(&key);
                 }
             }
         }
+        let mut invocation_occurrences = active_occurrences.clone();
+        invocation_occurrences.extend(endpoint_occurrences);
         CallbackSchedulePreview {
             time,
             active_occurrences,
+            invocation_occurrences,
         }
     }
 
@@ -292,7 +300,7 @@ impl CallbackSchedule {
 
     pub(super) fn wake_timeline(&self, current: f64) -> noon_runtime::TimelineWakeState {
         let preview = self.preview(current, current);
-        if !preview.active_occurrences.is_empty() && self.completed_time != Some(current) {
+        if !preview.invocation_occurrences.is_empty() && self.completed_time != Some(current) {
             return noon_runtime::TimelineWakeState::Continuous;
         }
         if !self.active_occurrences.is_empty() {
@@ -713,6 +721,22 @@ impl CallbackPhaseOverlay {
         self.write(EffectiveSemanticPropertyWrite::Transform { object, transform })
     }
 
+    /// Stage a Rust-prepared layout transform with the exact bounds observed by
+    /// following reads in this callback invocation.
+    pub fn set_transform_and_bounds(
+        &mut self,
+        object: SemanticNodeId,
+        transform: Transform2D,
+        bounds: Option<noon_core::Rect>,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.set_transform(object, transform)?;
+        self.objects
+            .get_mut(&object)
+            .expect("set_transform validated the callback row")
+            .set_transform_and_bounds(transform, bounds);
+        Ok(())
+    }
+
     pub fn set_style(
         &mut self,
         object: SemanticNodeId,
@@ -978,6 +1002,34 @@ impl ExecutionSession {
     ) -> Result<Vec<(SemanticNodeId, EffectiveObjectProperties)>, crate::FamilyCallbackPaintError>
     {
         use crate::FamilyCallbackPaintError as Error;
+        self.validate_callback_store(store, token)?;
+        store
+            .semantic_family_checked(family)
+            .map_err(|e| Error::Authoring(e.into()))?;
+        store
+            .ordered_leaf_nodes(family)
+            .map_err(Error::Store)?
+            .into_iter()
+            .map(|node| {
+                match self
+                    .required_callback_read(token, CallbackReadRequest::Object(node))
+                    .map_err(|e| Error::Callback(e.into()))?
+                {
+                    CallbackReadValue::Object(properties) => Ok((node, properties)),
+                    CallbackReadValue::Scalar(_) => unreachable!("object request returns object"),
+                }
+            })
+            .collect()
+    }
+
+    /// Validate that a callback-owned semantic read uses the execution
+    /// session's store, phase token, and pinned revision.
+    pub(crate) fn validate_callback_store(
+        &self,
+        store: &noon_core::SemanticStore,
+        token: CallbackPhaseToken,
+    ) -> Result<(), crate::FamilyCallbackPaintError> {
+        use crate::FamilyCallbackPaintError as Error;
         let pending = self.pending_callback.as_ref().ok_or(Error::Callback(
             ExecutionSessionCallbackError::NoPendingPhase,
         ))?;
@@ -996,23 +1048,7 @@ impl ExecutionSession {
                 actual: store.scene_revision(),
             });
         }
-        store
-            .semantic_family_checked(family)
-            .map_err(|e| Error::Authoring(e.into()))?;
-        store
-            .ordered_leaf_nodes(family)
-            .map_err(Error::Store)?
-            .into_iter()
-            .map(|node| {
-                match self
-                    .required_callback_read(token, CallbackReadRequest::Object(node))
-                    .map_err(|e| Error::Callback(e.into()))?
-                {
-                    CallbackReadValue::Object(properties) => Ok((node, properties)),
-                    CallbackReadValue::Scalar(_) => unreachable!("object request returns object"),
-                }
-            })
-            .collect()
+        Ok(())
     }
 
     pub fn required_callback_read(
@@ -1213,7 +1249,7 @@ impl ExecutionSession {
 
         let preview = self.callback_schedule.preview(time, current);
         let invocations = preview
-            .active_occurrences
+            .invocation_occurrences
             .iter()
             .map(|&(_, occurrence_index)| {
                 let occurrence = self.callback_schedule.plan.occurrence(occurrence_index);
@@ -1270,7 +1306,7 @@ impl ExecutionSession {
                 .schedule
                 .as_ref()
                 .expect("scheduled callback phase")
-                .active_occurrences,
+                .invocation_occurrences,
             &relevant_native,
         );
         self.pending_callback

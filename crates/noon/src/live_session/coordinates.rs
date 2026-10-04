@@ -1,7 +1,8 @@
 //! Coordinate construction through the ordinary running publication transaction.
 use super::*;
 use crate::coordinate_authoring::{
-    prepare_axes, prepare_number_line, prepare_number_plane, prepare_polar_plane, resolve_family,
+    prepare_axes, prepare_number_line, prepare_number_plane, prepare_polar_plane,
+    publish_prepared_axes, resolve_family,
 };
 use crate::AuthoringError;
 use crate::{
@@ -28,9 +29,11 @@ impl LiveSession<'_> {
         &mut self,
         options: &ManimAxesOptions,
     ) -> Result<ManimAxes, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_axes(options)?;
-        let result = self.apply(transaction)?;
-        ManimAxes::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
+        let prepared = prepare_axes(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_axes(options, prepared.axes, prepared.tip_paths, store, publish)
+        })?;
+        ManimAxes::from_family(MobjectFamily::from_node(Rc::clone(self.store), root)?)
     }
 
     /// Construct a detached NumberLine through this existing execution owner.

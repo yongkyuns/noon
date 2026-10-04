@@ -2,7 +2,7 @@
 
 use crate::ManimCamera3DProfile;
 
-/// Maximum authored ambient intervals per camera. Closed intervals are seek
+/// Maximum authored camera-motion intervals per camera. Closed intervals are seek
 /// history; bounding them also bounds copy-on-publication metadata retention.
 pub const MAX_CAMERA_MOTION_INTERVALS: usize = 256;
 
@@ -14,13 +14,19 @@ pub enum CameraRotationAxis {
     Gamma,
 }
 
-/// One immutable native angular driver interval. It owns no clock or scheduler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CameraMotionProfile {
+    Angular(CameraRotationAxis),
+    ThreeDIllusion { origin_phi: f64, origin_theta: f64 },
+}
+
+/// One immutable native authored camera-motion interval. It owns no clock or scheduler.
 /// `end` is exclusive for driver ownership; sampling at it returns the exact
 /// endpoint for release. Closed occurrences are intentional authored seek history.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraAngularMotion {
     source: ManimCamera3DProfile,
-    axis: CameraRotationAxis,
+    profile: CameraMotionProfile,
     rate: f64,
     start: f64,
     end: Option<f64>,
@@ -40,7 +46,7 @@ impl CameraAngularMotion {
     ) -> Option<Self> {
         let value = Self {
             source,
-            axis,
+            profile: CameraMotionProfile::Angular(axis),
             rate,
             start,
             end,
@@ -59,11 +65,61 @@ impl CameraAngularMotion {
         Some(value)
     }
 
+    /// Build Manim's deterministic 3D-illusion camera interval. The two
+    /// oscillations share phase `rate * (time - start)` and the captured
+    /// origin defaults to the source profile's orientation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn three_d_illusion(
+        source: ManimCamera3DProfile,
+        rate: f64,
+        start: f64,
+        end: Option<f64>,
+        near: f64,
+        far: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> Option<Self> {
+        let value = Self {
+            source,
+            profile: CameraMotionProfile::ThreeDIllusion {
+                origin_phi: origin_phi.unwrap_or(source.phi),
+                origin_theta: origin_theta.unwrap_or(source.theta),
+            },
+            rate,
+            start,
+            end,
+            near,
+            far,
+        };
+        let (origin_phi, origin_theta) = match value.profile {
+            CameraMotionProfile::ThreeDIllusion {
+                origin_phi,
+                origin_theta,
+            } => (origin_phi, origin_theta),
+            CameraMotionProfile::Angular(_) => unreachable!(),
+        };
+        if !rate.is_finite()
+            || !start.is_finite()
+            || start < 0.0
+            || !origin_phi.is_finite()
+            || !origin_theta.is_finite()
+            || end.is_some_and(|end| !end.is_finite() || end < start)
+            || source.camera(near, far).is_none()
+            || end.is_some_and(|end| value.sample(end).is_none())
+        {
+            return None;
+        }
+        Some(value)
+    }
+
     pub const fn source(self) -> ManimCamera3DProfile {
         self.source
     }
-    pub const fn axis(self) -> CameraRotationAxis {
-        self.axis
+    pub const fn axis(self) -> Option<CameraRotationAxis> {
+        match self.profile {
+            CameraMotionProfile::Angular(axis) => Some(axis),
+            CameraMotionProfile::ThreeDIllusion { .. } => None,
+        }
     }
     pub const fn rate(self) -> f64 {
         self.rate
@@ -78,19 +134,63 @@ impl CameraAngularMotion {
         (self.near, self.far)
     }
 
+    fn is_valid(self) -> bool {
+        match self.profile {
+            CameraMotionProfile::Angular(axis) => Self::new(
+                self.source,
+                axis,
+                self.rate,
+                self.start,
+                self.end,
+                self.near,
+                self.far,
+            )
+            .is_some(),
+            CameraMotionProfile::ThreeDIllusion {
+                origin_phi,
+                origin_theta,
+            } => Self::three_d_illusion(
+                self.source,
+                self.rate,
+                self.start,
+                self.end,
+                self.near,
+                self.far,
+                Some(origin_phi),
+                Some(origin_theta),
+            )
+            .is_some(),
+        }
+    }
+
     pub fn close(self, end: f64) -> Option<Self> {
         if self.end.is_some() {
             return None;
         }
-        Self::new(
-            self.source,
-            self.axis,
-            self.rate,
-            self.start,
-            Some(end),
-            self.near,
-            self.far,
-        )
+        match self.profile {
+            CameraMotionProfile::Angular(axis) => Self::new(
+                self.source,
+                axis,
+                self.rate,
+                self.start,
+                Some(end),
+                self.near,
+                self.far,
+            ),
+            CameraMotionProfile::ThreeDIllusion {
+                origin_phi,
+                origin_theta,
+            } => Self::three_d_illusion(
+                self.source,
+                self.rate,
+                self.start,
+                Some(end),
+                self.near,
+                self.far,
+                Some(origin_phi),
+                Some(origin_theta),
+            ),
+        }
     }
 
     pub fn is_active_at(self, time: f64) -> bool {
@@ -106,10 +206,18 @@ impl CameraAngularMotion {
         let time = self.end.map_or(time, |end| time.min(end)).max(self.start);
         let delta = (time - self.start) * self.rate;
         let mut profile = self.source;
-        match self.axis {
-            CameraRotationAxis::Phi => profile.phi += delta,
-            CameraRotationAxis::Theta => profile.theta += delta,
-            CameraRotationAxis::Gamma => profile.gamma += delta,
+        match self.profile {
+            CameraMotionProfile::Angular(CameraRotationAxis::Phi) => profile.phi += delta,
+            CameraMotionProfile::Angular(CameraRotationAxis::Theta) => profile.theta += delta,
+            CameraMotionProfile::Angular(CameraRotationAxis::Gamma) => profile.gamma += delta,
+            CameraMotionProfile::ThreeDIllusion {
+                origin_phi,
+                origin_theta,
+            } => {
+                let phase = delta;
+                profile.theta = origin_theta + 0.2 * phase.sin();
+                profile.phi = origin_phi + 0.1 * phase.cos() - 0.1;
+            }
         }
         profile.camera(self.near, self.far)?;
         Some(profile)
@@ -120,16 +228,7 @@ impl CameraAngularMotion {
 pub fn camera_motion_history_is_valid(motions: &[CameraAngularMotion]) -> bool {
     motions.len() <= MAX_CAMERA_MOTION_INTERVALS
         && motions.iter().enumerate().all(|(index, motion)| {
-            CameraAngularMotion::new(
-                motion.source,
-                motion.axis,
-                motion.rate,
-                motion.start,
-                motion.end,
-                motion.near,
-                motion.far,
-            )
-            .is_some()
+            motion.is_valid()
                 && (index == 0
                     || motions[index - 1]
                         .end
@@ -172,6 +271,42 @@ mod tests {
         assert!(!closed.is_active_at(4.0));
         assert_eq!(closed.sample(100.0), closed.sample(4.0));
         assert!(closed.close(5.0).is_none());
+    }
+
+    #[test]
+    fn illusion_motion_matches_pinned_manim_formula_and_phase() {
+        let mut source = profile();
+        source.phi = 75_f64.to_radians();
+        source.theta = 30_f64.to_radians();
+        let motion =
+            CameraAngularMotion::three_d_illusion(source, 2.0, 4.0, None, 0.1, 100.0, None, None)
+                .unwrap();
+
+        assert_eq!(motion.sample(4.0), Some(source));
+        let halfway = motion.sample(4.0 + std::f64::consts::PI / 4.0).unwrap();
+        assert!((halfway.theta - (source.theta + 0.2)).abs() < 1e-14);
+        assert!((halfway.phi - (source.phi - 0.1)).abs() < 1e-14);
+        let stopped = motion.close(4.0 + std::f64::consts::PI / 2.0).unwrap();
+        let endpoint = stopped.sample(stopped.end().unwrap()).unwrap();
+        assert!((endpoint.theta - source.theta).abs() < 1e-14);
+        assert!((endpoint.phi - (source.phi - 0.2)).abs() < 1e-14);
+        assert_eq!(stopped.sample(100.0), Some(endpoint));
+
+        let settled =
+            CameraAngularMotion::three_d_illusion(source, 0.0, 0.0, None, 0.1, 100.0, None, None)
+                .unwrap();
+        assert_eq!(settled.sample(100.0), Some(source));
+        assert!(CameraAngularMotion::three_d_illusion(
+            source,
+            1.0,
+            0.0,
+            None,
+            0.1,
+            100.0,
+            Some(f64::NAN),
+            None,
+        )
+        .is_none());
     }
 
     #[test]

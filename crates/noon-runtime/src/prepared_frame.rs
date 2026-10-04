@@ -239,6 +239,7 @@ impl SceneInstance {
             )
         } else {
             cached_bounds
+                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id))
         };
         let object = &self.frame.objects[object_index];
         let content = row.content_override.as_ref().unwrap_or(&object.content);
@@ -347,6 +348,7 @@ impl SceneInstance {
                     time,
                     object.base_transform,
                     object.base_style,
+                    &self.path_motion_plans,
                 );
                 cursor_updates.insert(channel, cursor);
                 stats.groups_evaluated += 1;
@@ -385,6 +387,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             cursor_updates.insert(channel, cursor);
             stats.groups_evaluated += 1;

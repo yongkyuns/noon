@@ -29,6 +29,10 @@ pub struct CompiledReplayRevision {
     // Reserve both sides of changed camera metadata. Exchanging revisions must
     // never retain a larger motion history than the scope budget admitted.
     camera_motion_payloads: usize,
+    // Variable path snapshots are immutable Arc payloads, but are retained by
+    // inverse tracks. Charge each side by its command count in the finite replay
+    // payload budget just as camera intervals are charged by payload count.
+    path_motion_commands: usize,
 }
 
 impl CompiledReplayRevision {
@@ -41,7 +45,11 @@ impl CompiledReplayRevision {
     /// Reserve one payload for each affected track even when the saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {
-        self.rows.len() + self.channels.len() + self.tracks.len() + self.camera_motion_payloads
+        self.rows.len()
+            + self.channels.len()
+            + self.tracks.len()
+            + self.camera_motion_payloads
+            + self.path_motion_commands
     }
 }
 
@@ -133,8 +141,20 @@ impl CompiledScene {
         }
         .and_then(|spatial| spatial.camera_motions.as_deref())
         .map_or(0, <[_]>::len);
+        let saved_path_motion_commands: usize = tracks
+            .iter()
+            .filter_map(|id| self.track(*id))
+            .map(|track| path_motion_command_count(&track.values))
+            .sum();
+        let incoming_path_motion_commands = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
+                path_motion_command_count(&track.values)
+            }
+            _ => 0,
+        };
         Some(CompiledReplayRevision {
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
+            path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {
@@ -241,5 +261,12 @@ impl CompiledScene {
             }
             *saved = current;
         }
+    }
+}
+
+fn path_motion_command_count(values: &noon_core::TrackValues) -> usize {
+    match values {
+        noon_core::TrackValues::PathVec2 { path, .. } => path.retained_command_count(),
+        _ => 0,
     }
 }

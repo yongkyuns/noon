@@ -1,10 +1,9 @@
 """Typed indexed-mesh authoring on Noon's ordinary Scene and Runtime.
 
-These native mesh conventions are explicit: opaque fills, no mesh strokes,
-quaternion poses, z-axis cylinders/cones from zero to height, and UV cell
-resolution. They do not claim Manim Cairo surface shading or class defaults.
-Python evaluates an explicitly supplied sampling callback at construction;
-Rust owns sampling coordinates, topology, normals, transforms and playback.
+These native mesh conventions are explicit: opaque fills, quaternion poses,
+z-axis cylinders/cones from zero to height, and UV cell resolution. Python
+evaluates an explicitly supplied sampling callback at construction; Rust owns
+sampling coordinates, topology, normals, transforms, and playback.
 """
 from __future__ import annotations
 
@@ -22,10 +21,13 @@ try:
     from js import (
         noonAuthoringMeshOptions as _mesh_options,
         noonSurfaceSamplingPlan as _surface_plan,
+        noonAuthoringMeshFamilyOptions as _mesh_family_options,
         noonCreateAuthoringMeshHandle as _create_mesh,
+        noonCreateAuthoringMeshFamilyHandle as _create_mesh_family,
     )
 except ImportError:
-    _mesh_options = _surface_plan = _create_mesh = None
+    _mesh_options = _surface_plan = _mesh_family_options = None
+    _create_mesh = _create_mesh_family = None
 
 
 def _vector(value, length=3):
@@ -251,6 +253,9 @@ class SpatialScene(_base.Scene):
                              _bulk((fill.red, fill.green, fill.blue, fill.alpha)), float(intensity))
         light = object.__new__(_WorldMobject)
         _attach_shared_handle(light, handle)
+        light._semantic_point_light = True
+        if hasattr(self, "_manim_camera_light_source") and self._manim_camera_light_source is None:
+            self._manim_camera_light_source = light
         return light
 
     def add_world_mobjects(self, *mobjects):
@@ -301,9 +306,15 @@ class ThreeDScene(SpatialScene):
 
     def __init__(self, *, near=0.1, far=100):
         _base.Scene.__init__(self)
+        self._manim_camera_light_source = None
+        self._renderer_proxy = _RendererProxy(self)
         from math import pi
         self._initialize_camera("createCamera3DProfile",
                                 _bulk((0, -pi / 2, 0, 20, 1, 8, 0, 0, 0)), float(near), float(far))
+
+    @property
+    def renderer(self):
+        return self._renderer_proxy
 
     def _camera_endpoint(self, *, phi=None, theta=None, gamma=None,
                          focal_distance=None, zoom=None, frame_height=None,
@@ -345,3 +356,50 @@ class ThreeDScene(SpatialScene):
         from _manim_scene import _context
         engine_call(_context(self).stopAmbientCameraRotation, _handle_for(self.camera))
         return self
+
+
+    def begin_3dillusion_camera_rotation(self, rate=1, origin_phi=None, origin_theta=None):
+        from _manim_scene import _context
+        engine_call(_context(self).begin3DIllusionCameraRotation,
+                    _handle_for(self.camera), float(rate),
+                    None if origin_phi is None else float(origin_phi),
+                    None if origin_theta is None else float(origin_theta))
+        return self
+
+    def stop_3dillusion_camera_rotation(self):
+        from _manim_scene import _context
+        engine_call(_context(self).stop3DIllusionCameraRotation, _handle_for(self.camera))
+        return self
+
+class _RendererProxy:
+    """Thin spelling adapter for Manim's renderer.camera.light_source slot."""
+
+    def __init__(self, scene):
+        self.camera = _RendererCameraProxy(scene)
+
+
+class _RendererCameraProxy:
+    def __init__(self, scene):
+        self._scene = scene
+
+    @property
+    def light_source(self):
+        light = self._scene._manim_camera_light_source
+        if light is None:
+            light = self._scene.point_light(position=(-7, -9, 10))
+        # PointLight3D remains an ordinary Rust semantic object. Membership is
+        # edited through the same Scene/LiveSession operation as any Mobject.
+        self._scene.add_world_mobjects(light)
+        return light
+
+    @light_source.setter
+    def light_source(self, light):
+        if (not isinstance(light, _base.Mobject)
+                or not bool(getattr(light, "_semantic_point_light", False))
+                or _handle_for(light) is None):
+            raise TypeError("renderer.camera.light_source requires a typed point-light Mobject")
+        previous = self._scene._manim_camera_light_source
+        if previous is not None and previous is not light:
+            self._scene._edit_membership("remove", (previous,))
+        self._scene._manim_camera_light_source = light
+        self._scene.add_world_mobjects(light)

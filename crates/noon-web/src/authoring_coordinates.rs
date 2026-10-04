@@ -80,16 +80,27 @@ impl WasmCoordinateOptions {
     pub fn axes(
         x_range: &[f64],
         y_range: &[f64],
-        x_length: f64,
-        y_length: f64,
+        x_length: Option<f64>,
+        y_length: Option<f64>,
     ) -> Result<Self, JsValue> {
+        let options = ManimAxesOptions::from_ranges(
+            if x_range.is_empty() {
+                None
+            } else {
+                Some(x_range)
+            },
+            if y_range.is_empty() {
+                None
+            } else {
+                Some(y_range)
+            },
+            x_length,
+            y_length,
+        )
+        .map_err(coordinate_failure)
+        .map_err(js_error)?;
         Ok(Self {
-            request: CoordinateRequest::Axes(ManimAxesOptions::new(
-                range3(x_range)?,
-                range3(y_range)?,
-                x_length,
-                y_length,
-            )),
+            request: CoordinateRequest::Axes(options),
         })
     }
 
@@ -140,10 +151,15 @@ impl WasmCoordinateOptions {
 
     #[wasm_bindgen(js_name = setTips)]
     pub fn set_tips(&mut self, enabled: bool) -> Result<(), JsValue> {
-        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
-            return Err(js_error("tips are configurable only for ThreeDAxes"));
-        };
-        options.tips = enabled;
+        match &mut self.request {
+            CoordinateRequest::Axes(options) => options.tips = enabled,
+            CoordinateRequest::ThreeDAxes(options) => options.tips = enabled,
+            _ => {
+                return Err(js_error(
+                    "tips are configurable only for Axes and ThreeDAxes",
+                ));
+            }
+        }
         Ok(())
     }
 

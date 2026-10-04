@@ -21,8 +21,9 @@ class ShowcaseSourceContract(unittest.TestCase):
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
                 is_linear = entry["id"] == "showcase-linear-algebra"
+                is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
-                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "Scene"
+                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
                 self.assertIn(expected_base, scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
                 progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}

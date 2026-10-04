@@ -254,6 +254,20 @@ impl EffectiveObjectProperties {
         }
     }
 
+    /// Set a callback-prepared transform and its authoritative projected bounds
+    /// together. This is used when Rust has already resolved geometry from the
+    /// exact sparse callback overlay and must preserve that result for immediate
+    /// reads in the same callback phase.
+    pub fn set_transform_and_bounds(
+        &mut self,
+        transform: Transform2D,
+        bounds: Option<noon_core::Rect>,
+    ) {
+        self.transform = transform;
+        self.bounds = bounds;
+        self.bounds_basis = None;
+    }
+
     pub fn set_style(&mut self, style: Style) {
         let spatial_change = self.style.stroke.is_some() != style.stroke.is_some()
             || self.style.stroke_width != style.stroke_width

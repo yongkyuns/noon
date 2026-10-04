@@ -34,6 +34,25 @@ impl super::SemanticExecutionPlayer {
         self.with_live_session(|live| live.stop_ambient_camera_rotation(camera))
     }
 
+    pub(crate) fn live_begin_3dillusion_camera_rotation(
+        &mut self,
+        camera: &noon::Mobject,
+        rate: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.begin_3dillusion_camera_rotation(camera, rate, origin_phi, origin_theta)
+        })
+    }
+
+    pub(crate) fn live_stop_3dillusion_camera_rotation(
+        &mut self,
+        camera: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.stop_3dillusion_camera_rotation(camera))
+    }
+
     pub(crate) fn live_set_camera_orientation(
         &mut self,
         camera: &noon::Mobject,

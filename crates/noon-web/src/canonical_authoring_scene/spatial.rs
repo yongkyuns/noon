@@ -6,6 +6,26 @@ use noon_core::SemanticVec3;
 use std::rc::Rc;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn set_surface_checkerboard(
+        &mut self,
+        surface: &noon::SurfaceFamily,
+        colors: [Color; 2],
+        opacity: f64,
+    ) -> Result<(), crate::authoring_error::AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => self
+                .scene
+                .set_surface_checkerboard(surface, colors, opacity)
+                .map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_set_surface_checkerboard(surface, colors, opacity),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn declare_world_transform(
         &self,

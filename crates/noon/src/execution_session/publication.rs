@@ -530,7 +530,12 @@ impl ExecutionSession {
                     ),
                 }
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
-                (publication, None)
+                let revised = self
+                    .callback_schedule
+                    .plan()
+                    .prepare_registration_revision(&prepared, self.frame().time)
+                    .map_err(ExecutionSessionPublicationError::Lowering)?;
+                (publication, revised)
             };
         let preparation_stats = publication.stats();
         let order_patches = order_root

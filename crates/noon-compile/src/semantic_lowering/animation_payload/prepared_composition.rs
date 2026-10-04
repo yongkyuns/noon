@@ -2,9 +2,10 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
-    ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
-    SemanticObjectProperty, SemanticTransactionNodeRef, SemanticTransactionReadError,
-    TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues,
+    GeometryResource, ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction,
+    SemanticLoweringError, SemanticObjectProperty, SemanticTransactionNodeRef,
+    SemanticTransactionReadError, StoredGeometry, TimelineError, TrackDefinition, TrackId,
+    TrackTiming, TrackValues,
 };
 
 use super::super::{
@@ -210,6 +211,14 @@ pub enum PreparedSemanticAnimationLoweringError {
         target_state: SemanticTransactionNodeRef,
         error: SemanticExecutionValueError,
     },
+    UnsupportedPathMotion {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+    },
+    InvalidTrack {
+        animation: SemanticTransactionNodeRef,
+        error: TimelineError,
+    },
 }
 
 impl std::fmt::Display for PreparedSemanticAnimationLoweringError {
@@ -341,6 +350,15 @@ where
         ) {
             continue;
         }
+        if matches!(
+            leaf.payload,
+            PreparedSemanticScheduledAnimationPayload::MoveAlongPath { .. }
+        ) {
+            // Capturing the exact effective bounds-center offset requires the runtime's
+            // current retained bounds. The activation coordinator appends this channel
+            // through lower_prepared_path_motion_tracks after ordinary lowering.
+            continue;
+        }
         let source = prepared.object_state(leaf.target).map_err(|error| {
             PreparedSemanticAnimationLoweringError::Target {
                 animation: leaf.animation,
@@ -404,10 +422,7 @@ where
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
                 property: Property::WorldTransform,
-                completion: super::affine::completion_at_endpoint(
-                    channel.completion,
-                    leaf.timing.easing,
-                ),
+                completion: super::affine::completion_at_endpoint(channel.completion, leaf.timing),
                 values: channel.values,
                 timing: leaf.timing,
                 time_map: leaf.time_map.clone(),
@@ -478,10 +493,7 @@ where
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
                 property: Property::CameraProfile,
-                completion: super::affine::completion_at_endpoint(
-                    channel.completion,
-                    leaf.timing.easing,
-                ),
+                completion: super::affine::completion_at_endpoint(channel.completion, leaf.timing),
                 values: channel.values,
                 timing: leaf.timing,
                 time_map: leaf.time_map.clone(),
@@ -489,6 +501,9 @@ where
             continue;
         }
         let channel = match leaf.payload {
+            PreparedSemanticScheduledAnimationPayload::MoveAlongPath { .. } => {
+                unreachable!("MoveAlongPath was lowered through its activation snapshot helper")
+            }
             PreparedSemanticScheduledAnimationPayload::TransformTo {
                 target_state,
                 interpolation,
@@ -1000,6 +1015,121 @@ where
     })
 }
 
+/// Lower activation snapshots for prepared MoveAlongPath leaves. The runtime supplies the
+/// current effective bounds center and transform; path geometry remains typed immutable data.
+pub fn lower_prepared_path_motion_tracks<F>(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    schedule: &super::super::PreparedSemanticAnimationScheduleProjection,
+    existing: &[PreparedSemanticAnimationTrack],
+    mut effective: F,
+) -> Result<Vec<PreparedSemanticAnimationTrack>, PreparedSemanticAnimationLoweringError>
+where
+    F: FnMut(ObjectId) -> Option<super::affine::PathMotionActivationProperties>,
+{
+    if !schedule.leaves().iter().any(|leaf| {
+        matches!(
+            leaf.payload,
+            PreparedSemanticScheduledAnimationPayload::MoveAlongPath { .. }
+        )
+    }) {
+        return Ok(Vec::new());
+    }
+    let mut driven = HashMap::<ObjectId, SemanticTransactionNodeRef>::new();
+    for track in existing
+        .iter()
+        .filter(|track| track.property == Property::Position)
+    {
+        driven.insert(track.execution_object_id, track.animation);
+    }
+    let mut tracks = Vec::new();
+    for leaf in schedule.leaves() {
+        let PreparedSemanticScheduledAnimationPayload::MoveAlongPath {
+            path,
+            path_execution_object_id,
+        } = leaf.payload
+        else {
+            continue;
+        };
+        let unsupported = || PreparedSemanticAnimationLoweringError::UnsupportedPathMotion {
+            animation: leaf.animation,
+            target: leaf.target,
+        };
+        if let Some(first_animation) = driven.get(&leaf.execution_object_id).copied() {
+            return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+                first_animation,
+                next_animation: leaf.animation,
+                target: leaf.target,
+                property: SemanticObjectProperty::Translation,
+            });
+        }
+        let has_staged_updater = prepared.mutations().iter().any(|mutation| {
+            matches!(mutation, noon_core::SemanticMutation::AddUpdater { target, .. }
+                if *target == leaf.target || *target == path)
+        });
+        if has_staged_updater {
+            return Err(unsupported());
+        }
+        let path_state = prepared.object_state(path).map_err(|_| unsupported())?;
+        let Some(StoredGeometry::Resource(handle)) = path_state.content.geometry() else {
+            return Err(unsupported());
+        };
+        let Some(GeometryResource::VectorPath(path_geometry)) =
+            prepared.store().geometry_resources().get(handle)
+        else {
+            return Err(unsupported());
+        };
+        if !path_geometry.has_drawable_segments()
+            || path_geometry.retained_command_count() > noon_core::MAX_PATH_MOTION_COMMANDS
+        {
+            return Err(unsupported());
+        }
+        let Some((_, endpoint)) = noon_geometry::drawable_endpoints(path_geometry) else {
+            return Err(unsupported());
+        };
+        let target_effective = effective(leaf.execution_object_id).ok_or_else(unsupported)?;
+        let path_effective = effective(path_execution_object_id).ok_or_else(unsupported)?;
+        let target_center_offset =
+            target_effective.bounds_center - target_effective.transform.translation;
+        let destination = path_effective.transform.transform_point(endpoint) - target_center_offset;
+        let values = TrackValues::PathVec2 {
+            path: path_geometry.clone(),
+            path_transform: path_effective.transform,
+            target_center_offset,
+        };
+        let mut timing = leaf.timing;
+        timing.reverse_rate_function = leaf.options.reverse_rate_function;
+        let track = PreparedSemanticAnimationTrack {
+            animation: leaf.animation,
+            target: leaf.target,
+            execution_object_id: leaf.execution_object_id,
+            property: Property::Position,
+            completion: super::affine::completion_at_endpoint(
+                SemanticAnimationCompletion::Property {
+                    property: SemanticObjectProperty::Translation,
+                    value: noon_core::SemanticSignalValue::Vec3(noon_core::SemanticVec3::new(
+                        f64::from(destination.x),
+                        f64::from(destination.y),
+                        0.0,
+                    )),
+                },
+                timing,
+            ),
+            values,
+            timing,
+            time_map: leaf.time_map.clone(),
+        };
+        track.with_track_id(TrackId::new(0)).map_err(|error| {
+            PreparedSemanticAnimationLoweringError::InvalidTrack {
+                animation: leaf.animation,
+                error,
+            }
+        })?;
+        driven.insert(leaf.execution_object_id, leaf.animation);
+        tracks.push(track);
+    }
+    Ok(tracks)
+}
+
 fn capture_effective<F>(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
     source: &noon_core::SemanticObjectState,
@@ -1096,14 +1226,20 @@ fn push_prepared_channel(
             entry.insert(leaf.animation);
         }
     }
+    let mut timing = leaf.timing;
+    timing.reverse_rate_function = leaf.options.reverse_rate_function
+        && matches!(
+            &leaf.payload,
+            PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
+        );
     tracks.push(PreparedSemanticAnimationTrack {
         animation: leaf.animation,
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: super::affine::completion_at_endpoint(channel.completion, leaf.timing.easing),
+        completion: super::affine::completion_at_endpoint(channel.completion, timing),
         values: channel.values,
-        timing: leaf.timing,
+        timing,
         time_map: leaf.time_map.clone(),
     });
     Ok(())
@@ -1461,6 +1597,39 @@ mod tests {
     }
 
     #[test]
+    fn reverse_transform_uses_track_time_reversal_without_reversing_create_channels() {
+        let mut store = noon_core::SemanticStore::new();
+        let source = visible_circle(&mut store);
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        let target = transaction.create_node(SemanticNodeCreation::object(target_state(
+            SemanticVec3::new(2.0, -1.0, 0.0),
+        )));
+        let animation = transaction.create_transform_animation(
+            source,
+            target,
+            AnimationOptions::new().reverse_rate_function(true),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            animation,
+            0.0,
+            AnimationOptions::new(),
+            |_| Some(effective(Vec2::ZERO)),
+        )
+        .unwrap();
+
+        assert!(!activation.tracks().is_empty());
+        assert!(activation
+            .tracks()
+            .iter()
+            .all(|track| track.timing.reverse_rate_function));
+    }
+
+    #[test]
     fn analytic_content_morph_lowers_to_prepared_geometry_and_scalar_channels() {
         let mut store = noon_core::SemanticStore::new();
         let source = visible_circle(&mut store);
@@ -1682,6 +1851,7 @@ mod tests {
                 let animation = transaction.create_create_animation(
                     circle,
                     AnimationOptions::new()
+                        .rate_func(RateFunction::RushInto)
                         .reverse_rate_function(reverse)
                         .remover(remove),
                 );
@@ -1696,6 +1866,18 @@ mod tests {
                 )
                 .unwrap();
                 let track = &activation.tracks()[0];
+                // Create lowering already maps an asymmetric rate function and
+                // reverses the reveal endpoints. TrackTiming reversal is reserved
+                // for TransformTo and would apply this reversal a second time.
+                assert!(!track.timing.reverse_rate_function);
+                assert_eq!(
+                    track.timing.easing,
+                    if reverse {
+                        RateFunction::RushFrom
+                    } else {
+                        RateFunction::RushInto
+                    }
+                );
                 assert_eq!(
                     track.completion,
                     SemanticAnimationCompletion::RevealLifecycle { remove }

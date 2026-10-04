@@ -341,7 +341,7 @@ fn push_matching_stable_channel(
             target: source.into(),
             execution_object_id,
             property: channel.property,
-            completion: completion_at_endpoint(channel.completion, activation.timing.easing),
+            completion: completion_at_endpoint(channel.completion, activation.timing),
             values: channel.values,
             timing: activation.timing,
             time_map: activation.time_map.clone(),

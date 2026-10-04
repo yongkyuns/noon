@@ -94,6 +94,19 @@ class Transform:
         _store_animation_args(self, kwargs)
 
 
+class MoveAlongPath:
+    """Inert ManimCE path-motion request for the shared Rust timeline."""
+
+    def __init__(self, mobject: object, path: object, **kwargs: Any) -> None:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("MoveAlongPath target must be a Mobject or Group")
+        if not isinstance(path, _base.Mobject):
+            raise TypeError("MoveAlongPath path must be a retained Mobject")
+        self.mobject = mobject
+        self.path = path
+        _store_animation_args(self, kwargs)
+
+
 def _matrix_arguments(matrix: object):
     """Preserve rectangular row boundaries when marshalling a Rust matrix request."""
     try:

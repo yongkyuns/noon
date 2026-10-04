@@ -37,6 +37,13 @@ pub struct EffectiveAnimationProperties {
     pub camera_profile: Option<(noon_core::ManimCamera3DProfile, f64, f64)>,
 }
 
+/// Effective runtime data captured once for retained-path motion activation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathMotionActivationProperties {
+    pub transform: Transform2D,
+    pub bounds_center: noon_core::Vec2,
+}
+
 /// Exact authored reconciliation performed when one execution channel is released.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
@@ -79,9 +86,9 @@ pub enum SemanticAnimationCompletion {
 /// alpha one, independently of the outer composition's rate function.
 pub(super) fn completion_at_endpoint(
     completion: SemanticAnimationCompletion,
-    easing: RateFunction,
+    timing: noon_core::TrackTiming,
 ) -> SemanticAnimationCompletion {
-    if easing.evaluate(1.0) == 0.0
+    if timing.terminal_progress() == 0.0
         && matches!(
             completion,
             SemanticAnimationCompletion::Property { .. }
@@ -153,6 +160,10 @@ impl SemanticAffineAnimationTrackProjection {
     pub fn is_empty(&self) -> bool {
         self.tracks.is_empty()
     }
+
+    pub fn append(&mut self, other: Self) {
+        self.tracks.extend(other.tracks);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -169,6 +180,10 @@ pub enum SemanticAffineAnimationTrackError {
     },
     ScheduleMismatch {
         animation: SemanticNodeId,
+    },
+    UnsupportedPathMotion {
+        animation: SemanticNodeId,
+        target: SemanticNodeId,
     },
     MissingEffectiveTransform {
         animation: SemanticNodeId,
@@ -284,6 +299,14 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 "scheduled semantic animation {}:{} no longer matches its authored declaration",
                 animation.slot(),
                 animation.generation()
+            ),
+            Self::UnsupportedPathMotion { animation, target } => write!(
+                formatter,
+                "semantic MoveAlongPath animation {}:{} cannot capture a supported static 2D path snapshot for target {}:{}",
+                animation.slot(),
+                animation.generation(),
+                target.slot(),
+                target.generation()
             ),
             Self::MissingEffectiveTransform {
                 animation,
@@ -541,6 +564,12 @@ where
         validate_leaf_matches_declaration(store, leaf)?;
         if matches!(
             leaf.payload,
+            SemanticScheduledAnimationPayload::MoveAlongPath { .. }
+        ) {
+            continue;
+        }
+        if matches!(
+            leaf.payload,
             SemanticScheduledAnimationPayload::TextGlyph { .. }
         ) {
             continue;
@@ -784,6 +813,9 @@ where
             continue;
         }
         let (target_state, interpolation, complete_priority) = match leaf.payload {
+            SemanticScheduledAnimationPayload::MoveAlongPath { .. } => {
+                unreachable!("MoveAlongPath was lowered through its activation snapshot helper")
+            }
             SemanticScheduledAnimationPayload::WorldTransformTo { .. } => {
                 unreachable!("world transform payload was lowered above")
             }
@@ -846,7 +878,12 @@ where
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
         }
-        if complete_priority && from.z_index != target.z_index() {
+        let priority_endpoint = if leaf.options.reverse_rate_function {
+            from.z_index
+        } else {
+            target.z_index()
+        };
+        if complete_priority && from.z_index != priority_endpoint {
             if let Some(first_animation) = driven.insert(
                 driver_key(leaf.execution_object_id, Property::ZIndex),
                 leaf.animation,
@@ -872,11 +909,11 @@ where
                 execution_object_id: leaf.execution_object_id,
                 property: Property::ZIndex,
                 completion: SemanticAnimationCompletion::Priority {
-                    value: target.z_index(),
+                    value: priority_endpoint,
                 },
                 values: TrackValues::ZIndex {
                     from: from.z_index,
-                    to: target.z_index(),
+                    to: priority_endpoint,
                 },
                 timing: noon_core::TrackTiming::instant(end),
                 time_map: CompositionTimeMap::identity(),
@@ -884,6 +921,125 @@ where
         }
     }
 
+    Ok(SemanticAffineAnimationTrackProjection { tracks })
+}
+
+/// Lower activation snapshots for MoveAlongPath into the ordinary Position channel.
+/// The caller supplies only current-frame transforms and bounds centers; the immutable
+/// path resource remains typed execution data and its proportion plan is runtime-owned.
+pub fn lower_semantic_path_motion_tracks<F>(
+    store: &SemanticStore,
+    schedule: &SemanticAnimationScheduleProjection,
+    existing: &[SemanticAffineAnimationTrack],
+    mut effective: F,
+) -> Result<SemanticAffineAnimationTrackProjection, SemanticAffineAnimationTrackError>
+where
+    F: FnMut(ObjectId) -> Option<PathMotionActivationProperties>,
+{
+    if !schedule.leaves().iter().any(|leaf| {
+        matches!(
+            leaf.payload,
+            SemanticScheduledAnimationPayload::MoveAlongPath { .. }
+        )
+    }) {
+        return Ok(SemanticAffineAnimationTrackProjection { tracks: Vec::new() });
+    }
+    let mut driven = HashMap::<ObjectId, SemanticNodeId>::new();
+    for track in existing
+        .iter()
+        .filter(|track| track.property == Property::Position)
+    {
+        driven.insert(track.execution_object_id, track.animation);
+    }
+    let mut tracks = Vec::new();
+    for leaf in schedule.leaves() {
+        let SemanticScheduledAnimationPayload::MoveAlongPath {
+            path,
+            path_execution_object_id,
+        } = leaf.payload
+        else {
+            continue;
+        };
+        validate_leaf_matches_declaration(store, leaf)?;
+        let unsupported = || SemanticAffineAnimationTrackError::UnsupportedPathMotion {
+            animation: leaf.animation,
+            target: leaf.target,
+        };
+        if driven.contains_key(&leaf.execution_object_id) {
+            let first_animation = driven[&leaf.execution_object_id];
+            return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
+                first_animation,
+                next_animation: leaf.animation,
+                target: leaf.target,
+                property: SemanticObjectProperty::Translation,
+            });
+        }
+        let path_state = store
+            .semantic_object_state_checked(path)
+            .map_err(|_| unsupported())?;
+        let Some(StoredGeometry::Resource(handle)) = path_state.content.geometry() else {
+            return Err(unsupported());
+        };
+        let Some(crate::GeometryResource::VectorPath(path_geometry)) =
+            store.geometry_resources().get(handle)
+        else {
+            return Err(unsupported());
+        };
+        let target = effective(leaf.execution_object_id).ok_or_else(unsupported)?;
+        let path_effective = effective(path_execution_object_id).ok_or_else(unsupported)?;
+        let path_transform = path_effective.transform;
+        if !path_geometry.has_drawable_segments()
+            || path_geometry.retained_command_count() > noon_core::MAX_PATH_MOTION_COMMANDS
+        {
+            return Err(unsupported());
+        }
+        let endpoint = noon_geometry::drawable_endpoints(path_geometry)
+            .ok_or_else(unsupported)?
+            .1;
+        let target_center_offset = target.bounds_center - target.transform.translation;
+        let destination = path_transform.transform_point(endpoint) - target_center_offset;
+        let values = TrackValues::PathVec2 {
+            path: path_geometry.clone(),
+            path_transform,
+            target_center_offset,
+        };
+        let mut timing = leaf.timing;
+        timing.reverse_rate_function = leaf.options.reverse_rate_function;
+        let completion = SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::Translation,
+            value: SemanticSignalValue::Vec3(noon_core::SemanticVec3::new(
+                f64::from(destination.x),
+                f64::from(destination.y),
+                0.0,
+            )),
+        };
+        let track = SemanticAffineAnimationTrack {
+            animation: leaf.animation,
+            target: leaf.target,
+            execution_object_id: leaf.execution_object_id,
+            property: Property::Position,
+            completion: completion_at_endpoint(completion, timing),
+            values,
+            timing,
+            time_map: leaf.time_map.clone(),
+        };
+        let definition = TrackDefinition {
+            id: TrackId::new(0),
+            object: track.execution_object_id,
+            property: track.property,
+            values: track.values.clone(),
+            timing: track.timing,
+            time_map: track.time_map.clone(),
+        };
+        validate_track_definition(&definition).map_err(|error| {
+            SemanticAffineAnimationTrackError::InvalidTrack {
+                animation: leaf.animation,
+                error,
+            }
+        })?;
+        driven.insert(leaf.execution_object_id, leaf.animation);
+        tracks.push(track);
+    }
     Ok(SemanticAffineAnimationTrackProjection { tracks })
 }
 
@@ -933,6 +1089,18 @@ fn validate_leaf_matches_declaration(
         .semantic_animation_state(leaf.animation)
         .map_err(SemanticAffineAnimationTrackError::Animation)?;
     match animation.intent() {
+        SemanticAnimationIntent::MoveAlongPath { target, path }
+            if *target == leaf.target
+                && matches!(
+                    leaf.payload,
+                    SemanticScheduledAnimationPayload::MoveAlongPath {
+                        path: scheduled_path,
+                        ..
+                    } if scheduled_path == *path
+                ) =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::WorldTransformTo { target, transform }
             if *target == leaf.target
                 && leaf.payload
@@ -1137,14 +1305,20 @@ fn push_published_channel(
             entry.insert(leaf.animation);
         }
     }
+    let mut timing = leaf.timing;
+    timing.reverse_rate_function = leaf.options.reverse_rate_function
+        && matches!(
+            &leaf.payload,
+            SemanticScheduledAnimationPayload::TransformTo { .. }
+        );
     tracks.push(SemanticAffineAnimationTrack {
         animation: leaf.animation,
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: completion_at_endpoint(channel.completion, leaf.timing.easing),
+        completion: completion_at_endpoint(channel.completion, timing),
         values: channel.values,
-        timing: leaf.timing,
+        timing,
         time_map: leaf.time_map.clone(),
     });
     Ok(())
@@ -2617,6 +2791,20 @@ mod tests {
             world_transform: None,
             camera_profile: None,
         }
+    }
+
+    #[test]
+    fn reverse_smooth_transform_releases_to_source_at_completion() {
+        let completion = SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::ObjectOpacity,
+            value: SemanticSignalValue::Scalar(0.5),
+        };
+        let mut timing = noon_core::TrackTiming::new(0.0, 1.0, RateFunction::Smooth);
+        timing.reverse_rate_function = true;
+        assert_eq!(
+            completion_at_endpoint(completion, timing),
+            SemanticAnimationCompletion::Release
+        );
     }
 
     #[test]

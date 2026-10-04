@@ -18,16 +18,27 @@ impl HostCallbackId {
     }
 }
 
+/// Endpoint behavior for a finite semantic host-updater interval.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SemanticUpdaterEndpointPolicy {
+    /// The updater runs on `[active_from, inactive_from)`.
+    #[default]
+    Exclusive,
+    /// The updater also runs once at exactly `inactive_from`, then deactivates.
+    InvokeAtEnd,
+}
+
 /// One authored occurrence of a host updater on a semantic object or family.
 ///
-/// Reusing a callback ID creates another occurrence. The interval is inclusive at
-/// `active_from` and exclusive at `inactive_from`, matching authored frame-time
-/// boundaries without making the host callable table a scheduling authority.
+/// Reusing a callback ID creates another occurrence. The interval starts at
+/// `active_from`; its finite endpoint follows the explicit endpoint policy,
+/// without making the host callable table a scheduling authority.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SemanticUpdaterRegistration {
     callback: HostCallbackId,
     active_from: f64,
     inactive_from: Option<f64>,
+    endpoint_policy: SemanticUpdaterEndpointPolicy,
     authored_order: u64,
 }
 
@@ -37,10 +48,25 @@ impl SemanticUpdaterRegistration {
         active_from: f64,
         inactive_from: Option<f64>,
     ) -> Result<Self, SemanticUpdaterRegistrationError> {
+        Self::with_endpoint_policy(
+            callback,
+            active_from,
+            inactive_from,
+            SemanticUpdaterEndpointPolicy::Exclusive,
+        )
+    }
+
+    pub fn with_endpoint_policy(
+        callback: HostCallbackId,
+        active_from: f64,
+        inactive_from: Option<f64>,
+        endpoint_policy: SemanticUpdaterEndpointPolicy,
+    ) -> Result<Self, SemanticUpdaterRegistrationError> {
         let registration = Self {
             callback,
             active_from,
             inactive_from,
+            endpoint_policy,
             authored_order: 0,
         };
         registration.validate()?;
@@ -57,6 +83,10 @@ impl SemanticUpdaterRegistration {
 
     pub const fn inactive_from(self) -> Option<f64> {
         self.inactive_from
+    }
+
+    pub const fn endpoint_policy(self) -> SemanticUpdaterEndpointPolicy {
+        self.endpoint_policy
     }
 
     pub const fn authored_order(self) -> u64 {
@@ -81,7 +111,12 @@ impl SemanticUpdaterRegistration {
         &mut self,
         inactive_from: f64,
     ) -> Result<(), SemanticUpdaterRegistrationError> {
-        let mut replacement = Self::new(self.callback, self.active_from, Some(inactive_from))?;
+        let mut replacement = Self::with_endpoint_policy(
+            self.callback,
+            self.active_from,
+            Some(inactive_from),
+            self.endpoint_policy,
+        )?;
         replacement.authored_order = self.authored_order;
         *self = replacement;
         Ok(())

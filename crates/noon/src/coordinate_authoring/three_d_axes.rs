@@ -499,11 +499,7 @@ fn prepare_three_d_axes(
         ))?;
         if options.tips {
             let end = frame.end();
-            tip_paths.push(triangle_tip_path(
-                (end[0], end[1]),
-                (1.0, 0.0),
-                options.tip_length,
-            )?);
+            tip_paths.push(filled_tip_path(end, (1.0, 0.0), options.tip_length)?);
         }
         prepared_axes.push((states, world));
     }
@@ -572,36 +568,8 @@ fn publish_prepared_three_d_axes(
     })
 }
 
-fn triangle_tip_path(
-    apex: (f64, f64),
-    direction: (f64, f64),
-    length: f64,
-) -> Result<VectorPath, AuthoringError> {
-    let vertices = noon_geometry::arrow_tip_vertices(apex, direction, length);
-    let point = |xy: (f64, f64)| -> Result<noon_core::Vec2, AuthoringError> {
-        Ok(noon_core::Vec2::new(
-            crate::integration::authoring_render_f64("ThreeDAxes tip x", xy.0)? as f32,
-            crate::integration::authoring_render_f64("ThreeDAxes tip y", xy.1)? as f32,
-        ))
-    };
-    Ok(VectorPath::new()
-        .move_to(point(vertices[0])?)
-        .line_to(point(vertices[1])?)
-        .line_to(point(vertices[2])?)
-        .close())
-}
-
 fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoringError> {
-    let Some(SemanticPaint::Solid(color)) = style.stroke.as_ref() else {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "ThreeDAxes tips require a solid stroke color",
-        ));
-    };
-    let mut tip = style.clone();
-    tip.fill = Some(SemanticPaint::Solid(*color));
-    tip.fill_opacity = 1.0;
-    tip.stroke = Some(SemanticPaint::Solid(*color));
-    Ok(tip)
+    filled_tip_style(style)
 }
 
 fn three_d_axis_style() -> SemanticStyle {

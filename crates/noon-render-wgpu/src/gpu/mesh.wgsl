@@ -7,6 +7,7 @@ struct Lighting {
     color_intensity: vec4<f32>,
 };
 @group(0) @binding(1) var<uniform> lighting: Lighting;
+@group(0) @binding(2) var<uniform> boundary_metrics: vec4<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -83,4 +84,57 @@ fn stable_normalize(value: vec3<f32>) -> vec4<f32> {
         }
     }
     return result;
+}
+
+struct EdgeInput {
+    @location(0) start: vec3<f32>,
+    @location(1) end: vec3<f32>,
+    @location(10) corner: vec2<f32>,
+    @location(2) world0: vec4<f32>,
+    @location(3) world1: vec4<f32>,
+    @location(4) world2: vec4<f32>,
+    @location(5) world3: vec4<f32>,
+    @location(6) normal0: vec4<f32>,
+    @location(7) normal1: vec4<f32>,
+    @location(8) normal2: vec4<f32>,
+    @location(9) color: vec4<f32>,
+};
+struct EdgeOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+@vertex fn vs_boundary(input: EdgeInput) -> EdgeOutput {
+    let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
+    var a = camera.view_projection * world * vec4<f32>(input.start, 1.0);
+    var b = camera.view_projection * world * vec4<f32>(input.end, 1.0);
+    // Clip the centerline before dividing by W. Fully clipped segments collapse
+    // instead of creating infinities during billboard extrusion.
+    if a.z < 0.0 && b.z < 0.0 {
+        a = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+        b = a;
+    } else {
+        if a.z < 0.0 { a = mix(a, b, a.z / (a.z - b.z)); }
+        if b.z < 0.0 { b = mix(b, a, b.z / (b.z - a.z)); }
+    }
+    let viewport = boundary_metrics.xy;
+    let delta = (b.xy / max(b.w, 1e-8) - a.xy / max(a.w, 1e-8))
+        * (viewport / max(viewport.x, viewport.y));
+    let scale = max(abs(delta.x), abs(delta.y));
+    var perpendicular = vec2<f32>(0.0, 0.0);
+    if scale > 1e-8 && scale <= MAX_FINITE_F32 {
+        let direction = delta / scale;
+        perpendicular = vec2<f32>(-direction.y, direction.x) / length(direction);
+    }
+    var p = mix(a, b, input.corner.x);
+    // The width is in authoring frame units; projecting endpoints and extruding
+    // stays on the GPU even while the camera moves.
+    p = vec4<f32>(p.xy + perpendicular * input.corner.y * input.normal1.w
+        * boundary_metrics.zw * 0.5 * p.w, p.zw);
+    var result: EdgeOutput;
+    result.position = p;
+    result.color = input.color;
+    return result;
+}
+@fragment fn fs_boundary(input: EdgeOutput) -> @location(0) vec4<f32> {
+    return input.color;
 }

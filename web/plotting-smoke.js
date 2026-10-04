@@ -516,7 +516,7 @@ class PlottingQualification(Scene):
 export async function qualifyPlotting(runLive) {
   directWasmPreparation();
   const result = await runLive(source);
-  if (Math.abs(result.duration - 0.8) > 1e-6 || result.metrics.objectCount !== 14) {
+  if (Math.abs(result.duration - 0.8) > 1e-6 || result.metrics.objectCount !== 16) {
     throw new Error(`plotting lifecycle produced unexpected duration/membership: ${JSON.stringify(result)}`);
   }
   if (!result.metrics.ready || !result.metrics.retained || result.metrics.presentedFrames < 1 ||

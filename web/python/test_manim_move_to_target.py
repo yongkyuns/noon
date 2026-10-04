@@ -22,7 +22,7 @@ class ManimMoveToTargetTests(unittest.TestCase):
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            from noon import Circle, MoveToTarget, RIGHT, Scene, Transform, UP, VGroup
+            from noon import Circle, MoveToTarget, Restore, RIGHT, Scene, Transform, UP, VGroup
 
             missing = identity(Circle)
             try:
@@ -37,6 +37,19 @@ class ManimMoveToTargetTests(unittest.TestCase):
             request = MoveToTarget(group, run_time=2, rate_func=_manim_rate_functions.linear)
             assert type(request) is Transform
             assert request.source is group and request.target is target
+
+            saved = identity(Circle)
+            current = identity(Circle)
+            current.saved_state = saved
+            restored = Restore(current, run_time=2)
+            assert type(restored) is Transform
+            assert restored.source is current and restored.target is saved
+            assert restored.anim_args == {{"run_time": 2}}
+            try:
+                Restore(identity(Circle))
+                raise AssertionError("Restore without saved state must fail")
+            except Exception as error:
+                assert str(error) == "Trying to restore without having saved"
 
             # Executable target endpoints are covered by shared-authoring-smoke;
             # this unit test protects Python target-editor selection and rollback.

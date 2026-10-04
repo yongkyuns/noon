@@ -104,6 +104,74 @@ fn axes_positive_negative_ranges_use_numerical_midpoints() {
 }
 
 #[test]
+fn manim_axes_profile_normalizes_ranges_and_retains_filled_tips() {
+    let defaults = ManimAxesOptions::default();
+    assert_eq!(defaults.x_range, [-7.0, 7.0, 1.0]);
+    assert_eq!(defaults.y_range, [-4.0, 4.0, 1.0]);
+    assert_eq!(defaults.x_length, 12.0);
+    assert_eq!(defaults.y_length, 6.0);
+    assert!(defaults.tips);
+
+    let options =
+        ManimAxesOptions::from_ranges(Some(&[-1.0, 10.0]), Some(&[-1.0, 10.0, 2.0]), None, None)
+            .unwrap();
+    assert_eq!(options.x_range, [-1.0, 10.0, 1.0]);
+    assert_eq!(options.y_range, [-1.0, 10.0, 2.0]);
+
+    // The historical explicit constructor remains tipless, preserving existing
+    // coordinate-family output for examples that supply all four arguments.
+    let explicit = ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0);
+    assert!(!explicit.tips);
+    let mut scene = Scene::new();
+    let tipless = scene.axes(&explicit).unwrap();
+    assert_eq!(resources(&scene), 0);
+    assert_eq!(
+        tipless.authored_frame().unwrap().x().range(),
+        [-2.0, 2.0, 1.0]
+    );
+
+    let axes = scene.axes(&options).unwrap();
+    let root = axes.family().node_id();
+    let store_rc = Rc::clone(axes.family().integration_store());
+    let store = store_rc.borrow();
+    let axis_groups = store.semantic_family_members_checked(root).unwrap();
+    assert_eq!(axis_groups.len(), 2);
+    for group_id in axis_groups {
+        let members = store.semantic_family_members_checked(group_id).unwrap();
+        assert_eq!(members.len(), 3); // shaft, tick family, retained tip
+        let tip = store.semantic_object_state_checked(members[2]).unwrap();
+        assert!(matches!(
+            tip.content.geometry(),
+            Some(StoredGeometry::Resource(_))
+        ));
+        assert_eq!(tip.style.fill, tip.style.stroke);
+        assert_eq!(tip.style.fill_opacity, 1.0);
+    }
+    drop(store);
+    assert_eq!(resources(&scene), 2);
+    let copied = axes.family().copy_family().unwrap();
+    let copy = ManimAxes::from_family(copied.root().clone()).unwrap();
+    assert_ne!(copy.family().node_id(), axes.family().node_id());
+    assert_eq!(
+        copy.authored_frame().unwrap(),
+        axes.authored_frame().unwrap()
+    );
+}
+
+#[test]
+fn axes_range_coercion_and_tip_failure_are_checked_before_publication() {
+    assert!(ManimAxesOptions::from_ranges(Some(&[1.0]), None, None, None).is_err());
+    assert!(ManimAxesOptions::from_ranges(Some(&[0.0, 1.0, 0.0]), None, None, None).is_err());
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimAxesOptions::default();
+    options.style.stroke = None;
+    assert!(scene.axes(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn affine_family_edits_keep_ranges_and_round_trips() {
     let mut scene = Scene::new();
     let axes = scene.axes(&axes_options()).unwrap();

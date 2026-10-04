@@ -9,10 +9,14 @@ import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
+import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
-export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels }) {
+export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels, prepareContext,
+  browserName = "chromium", contextOptions }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const output = path.resolve(root, artifactDirectory);
+  assert.ok(["chromium", "webkit"].includes(browserName), `unknown camera browser: ${browserName}`);
   const selectedIds = process.env.NOON_PAIRED_CASES?.split(",").map(id => id.trim()).filter(Boolean);
   if (selectedIds) {
     for (const id of selectedIds) assert.ok(cases.some(fixture => fixture.id === id), `unknown paired case: ${id}`);
@@ -23,6 +27,12 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
     const source = fixture.scene ? rasterFixtureSource(rawSource, fixture.scene) : rawSource;
     return { ...fixture, source, sourceHash: createHash("sha256").update(source).digest("hex") };
   }));
+  let resourceCache;
+  try {
+    resourceCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const server = await serveRepository(root, port);
   await mkdir(output, { recursive: true });
   const report = { fixtures: fixtures.map(({ id, sourceHash }) => ({ id, sourceHash })), backends: [] };
@@ -92,6 +102,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         }
         const renderer = await wasm[factory](canvas.transferControlToOffscreen(), ...args);
         window.pairedRenderer = renderer;
+        if (playback === "live") renderer.advanceDirectRealtime(0);
         const present = async () => {
           for (let attempt = 0; attempt < 60; attempt++) {
             if (renderer.render()) return true;
@@ -134,13 +145,19 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
   }
 
   try {
-    for (const backend of ["webgpu", "webgl"]) {
+    for (const backend of (browserName === "webkit" ? ["webgl"] : ["webgpu", "webgl"])) {
       const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
       const result = { backend: expectedBackend };
       report.backends.push(result);
-      const browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
+      const browserType = playwright[browserName];
+      const browser = await browserType.launch(browserName === "chromium"
+        ? { channel: "chromium", headless: true, args: browserArgs(backend) }
+        : playgroundLaunchOptions(browserName));
       try {
-        const context = await browser.newContext({ viewport: { width: 1000, height: 600 } });
+        const options = contextOptions ?? { viewport: { width: 1000, height: 600 } };
+        const context = await browser.newContext(options);
+        await resourceCache?.install(context);
+        await prepareContext?.(context);
         result.static = {};
         for (const fixture of fixtures) {
           const rust = await capture(context, "rust-wasm", expectedBackend, fixture);
@@ -148,8 +165,9 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           const python = await capture(context, "python", expectedBackend, fixture);
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: Python host`);
           assert.equal(python.metrics.objectCount, rust.metrics.objectCount, "paired hosts must publish the same object count");
-          assert.equal(rust.png.width, fixture.canvasSize?.[0] ?? 960);
-          assert.equal(rust.png.height, fixture.canvasSize?.[1] ?? 540);
+          const pixelRatio = contextOptions?.deviceScaleFactor ?? 1;
+          assert.equal(rust.png.width, (fixture.canvasSize?.[0] ?? 960) * pixelRatio);
+          assert.equal(rust.png.height, (fixture.canvasSize?.[1] ?? 540) * pixelRatio);
           assert.equal(python.png.width, rust.png.width);
           assert.equal(python.png.height, rust.png.height);
           let foregroundPixels = 0;
@@ -186,6 +204,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       }
     }
   } finally {
+    if (resourceCache) report.pyodideResourceCache = resourceCache.stats();
     await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     await server.close();
   }

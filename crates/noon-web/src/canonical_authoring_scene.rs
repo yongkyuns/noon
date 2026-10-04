@@ -395,6 +395,16 @@ enum OrdinaryCompositionChild {
         complete_priority: bool,
         options: noon_core::AnimationOptions,
     },
+    MoveAlongPath {
+        target: noon::Mobject,
+        path: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    CallbackInterval {
+        target: noon::Mobject,
+        callback: noon_core::HostCallbackId,
+        options: noon_core::AnimationOptions,
+    },
     FamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
@@ -1582,6 +1592,24 @@ impl CanonicalAuthoringScene {
                         request
                     })
                 }
+                OrdinaryCompositionChild::MoveAlongPath {
+                    target,
+                    path,
+                    options,
+                } => noon::AnimationCompositionRequest::MoveAlongPath {
+                    target,
+                    path,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::CallbackInterval {
+                    target,
+                    callback,
+                    options,
+                } => noon::AnimationCompositionRequest::CallbackInterval {
+                    target,
+                    callback: *callback,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
@@ -1832,7 +1860,9 @@ impl CanonicalAuthoringScene {
         ) {
             match child {
                 OrdinaryCompositionChild::WorldTransform { .. }
-                | OrdinaryCompositionChild::CameraProfile { .. } => {}
+                | OrdinaryCompositionChild::CameraProfile { .. }
+                | OrdinaryCompositionChild::MoveAlongPath { .. }
+                | OrdinaryCompositionChild::CallbackInterval { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -2020,6 +2050,64 @@ impl CanonicalAuthoringScene {
                         return Err(
                             "ordinary composition ValueTracker target must be finite".into()
                         );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::MoveAlongPath {
+                    target,
+                    path,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) || !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        path.integration_store(),
+                    ) {
+                        return Err(
+                            "ordinary MoveAlongPath objects belong to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    path.validate().map_err(|error| error.to_string())?;
+                    if !self.identities.contains_key(&target.node_id())
+                        || !self.identities.contains_key(&path.node_id())
+                    {
+                        return Err(
+                            "ordinary MoveAlongPath target and path must belong to this Scene"
+                                .into(),
+                        );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::CallbackInterval {
+                    target, options, ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
+                        return Err(
+                            "callback interval target belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    if !self.identities.contains_key(&target.node_id()) {
+                        return Err("callback interval target must belong to this Scene".into());
                     }
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
@@ -2260,7 +2348,7 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate().map_err(|error| error.to_string())?;
                     target_state.validate().map_err(|error| error.to_string())?;
-                    noon_core::resolve_transform_animation_options(
+                    noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -3987,6 +4075,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: bool,
         ) -> Result<(), JsValue> {
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
@@ -3996,7 +4085,8 @@ mod wasm {
                 })?;
             let mut options = noon_core::AnimationOptions::new()
                 .run_time(child_run_time)
-                .rate_func(rate_function);
+                .rate_func(rate_function)
+                .reverse_rate_function(reverse_rate_function);
             if let Some(path_arc) = path_arc {
                 options = options.path_arc(path_arc);
             }
@@ -4156,6 +4246,52 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAnimationCompositionBuilder {
+        #[wasm_bindgen(js_name = appendCallbackInterval)]
+        pub fn append_callback_interval(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            callback_id: &str,
+            child_run_time: f64,
+        ) -> Result<(), JsValue> {
+            let callback = parse_callback_id(callback_id)?;
+            if !child_run_time.is_finite() || child_run_time < 0.0 {
+                return Err(js_error(
+                    "callback interval duration must be finite and non-negative",
+                ));
+            }
+            self.children
+                .push(OrdinaryCompositionChild::CallbackInterval {
+                    target: target.semantic_mobject().clone(),
+                    callback,
+                    options: noon_core::AnimationOptions::new().run_time(child_run_time),
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMoveAlongPath)]
+        pub fn append_move_along_path(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            path: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::MoveAlongPath {
+                target: target.semantic_mobject().clone(),
+                path: path.semantic_mobject().clone(),
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = setCompositionRateFunction)]
         pub fn set_composition_rate_function(
             &mut self,
@@ -4195,6 +4331,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             let entering = entering_id
                 .as_deref()
@@ -4214,6 +4351,7 @@ mod wasm {
                 child_run_time,
                 rate_function,
                 path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -4225,6 +4363,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -4235,6 +4374,7 @@ mod wasm {
                 child_run_time,
                 rate_function,
                 path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -4246,6 +4386,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -4256,6 +4397,7 @@ mod wasm {
                 child_run_time,
                 rate_function,
                 path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -4268,6 +4410,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -4278,6 +4421,7 @@ mod wasm {
                 child_run_time,
                 rate_function,
                 path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -4290,6 +4434,7 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
             path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -4300,6 +4445,7 @@ mod wasm {
                 child_run_time,
                 rate_function,
                 path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -5033,17 +5179,17 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let options = Self::options(child_run_time, rate_function)?;
-            self.push_target(
-                object_id,
-                target,
-                options,
-                |entering_id, target, options| OrdinaryCompositionChild::Create {
-                    entering_id: Some(entering_id),
-                    target,
-                    options,
-                },
-            )
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Create object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::Create {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                options: Self::options(child_run_time, rate_function)?,
+            });
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = appendUncreate)]
@@ -5466,6 +5612,219 @@ mod wasm {
                 })
                 .collect();
             serde_json::to_string(&rows).map_err(callback_codec_error)
+        }
+
+        /// Resolve an object or family layout anchor against this callback's
+        /// pinned semantic revision.
+        #[wasm_bindgen(js_name = callbackLayoutKeys)]
+        pub fn callback_layout_keys(
+            &self,
+            anchor: &crate::authoring_mobject::WasmLayoutAnchor,
+            revision: &str,
+        ) -> Result<Vec<u32>, JsValue> {
+            let store = self.inner.scene.integration_store();
+            if !anchor.anchor.belongs_to_store(store) {
+                return Err(js_error(
+                    "callback layout anchor belongs to another scene store",
+                ));
+            }
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            let node = anchor.anchor.resolve_checked().map_err(typed_js_error)?;
+            if matches!(
+                store.borrow().node(node).map(|item| item.kind()),
+                Some(noon_core::SemanticNodeKind::Family(_))
+            ) {
+                noon::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+                    .map_err(typed_js_error)?
+                    .callback_leaf_nodes(revision)
+                    .map(|nodes| {
+                        nodes
+                            .into_iter()
+                            .flat_map(|node| [node.slot(), node.generation()])
+                            .collect()
+                    })
+                    .map_err(typed_js_error)
+            } else {
+                if store.borrow().scene_revision() != revision {
+                    return Err(js_error(
+                        "callback layout anchor is from a stale scene revision",
+                    ));
+                }
+                Ok(vec![node.slot(), node.generation()])
+            }
+        }
+
+        /// Prepare one object/family replacement from phase-effective transform
+        /// and bounds rows. Rust owns scale, translation, and bounds projection.
+        #[wasm_bindgen(js_name = callbackLayoutReplace)]
+        pub fn callback_layout_replace(
+            &self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            revision: &str,
+            keys: Vec<u32>,
+            rows: Vec<f64>,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let store = self.inner.scene.integration_store();
+            if !source.anchor.belongs_to_store(store) || !target.anchor.belongs_to_store(store) {
+                return Err(js_error(
+                    "callback layout anchor belongs to another scene store",
+                ));
+            }
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            const STRIDE: usize = 12;
+            if keys.len() % 2 != 0 || rows.len() != (keys.len() / 2) * STRIDE {
+                return Err(js_error(
+                    "callback layout rows do not match typed semantic keys",
+                ));
+            }
+            let mut decoded = BTreeMap::new();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut expected = std::collections::BTreeSet::new();
+            for anchor in [source, target] {
+                let node = anchor.anchor.resolve_checked().map_err(typed_js_error)?;
+                if matches!(
+                    store.borrow().node(node).map(|item| item.kind()),
+                    Some(noon_core::SemanticNodeKind::Family(_))
+                ) {
+                    expected.extend(
+                        noon::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+                            .map_err(typed_js_error)?
+                            .callback_leaf_nodes(revision)
+                            .map_err(typed_js_error)?,
+                    );
+                } else {
+                    if store.borrow().scene_revision() != revision {
+                        return Err(js_error(
+                            "callback layout anchor is from a stale scene revision",
+                        ));
+                    }
+                    expected.insert(node);
+                }
+            }
+            let decode_f32 = |value: f64, label: &str| -> Result<f32, JsValue> {
+                if !value.is_finite() {
+                    return Err(js_error(format!("{label} must be finite")));
+                }
+                let narrowed = value as f32;
+                if !narrowed.is_finite() {
+                    return Err(js_error(format!("{label} exceeds the supported range")));
+                }
+                Ok(narrowed)
+            };
+            for (index, pair) in keys.chunks_exact(2).enumerate() {
+                let node = noon_core::SemanticNodeId::new(pair[0], pair[1]);
+                if !seen.insert(node) {
+                    return Err(js_error(
+                        "callback layout keys contain a duplicate semantic node",
+                    ));
+                }
+                let row = &rows[index * STRIDE..(index + 1) * STRIDE];
+                let slot = row[0];
+                let generation = row[1];
+                if !slot.is_finite()
+                    || !generation.is_finite()
+                    || slot.fract() != 0.0
+                    || generation.fract() != 0.0
+                    || slot < 0.0
+                    || generation < 0.0
+                    || slot > f64::from(u32::MAX)
+                    || generation > f64::from(u32::MAX)
+                    || slot as u32 != pair[0]
+                    || generation as u32 != pair[1]
+                {
+                    return Err(js_error(
+                        "callback layout row has an invalid semantic identity",
+                    ));
+                }
+                let transform = Transform2D {
+                    translation: noon_core::Vec2::new(
+                        decode_f32(row[2], "callback layout translation.x")?,
+                        decode_f32(row[3], "callback layout translation.y")?,
+                    ),
+                    scale: noon_core::Vec2::new(
+                        decode_f32(row[4], "callback layout scale.x")?,
+                        decode_f32(row[5], "callback layout scale.y")?,
+                    ),
+                    rotation: decode_f32(row[6], "callback layout rotation")?,
+                };
+                if row[7] != 0.0 && row[7] != 1.0 {
+                    return Err(js_error("callback layout bounds flag must be zero or one"));
+                }
+                let bounds = if row[7] == 1.0 {
+                    let bounds = noon_core::Rect::new(
+                        noon_core::Vec2::new(
+                            decode_f32(row[8], "callback layout bounds.min.x")?,
+                            decode_f32(row[9], "callback layout bounds.min.y")?,
+                        ),
+                        noon_core::Vec2::new(
+                            decode_f32(row[10], "callback layout bounds.max.x")?,
+                            decode_f32(row[11], "callback layout bounds.max.y")?,
+                        ),
+                    );
+                    if bounds.min.x > bounds.max.x || bounds.min.y > bounds.max.y {
+                        return Err(js_error("callback layout bounds are inverted"));
+                    }
+                    Some(bounds)
+                } else {
+                    if row[8..].iter().any(|value| *value != 0.0) {
+                        return Err(js_error(
+                            "callback layout absent bounds must use zero coordinates",
+                        ));
+                    }
+                    None
+                };
+                decoded.insert(node, (transform, bounds));
+            }
+            if seen != expected {
+                return Err(js_error(
+                    "callback layout keys do not match the typed anchors",
+                ));
+            }
+            let changes = noon::prepare_callback_layout_replace(
+                &source.anchor,
+                &target.anchor,
+                revision,
+                noon::LayoutDimension::try_from(dimension).map_err(typed_js_error)?,
+                stretch,
+                |node| {
+                    decoded
+                        .get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                },
+            )
+            .map_err(|error| js_error(error.to_string()))?;
+            let mut output = Vec::with_capacity(changes.len() * STRIDE);
+            for change in changes {
+                output.extend_from_slice(&[
+                    f64::from(change.node.slot()),
+                    f64::from(change.node.generation()),
+                    f64::from(change.transform.translation.x),
+                    f64::from(change.transform.translation.y),
+                    f64::from(change.transform.scale.x),
+                    f64::from(change.transform.scale.y),
+                    f64::from(change.transform.rotation),
+                ]);
+                if let Some(bounds) = change.bounds {
+                    output.extend_from_slice(&[
+                        1.0,
+                        f64::from(bounds.min.x),
+                        f64::from(bounds.min.y),
+                        f64::from(bounds.max.x),
+                        f64::from(bounds.max.y),
+                    ]);
+                } else {
+                    output.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+                }
+            }
+            Ok(output)
         }
 
         /// Apply shared Manim `set_color` semantics to callback-local paint.
@@ -12754,6 +13113,180 @@ mod tests {
         context.live_player(1.0).unwrap();
         assert!(context.pointer_position_signal().is_err());
         assert!(context.bind_opacity(&square, &opacity).is_err());
+    }
+
+    #[test]
+    fn canonical_illusion_rotation_forwards_cold_and_live_lifecycle() {
+        let profile = noon_core::ManimCamera3DProfile {
+            phi: 75_f64.to_radians(),
+            theta: 30_f64.to_radians(),
+            gamma: 0.1,
+            focal_distance: 5.0,
+            zoom: 1.0,
+            frame_height: 8.0,
+            frame_center: SemanticVec3::ZERO,
+        };
+        let camera_id = ObjectId::new(41);
+
+        let mut cold = CanonicalAuthoringScene::default();
+        let camera = cold
+            .create_camera_profile(camera_id, profile, 0.1, 100.0)
+            .unwrap();
+        cold.begin_3dillusion_camera_rotation(&camera, 2.0, None, None)
+            .unwrap();
+        cold.scene.wait(std::f64::consts::FRAC_PI_2).unwrap();
+        // Before execution starts, this query reads authored base state. Stop
+        // resolves the analytic endpoint from the authored motion interval.
+        assert_eq!(cold.effective_camera_profile(&camera).unwrap().0, profile);
+        let cold_endpoint = noon_core::ManimCamera3DProfile {
+            phi: profile.phi - 0.2,
+            ..profile
+        };
+        cold.stop_3dillusion_camera_rotation(&camera).unwrap();
+        let cold_state = camera.state().unwrap();
+        assert_eq!(cold_state.camera_profile(), Some(cold_endpoint));
+        assert_eq!(
+            cold_state.camera_motions()[0].end(),
+            Some(std::f64::consts::FRAC_PI_2)
+        );
+
+        let mut live = CanonicalAuthoringScene::default();
+        let camera = live
+            .create_camera_profile(ObjectId::new(42), profile, 0.1, 100.0)
+            .unwrap();
+        assert_eq!(live.ordinary_wait(0.25).unwrap(), 0.25);
+        live.begin_3dillusion_camera_rotation(&camera, 1.5, Some(profile.phi), Some(profile.theta))
+            .unwrap();
+        assert_eq!(live.ordinary_wait(0.5).unwrap(), 0.75);
+        let live_endpoint = live.effective_camera_profile(&camera).unwrap().0;
+        live.stop_3dillusion_camera_rotation(&camera).unwrap();
+        let live_state = camera.state().unwrap();
+        assert_eq!(live_state.camera_profile(), Some(live_endpoint));
+        assert_eq!(live_state.camera_motions()[0].start(), 0.25);
+        assert_eq!(live_state.camera_motions()[0].end(), Some(0.75));
+        assert_eq!(live.active_live_player().unwrap().time(), 0.75);
+    }
+
+    #[test]
+    fn canonical_surface_checkerboard_forwards_to_scene_semantic_transaction() {
+        let mut context = CanonicalAuthoringScene::default();
+        let plan = noon_geometry::UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [2, 2]).unwrap();
+        let samples = plan
+            .coordinates()
+            .map(|(u, v)| noon_geometry::SurfaceSample::position(SemanticVec3::new(u, v, 0.0)))
+            .collect::<Vec<_>>();
+        let surface = context
+            .scene
+            .surface_family(
+                plan.finish_samples(samples).unwrap(),
+                noon::SurfaceOptions::default(),
+            )
+            .unwrap();
+        context.scene.add_many(&[surface.family().into()]).unwrap();
+
+        context
+            .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.4)
+            .unwrap();
+
+        assert_eq!(context.ordinary_wait(0.2).unwrap(), 0.2);
+        context
+            .set_surface_checkerboard(&surface, [Color::BLUE, Color::YELLOW], 0.6)
+            .unwrap();
+
+        let store = std::rc::Rc::clone(context.scene.integration_store());
+        let leaves = store
+            .borrow()
+            .ordered_leaf_nodes(surface.family().node_id())
+            .unwrap();
+        assert_eq!(leaves.len(), 4);
+        for leaf in &leaves {
+            let borrowed = store.borrow();
+            let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+            let [u, v] = state.surface_uv_cell().unwrap();
+            let expected = if (u + v) % 2 == 0 {
+                Color::BLUE
+            } else {
+                Color::YELLOW
+            };
+            assert_eq!(
+                state.style.fill,
+                Some(noon_core::SemanticPaint::Solid(expected))
+            );
+            assert_eq!(state.style.fill_opacity, 0.6);
+            drop(borrowed);
+
+            let leaf = noon::Mobject::from_node(std::rc::Rc::clone(&store), *leaf).unwrap();
+            let effective = context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&leaf)
+                .unwrap();
+            assert_eq!(
+                effective.style.fill,
+                Some(Color {
+                    alpha: 0.6,
+                    ..expected
+                })
+            );
+            assert_eq!(effective.fill_opacity(), 0.6);
+        }
+
+        let authored_revision = store.borrow().scene_revision();
+        let player = context.active_live_player().unwrap();
+        assert_eq!(player.scene_revision(), authored_revision);
+        assert_eq!(context.ordinary_wait(0.2).unwrap(), 0.4);
+        assert_eq!(
+            context.active_live_player().unwrap().scene_revision(),
+            authored_revision
+        );
+    }
+
+    #[test]
+    fn ordinary_sequence_admits_move_path_and_finite_callback_interval() {
+        let mut context = CanonicalAuthoringScene::default();
+        let target = context.scene.circle(0.25).unwrap();
+        let path = context
+            .scene
+            .path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, 0.0))
+                    .line_to(noon_core::Vec2::new(1.0, 0.0)),
+                noon_core::SemanticStyle::default(),
+            )
+            .unwrap();
+        context.bind_mobject(ObjectId::new(43), &target).unwrap();
+        context.bind_mobject(ObjectId::new(44), &path).unwrap();
+        let callback = HostCallbackId::new(45);
+
+        let children = [
+            OrdinaryCompositionChild::MoveAlongPath {
+                target: target.clone(),
+                path,
+                options: AnimationOptions::new()
+                    .run_time(0.4)
+                    .rate_func(RateFunction::Linear),
+            },
+            OrdinaryCompositionChild::CallbackInterval {
+                target,
+                callback,
+                options: AnimationOptions::new().run_time(0.6),
+            },
+        ];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert_eq!(end, 1.0);
+        assert_eq!(context.live_execution_ownership(), "active");
+        let player = context.active_live_player().unwrap();
+        assert_eq!(player.time(), 0.0);
+        assert_eq!(player.live_handoff_duration(), Some(1.0));
+        assert!(player.has_required_callbacks());
     }
 }
 

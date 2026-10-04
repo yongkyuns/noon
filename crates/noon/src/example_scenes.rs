@@ -21,6 +21,7 @@ pub mod family_paint;
 pub mod family_placement;
 pub mod family_replacement;
 pub mod family_transform_indicate;
+pub mod following_graph_camera;
 pub mod foreground_matching;
 pub mod foreground_membership;
 pub mod graph_queries;
@@ -33,6 +34,8 @@ pub mod markup_text;
 pub mod matrix;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod moving_zoomed_scene_around;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
 pub mod ordinary_become_semantics;
@@ -53,6 +56,8 @@ pub mod spatial_mesh;
 pub mod spatial_primitives;
 pub mod spatial_surface;
 pub mod spatial_three_d_axes;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod special_camera_settings;
 pub mod specialized_geometry;
 pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]

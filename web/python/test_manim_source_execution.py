@@ -117,6 +117,43 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertEqual(events[-5:], ["completed", "after play", ("wait", 0.5), "completed", "after wait"])
 
+    async def test_move_along_path_is_an_ordered_source_barrier(self):
+        events = []
+        release = asyncio.Event()
+
+        class Base:
+            def play(self, *animations, **kwargs):
+                events.append((animations, kwargs))
+
+        async def barrier(method, *args, **kwargs):
+            method(*args, **kwargs)
+            await release.wait()
+            events.append("path complete")
+
+        _, portable, _ = self.compile_scene("""
+            class Example(Base):
+                def construct(self):
+                    self.play(MoveAlongPath(dot, graph, rate_func=linear))
+                    events.append("after path")
+        """, {
+            "Base": Base,
+            "MoveAlongPath": lambda target, path, **kwargs: (target, path, kwargs),
+            "dot": object(),
+            "graph": object(),
+            "linear": "linear",
+            "events": events,
+            BARRIER_GLOBAL: barrier,
+        })
+        task = asyncio.create_task(portable())
+        await asyncio.sleep(0)
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0][0][0], tuple)
+        self.assertEqual(events[0][0][0][2], {"rate_func": "linear"})
+        self.assertFalse(task.done())
+        release.set()
+        await task
+        self.assertEqual(events[-2:], ["path complete", "after path"])
+
     async def test_globals_closure_defaults_and_definition_effects_are_not_replayed(self):
         effects = []
         async def await_barrier(method, *args, **kwargs):
@@ -227,6 +264,24 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         original, portable = next(iter(pairs.items()))
         self.assertEqual(original.co_qualname, "RetainedZoom.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_following_graph_camera_uses_portable_continuation(self):
+        filename = "manim_example_following_graph_camera.py"
+        source = Path(__file__).with_name("examples").joinpath(filename).read_text()
+        _, pairs = compile_authoring_source(source, filename=filename)
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "FollowingGraphCamera.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_moving_zoomed_scene_around_retains_source_execution_when_helper_is_nested(self):
+        filename = "manim_example_moving_zoomed_scene_around.py"
+        source = Path(__file__).with_name("examples").joinpath(filename).read_text()
+        _, pairs = compile_authoring_source(source, filename=filename)
+        # The portable compiler does not rewrite scene helper calls nested in
+        # play arguments. Keep this source on its original execution path until
+        # the zoom-popout behavior has a portable shared operation.
+        self.assertEqual(pairs, {})
 
     def test_click_indicate_gallery_uses_portable_continuation(self):
         source = Path(__file__).with_name("examples").joinpath("showcase_pointer_selection.py").read_text()

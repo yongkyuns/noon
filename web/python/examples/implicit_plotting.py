@@ -8,7 +8,7 @@ from noon import *
 
 class ImplicitPlotting(Scene):
     def construct(self):
-        axes = Axes([-3, 3, 1], [-2, 2, 1], x_length=9, y_length=4.8)
+        axes = Axes([-3, 3, 1], [-2, 2, 1], x_length=9, y_length=4.8, tips=False)
         axes.shift(0.15 * DOWN)
         circle = axes.plot_implicit_curve(
             lambda x, y: x * x + y * y - 2.25,

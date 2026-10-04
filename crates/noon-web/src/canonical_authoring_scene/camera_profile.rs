@@ -95,6 +95,53 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    pub(crate) fn begin_3dillusion_camera_rotation(
+        &mut self,
+        object: &noon::Mobject,
+        rate: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> Result<(), crate::authoring_error::AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        object.validate()?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => self
+                .scene
+                .begin_3dillusion_camera_rotation(object, rate, origin_phi, origin_theta)
+                .map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_begin_3dillusion_camera_rotation(object, rate, origin_phi, origin_theta),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    pub(crate) fn stop_3dillusion_camera_rotation(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<(), crate::authoring_error::AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        object.validate()?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => self
+                .scene
+                .stop_3dillusion_camera_rotation(object)
+                .map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_stop_3dillusion_camera_rotation(object),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     pub(crate) fn create_camera_profile(
         &mut self,
         id: noon_core::ObjectId,

@@ -95,6 +95,105 @@ class ManimTransformPathArcOptionsTests(unittest.TestCase):
             f"compatibility subprocess failed:\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
         )
 
+    def test_canonical_reverse_smooth_lambda_maps_to_shared_transform_option(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(python_dir)
+        source = textwrap.dedent(
+            """
+            import math
+            import sys
+            import types
+
+            fake_js = types.ModuleType("js")
+            class Result:
+                ok = True
+                errorKind = ""
+                message = ""
+
+            def transform(*args):
+                result = Result()
+                result.runTime = 1.0
+                result.rateFunc = args[2] or "smooth"
+                result.lagRatio = 0.0
+                result.pathArc = 0.0
+                result.reverseRateFunction = args[5] == 1
+                assert result.rateFunc == "smooth"
+                assert result.reverseRateFunction
+                return result
+
+            fake_js.noonResolveAnimationOptions = transform
+            fake_js.noonResolveTransformAnimationOptions = transform
+            sys.modules["js"] = fake_js
+            import _manim_animation_options as options
+            from _manim_rate_functions import smooth
+
+            class Animation:
+                anim_args = {"rate_func": lambda t: smooth(1 - t)}
+
+            resolved = options.resolve_transform(
+                builder_args=options.builder_args(Animation()),
+                default_lag_ratio=0.0,
+                play_run_time=None,
+                play_easing=None,
+                play_rate_func=None,
+                play_lag_ratio=None,
+                play_path_arc=None,
+            )
+            assert resolved.rate_func == "smooth"
+            assert resolved.reverse_rate_function
+
+            play_resolved = options.resolve_transform(
+                builder_args={},
+                default_lag_ratio=0.0,
+                play_run_time=None,
+                play_easing=None,
+                play_rate_func=lambda t: smooth(1 - t),
+                play_lag_ratio=None,
+                play_path_arc=None,
+            )
+            assert play_resolved.rate_func == "smooth"
+            assert play_resolved.reverse_rate_function
+
+            class Unsupported:
+                anim_args = {"rate_func": lambda t: smooth(1 - t) + 0.0}
+
+            try:
+                options.resolve_transform(
+                    builder_args=options.builder_args(Unsupported()),
+                    default_lag_ratio=0.0,
+                    play_run_time=None,
+                    play_easing=None,
+                    play_rate_func=None,
+                    play_lag_ratio=None,
+                    play_path_arc=None,
+                )
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError("arbitrary Python easing was admitted")
+
+            import _manim_rate_functions as rates
+            namespace = {"smooth": lambda t: t * t}
+            namespace["smooth"].__name__ = "smooth"
+            impostor = eval("lambda t: smooth(1 - t)", namespace)
+            assert not rates.is_reverse_smooth_rate_func(impostor)
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            check=False,
+            cwd=python_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            f"compatibility subprocess failed:\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ from math import sin
 class CoordinatePlotting(Scene):
     def construct(self):
         axes = Axes(
-            [0, 10, 2], [-1.5, 1.5, 0.5], x_length=10, y_length=4,
+            [0, 10, 2], [-1.5, 1.5, 0.5], x_length=10, y_length=4, tips=False,
         )
         curve = axes.plot(lambda t: sin(0.8 * t), [0, 10, 0.05], color=BLUE)
         samples = [

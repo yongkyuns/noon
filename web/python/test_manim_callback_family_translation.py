@@ -12,6 +12,65 @@ import test_manim_shared_family_paint as paint_fixture
 
 
 class CallbackFamilyTranslationTests(unittest.TestCase):
+    def test_layout_replace_reads_and_stages_the_complete_rust_projection(self):
+        context, row, second, family = paint_fixture.FamilyCallbackBatchTests().fixture()
+        source, target = Mock(), Mock()
+        source_anchor, target_anchor = Mock(), Mock()
+        bounds = {"min": {"x": 1.0, "y": 0.0}, "max": {"x": 3.0, "y": 2.0}}
+        context._frame_items[(11, 3)]["bounds"] = bounds
+        target_row = {"transform": second["transform"], "style": second["style"],
+                      "bounds": {"min": {"x": 5.0, "y": 0.0}, "max": {"x": 9.0, "y": 4.0}}}
+        context._read = Mock(return_value={"kind": "object", "object": {
+            **target_row, "node": {"slot": 21, "generation": 3}
+        }})
+        context._operations.callbackLayoutKeys = Mock(side_effect=[[11, 3], [21, 3]])
+        context._operations.callbackLayoutReplace = Mock(
+            return_value=[11, 3, 6.0, 0.0, 2.0, 1.0, 0.0, 1.0, 5.0, 1.0, 9.0, 3.0]
+        )
+        with patch("_manim_semantic_handles._layout_anchor",
+                   side_effect=lambda value: source_anchor if value is source else target_anchor):
+            context.replace_layout(source, target)
+        context._operations.callbackLayoutReplace.assert_called_once()
+        keys = context._operations.callbackLayoutReplace.call_args.args[3]
+        wire = context._operations.callbackLayoutReplace.call_args.args[4]
+        self.assertEqual(keys, [11, 3, 21, 3])
+        self.assertEqual(len(wire), 24)
+        self.assertEqual(row.transform.translation_x, 6.0)
+        self.assertEqual(row.bounds, (5.0, 1.0, 9.0, 3.0))
+        self.assertEqual(context.effective_batch()["writes"][-1]["kind"], "scale")
+
+    def test_layout_replace_rejection_does_not_publish_partial_rows_or_writes(self):
+        context, row, second, _ = paint_fixture.FamilyCallbackBatchTests().fixture()
+        before = copy.deepcopy(row)
+        source, target = Mock(), Mock()
+        context._operations.callbackLayoutKeys = Mock(side_effect=[[11, 3], [21, 3]])
+        context._read = Mock(return_value={"kind": "object", "object": {
+            **second, "node": {"slot": 21, "generation": 3}
+        }})
+        context._operations.callbackLayoutReplace = Mock(side_effect=ValueError("bad Rust bounds"))
+        with patch("_manim_semantic_handles._layout_anchor", side_effect=[Mock(), Mock()]):
+            with self.assertRaisesRegex(ValueError, "bad Rust bounds"):
+                context.replace_layout(source, target)
+        self.assertEqual(row, before)
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertNotIn((21, 3), context._rows)
+
+    def test_layout_replace_rejects_malformed_typed_result_before_staging(self):
+        context, row, second, _ = paint_fixture.FamilyCallbackBatchTests().fixture()
+        before = copy.deepcopy(row)
+        context._operations.callbackLayoutKeys = Mock(side_effect=[[11, 3], [21, 3]])
+        context._read = Mock(return_value={"kind": "object", "object": {
+            **second, "node": {"slot": 21, "generation": 3}
+        }})
+        context._operations.callbackLayoutReplace = Mock(
+            return_value=[11, 3, 6.0, 0.0, 2.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0]
+        )
+        with patch("_manim_semantic_handles._layout_anchor", side_effect=[Mock(), Mock()]):
+            with self.assertRaisesRegex(RuntimeError, "invalid typed layout row"):
+                context.replace_layout(Mock(), Mock())
+        self.assertEqual(row, before)
+        self.assertEqual(context.effective_batch()["writes"], [])
+
     def test_group_forwards_one_typed_handle_without_walking_wrapper_members(self):
         member = identity_only_wrapper(compat.Circle)
         member.shift = Mock()

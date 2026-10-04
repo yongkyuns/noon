@@ -1278,10 +1278,22 @@ Manim class name alone does not imply full ManimCE parity. `Mesh3D` provides
 indexed Surface, sphere, cube, prism, torus, cylinder, cone, line, and point
 profiles with Rust-owned geometry, transforms, resources, and rendering.
 Compatibility constructors preserve pinned Manim defaults in their signatures
-and reject unsupported defaults/options (including Cairo checkerboards,
-per-face strokes/shading, non-opaque mesh fills, partial sweeps, and unsupported
-primitive orientations) instead of silently substituting a different result.
-Only explicitly admitted opaque/unshaded profiles are in scope.
+and reject unsupported defaults/options (including Cairo shading, partially
+transparent solids, partial sweeps, and unsupported primitive orientations)
+instead of silently substituting a different result. The opaque indexed-mesh
+profile remains available without cell-family overhead.
+
+Sampled `Surface` cell families retain UV roles on ordinary semantic mesh
+objects. Checkerboard color and opacity changes use one checked owner-routed
+transaction; family transforms reuse the shared world-affine operation.
+The Python adapter requires `shade_in_3d=False`; Noon point lighting is a
+separate explicit `point_lit` option. Surface borders derive immutable exterior
+triangle edges once, omit triangulation diagonals, and use GPU screen-space
+extrusion during camera movement. Translucency is admitted only for individual
+triangle or canonical quad cells. Opaque world geometry populates depth first;
+translucent cells blend in camera-depth order, with authored painter order
+breaking ties. General intersecting transparent solids and exact Cairo shading
+remain outside this profile.
 
 Spatial `get_center()` and default affine pivots share Rust's bounds convention:
 the world bounds of the retained local AABB. They read the current effective pose
@@ -1292,15 +1304,35 @@ use resource bounds metadata rather than traversing mesh vertices.
 
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
 publication/runtime. Camera profile tracks update the effective pose and
-projection together; ambient camera motion is authored camera state, while
-ordinary object animation remains on the common timeline. Ambient intervals
+projection together; ambient and 3D-illusion camera motion are authored camera
+state, while ordinary object animation remains on the common timeline.
+Illusion motion evaluates the pinned sine/cosine orientation analytically
+without host callbacks. Camera-motion intervals
 are sampled analytically from authored time and share the existing camera-profile
 scheduler channel. Overlapping finite camera moves and ambient ownership are
 rejected; stopping closes the interval at the exact effective endpoint. Ordinary
 authored edits require a completed animation segment, and zero-rate ambient
 intervals do not keep settled playback awake. Each camera admits at most 256
-ambient intervals; further begins fail before publication. Replay budgets count
+camera-motion intervals; further begins fail before publication. Replay budgets count
 both saved and incoming motion metadata, including the payload exchanged on seek. Direct seeking and forward playback are required to produce the same effective spatial state.
+`MoveAlongPath` captures a static retained path and target bounds-center offset
+at activation, then uses the ordinary Position timeline channel. Path length
+sampling plans are derived once, shared across equivalent snapshots, rebuilt
+before changed-track evaluation, and retired with their tracks. Replay retains
+immutable path snapshots and charges their complexity against its budget.
+Unsupported simultaneous path drivers fail before publication.
+
+`UpdateFromFunc` registers a host callback over a compiler-scheduled finite
+composition interval. It reuses the existing callback phase barrier; nested
+timing does not create a second host scheduler. Its final callback runs once at
+the exact interval endpoint, then the registration retires; an ordinary updater
+still uses a half-open activation interval. Revising another registration at
+that endpoint cannot reactivate the finished callback. Callback layout replacement
+stages all affected transforms and bounds before publication, validates store
+and revision ownership, and uses typed bulk rows for same-context WASM calls.
+Reverse Transform timing supports the checked `smooth(1-t)` pop-out profile;
+Create/Uncreate retains its existing reveal and easing semantics.
+
 World, FixedOrientation, and FixedFrame composition are represented as
 semantic domains on ordinary objects/families. World mesh/path content uses
 depth; FixedOrientation currently supports retained path and vector text with

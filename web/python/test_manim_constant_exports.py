@@ -49,6 +49,11 @@ class ManimConstantExportTests(unittest.TestCase):
             group = namespace["AnimationGroup"](wait)
             assert wait.run_time == 0.25 and group.animations == [wait]
             assert wait.rate_func is group.rate_func is namespace["linear"]
+            target = object.__new__(namespace["Mobject"])
+            callback = lambda mobject: None
+            update = namespace["UpdateFromFunc"](target, callback, run_time=0.75)
+            assert update.mobject is target and update.update_function is callback
+            assert update.anim_args["run_time"] == 0.75
             assert namespace["smooth"](0.5) == 0.5
             """
         )

@@ -21,6 +21,8 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
+      - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/special-camera-qualification.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -40,6 +42,8 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
+      - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/special-camera-qualification.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -89,6 +93,7 @@ jobs:
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
       - name: Upload browser runtime assets
         uses: actions/upload-artifact@v7
@@ -203,6 +208,15 @@ jobs:
         env:
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
         run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Qualify mobile camera callbacks without JSPI
+        if: matrix.browser == 'webkit'
+        timeout-minutes: 5
+        env:
+          NOON_CAMERA_BROWSER: webkit
+          NOON_CAMERA_NO_JSPI: "1"
+          NOON_PAIRED_CASES: following_graph_camera-1.5,moving_zoomed_scene_around-9.5
+          NOON_CAMERA_ARTIFACTS: browser-smoke-artifacts/playground-matrix/webkit-mobile-dpr2/special-camera
+        run: node scripts/special-camera-qualification.mjs
       - name: Upload playground diagnostics
         if: always()
         uses: actions/upload-artifact@v7
