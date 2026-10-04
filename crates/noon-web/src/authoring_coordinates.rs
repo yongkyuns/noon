@@ -741,3 +741,16 @@ pub async fn create_area_helpers_renderer(
         noon::example_scenes::area_helpers::session().map_err(|error| JsValue::from_str(&error))?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createGraphQueriesRenderer)]
+pub async fn create_graph_queries_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::graph_queries::session()
+        .map_err(|error| JsValue::from_str(&error))?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

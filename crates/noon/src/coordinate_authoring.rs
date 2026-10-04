@@ -413,6 +413,33 @@ impl ManimAxes {
             .map_err(CoordinateAuthoringError::from)
     }
 
+    /// Evaluate an explicit scalar callable and map its result through this
+    /// axes' current authored frame. Like Manim's callable-backed graph query,
+    /// this reevaluates the function rather than interpolating retained vertices.
+    /// The callable belongs to the author; it is never retained by the runtime.
+    pub fn input_to_graph_point(
+        &self,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self.authored_frame()?.coords_to_point(input, ordinate)?)
+    }
+
+    /// The live counterpart of [`Self::input_to_graph_point`], observing both
+    /// shafts from the same effective publication after evaluating the callable.
+    pub fn effective_input_to_graph_point(
+        &self,
+        execution: &ExecutionSession,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self
+            .effective_frame(execution)?
+            .coords_to_point(input, ordinate)?)
+    }
+
     /// Construct a detached static y=f(x) path in this axes' semantic store.
     ///
     /// The authored coordinate frame is captured once before the callback runs,

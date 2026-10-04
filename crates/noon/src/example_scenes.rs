@@ -23,6 +23,7 @@ pub mod family_replacement;
 pub mod family_transform_indicate;
 pub mod foreground_matching;
 pub mod foreground_membership;
+pub mod graph_queries;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;

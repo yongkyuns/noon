@@ -223,6 +223,40 @@ fn mapped_curves_share_the_coordinate_snapshot_and_data_order() {
 }
 
 #[test]
+fn graph_input_queries_evaluate_once_before_capturing_current_axes() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes
+        .plot(|x| x * x, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    let content = graph.state().unwrap().content;
+    assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
+    let calls = std::cell::Cell::new(0);
+    let point = axes
+        .input_to_graph_point(0.5, |x| {
+            calls.set(calls.get() + 1);
+            axes.family().shift(2.0, 1.0).unwrap();
+            x * x
+        })
+        .unwrap();
+    near(point, [2.5, 1.25]);
+    assert_eq!(calls.get(), 1);
+    // Queries use the current axes; they do not resample the retained curve.
+    assert_eq!(graph.state().unwrap().content, content);
+    assert_eq!(graph.path_query().unwrap().start().unwrap(), (-1.0, 1.0));
+    let revision = scene.revision();
+    let resource_count = resources(&scene);
+    near(
+        axes.input_to_graph_point(-0.5, |x| x * x).unwrap(),
+        [1.5, 1.25],
+    );
+    assert!(axes.input_to_graph_point(0.0, |_| f64::NAN).is_err());
+    assert!(axes.input_to_graph_point(f64::INFINITY, |_| 0.0).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), resource_count);
+}
+
+#[test]
 fn axes_plot_creates_one_detached_object_in_the_axes_store() {
     let mut scene = Scene::new();
     let axes = scene.axes(&axes_options()).unwrap();
@@ -378,6 +412,34 @@ fn effective_axis_queries_follow_active_drivers_without_semantic_churn() {
             .unwrap(),
         [2.0, 4.0],
     );
+}
+
+#[test]
+fn graph_input_queries_choose_authored_or_effective_axes_without_publication() {
+    let (axes, mut program) = moving_axes();
+    program.resume().unwrap();
+    program
+        .drive_to(&mut RustHostCallbackTable::new(), 0.5)
+        .unwrap();
+    let store = axes.family().integration_store();
+    let revision = store.borrow().scene_revision();
+    let resource_count = store.borrow().geometry_resources().len();
+    near(
+        axes.input_to_graph_point(0.5, |x| x * x).unwrap(),
+        [0.5, 0.25],
+    );
+    let calls = std::cell::Cell::new(0);
+    near(
+        axes.effective_input_to_graph_point(program.session(), 0.5, |x| {
+            calls.set(calls.get() + 1);
+            x * x
+        })
+        .unwrap(),
+        [1.5, 2.25],
+    );
+    assert_eq!(calls.get(), 1);
+    assert_eq!(store.borrow().scene_revision(), revision);
+    assert_eq!(store.borrow().geometry_resources().len(), resource_count);
 }
 
 #[test]
