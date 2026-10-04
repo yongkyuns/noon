@@ -3144,13 +3144,68 @@ impl TryFrom<CallbackTokenWire> for CallbackPhaseToken {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackPhaseObjectWire {
     node: CallbackNodeWire,
+    #[serde(serialize_with = "serialize_callback_transform")]
     transform: Transform2D,
     style: Style,
     appearance: f32,
     presence: bool,
     reveal: f32,
     morph: f32,
+    #[serde(serialize_with = "serialize_callback_bounds")]
     bounds: Option<Rect>,
+}
+
+// JSON is a genuine worker boundary here. Python reads its numbers as f64;
+// preserve the exact runtime f32 values rather than their shorter f32 decimal
+// representation before callback arithmetic promotes them to f64.
+fn serialize_callback_transform<S: serde::Serializer>(
+    transform: &Transform2D,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct TransformWire {
+        translation: CallbackPointWire,
+        scale: CallbackPointWire,
+        rotation: f64,
+    }
+    TransformWire {
+        translation: transform.translation.into(),
+        scale: transform.scale.into(),
+        rotation: f64::from(transform.rotation),
+    }
+    .serialize(serializer)
+}
+
+fn serialize_callback_bounds<S: serde::Serializer>(
+    bounds: &Option<Rect>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct BoundsWire {
+        min: CallbackPointWire,
+        max: CallbackPointWire,
+    }
+    bounds
+        .map(|bounds| BoundsWire {
+            min: bounds.min.into(),
+            max: bounds.max.into(),
+        })
+        .serialize(serializer)
+}
+
+#[derive(Serialize)]
+struct CallbackPointWire {
+    x: f64,
+    y: f64,
+}
+
+impl From<Vec2> for CallbackPointWire {
+    fn from(point: Vec2) -> Self {
+        Self {
+            x: f64::from(point.x),
+            y: f64::from(point.y),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

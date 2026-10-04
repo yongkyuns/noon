@@ -1079,7 +1079,7 @@ def _semantic_member_index(index):
     return index
 
 
-def _layout_reference_handle(value):
+def _layout_reference_handle(value, callback_context=None):
     """Borrow typed identity for placement without granting raw geometry access."""
     handle = getattr(value, "_semantic_handle", None)
     if handle is None or not hasattr(handle, "layoutAnchor"):
@@ -1087,20 +1087,25 @@ def _layout_reference_handle(value):
     if not bool(getattr(value, "_semantic_handle_fresh", False)):
         return None
     from _manim_updaters import _canonical_phase_context
-    if _canonical_phase_context(value) is not None:
+    active_context = _canonical_phase_context(value)
+    if active_context is not None and active_context is not callback_context:
         raise NotImplementedError("layout placement is unsupported during an active callback phase")
+    if (callback_context is not None
+            and getattr(value, "_scene", None) is not callback_context._scene):
+        raise RuntimeError("callback layout anchors must belong to the active Scene")
     return handle
 
 
-def _layout_anchor(value, index=None):
+def _layout_anchor(value, index=None, *, callback_context=None):
     if isinstance(value, _compat.Group):
         handle = getattr(value, "_semantic_family_handle", None)
         if handle is None or not hasattr(handle, "layoutAnchor"):
             return None
-        if any(_layout_reference_handle(leaf) is None for leaf in _compat._leaf_mobjects(value)):
+        if any(_layout_reference_handle(leaf, callback_context) is None
+               for leaf in _compat._leaf_mobjects(value)):
             return None
     else:
-        handle = _layout_reference_handle(value)
+        handle = _layout_reference_handle(value, callback_context)
     if handle is None:
         return None
     return engine_call(handle.layoutAnchor, _semantic_member_index(index))

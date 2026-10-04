@@ -1330,6 +1330,9 @@ still uses a half-open activation interval. Revising another registration at
 that endpoint cannot reactivate the finished callback. Callback layout replacement
 stages all affected transforms and bounds before publication, validates store
 and revision ownership, and uses typed bulk rows for same-context WASM calls.
+Removing the last active planar updater reconciles its current callback-owned
+affine channels through the ordinary authored transaction. Explicit writes in
+that transaction retain ownership; unrelated active updaters are not reconciled.
 Reverse Transform timing supports the checked `smooth(1-t)` pop-out profile;
 Create/Uncreate retains its existing reveal and easing semantics.
 

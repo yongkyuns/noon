@@ -5,8 +5,10 @@ use noon_compile::{
     SemanticOrderedUpdater,
 };
 use noon_core::{
-    HostCallbackId, ObjectContentRef, Property, PublicationContext, ReactiveValue, Rect,
-    SemanticNodeId, SemanticObjectProperty, Style, Transform2D,
+    HostCallbackId, ObjectContentRef, PreparedSemanticMutationTransaction, Property,
+    PublicationContext, ReactiveValue, Rect, SemanticMutation, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectRole, SemanticOrientation, SemanticSignalValue,
+    SemanticVec3, Style, Transform2D,
 };
 use noon_runtime::{
     EffectiveContentError, EffectiveContentLease, EffectiveObjectProperties,
@@ -1108,6 +1110,135 @@ impl ExecutionSession {
                     .ok_or(ExecutionSessionCallbackReadError::UnknownObject(semantic))
             }
         }
+    }
+
+    /// Prepare callback-owned affine values released by updater edits at the
+    /// frame that owns the callback receipt. The prepared semantic transaction
+    /// remains the authority for final updater membership and close semantics.
+    pub(super) fn released_callback_affine_mutations(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> Result<
+        Vec<(SemanticNodeId, SemanticObjectProperty, SemanticSignalValue)>,
+        super::ExecutionSessionPublicationError,
+    > {
+        if self.last_callback_receipt.is_none() {
+            return Ok(Vec::new());
+        }
+        let now = self.frame().time;
+        let store = prepared.store();
+        let targets = prepared
+            .candidate_mutations()
+            .filter_map(|mutation| match mutation {
+                SemanticMutation::RemoveUpdater {
+                    target,
+                    inactive_from,
+                    ..
+                }
+                | SemanticMutation::ClearUpdaters {
+                    target,
+                    inactive_from,
+                } if *inactive_from <= now => target.existing(),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut staged = Vec::new();
+        for target in targets {
+            if prepared.node_is_removed(target) {
+                continue;
+            }
+            let Some(registrations) = prepared.proposed_updater_registrations(target) else {
+                continue;
+            };
+            if registrations
+                .iter()
+                .any(|updater| updater.is_active_at(now))
+            {
+                continue;
+            }
+            let Some(domains) = self
+                .last_callback_receipt
+                .as_ref()
+                .and_then(|receipt| receipt.domains_at(target, now, self.publication_context()))
+            else {
+                continue;
+            };
+            let state = store
+                .semantic_object_state_checked(target)
+                .map_err(|_| super::ExecutionSessionPublicationError::UnknownObject(target))?;
+            if !matches!(
+                state.role(),
+                SemanticObjectRole::Ordinary | SemanticObjectRole::Camera2D
+            ) || !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
+            {
+                continue;
+            }
+            let authored = state.transform;
+            let effective = self
+                .effective_semantic_object(store, target)?
+                .object
+                .transform;
+            let explicitly_authored =
+                prepared
+                    .mutations()
+                    .iter()
+                    .fold(0, |domains, mutation| match mutation {
+                        SemanticMutation::SetObjectTransform { object, .. }
+                            if object.existing() == Some(target) =>
+                        {
+                            domains | CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
+                        }
+                        SemanticMutation::SetProperty {
+                            object, property, ..
+                        } if object.existing() == Some(target) => {
+                            domains
+                                | match property {
+                                    SemanticObjectProperty::Translation => CALLBACK_TRANSLATION,
+                                    SemanticObjectProperty::RotationZ => CALLBACK_ROTATION,
+                                    SemanticObjectProperty::Scale => CALLBACK_SCALE,
+                                    _ => 0,
+                                }
+                        }
+                        _ => domains,
+                    });
+            let domains = domains
+                & (CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE)
+                & !explicitly_authored;
+            if domains == 0 {
+                continue;
+            }
+            if domains & CALLBACK_TRANSLATION != 0 {
+                staged.push((
+                    target,
+                    SemanticObjectProperty::Translation,
+                    SemanticSignalValue::Vec3(SemanticVec3::new(
+                        f64::from(effective.translation.x),
+                        f64::from(effective.translation.y),
+                        authored.translation.z,
+                    )),
+                ));
+            }
+            if domains & CALLBACK_SCALE != 0 {
+                staged.push((
+                    target,
+                    SemanticObjectProperty::Scale,
+                    SemanticSignalValue::Vec3(SemanticVec3::new(
+                        f64::from(effective.scale.x),
+                        f64::from(effective.scale.y),
+                        authored.scale.z,
+                    )),
+                ));
+            }
+            if domains & CALLBACK_ROTATION != 0 {
+                staged.push((
+                    target,
+                    SemanticObjectProperty::RotationZ,
+                    SemanticSignalValue::Scalar(f64::from(effective.rotation)),
+                ));
+            }
+        }
+
+        Ok(staged)
     }
 
     pub(crate) fn callback_progression_is_coherent_at(&self, time: f64) -> bool {

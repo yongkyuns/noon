@@ -1000,8 +1000,8 @@ class _CanonicalCallbackContext:
         from _manim_semantic_handles import _layout_anchor
         from _noon_errors import engine_call
 
-        source_anchor = _layout_anchor(source)
-        target_anchor = _layout_anchor(target)
+        source_anchor = _layout_anchor(source, callback_context=self)
+        target_anchor = _layout_anchor(target, callback_context=self)
         if source_anchor is None or target_anchor is None:
             raise RuntimeError("callback replace requires typed shared layout anchors")
         revision = str(self.token["publication"]["scene_revision"])

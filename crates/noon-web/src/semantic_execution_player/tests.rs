@@ -2954,6 +2954,46 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
 }
 
 #[test]
+fn callback_wire_preserves_exact_runtime_numbers_for_f64_host_arithmetic() {
+    let row = CallbackPhaseObjectWire {
+        node: SemanticNodeId::new(1, 0).into(),
+        transform: Transform2D {
+            translation: Vec2::new(1.1, -2.3),
+            scale: Vec2::new(0.7, 1.3),
+            rotation: 0.37,
+        },
+        style: Style::default(),
+        appearance: 1.0,
+        presence: true,
+        reveal: 1.0,
+        morph: 0.0,
+        bounds: Some(Rect::new(
+            Vec2::new(-3.3238623, -5.0),
+            Vec2::new(3.7872488, -1.0),
+        )),
+    };
+    let encoded = serde_json::to_string(&row).unwrap();
+    let read: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    for (path, expected) in [
+        ("/transform/translation/x", row.transform.translation.x),
+        ("/transform/translation/y", row.transform.translation.y),
+        ("/transform/scale/x", row.transform.scale.x),
+        ("/transform/scale/y", row.transform.scale.y),
+        ("/transform/rotation", row.transform.rotation),
+        ("/bounds/min/x", row.bounds.unwrap().min.x),
+        ("/bounds/min/y", row.bounds.unwrap().min.y),
+        ("/bounds/max/x", row.bounds.unwrap().max.x),
+        ("/bounds/max/y", row.bounds.unwrap().max.y),
+    ] {
+        assert_eq!(
+            read.pointer(path).unwrap().as_f64(),
+            Some(f64::from(expected)),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(1.0).unwrap();

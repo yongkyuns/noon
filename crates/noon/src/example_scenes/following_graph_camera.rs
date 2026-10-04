@@ -40,6 +40,9 @@ impl LiveContinuation for FollowingGraphCamera {
                 .map_err(|error| error.to_string())
             }
             1 => {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_updater(self.frame.node_id(), FOLLOW_CAMERA, FOLLOW_START, None);
+                live.apply(transaction).map_err(|error| error.to_string())?;
                 self.stage = 2;
                 live.declare_and_activate_move_along_path(
                     &self.moving_dot,
@@ -173,20 +176,6 @@ pub fn program() -> Result<(LiveProgram<FollowingGraphCamera>, RustHostCallbackT
                 .map_err(std::io::Error::other)
         })
         .map_err(|error| error.to_string())?;
-    {
-        let store = scene.integration_store();
-        let mut store = store.borrow_mut();
-        callbacks
-            .add_updater(
-                &mut store,
-                frame.node_id(),
-                FOLLOW_CAMERA,
-                FOLLOW_START,
-                None,
-            )
-            .map_err(|error| error.to_string())?;
-    }
-
     let program = scene
         .into_live_program(FollowingGraphCamera {
             frame,
@@ -219,12 +208,15 @@ mod tests {
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
+        assert!(!program.session().has_required_callbacks());
         let at_zoom_endpoint = program.drive_to(&mut callbacks, FOLLOW_START).unwrap();
         admit_pending(&mut program, at_zoom_endpoint);
+        assert!(!program.session().has_required_callbacks());
         assert!(matches!(
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
+        assert!(program.session().has_required_callbacks());
 
         program.drive_to(&mut callbacks, 1.5).unwrap();
         let following = program.session().camera().unwrap();
@@ -236,10 +228,16 @@ mod tests {
 
         let at_path_endpoint = program.drive_to(&mut callbacks, FOLLOW_END).unwrap();
         admit_pending(&mut program, at_path_endpoint);
+        let endpoint_camera = program.session().camera().unwrap();
         assert!(matches!(
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
+        assert_eq!(
+            program.session().camera().unwrap(),
+            endpoint_camera,
+            "removing the updater and starting Restore must keep the path endpoint pose"
+        );
         let restored = program.drive_to(&mut callbacks, 3.0).unwrap();
         admit_pending(&mut program, restored);
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);

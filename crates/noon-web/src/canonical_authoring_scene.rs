@@ -13144,7 +13144,15 @@ mod tests {
         };
         cold.stop_3dillusion_camera_rotation(&camera).unwrap();
         let cold_state = camera.state().unwrap();
-        assert_eq!(cold_state.camera_profile(), Some(cold_endpoint));
+        let actual_endpoint = cold_state.camera_profile().unwrap();
+        assert!((actual_endpoint.phi - cold_endpoint.phi).abs() < 1.0e-12);
+        assert_eq!(
+            noon_core::ManimCamera3DProfile {
+                phi: cold_endpoint.phi,
+                ..actual_endpoint
+            },
+            cold_endpoint
+        );
         assert_eq!(
             cold_state.camera_motions()[0].end(),
             Some(std::f64::consts::FRAC_PI_2)
@@ -13228,7 +13236,7 @@ mod tests {
                     ..expected
                 })
             );
-            assert_eq!(effective.fill_opacity(), 0.6);
+            assert_eq!(effective.fill_opacity(), f64::from(0.6_f32));
         }
 
         let authored_revision = store.borrow().scene_revision();
@@ -13244,7 +13252,11 @@ mod tests {
     #[test]
     fn ordinary_sequence_admits_move_path_and_finite_callback_interval() {
         let mut context = CanonicalAuthoringScene::default();
-        let target = context.scene.circle(0.25).unwrap();
+        let camera = context.create_camera_frame(ObjectId::new(45)).unwrap();
+        let target = context
+            .scene
+            .geometry(noon::ManimGeometryOptions::dot(0.0, 0.0, 0.25).unwrap())
+            .unwrap();
         let path = context
             .scene
             .path(
@@ -13256,7 +13268,7 @@ mod tests {
             .unwrap();
         context.bind_mobject(ObjectId::new(43), &target).unwrap();
         context.bind_mobject(ObjectId::new(44), &path).unwrap();
-        let callback = HostCallbackId::new(45);
+        let callback = HostCallbackId::new(46);
 
         let children = [
             OrdinaryCompositionChild::MoveAlongPath {
@@ -13267,7 +13279,7 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             },
             OrdinaryCompositionChild::CallbackInterval {
-                target,
+                target: camera,
                 callback,
                 options: AnimationOptions::new().run_time(0.6),
             },
