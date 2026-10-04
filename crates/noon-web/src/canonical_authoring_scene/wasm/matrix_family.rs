@@ -18,10 +18,6 @@ impl CanonicalAuthoringSceneContext {
         about_y: f64,
     ) -> Result<(), JsValue> {
         let family = handle.semantic_family()?;
-        handle.id_in_store(
-            self.inner.scene.integration_store(),
-            "live execution context",
-        )?;
         self.inner
             .active_live_player()
             .map_err(js_error)?

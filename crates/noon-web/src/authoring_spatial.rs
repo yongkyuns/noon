@@ -172,7 +172,9 @@ impl WasmMeshOptions {
                 "polyhedron inputs require triples",
             ));
         }
-        if vertices.len() > noon::MAX_SURFACE_VERTICES || faces.len() > noon::MAX_SURFACE_CELLS {
+        if vertices.len() > noon_geometry::MAX_SURFACE_VERTICES
+            || faces.len() > noon_geometry::MAX_SURFACE_CELLS
+        {
             return Err(invalid(
                 "spatial.invalid_mesh",
                 "polyhedron exceeds the bounded mesh size",

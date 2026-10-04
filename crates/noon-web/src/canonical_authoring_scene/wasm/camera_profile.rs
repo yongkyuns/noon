@@ -1,6 +1,6 @@
 //! WASM facade for typed Manim finite-perspective camera profiles.
 
-use super::WasmAnimationCompositionBuilder;
+use super::{CanonicalAuthoringSceneContext, WasmAnimationCompositionBuilder};
 use crate::{authoring_error::js_error, WasmAuthoringMobjectHandle};
 use noon_core::{ManimCamera3DProfile, SemanticVec3};
 use wasm_bindgen::prelude::*;
@@ -46,7 +46,7 @@ fn profile_values(profile: ManimCamera3DProfile) -> Vec<f64> {
 }
 
 #[wasm_bindgen]
-impl super::CanonicalAuthoringSceneContext {
+impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = createCamera3DProfile)]
     pub fn create_camera_3d_profile(
         &mut self,

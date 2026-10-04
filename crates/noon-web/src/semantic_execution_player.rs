@@ -1578,6 +1578,21 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_apply_matrix_to_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.apply_matrix_to_family(family, values, rows, columns, about_x, about_y)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale(
         &mut self,
         mobject: &noon::Mobject,

@@ -513,7 +513,8 @@ impl WasmAuthoringArrowHandle {
                 &values,
                 rows as usize,
                 columns as usize,
-                (about_x, about_y),
+                about_x,
+                about_y,
             )
             .map_err(js_error)?;
         let result = js_sys::Array::new();
