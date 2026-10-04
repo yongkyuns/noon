@@ -8,6 +8,13 @@ It does **not** define a second architecture, roadmap, goal set, acceptance crit
 
 The purpose of this document is only to expose safe concurrency inside the existing Phase D plan and to separate the future JS/TypeScript frontend lane from the 3D capability lane.
 
+The bounded D1–D5 profiles are implemented by #1865, #1866, and #1867. Their
+qualification uses the shared native, direct-WASM, and worker paths; the camera,
+axes, surface, primitive, and vector-space raster pairs run on WebGPU and WebGL.
+The optional D6 facade remains tracked by #259. Full pinned gallery cases that
+require capabilities outside these profiles remain explicit follow-ups in #254;
+the inventory below distinguishes them from the qualified representative scenes.
+
 ## Principle
 
 The existing D1 -> D2 -> D3 -> D4 -> D5 capability progression remains authoritative. Parallelism exists inside and beside that progression; it does not erase the stated readiness gates.
@@ -194,13 +201,13 @@ qualified here; browser and cross-backend gates must be recorded separately.
 
 | Required pinned case | Current representative implementation/evidence | Owner and status |
 |---|---|---|
-| `FollowingGraphCamera` | Existing 2D moving-camera coverage (`manim-moving-camera-center`); no exact FollowingGraphCamera source pairing is listed. | B6/#89; exact pinned case deferred. |
-| `MovingZoomedSceneAround` | `noon-zoomed-scene` is a narrower ZoomedCamera candidate in `manim_compatibility_manifest.json`; it is not the pinned moving zoomed-scene composition. | B6/#89; full case deferred pending its text/image/compositing dependencies. |
-| `FixedInFrameMObjectTest` | `showcase-spatial-scene` and `noon_spatial_camera_labels.py` cover a HUD label during camera motion; paired Rust/direct-WASM spatial fixtures exist. | D4/#956; implementation slice represented, exact pinned-case browser/raster qualification pending. |
-| `ThreeDLightSourcePosition` | `noon_spatial_surface_lighting.py` and `showcase-spatial-scene` cover a point-lit surface with a moving point light. | D3/#956; bounded implementation represented, exact pinned-case parity and browser qualification pending. |
-| `ThreeDCameraRotation` | `noon_spatial_three_d_axes.py` and `showcase-spatial-scene` contain finite camera-profile moves. | D4/#956; representative implementation exists, exact pinned-case parity and browser qualification pending. |
-| `ThreeDCameraIllusionRotation` | Ordinary authored-time ambient rotation has native/runtime tests and Python APIs. Manim's separate oscillating illusion-rotation helper has no supported implementation or paired fixture. | D4/#956; illusion rotation is explicitly outside the bounded profile; exact case deferred. |
-| `ThreeDSurfacePlot` | `noon_spatial_surface.py`, `noon_spatial_surface_lighting.py`, and `showcase-spatial-scene` cover bounded indexed surfaces. | D2/D3/#699/#956; narrow surface behavior represented, exact pinned plot parity and browser qualification pending. |
+| `FollowingGraphCamera` | Existing 2D moving-camera coverage (`manim-moving-camera-center`); no exact FollowingGraphCamera source pairing is listed. | #254 follow-up, B6/#89 capability owner; exact pinned case deferred. |
+| `MovingZoomedSceneAround` | `noon-zoomed-scene` is a narrower ZoomedCamera candidate in `manim_compatibility_manifest.json`; it is not the pinned moving zoomed-scene composition. | #254 follow-up, B6/#89 capability owner; full case deferred pending its text/image/compositing dependencies. |
+| `FixedInFrameMObjectTest` | `spatial-camera-labels-direct`/`worker` qualify fixed-frame and fixed-orientation composition during camera motion on WebGPU/WebGL, including numeric domains, HUD pixels, seek, and sample cadence. The showcase exposes the same operation. | #254 follow-up, D4 owner; exact pinned case deferred because its default ThreeDAxes includes Cairo axis pieces/shading outside the bounded profile. |
+| `ThreeDLightSourcePosition` | `noon_spatial_surface_lighting.py` and `showcase-spatial-scene` exercise the shared point-lit material and moving light, with retained-resource and GPU/GL evidence from #1866. | #254 follow-up, D3 owner; exact case deferred for its checkerboard Surface, per-face appearance, and Cairo light-source semantics. Native point-lit material is an explicit separate profile. |
+| `ThreeDCameraRotation` | The paired camera/axes fixtures qualify finite effective camera motion, while native/runtime tests and the browser compatibility smoke cover authored ambient start/stop and endpoint ownership. | #254 follow-up, D4 owner; exact pinned case deferred for default Cairo-shaded ThreeDAxes. Ambient motion itself is implemented and qualified. |
+| `ThreeDCameraIllusionRotation` | Ordinary authored-time ambient rotation has native/runtime tests and Python APIs. Manim's separate oscillating illusion-rotation helper has no supported implementation or paired fixture. | #254 follow-up, D4 owner; illusion rotation is intentionally outside the bounded profile and explicitly deferred. |
+| `ThreeDSurfacePlot` | `spatial-surface-direct`/`worker` qualify a source-equivalent bounded indexed surface on WebGPU/WebGL with exact sparse/dense playback; the lit surface and showcase reuse the same mesh lane. | #254 follow-up, D2/D3 owner; exact pinned plot deferred for checkerboard/per-face strokes/shading outside the bounded profile. |
 
 Keep the full pinned examples as required evidence even where a narrower
 representative fixture already exercises the underlying semantic operation.
