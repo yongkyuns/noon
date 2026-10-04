@@ -46,6 +46,8 @@ mod tests {
         let target = live
             .create_manim_arrow(ManimArrowOptions::arrow(0.0, 0.0, 2.0, 0.0).unwrap())
             .unwrap();
+        let from_width = live.effective(arrow.shaft()).unwrap().style.stroke_width;
+        let to_width = live.effective(target.shaft()).unwrap().style.stroke_width;
         let segment = live
             .declare_and_activate_family_transform_to(
                 arrow.family(),
@@ -53,10 +55,17 @@ mod tests {
                 AnimationOptions::new().run_time(0.25),
             )
             .unwrap();
+        live.advance_segment_to(segment, segment.start_time() + 0.5 * segment.duration())
+            .unwrap();
+        let halfway_width = live.effective(arrow.shaft()).unwrap().style.stroke_width;
+        assert!((halfway_width - (from_width + to_width) * 0.5).abs() < 1.0e-5);
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();
-        assert!(live.effective(arrow.shaft()).is_ok());
+        assert_eq!(
+            live.effective(arrow.shaft()).unwrap().style.stroke_width,
+            to_width
+        );
     }
 
     #[test]
@@ -73,10 +82,12 @@ mod tests {
             .member_count();
 
         let node_count = scene.integration_store().borrow().len();
-        let mut options = ManimArrowOptions::arrow(0.0, 0.0, 1.0, 0.0).unwrap();
-        options.set_tip_length(f64::MAX).unwrap();
+        let coordinate = f64::from(f32::MAX) * 0.9;
+        let mut options = ManimArrowOptions::arrow(coordinate, 0.0, coordinate, 1.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        options.set_tip_length(f64::from(f32::MAX)).unwrap();
         options
-            .set_max_tip_length_to_length_ratio(f64::MAX)
+            .set_max_tip_length_to_length_ratio(f64::from(f32::MAX))
             .unwrap();
         assert!(live.create_manim_arrow(options).is_err());
         assert_eq!(scene.revision(), revision);
