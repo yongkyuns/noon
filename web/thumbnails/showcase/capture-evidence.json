@@ -1,30 +1,30 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "fc33e641914034b36f6ce890b3ffd9fdf84d4004",
+  "captureRevision": "17bb2c2e9dcf93d5263c4893f7cb7958c9bad009",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "fc33e641914034b36f6ce890b3ffd9fdf84d4004",
+    "sourceRevision": "17bb2c2e9dcf93d5263c4893f7cb7958c9bad009",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "5c561bd132969b9770072c59d214fc76dc7276370954caf3888e59434565fb36"
+        "sha256": "88bc968f5ba82433cb2fa54b7620d414b4afcc69184e3a57eaa7dc914d6573d4"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "90b0b62eaf117de75d091ae988fd7f3f9c61be6dc322c5f05fc2a2e27c74863b"
+        "sha256": "209c4aeb8bb3986881e2516c76b6090a6f9e9caca22a821b92a2b3f07cae8292"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "b2518f5606bdf511fe5091183db296b7a9cae0adbd8b4700ac7d887e84bede1a"
+        "sha256": "e954f3cbd9f31090290b4fb8dd0d86b174674181577ec160e7f0de78fc3daf92"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "63fedabf3b15cee5e31a5f55b8c321edbf3b91c02d62e4cb6847302a928e565a"
+    "buildId": "ba184692a7077d59faf1d7b49c494e8e56872cd3435743e3f3cfd8cb5bb949a5"
   },
   "posters": [
     {
@@ -362,9 +362,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 40359,
-        "pngSha256": "8cfcfc4370a2cc56175f2254f96dd5bd44d0e2fd0c8714fa6b83a04c65bafd25",
-        "pixelSha256": "60206b49a8257325678cd30af341aa717c7515289d6fa3007400f633436d5f50"
+        "foregroundPixels": 40020,
+        "pngSha256": "91eb0bee89d314fcd47ae164b8cad04975ed20899261c71db54f8c10e709e2a7",
+        "pixelSha256": "3a0f93c15041ef5ab57dfbae004956e7093c043020dd61af385ba05ebdc052b8"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -393,19 +393,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 17,
-            "lastDeltaApplyMs": 1.100000023841858,
-            "lastRendererCallMs": 2.899999976158142,
+            "presentedFrames": 29,
+            "lastDeltaApplyMs": 0.8999999761581421,
+            "lastRendererCallMs": 2.399999976158142,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 8840,
-            "performanceTimeOriginMs": 1791083829557.9,
-            "rendererReadyAtMs": 5710.5,
-            "firstPresentedAtMs": 5829.400000095367,
+            "sampledAtMs": 7759.700000047684,
+            "performanceTimeOriginMs": 1791088801466,
+            "rendererReadyAtMs": 4825.200000047684,
+            "firstPresentedAtMs": 4935.800000071526,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 8457.400000095367,
+            "firstPresentedSessionAtMs": 7375.200000047684,
             "transitionMode": null,
-            "lastFrameTimestamp": 7823.600000023842,
+            "lastFrameTimestamp": 6886.200000047684,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -441,9 +441,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 40359,
-          "pngSha256": "8cfcfc4370a2cc56175f2254f96dd5bd44d0e2fd0c8714fa6b83a04c65bafd25",
-          "pixelSha256": "60206b49a8257325678cd30af341aa717c7515289d6fa3007400f633436d5f50"
+          "foregroundPixels": 40020,
+          "pngSha256": "91eb0bee89d314fcd47ae164b8cad04975ed20899261c71db54f8c10e709e2a7",
+          "pixelSha256": "3a0f93c15041ef5ab57dfbae004956e7093c043020dd61af385ba05ebdc052b8"
         },
         "restoredImage": {
           "width": 960,
@@ -461,9 +461,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 38811,
-        "pngSha256": "6102bb6da64b94a9078457606b6073cf86229bfeacb007d5e3dc8634157cc7d6",
-        "pixelSha256": "a0d22fa2dfa936026f42269ca96ccfbaf0dec176b7ade09f37b84d972f23687a"
+        "foregroundPixels": 39315,
+        "pngSha256": "db58b8f6bad795ccce0348b93bba2b9ee71cd8a963bdaf5af7fc745e3f32d738",
+        "pixelSha256": "a05b573e3954ca902db54044d54dd73f743fd9d414ca52922bd62b684a24bf87"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -495,19 +495,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 17,
-            "lastDeltaApplyMs": 0.2999999523162842,
-            "lastRendererCallMs": 1.9000000953674316,
+            "presentedFrames": 25,
+            "lastDeltaApplyMs": 0.3999999761581421,
+            "lastRendererCallMs": 1.7000000476837158,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 7383.700000047684,
-            "performanceTimeOriginMs": 1791083856464.6,
-            "rendererReadyAtMs": 4576.200000047684,
-            "firstPresentedAtMs": 4681.5,
+            "sampledAtMs": 6795.100000023842,
+            "performanceTimeOriginMs": 1791088823362.8,
+            "rendererReadyAtMs": 4204.700000047684,
+            "firstPresentedAtMs": 4306.300000071526,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 7360.399999976158,
+            "firstPresentedSessionAtMs": 6773.400000095367,
             "transitionMode": null,
-            "lastFrameTimestamp": 6649.600000023842,
+            "lastFrameTimestamp": 6254.800000071526,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -543,9 +543,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 38811,
-          "pngSha256": "6102bb6da64b94a9078457606b6073cf86229bfeacb007d5e3dc8634157cc7d6",
-          "pixelSha256": "a0d22fa2dfa936026f42269ca96ccfbaf0dec176b7ade09f37b84d972f23687a"
+          "foregroundPixels": 39315,
+          "pngSha256": "db58b8f6bad795ccce0348b93bba2b9ee71cd8a963bdaf5af7fc745e3f32d738",
+          "pixelSha256": "a05b573e3954ca902db54044d54dd73f743fd9d414ca52922bd62b684a24bf87"
         },
         "restoredImage": {
           "width": 960,
