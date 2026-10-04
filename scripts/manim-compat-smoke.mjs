@@ -45,8 +45,16 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
             Dot3D(point=(2.4, 0, 0), radius=0.08, resolution=(8, 8),
                   stroke_width=0, shade_in_3d=False),
         ]
+        meshes[0].rotate(PI / 2, axis=(0, 0, 1), about_point=(0, 0, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(meshes[0].get_center(), (0, -2.4, 0)))
+        meshes[0].rotate(-PI / 2, axis=(0, 0, 1), about_point=(0, 0, 0))
+        meshes[0].scale(1.2).scale(1 / 1.2)
         for index, mesh in enumerate(meshes[1:-1], start=1):
             mesh.move_to((index * 0.8 - 2.4, 0, 0))
+        for index, mesh in enumerate(meshes):
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), (index * 0.8 - 2.4, 0, 0))), (index, mesh.get_center())
         handles = [mesh._semantic_handle for mesh in meshes]
         assert all(handle is not None and handle is mesh._semantic_handle
                    for mesh, handle in zip(meshes, handles))
@@ -65,12 +73,32 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
         edited_camera = self._camera_endpoint()
         assert abs(edited_camera[1] - (stopped_camera[1] + 0.15)) < 1e-12
 
+        # Detached construction after a wait must query its authored mesh bounds;
+        # it has no effective runtime row until it joins the live scene.
+        line = Line3D(start=(3, 3, 2), end=(3, 3, 4), thickness=0.04,
+                      resolution=8, checkerboard_colors=False,
+                      stroke_width=0, shade_in_3d=False)
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(line.get_center(), (3, 3, 3)))
+        line.move_to((1, 2, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(line.get_center(), (1, 2, 0)))
+
         await self.play(
             WorldTransformTo(meshes[0], translation=(-1.8, 0.2, 0.1)),
+            WorldTransformTo(meshes[3], translation=(0.2, 0.1, 0.3)),
             run_time=0.25, rate_func=linear,
         )
         assert all(abs(actual - expected) < 1e-8
                    for actual, expected in zip(meshes[0].world_transform[:3], (-1.8, 0.2, 0.1)))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0.65)))
+        meshes[3].rotate(PI / 2, axis=(0, 1, 0)).scale(1.2)
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0.65)))
+        meshes[3].move_to((0.2, 0.1, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0)))
 `;
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;

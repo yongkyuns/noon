@@ -87,7 +87,7 @@ class _WorldMobject(_base.Mobject):
         return _pose(self._world_call("worldTransform", "effectiveWorldTransform"))
 
     def get_center(self):
-        return self.world_transform[:3]
+        return _pose(self._world_call("worldCenter", "effectiveWorldCenter"))
 
     @property
     def animate(self):

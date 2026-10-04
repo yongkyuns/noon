@@ -51,7 +51,8 @@ class RasterManifestTests(unittest.TestCase):
         self.assertEqual(fixture["scene"], "SpatialMeshDepthOracle")
         self.assertEqual(fixture["direct_factory"], "createDirectSpatialMeshSmokeRenderer")
         self.assertEqual(fixture["expected_duration"], 2.0)
-        self.assertEqual(fixture["sample_times"], [0.0, 0.5, 1.5, 1.9666666666666666])
+        self.assertEqual(fixture["sample_times"], [0.0, 0.5, 1.0, 1.5, 1.9666666666666666])
+        self.assertIn(fixture["expected_duration"] / 2, fixture["sample_times"])
         source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
         raster_driver = (ROOT / "scripts/manim-raster-differential.mjs").read_text(
             encoding="utf-8"

@@ -1,4 +1,5 @@
 use super::*;
+use crate::WorldAffineEdit;
 use noon_core::{AnimationOptions, RateFunction, SemanticProjection3D, SemanticRotation3D};
 
 fn camera() -> SemanticCamera3D {
@@ -16,6 +17,180 @@ fn camera() -> SemanticCamera3D {
 
 fn cube() -> MeshOptions {
     MeshOptions::new(noon_geometry::cube_mesh(1.0).unwrap())
+}
+
+fn offset_mesh() -> MeshOptions {
+    let positions = vec![
+        SemanticVec3::new(10.0, 0.0, 0.0),
+        SemanticVec3::new(12.0, 0.0, 0.0),
+        SemanticVec3::new(10.0, 2.0, 2.0),
+        SemanticVec3::new(12.0, 2.0, 2.0),
+    ];
+    MeshOptions::new(MeshResource::new(positions, None, vec![0, 1, 2, 1, 3, 2]).unwrap())
+}
+
+fn assert_vec3_near(actual: SemanticVec3, expected: SemanticVec3) {
+    assert!(
+        (actual.x - expected.x).abs() < 1e-12,
+        "{actual:?} != {expected:?}"
+    );
+    assert!(
+        (actual.y - expected.y).abs() < 1e-12,
+        "{actual:?} != {expected:?}"
+    );
+    assert!(
+        (actual.z - expected.z).abs() < 1e-12,
+        "{actual:?} != {expected:?}"
+    );
+}
+
+#[test]
+fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
+    let mut scene = Scene::new();
+    let object = scene.mesh(offset_mesh()).unwrap();
+    let world = SemanticWorldTransform3D::new(
+        SemanticVec3::new(1.0, 2.0, 3.0),
+        SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap(),
+        SemanticVec3::new(2.0, 1.0, 1.0),
+    )
+    .unwrap();
+    scene.set_world_transform(&object, world).unwrap();
+    scene.add(&object).unwrap();
+    assert_vec3_near(
+        object.world_center().unwrap(),
+        SemanticVec3::new(0.0, 24.0, 4.0),
+    );
+
+    // Effective track sampling must win over the unchanged authored pose.
+    let mut endpoint = world;
+    endpoint.translation = SemanticVec3::new(-3.0, 5.0, 7.0);
+    let animation = scene
+        .declare_world_transform(
+            &object,
+            endpoint,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let root = transaction.create_animation_composition(
+        noon_core::SemanticAnimationCompositionKind::Parallel,
+        [animation.node_id()],
+        AnimationOptions::new(),
+    );
+    let root = transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap()
+        .resolve(root)
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            root,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    session.advance_to(1.0).unwrap();
+    scene.install_execution(session);
+    assert_vec3_near(
+        scene.effective_world_center(&object).unwrap(),
+        SemanticVec3::new(-2.0, 25.5, 6.0),
+    );
+    assert_eq!(object.world_transform().unwrap(), world);
+}
+
+#[test]
+fn world_center_handles_native_cylinder_camera_light_and_detached_live_mesh() {
+    let mut scene = Scene::new();
+    let camera = scene.camera_3d(camera()).unwrap();
+    assert_eq!(
+        camera.world_center().unwrap(),
+        SemanticVec3::new(0.0, 0.0, 5.0)
+    );
+    let light = scene
+        .point_light_3d(SemanticVec3::new(1.0, -2.0, 3.0), Color::WHITE, 0.5)
+        .unwrap();
+    assert_eq!(
+        light.world_center().unwrap(),
+        SemanticVec3::new(1.0, -2.0, 3.0)
+    );
+
+    let cylinder = scene
+        .mesh(MeshOptions::new(
+            noon_geometry::cylinder_mesh(1.0, 4.0, 16).unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(
+        cylinder.world_center().unwrap(),
+        SemanticVec3::new(0.0, 0.0, 2.0)
+    );
+
+    scene.install_execution(scene.execution_session().unwrap());
+    let detached = scene.mesh(offset_mesh()).unwrap();
+    assert_eq!(
+        scene.effective_world_center(&detached).unwrap(),
+        SemanticVec3::new(11.0, 1.0, 1.0)
+    );
+    scene
+        .world_affine(
+            (&detached).into(),
+            WorldAffineEdit::Shift(SemanticVec3::new(2.0, 0.0, -1.0)),
+        )
+        .unwrap();
+    assert_vec3_near(
+        scene.effective_world_center(&detached).unwrap(),
+        SemanticVec3::new(13.0, 1.0, 0.0),
+    );
+    scene
+        .world_affine(
+            (&detached).into(),
+            WorldAffineEdit::Rotate {
+                axis: SemanticVec3::new(0.0, 0.0, 1.0),
+                radians: std::f64::consts::FRAC_PI_2,
+                about: None,
+            },
+        )
+        .unwrap();
+    assert_vec3_near(
+        scene.effective_world_center(&detached).unwrap(),
+        SemanticVec3::new(13.0, 1.0, 0.0),
+    );
+}
+
+#[test]
+fn world_center_rejects_foreign_and_stale_handles() {
+    let mut first = Scene::new();
+    let second = Scene::new();
+    let object = first.mesh(offset_mesh()).unwrap();
+    assert!(matches!(
+        second.effective_world_center(&object),
+        Err(AuthoringError::ForeignStore)
+    ));
+    let stale = object.clone();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.remove_node(object.node_id());
+    transaction
+        .apply(&mut first.integration_store().borrow_mut())
+        .unwrap();
+    assert!(stale.world_center().is_err());
+
+    let mut running = Scene::new();
+    let detached = running.mesh(offset_mesh()).unwrap();
+    running.install_execution(running.execution_session().unwrap());
+    let mut external = SemanticMutationTransaction::new();
+    external.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 0.5 },
+    )));
+    external
+        .apply(&mut running.integration_store().borrow_mut())
+        .unwrap();
+    assert!(running.effective_world_center(&detached).is_err());
 }
 
 #[test]

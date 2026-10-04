@@ -1271,6 +1271,13 @@ per-face strokes/shading, non-opaque mesh fills, partial sweeps, and unsupported
 primitive orientations) instead of silently substituting a different result.
 Only explicitly admitted opaque/unshaded profiles are in scope.
 
+Spatial `get_center()` and default affine pivots share Rust's bounds convention:
+the world bounds of the retained local AABB. They read the current effective pose
+for attached live objects and the authored pose for detached objects. A geometric
+center can differ from the transform origin; `world_transform` and
+`WorldTransformTo` retain their explicit pose-origin convention. These queries
+use resource bounds metadata rather than traversing mesh vertices.
+
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
 publication/runtime. Camera profile tracks update the effective pose and
 projection together; ambient camera motion is authored camera state, while

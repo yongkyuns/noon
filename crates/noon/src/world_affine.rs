@@ -272,6 +272,28 @@ fn union_world_bounds_center(
         .ok_or(AuthoringError::NonFiniteObjectState)
 }
 
+/// Compute the center of one object's world-space axis-aligned bounds using
+/// the same local bounds and eight-corner transform used by default pivots.
+pub(crate) fn world_bounds_center(
+    store: &SemanticStore,
+    node: SemanticNodeId,
+    state: &SemanticObjectState,
+    world: SemanticWorldTransform3D,
+) -> Result<SemanticVec3, AuthoringError> {
+    if !state.spatial_declaration_is_valid() || !valid_world(world) {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    validate_spatial_leaf(store, state)?;
+    union_world_bounds_center(
+        store,
+        &[LeafPose {
+            node,
+            state: state.clone(),
+            world,
+        }],
+    )
+}
+
 fn midpoint(a: f64, b: f64) -> f64 {
     a * 0.5 + b * 0.5
 }

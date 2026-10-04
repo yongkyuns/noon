@@ -15,7 +15,9 @@ impl LiveSession<'_> {
             self.store,
             target,
             edit,
-            |store, node| crate::spatial_authoring::effective_world(self.session, store, node),
+            |store, node| {
+                crate::spatial_authoring::effective_world_or_authored(self.session, store, node)
+            },
         )?;
         self.apply(transaction).map(|_| ())
     }
@@ -31,6 +33,24 @@ impl LiveSession<'_> {
             object.node_id(),
         )
         .map_err(LiveSessionError::from)
+    }
+
+    pub fn effective_world_center(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticVec3, LiveSessionError> {
+        self.require_mobject(object)?;
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(object.node_id())
+            .map_err(AuthoringError::from)?;
+        let world = crate::spatial_authoring::effective_world_or_authored(
+            self.session,
+            &store,
+            object.node_id(),
+        )?;
+        crate::world_affine::world_bounds_center(&store, object.node_id(), state, world)
+            .map_err(Into::into)
     }
 
     /// Detached creation uses the same resource/publication boundary as Scene.

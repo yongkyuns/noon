@@ -123,6 +123,17 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = effectiveWorldCenter)]
+    pub fn effective_world_center(
+        &mut self,
+        object: &WasmAuthoringMobjectHandle,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.inner
+            .effective_world_center(object.semantic_mobject())
+            .map(|center| vec![center.x, center.y, center.z])
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = setWorldTransform)]
     pub fn set_world_transform(
         &mut self,

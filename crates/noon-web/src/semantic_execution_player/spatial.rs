@@ -55,6 +55,13 @@ impl super::SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_world_transform(object))
     }
 
+    pub(crate) fn live_effective_world_center(
+        &mut self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_world_center(object))
+    }
+
     pub(crate) fn live_set_world_transform(
         &mut self,
         object: &Mobject,
@@ -122,6 +129,16 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             self.live_effective_world_transform(object.semantic_mobject())
                 .map(crate::authoring_spatial::transform_values)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = effectiveWorldCenter)]
+        pub fn effective_world_center(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.live_effective_world_center(object.semantic_mobject())
+                .map(|center| vec![center.x, center.y, center.z])
                 .map_err(js_error)
         }
 
