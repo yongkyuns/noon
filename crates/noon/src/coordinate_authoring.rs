@@ -557,7 +557,7 @@ impl ManimAxes {
         if !Rc::ptr_eq(self.family.integration_store(), graph.integration_store()) {
             return Err(AuthoringError::ForeignStore.into());
         }
-        area::graph_range(graph)?;
+        graph.function_plot_range()?;
         Ok(())
     }
 
