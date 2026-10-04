@@ -23,7 +23,7 @@ mod tests {
 
     #[test]
     fn arrow_created_after_wait_is_detached_and_usable_by_live_family_transform() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let wait = live.wait_segment(0.5).unwrap();
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn invalid_live_arrow_request_does_not_publish_any_state() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let revision = scene.revision();
