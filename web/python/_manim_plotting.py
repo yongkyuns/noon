@@ -329,7 +329,11 @@ class Axes(_compat.Group):
         graph.underlying_function = function
         return graph
 
-
+    def plot_samples(self, points, *, color=None, **kwargs):
+        """Preserve sample order and repeated x values as a retained polyline."""
+        with _owned(self._coordinate_frame()) as frame:
+            options = engine_call(frame.sampledPlot, _points(points))
+        return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
 
     def get_area(self, graph, x_range=None, color=None, opacity=0.3,
                  bounded_graph=None, **kwargs):
@@ -594,14 +598,6 @@ class ThreeDAxes(_compat.Group):
                 frame.pointToCoords, *values))
 
     p2c = point_to_coords
-
-    def plot_samples(self, points, *, color=None, **kwargs):
-        """Noon extension: preserve data order and repeated x values as a polyline."""
-        with _owned(self._coordinate_frame()) as frame:
-            options = engine_call(frame.sampledPlot, _points(points))
-        return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
-
-
 
 class BarChart(Axes):
     """Shared-Rust static bar chart with explicit, atomic value changes.

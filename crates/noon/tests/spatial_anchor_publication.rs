@@ -59,6 +59,10 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
 
     let before = execution.publication_context();
     let mut remove = SemanticMutationTransaction::new();
+    // Keep the objects in the presented root while deleting their shared
+    // anchor family, so this probes live center publication rather than tombstones.
+    remove.add_member(scene.root(), left.node_id());
+    remove.add_member(scene.root(), right.node_id());
     remove.remove_node(family.node_id());
     execution
         .apply_semantic_transaction(&mut store_rc.borrow_mut(), remove)
@@ -68,7 +72,9 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
         before.scene_revision().checked_next().unwrap()
     );
     for object in [left_object, right_object] {
-        let row = &execution.frame().objects[row_index(&execution, object)];
+        let index = row_index(&execution, object);
+        assert!(execution.frame().is_present(index));
+        let row = &execution.frame().objects[index];
         let spatial = row.spatial.as_deref().unwrap();
         assert_eq!(
             spatial.composition_domain,

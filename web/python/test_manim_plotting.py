@@ -27,6 +27,22 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
+        for name in (
+            "plot",
+            "plot_samples",
+            "plot_implicit_curve",
+            "get_area",
+            "get_riemann_rectangles",
+            "add_coordinates",
+            "time_series_plan",
+            "synchronized_series_plan",
+            "gapped_series_plan",
+        ):
+            with self.subTest(method=name):
+                self.assertTrue(callable(getattr(plotting.Axes, name, None)))
+        self.assertFalse(hasattr(plotting.ThreeDAxes, "plot_samples"))
+
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf
 
