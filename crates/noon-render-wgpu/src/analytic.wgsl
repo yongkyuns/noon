@@ -361,8 +361,23 @@ fn styled_shape_color(
     );
 }
 
-fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
-    let coverage = inside_coverage(signed_distance);
+fn interval_box_coverage(center: f32, half_extent: f32, pixel_width: f32) -> f32 {
+    let width = max(pixel_width, 0.000001);
+    let covered_right = clamp((half_extent - center) / width + 0.5, 0.0, 1.0);
+    let covered_left = clamp((-half_extent - center) / width + 0.5, 0.0, 1.0);
+    return max(covered_right - covered_left, 0.0);
+}
+
+fn butt_line_coverage(local: vec2<f32>, half_length: f32, radius: f32) -> f32 {
+    // Integrate the line's signed local-coordinate cross section over one pixel.
+    // Using fwidth(local.y) remains nonzero on the centerline, unlike the
+    // derivative of abs(local.y) or a signed-distance value there.
+    let across = interval_box_coverage(local.y, radius, fwidth(local.y));
+    let along = interval_box_coverage(local.x, half_length, fwidth(local.x));
+    return across * along;
+}
+
+fn styled_line_color(input: VertexOutput, coverage: f32) -> vec4<f32> {
     if input.line_stroke_enabled >= 0.5 {
         return covered_color(input.stroke, input.metrics.y, coverage);
     }
@@ -542,6 +557,11 @@ fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
             vec2<f32>(half_length + radius, radius),
         );
     }
+    // Evaluate derivative-based coverage for every cap mode before selecting,
+    // so fragment derivatives remain valid across non-uniform control flow.
+    let sdf_coverage = inside_coverage(signed_distance);
+    let butt_coverage = butt_line_coverage(input.local, half_length, radius);
+    let coverage = select(sdf_coverage, butt_coverage, cap_mode == 1u);
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
-    return styled_line_color(input, signed_distance) * visible;
+    return styled_line_color(input, coverage) * visible;
 }

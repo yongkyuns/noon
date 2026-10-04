@@ -284,3 +284,146 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
         );
     });
 }
+
+#[test]
+fn butt_line_gpu_coverage_is_stable_at_pixel_phases_and_clips_at_caps() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping butt-line coverage readback: no GPU adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("butt line coverage target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("butt line coverage readback"),
+            size: u64::from(WIDTH * HEIGHT * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::ZERO, Vec2::new(2.0, 1.0)).unwrap(),
+        );
+        let gray = Color::rgba(0.5, 0.5, 0.5, 1.0);
+        let style = Style {
+            fill: None,
+            stroke: Some(gray),
+            stroke_width: 0.01,
+            stroke_cap: noon_core::StrokeCap::Butt,
+            ..Style::default()
+        };
+        let mut preparer = FramePreparer::new();
+        let mut render_line = |renderer: &mut GpuRenderer, start: Vec2, end: Vec2| {
+            let scene = scene_with_geometry(GeometryRef::line(start, end), style);
+            let prepared = preparer.prepare(scene.frame());
+            renderer.upload(&device, &queue, &prepared);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+            submit_and_read(&device, &queue, encoder, &target, &readback)
+        };
+        let cross_sum = |pixels: &[u8], vertical: bool, fixed: u32| -> u32 {
+            (-3_i32..=3)
+                .map(|offset| {
+                    let varying = (fixed as i32 + offset) as u32;
+                    if vertical {
+                        rgba(pixels, varying, 32)[0] as u32
+                    } else {
+                        rgba(pixels, 64, varying)[0] as u32
+                    }
+                })
+                .sum()
+        };
+        // With 64 pixels per world unit, 1/128 world units shifts the line by
+        // exactly half a pixel. The integrated opaque gray coverage should stay
+        // stable across both phases instead of disappearing or brightening.
+        let horizontal_integer =
+            render_line(&mut renderer, Vec2::new(-0.65, 0.0), Vec2::new(0.65, 0.0));
+        let horizontal_half = render_line(
+            &mut renderer,
+            Vec2::new(-0.65, 1.0 / 128.0),
+            Vec2::new(0.65, 1.0 / 128.0),
+        );
+        let vertical_integer =
+            render_line(&mut renderer, Vec2::new(0.0, -0.35), Vec2::new(0.0, 0.35));
+        let vertical_half = render_line(
+            &mut renderer,
+            Vec2::new(1.0 / 128.0, -0.35),
+            Vec2::new(1.0 / 128.0, 0.35),
+        );
+        for (name, total) in [
+            (
+                "horizontal integer",
+                cross_sum(&horizontal_integer, false, 32),
+            ),
+            ("horizontal half", cross_sum(&horizontal_half, false, 32)),
+            ("vertical integer", cross_sum(&vertical_integer, true, 64)),
+            ("vertical half", cross_sum(&vertical_half, true, 64)),
+        ] {
+            assert!(
+                (60..=105).contains(&total),
+                "{name} integrated gray coverage: {total}"
+            );
+        }
+
+        let diagonal = render_line(
+            &mut renderer,
+            Vec2::new(-0.35, -0.35),
+            Vec2::new(0.35, 0.35),
+        );
+        let diagonal_energy: u32 = (29..=35)
+            .flat_map(|y| (61..=67).map(move |x| (x, y)))
+            .map(|(x, y)| rgba(&diagonal, x, y)[0] as u32)
+            .sum();
+        assert!(
+            diagonal_energy > 400,
+            "diagonal line must cover pixels: {diagonal_energy}"
+        );
+
+        let capped = render_line(&mut renderer, Vec2::new(-0.25, 0.0), Vec2::new(0.25, 0.0));
+        assert_eq!(
+            rgba(&capped, 47, 31)[0],
+            0,
+            "butt cap must not extend before start"
+        );
+        assert_eq!(
+            rgba(&capped, 47, 32)[0],
+            0,
+            "butt cap must not extend before start"
+        );
+        assert!(
+            rgba(&capped, 48, 31)[0] > 0,
+            "line must cover its first in-bounds pixel"
+        );
+        assert_eq!(
+            rgba(&capped, 80, 31)[0],
+            0,
+            "butt cap must not extend past end"
+        );
+        assert_eq!(
+            rgba(&capped, 80, 32)[0],
+            0,
+            "butt cap must not extend past end"
+        );
+    });
+}
