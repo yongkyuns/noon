@@ -177,6 +177,37 @@ async function captureSelection(context, entry, result) {
   const errors = [];
   const sourceDeclaredClick = entry.features.includes("on_click");
   const legacyOverlay = Boolean(entry.interaction) && !sourceDeclaredClick;
+  const nativeInput = entry.playback_capability === "nonreplayable-native-input";
+  if (nativeInput) await page.addInitScript(() => {
+    // Test-only delivery delay after the engine acknowledges a real presented
+    // frame. Keep input, Rust admission and rendering on the production path.
+    // Independent pointer/render channels must tolerate this acknowledgement
+    // overtaking an occurrence collected against its preceding presentation.
+    const delayed = { held: false, pending: [], count: 0 };
+    window.MessageChannel = new Proxy(window.MessageChannel, {
+      construct(Target, args) {
+        const channel = Reflect.construct(Target, args);
+        for (const port of [channel.port1, channel.port2]) {
+          port.addEventListener("message", event => {
+            if (!delayed.held || event.data?.type !== "pointer_presented") return;
+            if (delayed.pending.length >= 32) throw new Error("pointer receipt delay capacity exceeded");
+            delayed.pending.push({ port, data: event.data });
+            delayed.count++;
+            event.stopImmediatePropagation();
+          });
+        }
+        return channel;
+      },
+    });
+    delayed.resume = () => {
+      delayed.held = false;
+      for (const { port, data } of delayed.pending.splice(0)) {
+        port.dispatchEvent(new MessageEvent("message", { data }));
+      }
+      return delayed.count;
+    };
+    window.__noonCapturePointerReceipts = delayed;
+  });
   let stage = "open playground";
   page.on("pageerror", (error) => errors.push(String(error)));
   try {
@@ -192,7 +223,6 @@ async function captureSelection(context, entry, result) {
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
-    const nativeInput = entry.playback_capability === "nonreplayable-native-input";
     if (nativeInput) await page.waitForFunction((duration) => {
       const controls = document.querySelector(".playback-controls")?.dataset;
       return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
@@ -264,6 +294,7 @@ async function captureSelection(context, entry, result) {
       const dragEnd = { x: bounds.x + bounds.width * 0.82, y: bounds.y + bounds.height * 0.5 };
       await page.mouse.move(dragStart.x, dragStart.y);
       await page.mouse.down();
+      await page.evaluate(() => { window.__noonCapturePointerReceipts.held = true; });
       await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 });
       // Observe a published drag frame while the contact is held. Releasing
       // immediately after synthetic move events can outrun a WebGPU frame and
@@ -284,6 +315,8 @@ async function captureSelection(context, entry, result) {
         await page.waitForTimeout(50);
       }
       assert.ok(dragged, "released pointer drag did not persist in the displayed image");
+      const delayedPointerAcknowledgements = await page.evaluate(() => window.__noonCapturePointerReceipts.resume());
+      assert.ok(delayedPointerAcknowledgements > 0, "drag did not exercise delayed presentation acknowledgement delivery");
       const beforeImage = PNG.sync.read(before), draggedImage = PNG.sync.read(dragged);
       assert.equal(draggedImage.width, beforeImage.width);
       assert.equal(draggedImage.height, beforeImage.height);
@@ -317,6 +350,7 @@ async function captureSelection(context, entry, result) {
         recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> public Run",
         requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend,
         automaticRestore: true, backgroundNoOp: true, pointerDrag: true, changedPixels: changed,
+        delayedPointerAcknowledgements,
         changedPixelsOutsideRightSideRoi: outsideExpectedRoi, runRestoresBase: true,
         baseMetrics: metrics, baseImage,
         selectedImage: validateImage(selected, `${entry.id}: selected`),

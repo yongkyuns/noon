@@ -548,6 +548,115 @@ fn captured_drag_continues_with_its_presented_receipt_until_release() {
 }
 
 #[test]
+fn captured_drag_survives_newer_acknowledgement_before_delayed_motion() {
+    let (mut p, circle, collected) = drag_player();
+    let before = p.session.publication_context();
+    assert!(input(&mut p, "press", 1, Some(collected), 1, 400.0).unwrap());
+    assert!(input(&mut p, "move", 1, Some(collected), 1, 450.0).unwrap());
+
+    // The render-owner channel can acknowledge the first motion before the
+    // pointer channel delivers the next occurrence collected against its
+    // predecessor. Its immutable receipt must not be relabelled or replayed.
+    let newer = receipt(&delta(&mut p), collected.presentation + 1);
+    assert!(acknowledge(&mut p, newer));
+    assert!(input(&mut p, "move", 1, Some(collected), 1, 500.0).unwrap());
+    assert!(p.session.translation_drag_active());
+    assert!(input(&mut p, "release", 1, Some(collected), 1, 550.0).unwrap());
+    assert_eq!(circle.state().unwrap().transform.translation.x, 3.0);
+    assert_eq!(
+        p.session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap()
+    );
+    let completed = receipt(&delta(&mut p), newer.presentation + 1);
+    assert!(acknowledge(&mut p, completed));
+    assert!(!input(&mut p, "press", 2, Some(collected), 1, 550.0).unwrap());
+}
+
+#[test]
+fn captured_drag_accepts_delayed_intermediate_receipt_without_frame_history() {
+    let (mut p, circle, first) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(first), 1, 400.0).unwrap());
+    assert!(input(&mut p, "move", 1, Some(first), 1, 450.0).unwrap());
+    let intermediate = receipt(&delta(&mut p), 2);
+    assert!(acknowledge(&mut p, intermediate));
+    assert!(input(&mut p, "move", 1, Some(intermediate), 1, 500.0).unwrap());
+    let newest = receipt(&delta(&mut p), 3);
+    assert!(acknowledge(&mut p, newest));
+    assert!(input(&mut p, "move", 1, Some(intermediate), 1, 550.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(intermediate), 1, 600.0).unwrap());
+    assert_eq!(circle.state().unwrap().transform.translation.x, 4.0);
+}
+
+#[test]
+fn captured_drag_rejects_receipts_outside_its_acquired_interval() {
+    for invalid in 0..6 {
+        let (mut p, circle, first) = drag_player();
+        let acquired = WorkerPointerReceipt {
+            presentation: 2,
+            ..first
+        };
+        assert!(acknowledge(&mut p, acquired));
+        assert!(input(&mut p, "press", 1, Some(acquired), 1, 400.0).unwrap());
+        assert!(input(&mut p, "move", 1, Some(acquired), 1, 450.0).unwrap());
+        let newest = receipt(&delta(&mut p), 3);
+        assert!(acknowledge(&mut p, newest));
+        let bad = match invalid {
+            0 => first,
+            1 => WorkerPointerReceipt {
+                session: 8,
+                ..acquired
+            },
+            2 => WorkerPointerReceipt {
+                view_revision: 2,
+                ..acquired
+            },
+            3 => WorkerPointerReceipt {
+                presentation: 4,
+                ..newest
+            },
+            4 => WorkerPointerReceipt {
+                sequence: newest.sequence + 1,
+                ..newest
+            },
+            _ => WorkerPointerReceipt {
+                sequence: newest.sequence,
+                ..acquired
+            },
+        };
+        assert!(!input(&mut p, "move", 1, Some(bad), 1, 500.0).unwrap());
+        assert!(!p.session.translation_drag_active());
+        assert_eq!(
+            circle.state().unwrap().transform.translation,
+            noon_core::SemanticVec3::ZERO
+        );
+        assert_eq!(
+            p.session.frame().objects[0].transform.translation,
+            Vec2::ZERO
+        );
+    }
+}
+
+#[test]
+fn captured_drag_mapping_is_retired_by_surface_invalidation() {
+    let (mut p, circle, collected) = drag_player();
+    assert!(input(&mut p, "press", 1, Some(collected), 1, 400.0).unwrap());
+    assert!(input(&mut p, "move", 1, Some(collected), 1, 450.0).unwrap());
+    let newest = receipt(&delta(&mut p), 2);
+    assert!(acknowledge(&mut p, newest));
+    assert!(invalidate(&mut p, newest));
+    assert!(!input(&mut p, "move", 1, Some(collected), 1, 500.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    assert_eq!(
+        p.session.frame().objects[0].transform.translation,
+        Vec2::ZERO
+    );
+}
+
+#[test]
 fn a_new_pointer_source_cancels_a_captured_drag_before_rebinding() {
     let (mut p, circle, presented) = drag_player();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
