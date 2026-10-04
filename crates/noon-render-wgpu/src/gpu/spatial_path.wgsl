@@ -4,6 +4,7 @@ struct Camera {
 @group(0) @binding(0) var<uniform> camera: Camera;
 struct FixedCamera {
     clip_scale: vec2<f32>,
+    _padding: vec2<f32>,
 };
 @group(1) @binding(0) var<uniform> fixed_camera: FixedCamera;
 

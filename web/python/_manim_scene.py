@@ -2117,7 +2117,11 @@ def _apply_matrix_target(target: object, animation: object) -> None:
         raise NotImplementedError(
             "ApplyMatrix requires a typed semantic Mobject or family"
         )
-    context = getattr(target, "_canonical_live_target_context", None)
+    context = (
+        _semantic_handles._group_target_context(target)
+        if is_family
+        else getattr(target, "_canonical_live_target_context", None)
+    )
     if context is None:
         engine_call(
             handle.applyMatrix,
@@ -2139,6 +2143,25 @@ def _apply_matrix_target(target: object, animation: object) -> None:
             float(about.y),
             operation="ApplyMatrix",
         )
+
+
+def _validate_apply_matrix_target(scene: _base.Scene, source: object) -> None:
+    """Check wrapper ownership without assuming Groups carry Mobject fields."""
+    if isinstance(source, _compat.Group):
+        if getattr(source, "_semantic_family_handle", None) is None:
+            raise NotImplementedError(
+                "ApplyMatrix family target requires a typed semantic family"
+            )
+        if any(
+            getattr(member, "_scene", None) not in (None, scene)
+            for member in _compat._leaf_mobjects(source)
+        ):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+        source_context = _semantic_handles._group_target_context(source)
+        if source_context is not None and source_context is not _context(scene):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+    elif getattr(source, "_scene", None) not in (None, scene):
+        raise ValueError("ApplyMatrix target belongs to another Scene")
 
 
 def _build_canonical_composition_candidate(
@@ -2222,8 +2245,7 @@ def _build_canonical_composition_candidate(
             # path_arc remains outside this first pointwise-matrix slice.
             _canonical_composition_child_options(animation, child_kwargs)
             source = animation.source
-            if source._scene not in (None, self):
-                raise ValueError("ApplyMatrix target belongs to another Scene")
+            _validate_apply_matrix_target(self, source)
             target = source._copy_for_animate_target()
             _apply_matrix_target(target, animation)
             transform = _base.Transform(source, target, **animation.anim_args)

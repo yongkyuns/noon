@@ -125,6 +125,13 @@ struct PathGpuState {
     capacity: usize,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct FixedCameraUniform {
+    clip_scale: [f32; 2],
+    _padding: [f32; 2],
+}
+
 impl PathGpuState {
     fn new(
         device: &wgpu::Device,
@@ -169,7 +176,9 @@ impl PathGpuState {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(8),
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
+                            FixedCameraUniform,
+                        >() as u64),
                     },
                     count: None,
                 }],
@@ -178,7 +187,7 @@ impl PathGpuState {
             device,
             queue,
             Some("Noon spatial path 2D clip scale"),
-            bytemuck::cast_slice(&[0.0_f32; 2]),
+            bytemuck::bytes_of(&FixedCameraUniform::zeroed()),
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         let fixed_camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -821,10 +830,13 @@ impl SpatialPathGpuState {
             queue.write_buffer(
                 &gpu.fixed_camera,
                 0,
-                bytemuck::cast_slice(&plan.camera_clip_scale),
+                bytemuck::bytes_of(&FixedCameraUniform {
+                    clip_scale: plan.camera_clip_scale,
+                    _padding: [0.0; 2],
+                }),
             );
             gpu.fixed_camera_scale = plan.camera_clip_scale;
-            stats.camera_bytes = std::mem::size_of_val(&plan.camera_clip_scale);
+            stats.camera_bytes = std::mem::size_of::<FixedCameraUniform>();
         }
         stats
     }
@@ -1310,6 +1322,19 @@ mod tests {
         GeometryResourceArena, Rect, StrokeWidthMode, TextResourceArena, TextSourceKind,
         TextVectorStyle,
     };
+
+    #[test]
+    fn fixed_camera_uniform_matches_webgl_uniform_buffer_layout() {
+        assert_eq!(std::mem::size_of::<FixedCameraUniform>(), 16);
+        assert_eq!(
+            bytemuck::bytes_of(&FixedCameraUniform {
+                clip_scale: [1.0, 2.0],
+                _padding: [0.0; 2],
+            })
+            .len(),
+            16
+        );
+    }
 
     #[test]
     fn tessellation_stays_local_and_rejects_unsupported_styles() {

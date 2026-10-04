@@ -7,6 +7,58 @@ from pathlib import Path
 
 
 class ManimApplyMatrixTests(unittest.TestCase):
+    def test_group_apply_matrix_uses_family_context_without_mobject_scene_field(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            filter(None, (str(python_dir), env.get("PYTHONPATH")))
+        )
+        source = textwrap.dedent(
+            """
+            import sys
+            import types
+
+            fake_js = types.ModuleType("js")
+            fake_js.noonResolveAnimationOptions = lambda *args: None
+            sys.modules["js"] = fake_js
+
+            import _manim_compat
+            import _manim_scene
+            import _manim_semantic_handles
+            import noon
+
+            scene = object.__new__(noon.Scene)
+            context = object()
+            class Family:
+                def memberKeys(self):
+                    return []
+
+            group = object.__new__(_manim_compat.Group)
+            group._semantic_family_handle = Family()
+            group._semantic_member_wrappers = {}
+            # Group wrappers intentionally do not have Mobject._scene.
+            _manim_scene._context = lambda current: context
+            _manim_semantic_handles._group_target_context = lambda target: context
+            _manim_scene._validate_apply_matrix_target(scene, group)
+
+            _manim_semantic_handles._group_target_context = lambda target: object()
+            try:
+                _manim_scene._validate_apply_matrix_target(scene, group)
+            except ValueError as error:
+                assert "another Scene" in str(error)
+            else:
+                raise AssertionError("foreign family context was accepted")
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source], cwd=python_dir, env=env,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(
+            completed.returncode, 0,
+            msg=f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+
     def test_apply_matrix_is_inert_until_shared_play_and_defaults_to_three_seconds(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()

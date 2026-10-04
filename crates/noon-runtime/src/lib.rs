@@ -482,12 +482,21 @@ impl SceneInstance {
             if !groups.is_empty() {
                 self.pending_fixed_orientation_anchor_groups
                     .extend(groups.iter().copied());
-            } else if self.frame.objects.get(object_index).is_some_and(|object| {
-                object.spatial.as_deref().is_some_and(|spatial| {
-                    spatial.composition_domain
-                        == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+            }
+            // Bounds dependencies do not imply ownership of this row's center.
+            // A surviving row whose anchor was removed still derives its own
+            // center even while it contributes to another retained group.
+            if self
+                .compiled
+                .fixed_orientation_group_for_row(index)
+                .is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.composition_domain
+                            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                    })
                 })
-            }) {
+            {
                 self.pending_fixed_orientation_anchor_rows
                     .insert(object_index);
             }

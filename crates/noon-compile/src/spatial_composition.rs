@@ -176,8 +176,8 @@ impl CompiledScene {
     }
 
     pub fn fixed_orientation_group_for_row(&self, object_index: u32) -> Option<u32> {
-        self.fixed_orientation_groups_for_row(object_index)
-            .first()
+        self.fixed_orientation_row_groups
+            .get(&object_index)
             .copied()
     }
 

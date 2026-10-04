@@ -919,9 +919,9 @@
         0.9666666666666667
       ],
       "raster_tolerance": {
-        "max_bounds_delta_px": 8,
-        "max_differing_ratio": 0.2,
-        "max_mean_absolute_channel_error": 12
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
       },
       "notes": "Pinned ManimCE 0.21 finite ThreeDCamera profile and three composition domains. This is a representative composition oracle, not glyph-raster parity: Noon uses retained Typst glyph/vector resources while the reference uses Cairo Text/MathTex."
     },
@@ -938,9 +938,9 @@
         0.9666666666666667
       ],
       "raster_tolerance": {
-        "max_bounds_delta_px": 8,
-        "max_differing_ratio": 0.2,
-        "max_mean_absolute_channel_error": 12
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
       },
       "notes": "The same mixed World/FixedOrientation/FixedFrame composition and unwrapped camera-profile track through the async Python worker. Typst is used for retained labels; the pinned source provides a representative Cairo camera/layering oracle, not glyph-shape parity."
     },
@@ -953,9 +953,9 @@
       "expected_duration": 1.0,
       "sample_times": [0.0, 0.5, 0.9666666666666667],
       "raster_tolerance": {
-        "max_bounds_delta_px": 8,
-        "max_differing_ratio": 0.2,
-        "max_mean_absolute_channel_error": 12
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
       },
       "notes": "Default pinned linear ThreeDAxes ranges/lengths/ticks/positive tips, an f64 Rust-c2p point, and a finite camera-profile track. Cairo axis pieces/shading and axis labels are deliberately outside this bounded native subset; default tips are retained and included."
     },
@@ -968,9 +968,9 @@
       "expected_duration": 1.0,
       "sample_times": [0.0, 0.5, 0.9666666666666667],
       "raster_tolerance": {
-        "max_bounds_delta_px": 8,
-        "max_differing_ratio": 0.2,
-        "max_mean_absolute_channel_error": 12
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
       },
       "notes": "The same typed axes/tips, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain explicitly outside the supported subset."
     },
