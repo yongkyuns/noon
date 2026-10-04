@@ -544,7 +544,7 @@ def _copy_nested_mobject(
     existing = memo.get(id(value))
     if existing is not None:
         return existing
-    if not isinstance(value, _compat.Group):
+    if not _is_shared_family(value):
         return _clone_mobject(value, context_override=context, memo=memo)
     members = _compat._leaf_mobjects(value)
     restore = []
@@ -1253,7 +1253,7 @@ def _set_color_by_gradient(self, *colors):
 
 
 def _style_target(value):
-    if isinstance(value, _compat.Group):
+    if _is_shared_family(value):
         return value._semantic_family_handle, _group_target_context(value), "Family"
     return _handle_for(value), _live_mutation_context(value), ""
 
@@ -1265,7 +1265,7 @@ def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")
-    if not family and isinstance(self, _compat.Group):
+    if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group style requires shared family style state")
     arguments = (*_family_color_arguments(fill_color),
                  None if fill_opacity is None else _compat._opacity("fill opacity", fill_opacity),
@@ -1799,9 +1799,16 @@ def _group_layout_observation(value: _compat.Group):
     return layout
 
 
+def _is_shared_family(value: object) -> bool:
+    return (
+        isinstance(value, _compat.Group)
+        and getattr(value, "_semantic_family_handle", None) is not None
+    )
+
+
 def _family_member_handle(value: object) -> tuple[str | None, object | None]:
-    if isinstance(value, _compat.Group):
-        return "family", getattr(value, "_semantic_family_handle", None)
+    if _is_shared_family(value):
+        return "family", value._semantic_family_handle
     if isinstance(value, _base.Mobject):
         return "mobject", getattr(value, "_semantic_handle", None)
     return None, None
@@ -1854,7 +1861,7 @@ def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
         if bool(engine_call(handle.memberIsFamily, index, operation="family.members")):
             member_handle = engine_call(handle.memberFamily, index, operation="family.members")
             member = old_members.get(key)
-            if not isinstance(member, _compat.Group):
+            if not _is_shared_family(member):
                 member = object.__new__(_compat.Group)
             _attach_shared_family(member, member_handle, context, leaf_type)
         else:
@@ -1941,7 +1948,7 @@ def _group_target_context(value: object) -> object | None:
         if id(member) in seen:
             return
         seen.add(id(member))
-        if isinstance(member, _compat.Group):
+        if _is_shared_family(member):
             for child in member.submobjects:
                 collect(child)
             return
@@ -1978,7 +1985,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             "_semantic_arrow_handle",
             "_noon_updater_registrations", "_noon_updater_registration_history",
         }
-        if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
+        if not _is_shared_family(value) and _is_bound(value) and hasattr(value, "_noon_updaters"):
             excluded.add("_noon_updaters")
         return excluded
 
@@ -1997,7 +2004,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             else engine_call(self._semantic_family_handle.copyFamily, references)
         )
     for source, target in pairs:
-        if isinstance(source, _compat.Group):
+        if _is_shared_family(source):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
             owner = context or getattr(source, "_canonical_live_target_context", None)
             if owner is not None:
@@ -2016,7 +2023,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         if latex is not None:
             target._semantic_latex_handle = engine_call(latex.rebindFamily, target._semantic_family_handle)
             target._part_views()
-        if not isinstance(target, _compat.Group):
+        if not _is_shared_family(target):
             rebind = getattr(target, "_rebind_copied_semantic_handle", None)
             if rebind is not None:
                 rebind()
@@ -2029,7 +2036,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
                 target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
                 target.__dict__.pop("_semantic_arrow_index", None)
     for source, target in pairs:
-        if isinstance(source, _compat.Group):
+        if _is_shared_family(source):
             rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)
             if rehydrate is not None:
                 rehydrate()

@@ -304,7 +304,7 @@ class Path(VMobject):
 
 
 def _leaf_mobjects(value: object) -> list[Mobject]:
-    if isinstance(value, Group):
+    if _is_shared_family(value):
         leaves: list[Mobject] = []
         for member in value.submobjects:
             leaves.extend(_leaf_mobjects(member))
@@ -312,6 +312,11 @@ def _leaf_mobjects(value: object) -> list[Mobject]:
     if isinstance(value, Mobject):
         return [value]
     raise TypeError("expected a Mobject or Group")
+
+
+def _is_shared_family(value: object) -> bool:
+    from _manim_semantic_handles import _is_shared_family as is_shared_family
+    return is_shared_family(value)
 
 
 def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
@@ -632,7 +637,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         clone = object.__new__(type(value))
         memo[id(value)] = clone
         pairs.append((value, clone))
-        if isinstance(value, Group):
+        if _is_shared_family(value):
             family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 

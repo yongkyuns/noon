@@ -14,7 +14,7 @@ import noon as _base
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _attach_shared_handle, _handle_for, _live_constructor_context,
-    _live_mutation_context,
+    _live_mutation_context, _group_target_context,
 )
 
 try:
@@ -76,10 +76,24 @@ class _WorldMobject(_base.Mobject):
     """Motion routes through shared Rust authored/effective world operations."""
 
     def _world_call(self, authored, live, *args):
-        handle = _handle_for(self)
+        family = getattr(self, "_semantic_family_handle", None)
+        handle = family if family is not None else _handle_for(self)
         if handle is None:
             raise NotImplementedError("world edits require an ordinary typed authoring context")
-        context = _live_mutation_context(self)
+        if family is not None and authored not in {"shiftWorld", "rotateWorld", "scaleWorld"}:
+            raise NotImplementedError("world observations require one spatial Mobject, not a family")
+        context = _group_target_context(self) if family is not None else _live_mutation_context(self)
+        if family is not None:
+            if context is None:
+                if authored == "rotateWorld":
+                    args = (args[3], _bulk(args[:3]), *args[4:])
+                return engine_call(getattr(handle, authored), *args)
+            family_live = {
+                "shiftWorld": "shiftFamilyWorld",
+                "rotateWorld": "rotateFamilyWorld",
+                "scaleWorld": "scaleFamilyWorld",
+            }
+            return engine_call(getattr(context, family_live[authored]), handle, *args)
         if context is None:
             return engine_call(getattr(handle, authored), *args)
         return engine_call(getattr(context, live), handle, *args)

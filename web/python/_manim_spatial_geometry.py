@@ -11,11 +11,14 @@ from array import array
 from operator import index as _index
 
 import noon as _base
+import _manim_compat as _compat
 from _noon_spatial import Mesh3D as _Mesh3D, _WorldMobject
 from _manim_compat import _as_color, _manim_stroke_width, _opacity
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _attach_shared_handle, _live_constructor_context, _live_mutation_context,
+    _attach_shared_family, _attach_shared_handle,
+    _group_target_context, _initialize_shared_wrapper,
+    _live_constructor_context, _live_mutation_context,
 )
 
 _DEFAULT_CHECKERBOARD = (_base.BLUE_D, _base.BLUE_E)
@@ -275,7 +278,7 @@ class Line3D(_Mesh3D):
         _take_mesh(self, mesh)
 
 
-class Surface(_Mesh3D):
+class Surface(_Mesh3D, _compat.Group):
     """Sampled surface; callback values feed Rust-owned UV topology.
 
     Python owns only callable sampling and argument coercion. Rust owns UV cell
@@ -360,7 +363,8 @@ class Surface(_Mesh3D):
         except BaseException:
             candidate.free()
             raise
-        _attach_shared_handle(self, handle)
+        _initialize_shared_wrapper(self)
+        _attach_shared_family(self, handle, context, _compat.VMobject)
         if context is not None:
             self._canonical_live_target_context = context
 
@@ -380,12 +384,14 @@ class Surface(_Mesh3D):
         first = _bulk((parsed[0].red, parsed[0].green, parsed[0].blue, parsed[0].alpha))
         second = _bulk((parsed[1].red, parsed[1].green, parsed[1].blue, parsed[1].alpha))
         opacity = _opacity("fill opacity", opacity)
-        context = _live_mutation_context(self)
+        family = getattr(self, "_semantic_family_handle", None)
+        if family is None:
+            raise NotImplementedError("single-mesh Surface does not support family checkerboard edits")
+        context = _group_target_context(self)
         if context is None:
-            engine_call(self._semantic_handle.setFillByCheckerboard, first, second, opacity)
+            engine_call(family.setFillByCheckerboard, first, second, opacity)
         else:
-            engine_call(context.setSurfaceCheckerboard, self._semantic_handle,
-                        first, second, opacity)
+            engine_call(context.setSurfaceCheckerboard, family, first, second, opacity)
         return self
 
     def shift(self, vector):
@@ -412,23 +418,17 @@ class Surface(_Mesh3D):
             raise TypeError("family requires a boolean")
         if not family:
             raise NotImplementedError("Surface style updates apply to its cell family")
-        fill = _as_color("fill_color", fill_color) if fill_color is not None else None
-        stroke = _as_color("stroke_color", stroke_color) if stroke_color is not None else None
-        fill_opacity = None if fill_opacity is None else _opacity("fill opacity", fill_opacity)
-        stroke_opacity = None if stroke_opacity is None else _opacity("stroke opacity", stroke_opacity)
-        stroke_width = None if stroke_width is None else _manim_stroke_width(stroke_width)
-        fill_components = ((fill.red, fill.green, fill.blue, fill.alpha)
-                           if fill is not None else (0.0, 0.0, 0.0, 1.0))
-        stroke_components = ((stroke.red, stroke.green, stroke.blue, stroke.alpha)
-                             if stroke is not None else (0.0, 0.0, 0.0, 1.0))
-        arguments = (fill is not None, *fill_components, fill_opacity,
-                     stroke is not None, *stroke_components, stroke_width, stroke_opacity)
-        context = _live_mutation_context(self)
-        if context is None:
-            engine_call(self._semantic_handle.setStyle, *arguments)
-        else:
-            engine_call(context.liveSetFamilyStyle, self._semantic_handle, *arguments)
-        return self
+        from _manim_semantic_handles import _set_style
+        return _set_style(
+            self, fill_color=fill_color, fill_opacity=fill_opacity,
+            stroke_color=stroke_color, stroke_width=stroke_width,
+            stroke_opacity=stroke_opacity, family=family,
+        )
+
+    def copy(self):
+        if getattr(self, "_semantic_family_handle", None) is not None:
+            return _compat.Group.copy(self)
+        return _base.Mobject.copy(self)
 
     def set_fill(self, color=None, opacity=None):
         return self.set_style(fill_color=color, fill_opacity=opacity)

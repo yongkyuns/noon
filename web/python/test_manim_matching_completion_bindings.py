@@ -133,6 +133,10 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '__name__': __name__, 'dataclass': dataclass,
             '_base': SimpleNamespace(Scene=object, Mobject=Mobject),
             '_compat': SimpleNamespace(Group=Group, _leaf_mobjects=leaves),
+            '_semantic_handles': SimpleNamespace(
+                _is_shared_family=lambda value: isinstance(value, Group)
+                and getattr(value, '_semantic_family_handle', None) is not None,
+            ),
             '_animate': SimpleNamespace(Indicate=Indicate),
             '_ir': SimpleNamespace(Object=ExportObject, _authoring_key=lambda label, key, default: default if key is None else key),
             'engine_call': lambda method, *args, operation=None: method(*args),

@@ -1295,12 +1295,14 @@ translucent cells blend in camera-depth order, with authored painter order
 breaking ties. General intersecting transparent solids and exact Cairo shading
 remain outside this profile.
 
-Spatial `get_center()` and default affine pivots share Rust's bounds convention:
+Spatial mesh-object `get_center()` and default affine pivots share Rust's bounds convention:
 the world bounds of the retained local AABB. They read the current effective pose
 for attached live objects and the authored pose for detached objects. A geometric
 center can differ from the transform origin; `world_transform` and
 `WorldTransformTo` retain their explicit pose-origin convention. These queries
 use resource bounds metadata rather than traversing mesh vertices.
+Surface cell families use the shared family affine pivots; aggregate world-pose
+and world-center observations are not exposed by this bounded profile.
 
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
 publication/runtime. Camera profile tracks update the effective pose and

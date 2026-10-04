@@ -213,14 +213,14 @@ def _register_membership_wrappers(
     if registry is None:
         registry = _membership_registry(scene)
     registry[_semantic_wrapper_key(value)] = value
-    if isinstance(value, _compat.Group):
+    if _semantic_handles._is_shared_family(value):
         for member in value.submobjects:
             _register_membership_wrappers(scene, member, registry=registry)
 
 
 def _membership_wrapper_leaves(candidate: object):
     """Visit affected Python identities; Rust alone decides scene membership."""
-    if isinstance(candidate, _compat.Group):
+    if _semantic_handles._is_shared_family(candidate):
         for child in candidate.submobjects:
             yield from _membership_wrapper_leaves(child)
     elif isinstance(candidate, _base.Mobject):
@@ -305,10 +305,8 @@ def _append_membership_value(
             key_binding=key_binding,
             binding_reservations=binding_reservations,
         )
-    if isinstance(value, _compat.Group):
+    if _semantic_handles._is_shared_family(value):
         family = getattr(value, "_semantic_family_handle", None)
-        if family is None:
-            raise NotImplementedError("standard Scene membership requires a typed Group")
         engine_call(batch.appendFamily, family, operation="Scene.membership")
     elif isinstance(value, _base.Mobject):
         handle = getattr(value, "_semantic_handle", None)
@@ -345,7 +343,7 @@ def _sync_membership_wrapper_attachments(
     )
     seen = set()
     for wrapper in candidates:
-        if isinstance(wrapper, _compat.Group) or wrapper._scene is not scene:
+        if _semantic_handles._is_shared_family(wrapper) or wrapper._scene is not scene:
             continue
         semantic_key = _semantic_wrapper_key(wrapper)
         if semantic_key in seen:
@@ -375,7 +373,7 @@ def _reconcile_completed_family_bindings(
     detached = []
     binding_reservations: dict[str, _TypedBindingReservation] = {}
     for wrapper in wrappers.values():
-        if isinstance(wrapper, _compat.Group):
+        if _semantic_handles._is_shared_family(wrapper):
             continue
         if wrapper._scene is not None and wrapper._scene is not scene:
             raise ValueError("completion wrapper belongs to another Scene")

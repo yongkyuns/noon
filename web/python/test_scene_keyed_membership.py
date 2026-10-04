@@ -79,8 +79,18 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         compat = ModuleType("_manim_compat")
         compat.Group = Group
         compat.Mobject = self.Mobject
-        self.compile_definitions("_manim_compat.py", {"_leaf_mobjects"}, compat.__dict__)
-        modules = patch.dict(sys.modules, {"_manim_compat": compat})
+        semantic_handles = ModuleType("_manim_semantic_handles")
+        semantic_handles._is_shared_family = lambda value: (
+            isinstance(value, compat.Group)
+            and getattr(value, "_semantic_family_handle", None) is not None
+        )
+        self.compile_definitions(
+            "_manim_compat.py", {"_is_shared_family", "_leaf_mobjects"}, compat.__dict__
+        )
+        modules = patch.dict(sys.modules, {
+            "_manim_compat": compat,
+            "_manim_semantic_handles": semantic_handles,
+        })
         modules.start()
         self.addCleanup(modules.stop)
         self.ns = {
@@ -88,6 +98,12 @@ class KeyedSceneMembershipTests(unittest.TestCase):
             "dataclass": dataclass,
             "_base": SimpleNamespace(Scene=self.Scene, Mobject=self.Mobject),
             "_compat": compat,
+            "_semantic_handles": SimpleNamespace(
+                _is_shared_family=lambda value: (
+                    isinstance(value, compat.Group)
+                    and getattr(value, "_semantic_family_handle", None) is not None
+                ),
+            ),
             "_ir": ir,
             "engine_call": lambda method, *args, operation=None: method(*args),
         }
@@ -153,6 +169,29 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertEqual(members, ((None, 100), (str(target.id), 11)))
         self.assertIs(child._scene, self.scene)
         self.assertIs(target._scene, self.scene)
+
+    def test_group_derived_surface_routes_family_and_single_mesh_membership(self):
+        SurfaceWrapper = type("SurfaceWrapper", (Group, self.Mobject), {})
+        family_leaf = self.mobject(70)
+        family_surface = object.__new__(SurfaceWrapper)
+        family_surface._semantic_family_handle = SimpleNamespace(
+            semanticSlot=170, semanticGeneration=0,
+        )
+        family_surface._semantic_member_wrappers = {"70:0": family_leaf}
+        family_surface.submobjects = [family_leaf]
+        family_surface._scene = None
+        family_surface._object = None
+        self.scene.add(family_surface)
+        self.assertEqual(self.context.edits[-1][2], ((None, 170),))
+
+        single_mesh = object.__new__(SurfaceWrapper)
+        single_mesh._semantic_handle = SimpleNamespace(
+            semanticSlot=71, semanticGeneration=0,
+        )
+        single_mesh._scene = None
+        single_mesh._object = None
+        self.scene.add(single_mesh)
+        self.assertEqual([slot for _, slot in self.context.edits[-1][2]], [71])
 
     def test_keyed_readd_after_foreground_binding_stays_single_object(self):
         child, target = self.mobject(10), self.mobject(11)

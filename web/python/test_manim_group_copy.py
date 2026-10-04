@@ -35,6 +35,8 @@ class ManimGroupCopyTests(unittest.TestCase):
             leaf = identity(Circle)
             family = identity(CustomFamily, submobjects=[leaf], selected=leaf)
             nested = identity(VGroup, submobjects=[family], selected=family)
+            family._semantic_family_handle = object()
+            nested._semantic_family_handle = object()
             from unittest.mock import patch
             import _manim_semantic_handles as handles
             with patch.object(handles, "_group_members", side_effect=lambda value: value.__dict__["submobjects"]):
