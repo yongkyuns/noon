@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { sampleRasterFrames } from "./manim-raster-support.mjs";
+import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -217,8 +218,13 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
   assert.equal(direct.expected_duration, 3);
   assert.deepEqual(direct.sample_times, [0, 1.5, 2.966666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
-  assert.equal(direct.raster_tolerance, undefined);
-  assert.equal(worker.raster_tolerance, undefined);
+  assert.deepEqual(direct.raster_tolerance, {
+    max_bounds_delta_px: 1, max_differing_ratio: 0.04,
+  });
+  assert.deepEqual(worker.raster_tolerance, direct.raster_tolerance);
+  const tolerance = resolveRasterTolerance(manifest, direct);
+  assert.equal(tolerance.max_mean_absolute_channel_error, 0.5);
+  assert.equal(tolerance.max_background_channel_delta_sum, 0);
 
   for (const relativePath of [
     direct.source,
