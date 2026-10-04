@@ -59,12 +59,14 @@ class ManimVectorSpaceTests(unittest.TestCase):
                 calls.append((list(values), rows, columns))
                 return 0.0
             fake_js.noonLinearTransformationPathArc = path_arc
+            fake_js.noonResolveAnimationOptions = lambda *args: None
             sys.modules["js"] = fake_js
 
             from noon import LinearTransformationScene
             import _manim_compat
             import _manim_animate
             import _manim_arrow
+            import _manim_scene
 
             class Shaft:
                 def get_stroke_width(self):
@@ -91,6 +93,23 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             _manim_arrow.Arrow = TargetArrow
 
+            class Family:
+                def __init__(self, *members):
+                    self.members = members
+            _manim_compat.Group = Family
+
+            class Plane:
+                def _copy_for_animate_target(self):
+                    return PlaneTarget()
+
+            class PlaneTarget:
+                pass
+
+            matrix_edits = []
+            _manim_scene._apply_matrix_target = lambda target, animation: matrix_edits.append(
+                (target, animation)
+            )
+
             class Animation:
                 def __init__(self, *args, **kwargs):
                     self.args = args
@@ -100,7 +119,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
             _manim_animate.Transform = Animation
 
             scene = LinearTransformationScene()
-            scene.foreground_plane = object.__new__(_manim_compat.Group)
+            scene.foreground_plane = Plane()
             scene.moving_vectors = [source_arrow]
             captured = {}
             scene.play = lambda *animations, **kwargs: captured.update(
@@ -109,14 +128,19 @@ class ManimVectorSpaceTests(unittest.TestCase):
             scene.apply_matrix([[0.0, 1.0], [1.0, 0.0]])
             assert calls == [([0.0, 1.0, 1.0, 0.0], 2, 2)]
             assert captured["kwargs"] == {"run_time": 3.0}
-            plane_animation, vector_animation = captured["animations"]
-            assert plane_animation.anim_args["about_point"] == (0.0, 0.0)
-            assert plane_animation.anim_args["run_time"] == 3.0
-            assert plane_animation.anim_args["path_arc"] == 0.0
-            assert vector_animation.anim_args == {"run_time": 3.0, "path_arc": 0.0}
+            assert len(captured["animations"]) == 1
+            combined_animation, = captured["animations"]
+            assert combined_animation.anim_args == {"path_arc": 0.0, "run_time": 3.0}
+            source_family, target_family = combined_animation.args
+            assert len(source_family.members) == len(target_family.members) == 2
+            assert source_family.members[0] is scene.foreground_plane
+            assert isinstance(target_family.members[0], PlaneTarget)
+            assert len(source_family.members[1].members) == 1
+            assert len(target_family.members[1].members) == 1
+            assert matrix_edits[0][0] is target_family.members[0]
+            assert matrix_edits[0][1].args[0] == [[0.0, 1.0], [1.0, 0.0]]
             assert target_arrows[0].args == ((0.0, 0.0), (1.0, 1.0))
             assert target_arrows[0].kwargs["stroke_width"] == 8.5
-            assert vector_animation.args == (source_arrow, target_arrows[0])
             # The flattened length is four, but these are not two valid rows.
             # Reject before querying Rust or preparing any target objects.
             try:

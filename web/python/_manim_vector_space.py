@@ -150,7 +150,7 @@ class LinearTransformationScene(VectorScene):
         return result
 
     def apply_matrix(self, matrix: object, **kwargs: Any):
-        """Animate the grid and moving vectors through ordinary shared morphs."""
+        """Animate the grid and vectors in one shared family Transform."""
         from _manim_animate import ApplyMatrix, Transform, _matrix_arguments
         from _manim_arrow import Arrow
         from _noon_errors import engine_call
@@ -174,17 +174,24 @@ class LinearTransformationScene(VectorScene):
             )
         else:
             path_arc = float(requested_path_arc)
-        animations = []
+        source_parts = []
+        target_parts = []
         if self.foreground_plane is not None:
-            animations.append(
-                ApplyMatrix(
-                    rows,
-                    self.foreground_plane,
-                    about_point=about,
-                    path_arc=path_arc,
-                    run_time=run_time,
-                )
+            plane_animation = ApplyMatrix(
+                rows,
+                self.foreground_plane,
+                about_point=about,
+                path_arc=path_arc,
+                run_time=run_time,
             )
+            target_plane = self.foreground_plane._copy_for_animate_target()
+            from _manim_scene import _apply_matrix_target
+
+            _apply_matrix_target(target_plane, plane_animation)
+            source_parts.append(self.foreground_plane)
+            target_parts.append(target_plane)
+        source_vectors = []
+        target_vectors = []
         for vector in self.moving_vectors:
             aggregate = getattr(vector, "_semantic_arrow_handle", None)
             transform = getattr(aggregate, "matrixTransformedEndpoints", None)
@@ -208,13 +215,20 @@ class LinearTransformationScene(VectorScene):
                 color=vector.get_color(),
                 stroke_width=float(vector.get_stroke_width()),
             )
-            animations.append(
-                Transform(vector, target, path_arc=path_arc, run_time=run_time)
-            )
-        if not animations:
+            source_vectors.append(vector)
+            target_vectors.append(target)
+        if source_vectors:
+            source_parts.append(_compat.Group(*source_vectors))
+            target_parts.append(_compat.Group(*target_vectors))
+        if not source_parts:
             return None
+        source = _compat.Group(*source_parts)
+        target = _compat.Group(*target_parts)
         kwargs.setdefault("run_time", 3.0)
-        return self.play(*animations, **kwargs)
+        return self.play(
+            Transform(source, target, path_arc=path_arc, run_time=run_time),
+            **kwargs,
+        )
 
 
 __all__ = ["LinearTransformationScene", "VectorScene"]
