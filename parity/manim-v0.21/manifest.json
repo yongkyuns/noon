@@ -70,6 +70,13 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "callable-graph-queries",
+      "scene": "CallableGraphQueries",
+      "source": "parity/manim-v0.21/core-examples/graph_queries.py",
+      "expected_duration": 0.2,
+      "notes": "Callable-backed i2gp, creating-axes ownership, current coordinate frames, standalone graph.function and semantic t_min/t_max. Does not qualify default Axes or the full FollowingGraphCamera case."
+    },
+    {
       "id": "implicit-curves",
       "scene": "RetainedImplicitCurves",
       "source": "parity/manim-v0.21/core-examples/implicit_curves.py",

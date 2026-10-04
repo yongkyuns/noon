@@ -1576,6 +1576,14 @@ mod wasm {
                 .map(WasmPathQuery::from_query)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = functionPlotRange)]
+        pub fn function_plot_range(&self) -> Result<Vec<f64>, JsValue> {
+            self.handle
+                .function_plot_range()
+                .map(|range| range.to_vec())
+                .map_err(crate::authoring_plotting::coordinate_failure)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = localPathQuery)]
         pub fn local_path_query(&self) -> Result<WasmPathQuery, JsValue> {
             self.handle

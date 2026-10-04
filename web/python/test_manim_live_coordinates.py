@@ -1,8 +1,9 @@
 """Dispatch/option ownership only; Rust and actual Pyodide test the semantics."""
 from types import SimpleNamespace
 from unittest import TestCase, main
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 import _manim_plotting as plotting
+import noon
 
 class LiveCoordinateAdapterTests(TestCase):
     def setUp(self):
@@ -85,5 +86,82 @@ class LiveCoordinateAdapterTests(TestCase):
             self.resolve.return_value=None
             bound.return_value=False
             self.assertIsNone(plotting._coordinate_context([shaft]))
+
+    def _plotted_graph(self, axes, callback):
+        frame = Mock()
+        frame.plotPlan.return_value = Mock()
+        axes._coordinate_frame = lambda: frame
+        handle = Mock()
+        with patch.object(plotting, "_evaluate", return_value=Mock()), \
+             patch.object(plotting, "_curve", side_effect=lambda wrapper, *args: self._attach_graph_handle(wrapper, handle)):
+            graph = axes.plot(callback, (0, 4, 1))
+        return graph, handle
+
+    @staticmethod
+    def _attach_graph_handle(graph, handle):
+        graph._semantic_handle = handle
+        return graph
+
+    def test_graph_query_uses_plot_owners_current_axes_and_re_evaluates_callable(self):
+        owner = object.__new__(plotting.Axes)
+        receiver = object.__new__(plotting.Axes)
+        owner.c2p = Mock(side_effect=lambda x, y: noon.Vec2(x + 10, y + 20))
+        receiver.c2p = Mock(return_value=noon.Vec2(-1, -1))
+        callback = Mock(side_effect=[2, 3])
+        graph, _ = self._plotted_graph(owner, callback)
+
+        first = receiver.i2gp(1, graph)
+        second = receiver.input_to_graph_point(1, graph)
+
+        self.assertEqual(first, noon.Vec2(11, 22))
+        self.assertEqual(second, noon.Vec2(11, 23))
+        self.assertEqual(callback.call_args_list, [call(1.0), call(1.0)])
+        self.assertEqual(owner.c2p.call_args_list, [call(1.0, 2.0), call(1.0, 3.0)])
+        receiver.c2p.assert_not_called()
+
+    def test_graph_callable_preserves_callback_exception_identity(self):
+        axes = object.__new__(plotting.Axes)
+        axes.c2p = Mock()
+        failure = ValueError("source callable failed")
+        graph, _ = self._plotted_graph(axes, Mock(side_effect=failure))
+        with self.assertRaises(ValueError) as caught:
+            graph.function(2)
+        self.assertIs(caught.exception, failure)
+        axes.c2p.assert_not_called()
+
+    def test_retained_path_and_invalid_graphs_fail_before_any_sampling(self):
+        axes = object.__new__(plotting.Axes)
+        with patch.object(plotting, "_outside_callback") as guard:
+            with self.assertRaisesRegex(NotImplementedError, "retained-path fallback"):
+                axes.input_to_graph_point(1, SimpleNamespace())
+            guard.assert_called_once_with()
+
+        callback = Mock()
+        with self.assertRaisesRegex(NotImplementedError, "callable-backed graph"):
+            axes.input_to_graph_point(1, SimpleNamespace(function=callback, underlying_function=None))
+        callback.assert_not_called()
+
+    def test_function_graph_range_is_forwarded_each_time_without_cached_copy(self):
+        graph = object.__new__(plotting.FunctionGraph)
+        graph._semantic_handle = SimpleNamespace(functionPlotRange=Mock(
+            side_effect=([0.0, 3.0], [2.0, 5.0], [2.0, 8.0])))
+
+        self.assertEqual(graph.t_min, 0.0)
+        self.assertEqual(graph.t_min, 2.0)
+        self.assertEqual(graph.t_max, 8.0)
+        self.assertEqual(graph._semantic_handle.functionPlotRange.call_count, 3)
+        with self.assertRaises(AttributeError):
+            graph.t_min = 9
+        with self.assertRaises(AttributeError):
+            graph.t_max = 9
+
+    def test_standalone_function_graph_returns_world_coordinate_vec2(self):
+        callback = Mock(return_value=4)
+        with patch.object(plotting, "_sampling_plan", SimpleNamespace(parametric=Mock(return_value=Mock()))), \
+             patch.object(plotting, "_evaluate", return_value=Mock()), \
+             patch.object(plotting, "_curve", side_effect=lambda wrapper, *args: wrapper):
+            graph = plotting.FunctionGraph(callback, (0, 5, 1))
+        self.assertEqual(graph.function(2), noon.Vec2(2, 4))
+        callback.assert_called_once_with(2.0)
 
 if __name__=="__main__":main()

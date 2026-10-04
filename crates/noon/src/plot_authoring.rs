@@ -3,7 +3,8 @@
 //! These operations return ordinary Mobjects, not an Axes facade or a second
 //! graph model. Function evaluation is preparation-time only. Ranges and sample
 //! planning are inert inputs; the resulting authored content is the sampled path.
-//! Persistent graph-query metadata and dynamic resampling are separate B5 work.
+//! Function plots retain their parameter interval as semantic query metadata;
+//! querying it does not inspect path vertices or retain the author's callable.
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, Scene};
 use noon_geometry::{PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan};
@@ -67,7 +68,14 @@ impl ManimGeometryOptions {
         mut function: impl FnMut(f64) -> f64,
         use_smoothing: bool,
     ) -> Result<Self, PlotAuthoringError> {
-        Self::parametric_plot(sampling, |x| [x, function(x)], use_smoothing)
+        let mut options = Self::parametric_plot(sampling, |x| [x, function(x)], use_smoothing)?;
+        options.set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
+            noon_core::SemanticFunctionPlotRole::scene_coordinates([
+                sampling.range[0],
+                sampling.range[1],
+            ]),
+        ));
+        Ok(options)
     }
 
     /// Convert host-evaluated samples from one shared plan into a normal inert
@@ -83,6 +91,36 @@ impl ManimGeometryOptions {
     /// Preserve supplied data order as a polyline without smoothing/resampling.
     pub fn sampled_plot(points: &[[f64; 2]]) -> Result<Self, PlotAuthoringError> {
         Ok(Self::path(noon_geometry::sampled_plot_path(points)?)?)
+    }
+}
+
+impl Mobject {
+    /// Read a function plot's declared interval in constant time. Affine edits
+    /// preserve the interval; copy carries it to the new identity. Manim `become`
+    /// replaces appearance while preserving the receiver's declared interval.
+    pub fn function_plot_range(&self) -> Result<[f64; 2], crate::CoordinateAuthoringError> {
+        Ok(self.function_plot_role()?.range())
+    }
+
+    pub(crate) fn axes_plot_range(&self) -> Result<[f64; 2], crate::CoordinateAuthoringError> {
+        let role = self.function_plot_role()?;
+        if !role.is_axes_mapped() {
+            return Err(crate::CoordinateAuthoringError::InvalidOptions(
+                "area helpers require an Axes graph",
+            ));
+        }
+        Ok(role.range())
+    }
+
+    fn function_plot_role(
+        &self,
+    ) -> Result<noon_core::SemanticFunctionPlotRole, crate::CoordinateAuthoringError> {
+        match self.state()?.role() {
+            noon_core::SemanticObjectRole::FunctionPlot(role) if role.is_valid() => Ok(role),
+            _ => Err(crate::CoordinateAuthoringError::InvalidOptions(
+                "graph queries require a function plot",
+            )),
+        }
     }
 }
 
@@ -151,6 +189,51 @@ mod tests {
         let session = scene.execution_session().unwrap();
         assert_eq!(session.frame().objects.len(), 1);
         assert_eq!(calls.get(), 5);
+    }
+
+    #[test]
+    fn function_range_survives_copy_affine_edits_and_become_appearance_changes() {
+        let mut scene = Scene::new();
+        let sampling = PlotSamplingOptions::parametric(&[-1.0, 1.0, 0.5]).unwrap();
+        let graph = scene.function_plot(&sampling, |x| x * x, false).unwrap();
+        let mut copy = graph.copy_handle().unwrap();
+        let content = copy.state().unwrap().content;
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        copy.shift(4.0, -2.0).unwrap();
+        copy.scale(2.0, 3.0).unwrap();
+        assert_eq!(copy.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert_eq!(copy.state().unwrap().content, content);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            resources
+        );
+
+        let replacement = scene
+            .function_plot(
+                &PlotSamplingOptions::parametric(&[2.0, 5.0, 1.0]).unwrap(),
+                |x| x,
+                false,
+            )
+            .unwrap();
+        copy.become_handle(&replacement, crate::ManimBecomeOptions::default())
+            .unwrap();
+        assert_eq!(copy.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert_eq!(replacement.function_plot_range().unwrap(), [2.0, 5.0]);
+        assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
+        let path = scene.parametric_plot(&sampling, |t| [t, t], false).unwrap();
+        assert!(path.function_plot_range().is_err());
+        copy.become_handle(&path, crate::ManimBecomeOptions::default())
+            .unwrap();
+        assert_eq!(copy.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
     }
 
     #[test]

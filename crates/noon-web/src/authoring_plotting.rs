@@ -121,7 +121,16 @@ impl WasmPlotSamplingPlan {
                 .zip(values)
                 .map(|(&x, &y)| [x, y]),
         );
-        self.geometry(points, smooth)
+        let mut options = self.geometry(points, smooth)?;
+        if self.frame.is_none() {
+            let range = self.plan.range();
+            options
+                .options
+                .set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
+                    noon_core::SemanticFunctionPlotRole::scene_coordinates([range[0], range[1]]),
+                ));
+        }
+        Ok(options)
     }
 
     #[wasm_bindgen(js_name = parametricSamples)]

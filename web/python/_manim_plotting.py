@@ -327,7 +327,25 @@ class Axes(_compat.Group):
         options = _evaluate(plan, function, use_smoothing, parametric=False)
         graph = _curve(object.__new__(FunctionGraph), options, color, kwargs)
         graph.underlying_function = function
+        # Manim's graph callable belongs to the Axes that created the graph.
+        # Queries through another Axes still use this owner's current frame;
+        # querying does not resample the retained curve.
+        graph.function = lambda x: self.c2p(float(x), float(function(float(x))))
         return graph
+
+    def input_to_graph_point(self, x, graph):
+        """Return a callable-backed graph point; retained-path inversion is unsupported."""
+        _outside_callback()
+        function = getattr(graph, "function", None)
+        underlying_function = getattr(graph, "underlying_function", None)
+        if not callable(function) or not callable(underlying_function):
+            raise NotImplementedError(
+                "input_to_graph_point currently requires a callable-backed graph; "
+                "retained-path fallback is not supported"
+            )
+        return _base._as_vec2(function(float(x)))
+
+    i2gp = input_to_graph_point
 
     def plot_samples(self, points, *, color=None, **kwargs):
         """Preserve sample order and repeated x values as a retained polyline."""
@@ -803,6 +821,19 @@ class FunctionGraph(_compat.VMobject):
         options = _evaluate(plan, function, use_smoothing, parametric=False)
         _curve(self, options, color, kwargs)
         self.underlying_function = function
+        self.function = lambda x: _base.Vec2(float(x), float(function(float(x))))
+
+    def _function_plot_range(self):
+        return tuple(float(value) for value in
+                     engine_call(self._semantic_handle.functionPlotRange))
+
+    @property
+    def t_min(self):
+        return self._function_plot_range()[0]
+
+    @property
+    def t_max(self):
+        return self._function_plot_range()[1]
 
 
 __all__ = ["NumberLine", "Axes", "BarChart", "FunctionGraph", "ParametricFunction"]

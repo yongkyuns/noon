@@ -10,9 +10,10 @@ pub(crate) fn axes_area(
     x_range: Option<[f64; 2]>,
     bounded: Option<(&Mobject, &PathQuery)>,
 ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
-    let mut interval = clip_interval(x_range.unwrap_or(graph_range(graph)?), graph_range(graph)?)?;
+    let range = graph.axes_plot_range()?;
+    let mut interval = clip_interval(x_range.unwrap_or(range), range)?;
     if let Some((bound, _)) = bounded {
-        interval = clip_interval(interval, graph_range(bound)?)?;
+        interval = clip_interval(interval, bound.axes_plot_range()?)?;
     }
     let mut top = graph_interval_points(frame, graph_path, interval)?;
     if let Some((_, bound_path)) = bounded {
@@ -67,10 +68,10 @@ impl RiemannRectanglePlan {
         if let Some((bound, _)) = bounded {
             graph.require_same_store(bound)?;
         }
-        let range = graph_range(graph)?;
+        let range = graph.axes_plot_range()?;
         let mut interval = clip_interval(options.x_range.unwrap_or(range), range)?;
         if let Some((bound, _)) = bounded {
-            interval = clip_interval(interval, graph_range(bound)?)?;
+            interval = clip_interval(interval, bound.axes_plot_range()?)?;
         }
         let partition =
             riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;
@@ -278,15 +279,6 @@ fn closed_path(points: &[[f64; 2]]) -> Result<noon_core::VectorPath, CoordinateA
         };
     }
     Ok(path.close())
-}
-
-pub(super) fn graph_range(graph: &Mobject) -> Result<[f64; 2], CoordinateAuthoringError> {
-    match graph.state()?.role() {
-        SemanticObjectRole::FunctionPlot(role) if role.is_valid() => Ok(role.range()),
-        _ => Err(CoordinateAuthoringError::InvalidOptions(
-            "area helpers require an Axes graph",
-        )),
-    }
 }
 
 fn clip_interval(
