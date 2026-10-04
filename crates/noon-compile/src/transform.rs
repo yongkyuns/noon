@@ -328,7 +328,6 @@ fn screen_line_width_only_change(from: Style, to: Style) -> bool {
         && to.stroke.is_some()
         && from.fill == to.fill
         && from.stroke == to.stroke
-        && from.stroke_width_mode == to.stroke_width_mode
         && from.stroke_join == to.stroke_join
         && from.stroke_cap == to.stroke_cap
         && from.opacity == to.opacity

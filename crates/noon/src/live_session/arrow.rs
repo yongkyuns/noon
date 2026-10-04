@@ -47,7 +47,8 @@ mod tests {
             .create_manim_arrow(ManimArrowOptions::arrow(0.0, 0.0, 2.0, 0.0).unwrap())
             .unwrap();
         let from_width = live.effective(arrow.shaft()).unwrap().style.stroke_width;
-        let to_width = live.effective(target.shaft()).unwrap().style.stroke_width;
+        // Detached targets intentionally have no effective runtime row.
+        let to_width = target.shaft().state().unwrap().style.stroke_width as f32;
         let segment = live
             .declare_and_activate_family_transform_to(
                 arrow.family(),
