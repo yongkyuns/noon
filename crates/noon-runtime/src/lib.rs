@@ -1929,7 +1929,47 @@ fn spatial_base_at_time(
         }
     }
     let channel = CompiledChannelKey::new(object_index as u32, Property::CameraProfile);
+    let first_profile_track = compiled.channel_tracks(channel).first();
+    let first_motion = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| motions.first());
+    let initial = match (first_profile_track, first_motion) {
+        (Some(track), motion)
+            if motion.is_none_or(|motion| track.timing.start_time <= motion.start()) =>
+        {
+            let TrackValues::CameraProfile {
+                from, near, far, ..
+            } = track.values
+            else {
+                unreachable!("compiled CameraProfile track has typed endpoints")
+            };
+            Some((track.timing.start_time, from, near, far))
+        }
+        (_, Some(motion)) => {
+            let (near, far) = motion.clips();
+            Some((motion.start(), motion.source(), near, far))
+        }
+        _ => None,
+    };
+    // Stops reconcile the authored baseline to their endpoint. Restore the
+    // earliest captured source before the first occurrence, so an initial wait
+    // cannot expose a future finite-move or ambient-stop position.
+    if let Some((_, profile, near, far)) = initial.filter(|(start, ..)| time < *start) {
+        let camera = profile.camera(near, far)?;
+        spatial.world = noon_core::SemanticWorldTransform3D::new(
+            camera.position,
+            camera.orientation,
+            noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+        )?;
+        spatial.camera_projection = Some(camera.projection);
+        spatial.camera_profile = Some(profile);
+    }
     let mut camera_owner_start = f64::NEG_INFINITY;
+    let released_ambient_start = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| camera_base_release_start(motions, time));
     for track in compiled.channel_tracks(channel) {
         let TrackValues::CameraProfile {
             from,
@@ -1940,6 +1980,12 @@ fn spatial_base_at_time(
         else {
             unreachable!("compiled CameraProfile track has typed endpoints")
         };
+        // A closed final ambient interval has reconciled its endpoint into the
+        // authored baseline. Earlier finite tracks cannot reclaim that released
+        // channel and overwrite a subsequent ordinary camera edit.
+        if released_ambient_start.is_some_and(|start| track.timing.start_time <= start) {
+            continue;
+        }
         if track.reconciled && time >= track.timing.start_time + track.timing.duration {
             continue;
         }
@@ -1987,7 +2033,14 @@ fn camera_motion_at_time(
     // history. Hold it across the intervening wait instead of reading the final
     // camera baseline. After the last closed occurrence, ordinary base writes
     // remain authoritative (including explicit orientation edits after stop).
-    (index + 1 < motions.len() || motion.end().is_none_or(|end| time <= end)).then_some(motion)
+    (index + 1 < motions.len() || motion.end().is_none_or(|end| time < end)).then_some(motion)
+}
+
+fn camera_base_release_start(motions: &[noon_core::CameraAngularMotion], time: f64) -> Option<f64> {
+    motions
+        .last()
+        .filter(|motion| motion.end().is_some_and(|end| time >= end))
+        .map(|motion| motion.start())
 }
 
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {
@@ -2050,11 +2103,38 @@ fn apply_group_to_row(
                     world_track_progress(track, time).map(|_| track.timing.start_time)
                 })
                 .unwrap_or(f64::NEG_INFINITY);
-            if let Some(motion) = motion.filter(|motion| motion.start() >= track_owner_start) {
-                let Some(profile) = motion.sample(time) else {
-                    return false;
+            let sample =
+                if let Some(motion) = motion.filter(|motion| motion.start() >= track_owner_start) {
+                    motion.sample(time).map(|profile| {
+                        let (near, far) = motion.clips();
+                        (profile, near, far)
+                    })
+                } else if motions
+                    .and_then(|motions| camera_base_release_start(motions, time))
+                    .is_some_and(|start| start >= track_owner_start)
+                {
+                    // Publish the reconciled baseline at release, even if this
+                    // frame crosses the boundary without landing on the stop time.
+                    compiled.objects()[group.channel.object_index as usize]
+                        .spatial
+                        .as_deref()
+                        .and_then(|spatial| {
+                            match (spatial.camera_profile, spatial.camera_projection) {
+                                (
+                                    Some(profile),
+                                    Some(noon_core::SemanticProjection3D::Perspective {
+                                        near,
+                                        far,
+                                        ..
+                                    }),
+                                ) => Some((profile, near, far)),
+                                _ => None,
+                            }
+                        })
+                } else {
+                    None
                 };
-                let (near, far) = motion.clips();
+            if let Some((profile, near, far)) = sample {
                 let Some(camera) = profile.camera(near, far) else {
                     return false;
                 };

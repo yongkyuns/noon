@@ -2597,8 +2597,8 @@ pub(super) fn transform_is_finite(transform: Transform2D) -> bool {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, Color, SemanticObjectState, SemanticPaint, SemanticVec3, StoredGeometry,
-        Vec2,
+        AnimationOptions, Color, RateFunction, SemanticObjectState, SemanticPaint, SemanticVec3,
+        StoredGeometry, StrokeWidthMode, Vec2,
     };
 
     use super::*;
@@ -2627,6 +2627,37 @@ mod tests {
         assert_ne!(width, driver_key(object, Property::Stroke));
         assert_ne!(width, driver_key(object, Property::Opacity));
         assert_ne!(width, driver_key(ObjectId::new(8), Property::StrokeWidth));
+    }
+
+    #[test]
+    fn public_transform_payload_validation_accepts_rotated_screen_space_lines() {
+        let mut source = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(0.75, 0.0),
+        });
+        let mut target = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(0.0, 0.75),
+        });
+        let line_style = noon_core::SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.0375,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..noon_core::SemanticStyle::default()
+        };
+        source.style = line_style.clone();
+        target.style = line_style;
+        let mut store = SemanticStore::new();
+        let source = store.insert_semantic_object(source);
+        let target = store.insert_semantic_object(target);
+        crate::validate_semantic_transform_to_payload(
+            &store,
+            source,
+            target,
+            AnimationOptions::new().run_time(3.0),
+        )
+        .expect("Line-to-Line content edits are a supported retained morph");
     }
 
     fn visible_object(store: &mut SemanticStore) -> SemanticNodeId {

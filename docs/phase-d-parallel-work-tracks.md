@@ -50,8 +50,10 @@ clip depth 0..w. Viewport aspect is supplied at evaluation time.
 The finite ordinary projection in [ManimCE v0.21.0's ThreeDCamera](https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/camera/three_d_camera.py)
 can map focal distance, frame height, and zoom to this perspective convention;
 the numeric tests pin that mapping. This does not qualify the public camera API,
-exponential projection, or Manim's behind-camera fallback. Shared authored and
-effective camera integration, mesh resources, and D1's full gate remain pending.
+exponential projection, or Manim's behind-camera fallback. Public camera-profile,
+finite camera-move, and authored-time ambient-rotation paths use the shared
+semantic camera and effective runtime state. The numeric oracle alone does not
+qualify those APIs or the exact #254 source cases tracked below.
 
 ### DH2 — immutable mesh-resource contract
 
@@ -182,6 +184,29 @@ DJ must not:
 **Owner:** existing B7-style qualification infrastructure and Phase D gallery/reference cases such as #254.
 
 **Runs continuously.** It pins numeric world/camera behavior early, renderer/depth behavior at D2, and source-equivalent public cases as D3–D5 slices are promoted. Existing 2D regression coverage remains part of every relevant handoff.
+
+### #254 pinned camera-case inventory
+
+This is an evidence index, not a change to #254's required case list or its
+acceptance bar. A source fixture or passing unit test does not constitute
+ManimCE semantic/raster/timing parity. No case below is recorded as parity-
+qualified here; browser and cross-backend gates must be recorded separately.
+
+| Required pinned case | Current representative implementation/evidence | Owner and status |
+|---|---|---|
+| `FollowingGraphCamera` | Existing 2D moving-camera coverage (`manim-moving-camera-center`); no exact FollowingGraphCamera source pairing is listed. | B6/#89; exact pinned case deferred. |
+| `MovingZoomedSceneAround` | `noon-zoomed-scene` is a narrower ZoomedCamera candidate in `manim_compatibility_manifest.json`; it is not the pinned moving zoomed-scene composition. | B6/#89; full case deferred pending its text/image/compositing dependencies. |
+| `FixedInFrameMObjectTest` | `showcase-spatial-scene` and `noon_spatial_camera_labels.py` cover a HUD label during camera motion; paired Rust/direct-WASM spatial fixtures exist. | D4/#956; implementation slice represented, exact pinned-case browser/raster qualification pending. |
+| `ThreeDLightSourcePosition` | `noon_spatial_surface_lighting.py` and `showcase-spatial-scene` cover a point-lit surface with a moving point light. | D3/#956; bounded implementation represented, exact pinned-case parity and browser qualification pending. |
+| `ThreeDCameraRotation` | `noon_spatial_three_d_axes.py` and `showcase-spatial-scene` contain finite camera-profile moves. | D4/#956; representative implementation exists, exact pinned-case parity and browser qualification pending. |
+| `ThreeDCameraIllusionRotation` | Ordinary authored-time ambient rotation has native/runtime tests and Python APIs. Manim's separate oscillating illusion-rotation helper has no supported implementation or paired fixture. | D4/#956; illusion rotation is explicitly outside the bounded profile; exact case deferred. |
+| `ThreeDSurfacePlot` | `noon_spatial_surface.py`, `noon_spatial_surface_lighting.py`, and `showcase-spatial-scene` cover bounded indexed surfaces. | D2/D3/#699/#956; narrow surface behavior represented, exact pinned plot parity and browser qualification pending. |
+
+Keep the full pinned examples as required evidence even where a narrower
+representative fixture already exercises the underlying semantic operation.
+When a case is promoted, record semantic state, intermediate timing/seek, and
+supported-backend raster results against the pinned source; do not infer a pass
+from manifest presence, compilation, unit tests, or a related showcase.
 
 ## Dependency view
 

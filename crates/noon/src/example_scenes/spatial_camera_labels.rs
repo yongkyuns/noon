@@ -32,12 +32,58 @@ fn to_profile() -> ManimCamera3DProfile {
 }
 
 fn pose(translation: SemanticVec3) -> SemanticWorldTransform3D {
-    SemanticWorldTransform3D::new(
-        translation,
-        SemanticRotation3D::IDENTITY,
-        SemanticVec3::new(1.0, 1.0, 1.0),
-    )
-    .expect("finite identity transform")
+    pose_with_scale(translation, SemanticVec3::new(1.0, 1.0, 1.0))
+}
+
+fn pose_with_scale(translation: SemanticVec3, scale: SemanticVec3) -> SemanticWorldTransform3D {
+    SemanticWorldTransform3D::new(translation, SemanticRotation3D::IDENTITY, scale)
+        .expect("finite identity transform")
+}
+
+fn text_pose(
+    object: &crate::Mobject,
+    center: SemanticVec3,
+    width: f64,
+    height: f64,
+) -> Result<SemanticWorldTransform3D, String> {
+    let source_width = object.width().map_err(|error| error.to_string())?;
+    let source_height = object.height().map_err(|error| error.to_string())?;
+    let (source_x, source_y) = object.center().map_err(|error| error.to_string())?;
+    if source_width <= 0.0 || source_height <= 0.0 {
+        return Err("spatial camera-label text must have nonempty layout bounds".into());
+    }
+    let scale_x = width / source_width;
+    let scale_y = height / source_height;
+    Ok(pose_with_scale(
+        SemanticVec3::new(
+            center.x - source_x * scale_x,
+            center.y - source_y * scale_y,
+            center.z,
+        ),
+        SemanticVec3::new(scale_x, scale_y, 1.0),
+    ))
+}
+
+fn fit_frame_text(
+    object: &mut crate::Mobject,
+    center: SemanticVec3,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let source_width = object.width().map_err(|error| error.to_string())?;
+    let source_height = object.height().map_err(|error| error.to_string())?;
+    let (source_x, source_y) = object.center().map_err(|error| error.to_string())?;
+    if source_width <= 0.0 || source_height <= 0.0 {
+        return Err("spatial camera-label text must have nonempty layout bounds".into());
+    }
+    let scale_x = width / source_width;
+    let scale_y = height / source_height;
+    object
+        .set_scale(scale_x, scale_y)
+        .map_err(|error| error.to_string())?;
+    object
+        .set_translation(center.x - source_x * scale_x, center.y - source_y * scale_y)
+        .map_err(|error| error.to_string())
 }
 
 pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
@@ -79,19 +125,20 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
         .typst(Typst::new("#text(fill: yellow)[Fixed frame]"))
         .map_err(|error| error.to_string())?;
 
-    for (object, position) in [
-        (&background, SemanticVec3::ZERO),
-        (&world_label, SemanticVec3::new(-3.2, 2.6, 0.1)),
-        (&formula, SemanticVec3::new(2.2, 2.6, 0.1)),
-        (&left, SemanticVec3::new(-1.0, -2.0, 0.3)),
-        (&right, SemanticVec3::new(1.0, -2.0, -0.3)),
+    scene
+        .set_world_transform(&background, pose(SemanticVec3::ZERO))
+        .map_err(|error| error.to_string())?;
+    for (object, center, width, height) in [
+        (&world_label, SemanticVec3::new(-3.2, 2.6, 0.1), 1.8, 0.28),
+        (&formula, SemanticVec3::new(2.2, 2.6, 0.1), 0.8, 0.55),
+        (&left, SemanticVec3::new(-1.0, -2.0, 0.3), 1.2, 0.24),
+        (&right, SemanticVec3::new(1.0, -2.0, -0.3), 1.2, 0.24),
     ] {
         scene
-            .set_world_transform(object, pose(position))
+            .set_world_transform(object, text_pose(object, center, width, height)?)
             .map_err(|error| error.to_string())?;
     }
-    hud.set_translation(-3.4, -3.4)
-        .map_err(|error| error.to_string())?;
+    fit_frame_text(&mut hud, SemanticVec3::new(-3.4, -3.4, 0.0), 1.1, 0.22)?;
     left.set_object_opacity(0.5)
         .map_err(|error| error.to_string())?;
     right
@@ -189,7 +236,22 @@ mod tests {
             family_rows[0].fixed_orientation_center,
             family_rows[1].fixed_orientation_center
         );
-        assert!(family_rows[0].fixed_orientation_center.is_some());
+        let fixed_center = family_rows[0]
+            .fixed_orientation_center
+            .expect("fixed family has a shared authored geometry center");
+        assert!((fixed_center.x).abs() < 1e-9);
+        assert!((fixed_center.y + 2.0).abs() < 1e-9);
+        assert!((fixed_center.z).abs() < 1e-9);
+        assert_eq!(
+            session
+                .frame()
+                .objects
+                .iter()
+                .filter_map(|row| row.spatial.as_deref())
+                .filter(|spatial| spatial.composition_domain == Domain::FixedFrame)
+                .count(),
+            1
+        );
         assert!(scene.integration_store().borrow().text_resources().len() >= 5);
     }
 }

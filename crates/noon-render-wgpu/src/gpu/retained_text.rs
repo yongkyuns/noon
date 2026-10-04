@@ -2171,7 +2171,7 @@ impl RetainedFramePreparer {
             // no 2D scratch slot. Their pose/style changes must not force the
             // retained vector stream to rebuild (or ask it to resolve a mesh as
             // a VectorPath).
-            if object.spatial.is_some() {
+            if object.world_transform().is_some() {
                 return true;
             }
             let Some(scratch_slot) = self.scratch_slots.get(index).and_then(|slot| *slot) else {
@@ -2613,10 +2613,10 @@ impl RetainedFramePreparer {
                 geometry_only = false;
                 continue;
             }
-            if object.spatial.is_some() {
-                // Meshes and Camera3D declarations belong exclusively to the
-                // spatial pass. They share publication ordering with this
-                // preparer, but are not retained planar geometry.
+            if object.world_transform().is_some() {
+                // World and fixed-orientation content belongs to the spatial
+                // pass. FixedFrame content retains ordinary planar geometry
+                // and text in this shared painter stream.
                 geometry_only = false;
                 continue;
             }

@@ -206,6 +206,9 @@ pub(super) fn is_supported_content_morph(
     matches!(
         (source.content.geometry(), target.content.geometry()),
         (
+            Some(StoredGeometry::Line { .. }),
+            Some(StoredGeometry::Line { .. })
+        ) | (
             Some(StoredGeometry::Circle { .. }),
             Some(StoredGeometry::Rectangle { .. })
         ) | (

@@ -965,6 +965,27 @@ impl From<noon::NumericAuthoringError> for AuthoringFailure {
     }
 }
 
+impl From<noon::SpatialCompositionError> for AuthoringFailure {
+    fn from(error: noon::SpatialCompositionError) -> Self {
+        use noon::SpatialCompositionError::*;
+        match error {
+            Authoring(error) => error.into(),
+            Live(error) => error.into(),
+            FixedFrameRequiresPlanarOrientation => Self::new(
+                "unsupported_operation",
+                "spatial.fixed_frame_orientation",
+                error,
+            ),
+            CameraOrLightMustRemainWorld => Self::new(
+                "unsupported_operation",
+                "spatial.camera_light_domain",
+                error,
+            ),
+            MeshMustRemainWorld => Self::new("unsupported_operation", "spatial.mesh_domain", error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1213,26 +1234,5 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
-    }
-}
-
-impl From<noon::SpatialCompositionError> for AuthoringFailure {
-    fn from(error: noon::SpatialCompositionError) -> Self {
-        use noon::SpatialCompositionError::*;
-        match error {
-            Authoring(error) => error.into(),
-            Live(error) => error.into(),
-            FixedFrameRequiresPlanarOrientation => Self::new(
-                "unsupported_operation",
-                "spatial.fixed_frame_orientation",
-                error,
-            ),
-            CameraOrLightMustRemainWorld => Self::new(
-                "unsupported_operation",
-                "spatial.camera_light_domain",
-                error,
-            ),
-            MeshMustRemainWorld => Self::new("unsupported_operation", "spatial.mesh_domain", error),
-        }
     }
 }

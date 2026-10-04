@@ -893,7 +893,7 @@
       "direct_factory": "createDirectVectorSpaceSmokeRenderer",
       "expected_duration": 3.0,
       "sample_times": [0.0, 1.5, 2.966666666666667],
-      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed by the same ordinary parallel family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0, exercising regenerated Arrow tips without relaxing transform payload support."
+      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed together by the ordinary structural family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0, exercising regenerated Arrow tips without relaxing transform payload support."
     },
     {
       "id": "vector-space-lts-worker",

@@ -1279,7 +1279,9 @@ are sampled analytically from authored time and share the existing camera-profil
 scheduler channel. Overlapping finite camera moves and ambient ownership are
 rejected; stopping closes the interval at the exact effective endpoint. Ordinary
 authored edits require a completed animation segment, and zero-rate ambient
-intervals do not keep settled playback awake. Direct seeking and forward playback are required to produce the same effective spatial state.
+intervals do not keep settled playback awake. Each camera admits at most 256
+ambient intervals; further begins fail before publication. Replay budgets count
+both saved and incoming motion metadata, including the payload exchanged on seek. Direct seeking and forward playback are required to produce the same effective spatial state.
 World, FixedOrientation, and FixedFrame composition are represented as
 semantic domains on ordinary objects/families. World mesh/path content uses
 depth; FixedOrientation currently supports retained path and vector text with

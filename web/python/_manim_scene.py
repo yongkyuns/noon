@@ -2105,19 +2105,7 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
 
 def _apply_matrix_target(target: object, animation: object) -> None:
     """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
-    try:
-        raw_rows = list(animation.matrix)
-    except TypeError:
-        raw_rows = [animation.matrix]
-    rows: list[list[object]] = []
-    for raw_row in raw_rows:
-        try:
-            row = list(raw_row)
-        except TypeError:
-            row = [raw_row]
-        rows.append(row)
-    columns = len(rows[0]) if rows else 0
-    values = [float(value) for row in rows for value in row]
+    rows, columns, values = _animate._matrix_arguments(animation.matrix)
     about = _base._as_vec2(animation.about_point)
     is_family = isinstance(target, _compat.Group)
     handle = getattr(

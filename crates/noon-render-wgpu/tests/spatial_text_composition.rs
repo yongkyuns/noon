@@ -82,7 +82,7 @@ impl Target {
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         receiver.recv().unwrap().unwrap();
-        let bytes = self.readback.slice(..).get_mapped_range().to_vec();
+        let bytes = self.readback.slice(..).get_mapped_range().unwrap().to_vec();
         self.readback.unmap();
         bytes
     }
@@ -92,6 +92,25 @@ fn attach(store: &mut SemanticStore, state: SemanticObjectState) -> noon_core::S
     let id = store.insert_semantic_object(state);
     store.attach_semantic_object(id).unwrap();
     id
+}
+
+fn fitted_text(
+    handle: noon_core::TextResourceHandle,
+    bounds: noon_core::Rect,
+    center: SemanticVec3,
+    size: [f64; 2],
+) -> SemanticObjectState {
+    let mut state = SemanticObjectState::new(handle);
+    let scale_x = size[0] / f64::from(bounds.width());
+    let scale_y = size[1] / f64::from(bounds.height());
+    let local_center = bounds.center();
+    state.transform.translation = SemanticVec3::new(
+        center.x - f64::from(local_center.x) * scale_x,
+        center.y - f64::from(local_center.y) * scale_y,
+        center.z,
+    );
+    state.transform.scale = SemanticVec3::new(scale_x, scale_y, 1.0);
+    state
 }
 
 fn pixel(image: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -151,7 +170,7 @@ fn render(
         .unwrap();
     renderer.upload_retained(device, queue, &prepared, text_state);
     let mut encoder = device.create_command_encoder(&Default::default());
-    renderer
+    let draw_stats = renderer
         .encode_retained(
             &mut encoder,
             &target.view,
@@ -161,6 +180,10 @@ fn render(
             None,
         )
         .unwrap();
+    assert!(
+        draw_stats.text.draw_calls > 0,
+        "FixedFrame text issues real glyph draws"
+    );
     (target.read(device, queue, encoder), spatial)
 }
 
@@ -183,6 +206,7 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
         let mut store = SemanticStore::new();
         let markup =
             compile_typst_resource("#text(fill: red)[World label]", TypstMode::Markup).unwrap();
+        let markup_bounds = markup.resource.bounds;
         let markup_handle = store
             .import_text_resource(markup.resource, &markup.fonts, &markup.geometry)
             .unwrap();
@@ -227,6 +251,8 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
             ..SemanticStyle::default()
         };
         path_state.transform.translation = SemanticVec3::new(0.0, 0.0, 0.0);
+        path_state.transform.orientation =
+            noon_core::SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY);
         attach(&mut store, path_state);
 
         // The later, farther copy must not cover the first opaque path. This
@@ -242,12 +268,17 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
             ..SemanticStyle::default()
         };
         far_path.transform.translation = SemanticVec3::new(0.0, 0.0, -1.0);
+        far_path.transform.orientation =
+            noon_core::SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY);
         far_path.set_z_index(10.0);
         attach(&mut store, far_path);
 
         let mut world_label = SemanticObjectState::new(markup_handle);
         world_label.transform = SemanticTransform {
             translation: SemanticVec3::new(-3.2, 2.6, 0.0),
+            orientation: noon_core::SemanticOrientation::Spatial(
+                noon_core::SemanticRotation3D::IDENTITY,
+            ),
             ..SemanticTransform::default()
         };
         attach(&mut store, world_label);
@@ -255,6 +286,9 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
         let mut math_label = SemanticObjectState::new(math_handle);
         math_label.transform = SemanticTransform {
             translation: SemanticVec3::new(2.2, 2.6, 0.0),
+            orientation: noon_core::SemanticOrientation::Spatial(
+                noon_core::SemanticRotation3D::IDENTITY,
+            ),
             ..SemanticTransform::default()
         };
         attach(&mut store, math_label);
@@ -263,13 +297,21 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
         // publishes that exact f64 center to the renderer for each row.
         let family = store.insert_family();
         store.attach_to_scene(family).unwrap();
-        let mut left = SemanticObjectState::new(markup_handle);
-        left.transform.translation = SemanticVec3::new(-1.0, -2.0, 0.3);
+        let mut left = fitted_text(
+            markup_handle,
+            markup_bounds,
+            SemanticVec3::new(-1.0, -2.0, 0.3),
+            [1.2, 0.24],
+        );
         left.style.object_opacity = 0.5;
         let left_id = store.insert_semantic_object(left);
         store.add_semantic_family_member(family, left_id).unwrap();
-        let mut right = SemanticObjectState::new(markup_handle);
-        right.transform.translation = SemanticVec3::new(1.0, -2.0, -0.3);
+        let mut right = fitted_text(
+            markup_handle,
+            markup_bounds,
+            SemanticVec3::new(1.0, -2.0, -0.3),
+            [1.2, 0.24],
+        );
         right.style.object_opacity = 0.5;
         let right_id = store.insert_semantic_object(right);
         store.add_semantic_family_member(family, right_id).unwrap();
@@ -284,8 +326,14 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
         domain.apply(&mut store).unwrap();
 
         // A real FixedFrame label is retained in the existing planar pass.
-        let mut hud = SemanticObjectState::new(markup_handle);
-        hud.transform.translation = SemanticVec3::new(-3.4, -3.4, 0.0);
+        // Keep its measured bounds outside the spatial paths, so comparing
+        // this region tests the HUD rather than the changing world behind it.
+        let mut hud = fitted_text(
+            markup_handle,
+            markup_bounds,
+            SemanticVec3::new(-3.4, -3.4, 0.0),
+            [1.1, 0.22],
+        );
         hud.set_spatial_composition_domain(SemanticSpatialCompositionDomain::FixedFrame)
             .unwrap();
         attach(&mut store, hud);
@@ -352,7 +400,7 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
             "MathTypst glyph/vector label is visible"
         );
         assert!(
-            non_black_pixels(&before, 10, 90, 92, 126) > 10,
+            non_black_pixels(&before, 1, 30, 115, 123) > 5,
             "FixedFrame label uses the retained planar pass"
         );
         let center = pixel(&before, WIDTH / 2, HEIGHT / 2);
@@ -360,7 +408,7 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
             center[2] > center[0] && center[2] < 100,
             "near opaque path wins against the later far blue path: {center:?}"
         );
-        let blended_fixed = (42..150)
+        let blended_fixed = (42..HEIGHT)
             .flat_map(|y| (42..150).map(move |x| (x, y)))
             .filter(|&(x, y)| {
                 let pixel = pixel(&before, x, y);
@@ -400,9 +448,8 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
         );
         assert_ne!(before, after, "world content responds to camera movement");
         assert_eq!(
-            (0..HEIGHT)
-                .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
-                .filter(|&(x, y)| x > 0 && x < 86 && y > 92)
+            (115..123)
+                .flat_map(|y| (1..30).map(move |x| (x, y)))
                 .filter(|&(x, y)| pixel(&before, x, y) != pixel(&after, x, y))
                 .count(),
             0,

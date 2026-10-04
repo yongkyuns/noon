@@ -18,21 +18,33 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertFalse(any(isinstance(node, ast.Assert) for node in ast.walk(tree)))
                 scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
                 self.assertEqual(len(scenes), 1)
-                is_spatial = entry["id"] == "showcase-spatial-scene"
+                is_surface = entry["id"] == "showcase-spatial-scene"
+                is_axes = entry["id"] == "showcase-three-d-axes"
+                is_linear = entry["id"] == "showcase-linear-algebra"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
-                self.assertTrue(scene_bases & ({"Scene", "ThreeDScene"} if is_spatial else {"Scene"}))
+                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "Scene"
+                self.assertIn(expected_base, scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
+                progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
-                         and node.func.attr in ({"play", "move_camera"} if is_spatial else {"play"})]
+                         and node.func.attr in progression]
                 self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
-                if is_spatial:
+                if is_surface:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and isinstance(node.func.value, ast.Name)
                                         and node.func.value.id == "Mesh3D"
                                         and node.func.attr == "parametric" for node in calls))
                     self.assertTrue(any(isinstance(node.func, ast.Name)
                                         and node.func.id == "WorldTransformTo" for node in calls))
+                elif is_axes:
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id == "ThreeDAxes" for node in calls))
+                    self.assertTrue(any(isinstance(node.func, ast.Attribute)
+                                        and node.func.attr == "c2p" for node in calls))
+                elif is_linear:
+                    self.assertTrue(any(isinstance(node.func, ast.Attribute)
+                                        and node.func.attr == "add_vector" for node in calls))
                 else:
                     self.assertTrue(any(isinstance(node.func, ast.Name)
                                         and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))

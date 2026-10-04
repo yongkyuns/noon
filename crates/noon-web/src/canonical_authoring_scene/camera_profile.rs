@@ -230,7 +230,7 @@ mod tests {
             context.effective_camera_profile(&camera).unwrap(),
             (profile(), 0.1, 100.0)
         );
-        assert_eq!(context.live_execution_ownership(), "unstarted");
+        assert_eq!(context.live_execution_ownership(), "none");
 
         let mut authored = profile();
         authored.zoom = 1.75;

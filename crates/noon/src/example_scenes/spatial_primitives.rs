@@ -58,18 +58,19 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     scene.add(&triangle).map_err(|error| error.to_string())?;
 
-    let triangle_rotation = SemanticRotation3D::from_axis_angle(
-        SemanticVec3::new(0.0, 1.0, 0.0),
-        0.4,
-    )
-    .ok_or("invalid triangle rotation")?;
+    let triangle_rotation =
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4)
+            .ok_or("invalid triangle rotation")?;
     let mut transaction = SemanticMutationTransaction::new();
     let line_track = transaction.create_object_property_track(
         line.node_id(),
         SemanticObjectTrackProperty::WorldTransform,
         SemanticObjectTrackValues::WorldTransform {
             from: world_transform(SemanticVec3::ZERO, SemanticRotation3D::IDENTITY),
-            to: world_transform(SemanticVec3::new(0.0, 0.0, 0.25), SemanticRotation3D::IDENTITY),
+            to: world_transform(
+                SemanticVec3::new(0.0, 0.0, 0.25),
+                SemanticRotation3D::IDENTITY,
+            ),
         },
         TrackTiming::new(0.0, DURATION, RateFunction::Linear),
         CompositionTimeMap::identity(),
@@ -123,12 +124,8 @@ fn world_transform(
     translation: SemanticVec3,
     rotation: SemanticRotation3D,
 ) -> SemanticWorldTransform3D {
-    SemanticWorldTransform3D::new(
-        translation,
-        rotation,
-        SemanticVec3::new(1.0, 1.0, 1.0),
-    )
-    .expect("fixture transform is finite and invertible")
+    SemanticWorldTransform3D::new(translation, rotation, SemanticVec3::new(1.0, 1.0, 1.0))
+        .expect("fixture transform is finite and invertible")
 }
 
 #[cfg(test)]
@@ -139,11 +136,27 @@ mod tests {
     fn public_line_and_explicit_triangle_share_the_native_execution_timeline() {
         let mut session = session().unwrap();
         assert_eq!(session.frame().objects.len(), 3);
-        assert_eq!(session.wake_state().timeline(), noon_runtime::TimelineWakeState::Continuous);
+        assert_eq!(
+            session.wake_state().timeline(),
+            noon_runtime::TimelineWakeState::Continuous
+        );
         let rows = |session: &ExecutionSession| {
-            let line = session.frame().objects.iter().find(|row| row.style.fill == Some(Color::RED)).unwrap();
-            let triangle = session.frame().objects.iter().find(|row| row.style.fill == Some(Color::BLUE)).unwrap();
-            (line.world_transform().unwrap(), triangle.world_transform().unwrap())
+            let line = session
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.style.fill == Some(Color::RED))
+                .unwrap();
+            let triangle = session
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.style.fill == Some(Color::BLUE))
+                .unwrap();
+            (
+                line.world_transform().unwrap(),
+                triangle.world_transform().unwrap(),
+            )
         };
         assert_eq!(rows(&session).0.translation, SemanticVec3::ZERO);
         session.advance_to(0.5).unwrap();

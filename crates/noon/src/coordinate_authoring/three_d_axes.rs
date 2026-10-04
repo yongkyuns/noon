@@ -200,11 +200,11 @@ impl ManimThreeDAxes {
         store: Rc<RefCell<SemanticStore>>,
         options: &ManimThreeDAxesOptions,
     ) -> Result<Self, CoordinateAuthoringError> {
-        let (prepared_axes, tip_paths) = prepare_three_d_axes(options)?;
+        let prepared = prepare_three_d_axes(options)?;
         let root = publish_prepared_three_d_axes(
             options,
-            prepared_axes,
-            tip_paths,
+            prepared.axes,
+            prepared.tip_paths,
             &mut store.borrow_mut(),
             |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
         )?;
@@ -351,9 +351,15 @@ impl Scene {
         &mut self,
         options: &ManimThreeDAxesOptions,
     ) -> Result<ManimThreeDAxes, CoordinateAuthoringError> {
-        let (prepared_axes, tip_paths) = prepare_three_d_axes(options)?;
+        let prepared = prepare_three_d_axes(options)?;
         let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_three_d_axes(options, prepared_axes, tip_paths, store, publish)
+            publish_prepared_three_d_axes(
+                options,
+                prepared.axes,
+                prepared.tip_paths,
+                store,
+                publish,
+            )
         })?;
         let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
         ManimThreeDAxes::from_family(family)
@@ -381,9 +387,15 @@ impl crate::LiveSession<'_> {
         &mut self,
         options: &ManimThreeDAxesOptions,
     ) -> Result<ManimThreeDAxes, CoordinateAuthoringError> {
-        let (prepared_axes, tip_paths) = prepare_three_d_axes(options)?;
+        let prepared = prepare_three_d_axes(options)?;
         let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_three_d_axes(options, prepared_axes, tip_paths, store, publish)
+            publish_prepared_three_d_axes(
+                options,
+                prepared.axes,
+                prepared.tip_paths,
+                store,
+                publish,
+            )
         })?;
         let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
         ManimThreeDAxes::from_family(family)
@@ -404,15 +416,14 @@ impl crate::LiveSession<'_> {
     }
 }
 
+struct PreparedThreeDAxes {
+    axes: Vec<(Vec<SemanticObjectState>, SemanticWorldTransform3D)>,
+    tip_paths: Vec<VectorPath>,
+}
+
 fn prepare_three_d_axes(
     options: &ManimThreeDAxesOptions,
-) -> Result<
-    (
-        Vec<(Vec<SemanticObjectState>, SemanticWorldTransform3D)>,
-        Vec<VectorPath>,
-    ),
-    CoordinateAuthoringError,
-> {
+) -> Result<PreparedThreeDAxes, CoordinateAuthoringError> {
     let axes = [
         (
             options.x_range,
@@ -496,7 +507,10 @@ fn prepare_three_d_axes(
         }
         prepared_axes.push((states, world));
     }
-    Ok((prepared_axes, tip_paths))
+    Ok(PreparedThreeDAxes {
+        axes: prepared_axes,
+        tip_paths,
+    })
 }
 
 fn publish_prepared_three_d_axes(
@@ -677,8 +691,10 @@ mod tests {
     fn three_d_axes_validation_fails_before_publishing_any_family() {
         let mut scene = Scene::new();
         let before = scene.integration_store().borrow().scene_revision();
-        let mut options = ManimThreeDAxesOptions::default();
-        options.z_length = f64::INFINITY;
+        let options = ManimThreeDAxesOptions {
+            z_length: f64::INFINITY,
+            ..ManimThreeDAxesOptions::default()
+        };
         assert!(scene.three_d_axes(&options).is_err());
         assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     }

@@ -2,6 +2,10 @@
 
 use crate::ManimCamera3DProfile;
 
+/// Maximum authored ambient intervals per camera. Closed intervals are seek
+/// history; bounding them also bounds copy-on-publication metadata retention.
+pub const MAX_CAMERA_MOTION_INTERVALS: usize = 256;
+
 /// Manim's unwrapped angular coordinate driven by one ambient occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraRotationAxis {
@@ -114,22 +118,23 @@ impl CameraAngularMotion {
 
 /// Validate camera-local occurrence order before semantic publication.
 pub fn camera_motion_history_is_valid(motions: &[CameraAngularMotion]) -> bool {
-    motions.iter().enumerate().all(|(index, motion)| {
-        CameraAngularMotion::new(
-            motion.source,
-            motion.axis,
-            motion.rate,
-            motion.start,
-            motion.end,
-            motion.near,
-            motion.far,
-        )
-        .is_some()
-            && (index == 0
-                || motions[index - 1]
-                    .end
-                    .is_some_and(|end| end <= motion.start))
-    })
+    motions.len() <= MAX_CAMERA_MOTION_INTERVALS
+        && motions.iter().enumerate().all(|(index, motion)| {
+            CameraAngularMotion::new(
+                motion.source,
+                motion.axis,
+                motion.rate,
+                motion.start,
+                motion.end,
+                motion.near,
+                motion.far,
+            )
+            .is_some()
+                && (index == 0
+                    || motions[index - 1]
+                        .end
+                        .is_some_and(|end| end <= motion.start))
+        })
 }
 
 #[cfg(test)]
@@ -215,5 +220,37 @@ mod tests {
             100.0
         )
         .is_none());
+    }
+
+    #[test]
+    fn intentional_ambient_seek_history_has_a_checked_size_limit() {
+        let mut motions: Vec<_> = (0..MAX_CAMERA_MOTION_INTERVALS)
+            .map(|index| {
+                CameraAngularMotion::new(
+                    profile(),
+                    CameraRotationAxis::Theta,
+                    0.0,
+                    index as f64,
+                    Some(index as f64 + 1.0),
+                    0.1,
+                    100.0,
+                )
+                .unwrap()
+            })
+            .collect();
+        assert!(camera_motion_history_is_valid(&motions));
+        motions.push(
+            CameraAngularMotion::new(
+                profile(),
+                CameraRotationAxis::Theta,
+                0.0,
+                MAX_CAMERA_MOTION_INTERVALS as f64,
+                None,
+                0.1,
+                100.0,
+            )
+            .unwrap(),
+        );
+        assert!(!camera_motion_history_is_valid(&motions));
     }
 }

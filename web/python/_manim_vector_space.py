@@ -151,7 +151,7 @@ class LinearTransformationScene(VectorScene):
 
     def apply_matrix(self, matrix: object, **kwargs: Any):
         """Animate the grid and moving vectors through ordinary shared morphs."""
-        from _manim_animate import ApplyMatrix, Transform
+        from _manim_animate import ApplyMatrix, Transform, _matrix_arguments
         from _manim_arrow import Arrow
         from _noon_errors import engine_call
 
@@ -159,8 +159,7 @@ class LinearTransformationScene(VectorScene):
         about = _base._as_vec2(about_point)
         requested_path_arc = kwargs.pop("path_arc", None)
         run_time = float(kwargs.get("run_time", 3.0))
-        rows = [list(row) for row in matrix]
-        values = [float(value) for row in rows for value in row]
+        rows, columns, values = _matrix_arguments(matrix)
         if requested_path_arc is None:
             from js import noonLinearTransformationPathArc
 
@@ -169,7 +168,7 @@ class LinearTransformationScene(VectorScene):
                     noonLinearTransformationPathArc,
                     values,
                     len(rows),
-                    len(rows[0]) if rows else 0,
+                    columns,
                     operation="LinearTransformationScene.pathArc",
                 )
             )
@@ -195,7 +194,7 @@ class LinearTransformationScene(VectorScene):
                 transform,
                 values,
                 len(rows),
-                len(rows[0]) if rows else 0,
+                columns,
                 float(about.x),
                 float(about.y),
                 operation="ApplyMatrix.vectorEndpoints",

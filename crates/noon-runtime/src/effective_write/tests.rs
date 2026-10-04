@@ -1,8 +1,11 @@
 use noon_compile::{
-    CompiledObject, CompiledResources, CompiledScene, ExecutionMutationTransaction,
+    lower_semantic_execution_root, CompiledObject, CompiledResources, CompiledScene,
+    ExecutionMutationTransaction, SemanticExecutionIndex,
 };
 use noon_core::{
-    CompositionTimeMap, GeometryRef, RateFunction, TrackDefinition, TrackId, TrackTiming,
+    CompositionTimeMap, GeometryRef, RateFunction, SemanticMutationTransaction,
+    SemanticObjectState, SemanticOrientation, SemanticSpatialCompositionDomain, SemanticStore,
+    SemanticTransform, SemanticVec3, StoredGeometry, TrackDefinition, TrackId, TrackTiming,
     TrackValues,
 };
 
@@ -673,35 +676,39 @@ fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
 
 #[test]
 fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center() {
-    let anchor = noon_core::SemanticNodeId::new(700, 1);
-    let mut objects = Vec::new();
-    for (id, x) in [(1_u64, -3.0), (2, 5.0)] {
-        let mut object = CompiledObject::new(
-            ObjectId::new(id),
-            GeometryRef::rectangle(2.0, 2.0),
-            Transform2D::IDENTITY,
-            base_style(),
+    let mut store = SemanticStore::new();
+    let anchor = store.insert_family();
+    let (first, second) = {
+        let mut insert_fixed = |x: f64| {
+            let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+                size: Vec2::new(2.0, 2.0),
+            });
+            state.transform = SemanticTransform {
+                translation: SemanticVec3::new(x, 0.0, 0.0),
+                scale: SemanticVec3::new(1.0, 1.0, 1.0),
+                orientation: SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY),
+            };
+            store.insert_semantic_object(state)
+        };
+        (insert_fixed(-3.0), insert_fixed(5.0))
+    };
+    store.add_semantic_family_member(anchor, first).unwrap();
+    store.add_semantic_family_member(anchor, second).unwrap();
+    let mut declaration = SemanticMutationTransaction::new();
+    for member in [first, second] {
+        declaration.set_spatial_composition_domain_with_anchor(
+            member,
+            SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(anchor),
         );
-        object.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
-            world: noon_core::SemanticWorldTransform3D::new(
-                noon_core::SemanticVec3::new(x, 0.0, 0.0),
-                noon_core::SemanticRotation3D::IDENTITY,
-                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
-            )
-            .unwrap(),
-            camera_projection: None,
-            camera_profile: None,
-            camera_motions: None,
-            material: noon_core::SemanticSpatialMaterial::Unlit,
-            point_light: false,
-            composition_domain: noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
-            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
-            fixed_orientation_anchor_family: Some(anchor),
-            fixed_orientation_center: None,
-        }));
-        objects.push(object);
     }
-    let mut instance = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+    declaration.apply(&mut store).unwrap();
+
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution_root(&store, anchor, &mut index).unwrap();
+    let first_id = index.execution_object_id(first).unwrap();
+    let second_id = index.execution_object_id(second).unwrap();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
     let expected_initial = noon_core::SemanticVec3::new(1.0, 0.0, 0.0);
     for row in &instance.frame().objects {
         assert_eq!(
@@ -723,7 +730,7 @@ fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center()
         &mut instance,
         0.0,
         &[EffectivePropertyWrite::WorldTransform {
-            object: ObjectId::new(1),
+            object: first_id,
             world: moved_world,
         }],
     );
@@ -752,6 +759,8 @@ fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center()
             .x,
         5.0
     );
+    assert_eq!(instance.frame().objects[0].id, first_id);
+    assert_eq!(instance.frame().objects[1].id, second_id);
     assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
 }
 

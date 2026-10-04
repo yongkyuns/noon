@@ -176,6 +176,7 @@ pub(crate) fn compile_content_morph(
             | (GeometryRef::Circle { .. }, GeometryRef::Circle { .. })
             | (GeometryRef::Rectangle { .. }, GeometryRef::Rectangle { .. })
             | (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
+            | (GeometryRef::Line { .. }, GeometryRef::Line { .. })
             | (
                 GeometryRef::VectorPath(_),
                 GeometryRef::Circle { .. }
@@ -631,6 +632,45 @@ mod tests {
         assert!(path
             .conservative_bounds()
             .is_some_and(|bounds| bounds.width() > 2.5 && bounds.height() > 2.5));
+    }
+
+    #[test]
+    fn screen_space_line_content_morph_keeps_rotated_endpoints_in_fixed_frame() {
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.0375,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let (geometry, render_transform) = compile_content_morph(
+            &GeometryRef::line(Vec2::ZERO, Vec2::new(0.75, 0.0)),
+            &GeometryRef::line(Vec2::ZERO, Vec2::new(0.0, 0.75)),
+            style,
+            style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+        )
+        .expect("line endpoints can rotate through the prepared path morph");
+
+        let GeometryRef::VectorPath(path) = geometry else {
+            panic!("line content morph must use the retained path pair")
+        };
+        let target = path.morph_target().expect("rotated line endpoint path");
+        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(path.commands().len(), 2);
+        assert_eq!(target.commands().len(), 2);
+        assert_eq!(
+            path.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(0.75, 0.0)
+            }
+        );
+        assert_eq!(
+            target.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(0.0, 0.75)
+            }
+        );
     }
 
     #[test]

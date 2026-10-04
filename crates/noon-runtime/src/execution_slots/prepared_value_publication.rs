@@ -16,7 +16,8 @@ enum PreparedAuthoredValueWrite {
     SemanticTransform {
         object_index: usize,
         base_transform: Transform2D,
-        spatial: Option<noon_compile::CompiledSpatialState>,
+        spatial: Option<Box<noon_compile::CompiledSpatialState>>,
+        compiled_spatial: Option<Box<noon_compile::CompiledSpatialState>>,
         changes_execution: bool,
     },
     Style {
@@ -150,7 +151,9 @@ impl SceneInstance {
                             object,
                             field: noon_core::ObjectStateField::Transform,
                         })?;
+                    let spatial = spatial.map(Box::new);
                     PreparedAuthoredValueWrite::SemanticTransform {
+                        compiled_spatial: spatial.clone(),
                         object_index,
                         base_transform,
                         spatial,
@@ -167,7 +170,8 @@ impl SceneInstance {
                 ) => PreparedAuthoredValueWrite::SemanticTransform {
                     object_index,
                     base_transform: *base_transform,
-                    spatial: spatial.clone(),
+                    compiled_spatial: spatial.clone().map(Box::new),
+                    spatial: spatial.clone().map(Box::new),
                     changes_execution,
                 },
                 _ => unreachable!("ordinary value publication classified above"),
@@ -254,13 +258,14 @@ impl SceneInstance {
                 PreparedAuthoredValueWrite::SemanticTransform {
                     base_transform,
                     spatial,
+                    compiled_spatial,
                     object_index,
                     ..
                 } => {
                     self.compiled.commit_prepared_semantic_transform_value(
                         object_index as u32,
                         base_transform,
-                        spatial.clone(),
+                        compiled_spatial,
                     );
                     self.frame.release_render_transform(object_index);
                     self.frame.objects[object_index].transform = base_transform;
@@ -269,9 +274,9 @@ impl SceneInstance {
                             if let Some(current) =
                                 self.frame.objects[object_index].spatial.as_deref_mut()
                             {
-                                *current = next;
+                                *current = *next;
                             } else {
-                                self.frame.objects[object_index].spatial = Some(Box::new(next));
+                                self.frame.objects[object_index].spatial = Some(next);
                             }
                         }
                         None => self.frame.objects[object_index].spatial = None,

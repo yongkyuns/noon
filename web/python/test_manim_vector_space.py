@@ -75,6 +75,15 @@ class ManimVectorSpaceTests(unittest.TestCase):
             assert captured["kwargs"] == {"run_time": 3.0}
             animation, = captured["animations"]
             assert animation.anim_args == {"run_time": 3.0, "path_arc": 0.0}
+            # The flattened length is four, but these are not two valid rows.
+            # Reject before querying Rust or preparing any target objects.
+            try:
+                scene.apply_matrix([[1.0, 2.0, 3.0], [4.0]])
+            except ValueError as error:
+                assert "equal lengths" in str(error)
+            else:
+                raise AssertionError("ragged matrix was silently reinterpreted")
+            assert calls == [([0.0, 1.0, 1.0, 0.0], 2, 2)]
             """
         )
         completed = subprocess.run(

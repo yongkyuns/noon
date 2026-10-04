@@ -28,9 +28,11 @@ impl Default for LinearTransformationOptions {
             muted_plane_style(crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE);
         background.faded_line_style = None;
         let frame_width = f64::from(DEFAULT_FRAME_WIDTH);
-        let mut foreground = ManimNumberPlaneOptions::default();
-        foreground.x_range = [-frame_width, frame_width, 1.0];
-        foreground.y_range = [-frame_width, frame_width, 1.0];
+        let foreground = ManimNumberPlaneOptions {
+            x_range: [-frame_width, frame_width, 1.0],
+            y_range: [-frame_width, frame_width, 1.0],
+            ..ManimNumberPlaneOptions::default()
+        };
         Self {
             background_plane: Some(background),
             foreground_plane: Some(foreground),

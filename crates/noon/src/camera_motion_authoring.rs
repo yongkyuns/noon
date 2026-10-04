@@ -13,8 +13,20 @@ fn state_without_open_motion(
     if motions.last().is_some_and(|motion| motion.end().is_none()) {
         return Err(AuthoringError::AmbientCameraMotionAlreadyActive);
     }
+    if motions.len() >= noon_core::MAX_CAMERA_MOTION_INTERVALS {
+        return Err(AuthoringError::InvalidCameraMotionInput(
+            "ambient camera history is limited to 256 intervals per camera",
+        ));
+    }
     Ok(motions.to_vec())
 }
+
+type StoppedCameraMotion = (
+    Arc<[CameraAngularMotion]>,
+    noon_core::ManimCamera3DProfile,
+    f64,
+    f64,
+);
 
 pub(crate) fn ensure_camera_motion_closed(camera: &Mobject) -> Result<(), AuthoringError> {
     if camera
@@ -58,15 +70,7 @@ pub(crate) fn begin_motion(
 pub(crate) fn stop_motion(
     state: &SemanticObjectState,
     time: f64,
-) -> Result<
-    Option<(
-        Arc<[CameraAngularMotion]>,
-        noon_core::ManimCamera3DProfile,
-        f64,
-        f64,
-    )>,
-    AuthoringError,
-> {
+) -> Result<Option<StoppedCameraMotion>, AuthoringError> {
     let Some(last) = state.camera_motions().last().copied() else {
         return Ok(None);
     };
@@ -208,5 +212,60 @@ mod tests {
             .is_err());
         assert_eq!(scene.integration_store().borrow().scene_revision(), before);
         assert!(camera.state().unwrap().camera_motions().is_empty());
+    }
+
+    #[test]
+    fn camera_motion_history_limit_rejects_the_next_interval_atomically() {
+        let mut scene = Scene::new();
+        let camera = scene.camera_3d_profile(profile(), 0.1, 100.0).unwrap();
+
+        for _ in 0..noon_core::MAX_CAMERA_MOTION_INTERVALS {
+            scene
+                .begin_ambient_camera_rotation(&camera, CameraRotationAxis::Theta, 0.25)
+                .unwrap();
+            scene.wait(0.01).unwrap();
+            scene.stop_ambient_camera_rotation(&camera).unwrap();
+        }
+
+        let before = camera.state().unwrap();
+        assert_eq!(
+            before.camera_motions().len(),
+            noon_core::MAX_CAMERA_MOTION_INTERVALS
+        );
+        assert!(before
+            .camera_motions()
+            .iter()
+            .all(|motion| motion.end().is_some()));
+        let revision = scene.integration_store().borrow().scene_revision();
+        let authored_profile = before.camera_profile();
+        let authored_pose = before.transform;
+        let authored_projection = before.camera_projection();
+
+        // Stopping again after the final closed interval is a no-op, even at the cap.
+        scene.stop_ambient_camera_rotation(&camera).unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+
+        let error = scene
+            .begin_ambient_camera_rotation(&camera, CameraRotationAxis::Gamma, 0.1)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AuthoringError::InvalidCameraMotionInput(
+                "ambient camera history is limited to 256 intervals per camera"
+            )
+        ));
+
+        let after = camera.state().unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(after.camera_motions(), before.camera_motions());
+        assert_eq!(after.camera_profile(), authored_profile);
+        assert_eq!(after.transform, authored_pose);
+        assert_eq!(after.camera_projection(), authored_projection);
     }
 }

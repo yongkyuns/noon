@@ -734,12 +734,15 @@ try {
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     spatialMeshAdaptersSource,
   );
-  assert.equal(spatialMeshAdapters.metrics.objectCount, 7,
+  assert.equal(spatialMeshAdapters.metrics.objectCount, 8,
     "public solid adapters must enter the shared semantic scene as retained meshes");
   assert.ok(spatialMeshAdapters.metrics.presentedFrames > 0);
   assert.ok(spatialMeshAdapters.metrics.drawCalls > 0,
     "mesh adapters must reach the real retained renderer");
-  assert.ok(spatialMeshAdapters.frame.objects.every(object => object.spatial?.draw_kind === "mesh"),
+  const meshRows = spatialMeshAdapters.frame.objects.filter(object => object.spatial?.draw_kind === "mesh");
+  assert.equal(meshRows.length, 7);
+  assert.equal(spatialMeshAdapters.frame.objects.filter(object => object.spatial?.camera_projection).length, 1);
+  assert.ok(meshRows.every(object => object.spatial?.composition_domain === "world"),
     "the worker frame must retain mesh draw kinds rather than flattening adapters to planar paths");
   assert.ok(spatialMeshAdapters.frame.objects.some(object =>
     object.spatial.translation[0] === -1.8 && object.spatial.translation[1] === 0.2),

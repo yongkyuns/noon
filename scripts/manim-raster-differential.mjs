@@ -180,6 +180,107 @@ async function assertSpatialMeshOracle(semantic, samples) {
   }
 }
 
+function assertSpatialCameraLabelsOracle(semantic, samples) {
+  const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
+  const expectedLabels = {
+    world: { center: [-3.2, 2.6, 0.1], width: 1.8, height: 0.28 },
+    formula: { center: [2.2, 2.6, 0.1], width: 0.8, height: 0.55 },
+    fixed_left: { center: [-1, -2, 0.3], width: 1.2, height: 0.24 },
+    fixed_right: { center: [1, -2, -0.3], width: 1.2, height: 0.24 },
+    hud: { center: [-3.4, -3.4, 0], width: 1.1, height: 0.22 },
+  };
+  const expectedCamera = {
+    phi: [0.6, 0.8], theta: [-1.2, -0.1], gamma: [0, 0.2],
+    focal_distance: [5, 5], zoom: [1, 1.1],
+    frame_center: [[0, 0, 0], [0.3, 0, 0]],
+  };
+  for (const sample of samples) {
+    const frame = byIndex.get(sample.frameIndex);
+    const oracle = frame?.oracle;
+    assert.ok(oracle, `spatial-camera-labels: missing numeric Manim state at ${sample.time}`);
+    const progress = Math.min(1, Math.max(0, sample.time));
+    const interpolate = (start, end) => start + (end - start) * progress;
+    for (const key of ["phi", "theta", "gamma", "focal_distance", "zoom"]) {
+      const expected = interpolate(...expectedCamera[key]);
+      assert.ok(Math.abs(oracle.camera[key] - expected) < 1e-6,
+        `spatial-camera-labels: camera ${key} at ${sample.time}; got ${oracle.camera[key]}, expected ${expected}`);
+    }
+    expectedCamera.frame_center[0].forEach((start, axis) => {
+      const expected = interpolate(start, expectedCamera.frame_center[1][axis]);
+      assert.ok(Math.abs(oracle.camera.frame_center[axis] - expected) < 1e-6,
+        `spatial-camera-labels: camera frame center axis ${axis} at ${sample.time}`);
+    });
+    for (const [name, expected] of Object.entries(expectedLabels)) {
+      const actual = oracle.labels[name];
+      assert.ok(actual, `spatial-camera-labels: missing ${name} geometry oracle`);
+      for (let axis = 0; axis < 3; axis += 1) {
+        assert.ok(Math.abs(actual.center[axis] - expected.center[axis]) < 1e-6,
+          `spatial-camera-labels: ${name} center axis ${axis} at ${sample.time}`);
+      }
+      assert.ok(Math.abs(actual.width - expected.width) < 1e-6,
+        `spatial-camera-labels: ${name} authored width`);
+      assert.ok(Math.abs(actual.height - expected.height) < 1e-6,
+        `spatial-camera-labels: ${name} authored height`);
+    }
+    const familyCenter = oracle.labels.fixed_family_center;
+    for (const [axis, expected] of [0, -2, 0].entries()) {
+      assert.ok(Math.abs(familyCenter[axis] - expected) < 1e-6,
+        `spatial-camera-labels: fixed-orientation family center axis ${axis}`);
+    }
+  }
+}
+
+function assertSpatialCameraLabelsFrame(debugFrame, time) {
+  const allSpatialRows = debugFrame.objects.filter(object => object.spatial);
+  const rows = allSpatialRows.filter(object => object.present);
+  const domains = new Map();
+  for (const object of rows) {
+    const domain = object.spatial.composition_domain;
+    domains.set(domain, (domains.get(domain) ?? 0) + 1);
+  }
+  const fixed = rows.filter(object => object.spatial.composition_domain === "fixed_orientation");
+  const hud = rows.filter(object => object.spatial.composition_domain === "fixed_frame");
+  assert.equal(fixed.length, 2,
+    `spatial-camera-labels: both retained fixed-orientation labels must stay present at ${time}`);
+  assert.equal(hud.length, 1,
+    `spatial-camera-labels: retained fixed-frame HUD must stay present at ${time}`);
+  assert.ok((domains.get("world") ?? 0) >= 3,
+    `spatial-camera-labels: background and world labels must stay in the world lane at ${time}`);
+  const centers = fixed.map(object => object.spatial.fixed_orientation_center);
+  assert.ok(centers.every(Boolean), `spatial-camera-labels: missing shared family anchor at ${time}`);
+  for (const axis of [0, 1, 2]) {
+    assert.ok(centers.every(center => Math.abs(center[axis] - [0, -2, 0][axis]) < 1e-5),
+      `spatial-camera-labels: common fixed-family center axis ${axis} at ${time}`);
+  }
+  const cameraRows = allSpatialRows.filter(object => object.spatial.camera_projection !== null);
+  assert.equal(cameraRows.length, 1, `spatial-camera-labels: one retained camera row at ${time}`);
+  assert.equal(cameraRows[0].spatial.camera_projection.near, 0.1);
+  assert.equal(cameraRows[0].spatial.camera_projection.far, 100);
+}
+
+function assertSpatialCameraHudPixels(buffer, context) {
+  const png = PNG.sync.read(buffer);
+  const pixelsPerWorldUnit = png.height / 8;
+  const centerX = png.width / 2 - 3.4 * pixelsPerWorldUnit;
+  const centerY = png.height / 2 + 3.4 * pixelsPerWorldUnit;
+  const halfWidth = 1.1 * pixelsPerWorldUnit / 2 + 3;
+  const halfHeight = 0.22 * pixelsPerWorldUnit / 2 + 3;
+  let visibleYellowPixels = 0;
+  for (let y = Math.max(0, Math.floor(centerY - halfHeight));
+       y <= Math.min(png.height - 1, Math.ceil(centerY + halfHeight)); y += 1) {
+    for (let x = Math.max(0, Math.floor(centerX - halfWidth));
+         x <= Math.min(png.width - 1, Math.ceil(centerX + halfWidth)); x += 1) {
+      const offset = (y * png.width + x) * 4;
+      const [red, green, blue, alpha] = png.data.subarray(offset, offset + 4);
+      if (alpha > 0 && red > 100 && green > 90 && blue < Math.min(red, green) * 0.65) {
+        visibleYellowPixels += 1;
+      }
+    }
+  }
+  assert.ok(visibleYellowPixels > 0,
+    `${context}: expected the fixed-frame yellow label inside its authored bounds`);
+}
+
 async function assertVectorSpaceOracle(semantic, samples) {
   const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
   const initialSample = samples.find(sample => Math.abs(sample.time) < 1e-9);
@@ -284,11 +385,18 @@ async function renderManimReferences() {
     const samples = sampleFrames(frameTimes, fixture);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
-      await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
+      const image = await readFile(frameFiles[sample.frameIndex]);
+      if (fixture.id.startsWith("spatial-camera-labels-")) {
+        assertSpatialCameraHudPixels(image, `${fixture.id} Manim reference at ${sample.time}`);
+      }
+      await writeFile(outputPath, image);
       sample.referencePath = outputPath;
     }
     if (fixture.id === "spatial-mesh-depth") {
       await assertSpatialMeshOracle(semanticFixture, samples);
+    }
+    if (fixture.id === "spatial-camera-labels-direct" || fixture.id === "spatial-camera-labels-worker") {
+      assertSpatialCameraLabelsOracle(semanticFixture, samples);
     }
     if (fixture.id === "vector-space-lts-direct" || fixture.id === "vector-space-lts-worker") {
       await assertVectorSpaceOracle(semanticFixture, samples);
@@ -351,9 +459,15 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
       const outputPath = path.join(fixtureDir, `${sample.label}.png`);
       await page.locator("#scene").screenshot({ path: outputPath });
+      if (fixture.id === "spatial-camera-labels-direct") {
+        assertSpatialCameraHudPixels(await readFile(outputPath), `${fixture.id} at ${sample.time}`);
+      }
       const debugFrame = await page.evaluate(() =>
         JSON.parse(window.noonSpatialMeshOracle.debugSelectionFrameJson()));
       assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+      if (fixture.id === "spatial-camera-labels-direct") {
+        assertSpatialCameraLabelsFrame(debugFrame, sample.time);
+      }
       captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
     }
     const completed = await page.evaluate(async (duration) => {
@@ -420,8 +534,14 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     const outputPath = path.join(fixtureDir, `${sample.label}.png`);
     await page.locator("#scene").screenshot({ path: outputPath });
+    if (fixture.id === "spatial-camera-labels-worker") {
+      assertSpatialCameraHudPixels(await readFile(outputPath), `${fixture.id} at ${sample.time}`);
+    }
     const debugFrame = await page.evaluate(() => window.noonHostRaster.debugFrame());
     assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+    if (fixture.id === "spatial-camera-labels-worker") {
+      assertSpatialCameraLabelsFrame(debugFrame, sample.time);
+    }
     captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
   }
   const completed = await page.evaluate((times) =>

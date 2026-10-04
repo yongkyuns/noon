@@ -139,6 +139,7 @@ impl ManimCamera3DProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SemanticWorldTransform3D;
 
     fn near(actual: f64, expected: f64) {
         assert!(

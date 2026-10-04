@@ -8,7 +8,6 @@ impl super::SemanticExecutionPlayer {
         camera: &noon::Mobject,
     ) -> Result<(noon_core::ManimCamera3DProfile, f64, f64), AuthoringFailure> {
         self.with_live_session(|live| live.effective_camera_profile(camera))
-            .map_err(Into::into)
     }
 
     pub(crate) fn live_set_camera_profile(
@@ -17,7 +16,6 @@ impl super::SemanticExecutionPlayer {
         profile: noon_core::ManimCamera3DProfile,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_camera_profile(camera, profile))
-            .map_err(Into::into)
     }
 
     pub(crate) fn live_begin_ambient_camera_rotation(
@@ -27,7 +25,6 @@ impl super::SemanticExecutionPlayer {
         rate: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.begin_ambient_camera_rotation(camera, axis, rate))
-            .map_err(Into::into)
     }
 
     pub(crate) fn live_stop_ambient_camera_rotation(
@@ -35,7 +32,6 @@ impl super::SemanticExecutionPlayer {
         camera: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.stop_ambient_camera_rotation(camera))
-            .map_err(Into::into)
     }
 
     pub(crate) fn live_set_camera_orientation(
@@ -46,6 +42,5 @@ impl super::SemanticExecutionPlayer {
         gamma: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_camera_orientation(camera, phi, theta, gamma))
-            .map_err(Into::into)
     }
 }

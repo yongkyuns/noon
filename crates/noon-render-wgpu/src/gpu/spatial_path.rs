@@ -17,6 +17,7 @@ use noon_core::{
     TextRenderItem, TextResource, TextResourceHandle, TextResourceLookup, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
@@ -93,7 +94,7 @@ struct ResidentPath {
     users: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct SpatialPathGpuState {
     draws: BTreeMap<DrawId, PathDraw>,
     /// Retained painter ordering for fixed-orientation paths. The map remains
@@ -108,22 +109,6 @@ pub(super) struct SpatialPathGpuState {
     free_instances: Vec<usize>,
     gpu: Option<PathGpuState>,
     outlines: GlyphOutlineCache,
-}
-
-impl Default for SpatialPathGpuState {
-    fn default() -> Self {
-        Self {
-            draws: BTreeMap::new(),
-            fixed_orientation_order: BTreeSet::new(),
-            painter_ranks: HashMap::new(),
-            painter_ranks_initialized: false,
-            paths: HashMap::new(),
-            instances: Vec::new(),
-            free_instances: Vec::new(),
-            gpu: None,
-            outlines: GlyphOutlineCache::default(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -280,6 +265,7 @@ impl PathGpuState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spatial_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -328,10 +314,17 @@ fn spatial_path_pipeline(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: depth.then_some(wgpu::DepthStencilState {
+        // Both domains execute in the shared spatial render pass, which owns a
+        // depth attachment. Fixed-orientation content uses painter order and
+        // ignores that depth without declaring an incompatible pipeline.
+        depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_write_enabled: Some(depth),
+            depth_compare: Some(if depth {
+                wgpu::CompareFunction::LessEqual
+            } else {
+                wgpu::CompareFunction::Always
+            }),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -366,6 +359,14 @@ struct StagedPath {
     instance: PathInstance,
     domain: Domain,
     painter_rank: u32,
+}
+
+#[derive(Debug)]
+struct PathCandidate<'a> {
+    id: DrawId,
+    source: Option<SourceKey>,
+    geometry: Cow<'a, GeometryRef>,
+    style: Style,
 }
 
 impl SpatialPathGpuState {
@@ -444,6 +445,7 @@ impl SpatialPathGpuState {
         self.painter_ranks_initialized = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn plan(
         &mut self,
         device: &wgpu::Device,
@@ -458,10 +460,7 @@ impl SpatialPathGpuState {
     ) -> Result<PathPlan, SpatialPathError> {
         let mut staged = Vec::with_capacity(indices.len());
         let mut new_paths = HashMap::new();
-        let camera_clip_scale = [
-            (2.0 / camera.world_size.x) as f32,
-            (2.0 / camera.world_size.y) as f32,
-        ];
+        let camera_clip_scale = [2.0 / camera.world_size.x, 2.0 / camera.world_size.y];
         if !camera_clip_scale
             .iter()
             .all(|value| value.is_finite() && *value > 0.0)
@@ -514,15 +513,15 @@ impl SpatialPathGpuState {
             let object_alpha = object.style.opacity * object.appearance;
             let mut candidates = Vec::new();
             if let Some(geometry) = object.content.geometry() {
-                candidates.push((
-                    DrawId {
+                candidates.push(PathCandidate {
+                    id: DrawId {
                         row: index,
                         item: 0,
                     },
-                    None,
-                    geometry.clone(),
-                    object.style,
-                ));
+                    source: None,
+                    geometry: Cow::Borrowed(geometry),
+                    style: object.style,
+                });
             } else if let Some(handle) = object.content.text() {
                 let resource = texts
                     .get(handle)
@@ -537,7 +536,7 @@ impl SpatialPathGpuState {
                     index,
                     |source, style| {
                         let key = PathKey {
-                            source: source.clone(),
+                            source: *source,
                             specialization: specialization(style),
                         };
                         self.paths.contains_key(&key) || new_paths.contains_key(&key)
@@ -550,18 +549,24 @@ impl SpatialPathGpuState {
                     SpatialPathError::MissingGeometry
                 });
             }
-            for (draw_id, text_key, geometry, style) in candidates {
+            for candidate in candidates {
+                let PathCandidate {
+                    id: draw_id,
+                    source: text_key,
+                    geometry,
+                    style,
+                } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
                 let keyed = match text_key {
                     Some(source) => PathKey {
                         source,
                         specialization: specialization(style),
                     },
-                    None => path_key(&geometry, resources, style, index as u64)?,
+                    None => path_key(geometry.as_ref(), resources, style, index as u64)?,
                 };
                 if !self.paths.contains_key(&keyed) && !new_paths.contains_key(&keyed) {
                     let path = tessellate(
-                        &geometry,
+                        geometry.as_ref(),
                         resources,
                         style,
                         object_alpha,
@@ -570,7 +575,7 @@ impl SpatialPathGpuState {
                     if path.indices.is_empty() {
                         continue;
                     }
-                    new_paths.insert(keyed.clone(), path);
+                    new_paths.insert(keyed, path);
                 }
                 let color = |value: Option<Color>| {
                     value.map_or([0.0; 4], |c| [c.red, c.green, c.blue, c.alpha])
@@ -751,7 +756,7 @@ impl SpatialPathGpuState {
                 .is_some_and(|(old, new)| old.key == new.key);
             if let Some(old) = previous.as_ref().filter(|_| !same_path) {
                 self.paths.get_mut(&old.key).expect("resident path").users -= 1;
-                released.insert(old.key.clone());
+                released.insert(old.key);
             }
             if let Some(staged) = staged {
                 let slot = previous.map(|old| old.instance).unwrap_or_else(|| {
@@ -930,7 +935,7 @@ fn path_key(
             }
             SourceKey::Resource(handle)
         }
-        GeometryRef::VectorPath(_) => return Err(SpatialPathError::UnsupportedGeometry),
+        GeometryRef::VectorPath(path) => SourceKey::Inline(inline_path_fingerprint(identity, path)),
         GeometryRef::Circle { radius } => {
             SourceKey::Inline(inline_fingerprint(identity, &[radius.to_bits()]))
         }
@@ -978,16 +983,17 @@ fn specialization(style: Style) -> Specialization {
     }
 }
 
-fn collect_text_paths(
+#[allow(clippy::too_many_arguments)]
+fn collect_text_paths<'a>(
     outlines: &mut GlyphOutlineCache,
     handle: TextResourceHandle,
-    resource: &TextResource,
+    resource: &'a TextResource,
     fonts: &dyn FontResourceLookup,
     geometries: &dyn GeometryResourceLookup,
     object_style: Style,
     row: usize,
     mut path_is_resident: impl FnMut(&SourceKey, Style) -> bool,
-) -> Result<Vec<(DrawId, Option<SourceKey>, GeometryRef, Style)>, SpatialPathError> {
+) -> Result<Vec<PathCandidate<'a>>, SpatialPathError> {
     let mut output = Vec::new();
     for (item_index, item) in resource.render_items.iter().copied().enumerate() {
         let item_index = u32::try_from(item_index).map_err(|_| SpatialPathError::BufferLimit)?;
@@ -1066,34 +1072,34 @@ fn collect_text_paths(
                     }
                 }
                 if base_style.fill.is_some() {
-                    output.push((
-                        DrawId {
+                    output.push(PathCandidate {
+                        id: DrawId {
                             row,
                             item: item_base,
                         },
-                        Some(fill_source),
-                        GeometryRef::VectorPath(if needs_fill {
+                        source: Some(fill_source),
+                        geometry: Cow::Owned(GeometryRef::VectorPath(if needs_fill {
                             fill_path
                         } else {
                             noon_core::VectorPath::new()
-                        }),
-                        base_style,
-                    ));
+                        })),
+                        style: base_style,
+                    });
                 }
                 if let Some(stroke_style) = stroke_style {
-                    output.push((
-                        DrawId {
+                    output.push(PathCandidate {
+                        id: DrawId {
                             row,
                             item: item_base + 1,
                         },
-                        Some(stroke_source),
-                        GeometryRef::VectorPath(if needs_stroke {
+                        source: Some(stroke_source),
+                        geometry: Cow::Owned(GeometryRef::VectorPath(if needs_stroke {
                             stroke_path
                         } else {
                             noon_core::VectorPath::new()
-                        }),
-                        stroke_style,
-                    ));
+                        })),
+                        style: stroke_style,
+                    });
                 }
             }
             TextRenderItem::Vector(vector_index) => {
@@ -1115,15 +1121,15 @@ fn collect_text_paths(
                 } else {
                     transform_path(path, vector.transform, Vec2::ZERO)
                 };
-                output.push((
-                    DrawId {
+                output.push(PathCandidate {
+                    id: DrawId {
                         row,
                         item: item_base,
                     },
-                    Some(source),
-                    GeometryRef::VectorPath(path),
+                    source: Some(source),
+                    geometry: Cow::Owned(GeometryRef::VectorPath(path)),
                     style,
-                ));
+                });
             }
         }
     }
@@ -1134,6 +1140,48 @@ fn inline_fingerprint(identity: u64, values: &[u32]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     identity.hash(&mut hasher);
     values.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn inline_path_fingerprint(identity: u64, path: &noon_core::VectorPath) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity.hash(&mut hasher);
+    path.commands().len().hash(&mut hasher);
+    for command in path.commands() {
+        match command {
+            noon_core::PathCommand::MoveTo { to } => {
+                0_u8.hash(&mut hasher);
+                to.x.to_bits().hash(&mut hasher);
+                to.y.to_bits().hash(&mut hasher);
+            }
+            noon_core::PathCommand::LineTo { to } => {
+                1_u8.hash(&mut hasher);
+                to.x.to_bits().hash(&mut hasher);
+                to.y.to_bits().hash(&mut hasher);
+            }
+            noon_core::PathCommand::QuadraticTo { control, to } => {
+                2_u8.hash(&mut hasher);
+                control.x.to_bits().hash(&mut hasher);
+                control.y.to_bits().hash(&mut hasher);
+                to.x.to_bits().hash(&mut hasher);
+                to.y.to_bits().hash(&mut hasher);
+            }
+            noon_core::PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                3_u8.hash(&mut hasher);
+                control1.x.to_bits().hash(&mut hasher);
+                control1.y.to_bits().hash(&mut hasher);
+                control2.x.to_bits().hash(&mut hasher);
+                control2.y.to_bits().hash(&mut hasher);
+                to.x.to_bits().hash(&mut hasher);
+                to.y.to_bits().hash(&mut hasher);
+            }
+            noon_core::PathCommand::Close => 4_u8.hash(&mut hasher),
+        }
+    }
     hasher.finish()
 }
 
@@ -1290,6 +1338,40 @@ mod tests {
     }
 
     #[test]
+    fn inline_path_key_tracks_exact_command_topology_and_row_identity() {
+        let resources = GeometryResourceArena::default();
+        let path = |end| {
+            GeometryRef::VectorPath(
+                noon_core::VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(end)
+                    .close(),
+            )
+        };
+        let style = Style::default();
+        let first = path(Vec2::new(1.0, 0.0));
+        let edited = path(Vec2::new(1.0, 0.25));
+        let first_key = path_key(&first, &resources, style, 7).unwrap();
+        let edited_key = path_key(&edited, &resources, style, 7).unwrap();
+        let other_row_key = path_key(&first, &resources, style, 8).unwrap();
+
+        assert_ne!(
+            first_key, edited_key,
+            "command edits get a new retained key"
+        );
+        assert_ne!(first_key, other_row_key, "inline paths are row-scoped");
+        assert_eq!(
+            tessellate(&first, &resources, style, 1.0, Domain::World)
+                .unwrap()
+                .indices,
+            tessellate(&edited, &resources, style, 1.0, Domain::World)
+                .unwrap()
+                .indices,
+            "same topology remains tessellatable after coordinate edits"
+        );
+    }
+
+    #[test]
     fn sparse_row_lookup_and_staged_count_touch_only_affected_draws() {
         let mut state = SpatialPathGpuState::default();
         let key = PathKey {
@@ -1348,14 +1430,6 @@ mod tests {
                 .line_to(noon_core::Vec2::new(1.0, 0.0)),
         )));
         let id = handle.id;
-        let result = tessellate(
-            &GeometryRef::External(id),
-            &resources,
-            Style::default(),
-            1.0,
-            Domain::World,
-        )
-        .unwrap();
         assert_eq!(
             path_key(&GeometryRef::External(id), &resources, Style::default(), 0)
                 .unwrap()
@@ -1532,15 +1606,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(candidates.len(), 1);
-        let (id, source, geometry, style) = &candidates[0];
-        assert_eq!(id.row, 7);
-        assert_eq!(id.item, 0);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.id.row, 7);
+        assert_eq!(candidate.id.item, 0);
         assert_eq!(
-            source,
-            &Some(SourceKey::TextVector(handle, 0, geometry_handle))
+            candidate.source,
+            Some(SourceKey::TextVector(handle, 0, geometry_handle))
         );
-        assert_eq!(style.fill, Some(Color::BLUE));
-        let GeometryRef::VectorPath(path) = geometry else {
+        assert_eq!(candidate.style.fill, Some(Color::BLUE));
+        let GeometryRef::VectorPath(path) = candidate.geometry.as_ref() else {
             panic!("text vector is materialized as a transformed path")
         };
         assert!(path.commands().iter().any(|command| matches!(

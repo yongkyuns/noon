@@ -4338,7 +4338,7 @@ mod tests {
         };
         let light = CompiledSpatialState {
             point_light: true,
-            ..mesh
+            ..mesh.clone()
         };
         let track = |property, values| TrackDefinition {
             id: TrackId::new(1),

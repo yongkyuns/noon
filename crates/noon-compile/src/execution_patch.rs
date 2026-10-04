@@ -145,21 +145,21 @@ impl CompiledScene {
         &mut self,
         object_index: u32,
         base_transform: Transform2D,
-        spatial: Option<crate::CompiledSpatialState>,
+        spatial: Option<Box<crate::CompiledSpatialState>>,
     ) {
         let previous = self.objects[object_index as usize]
             .spatial
             .as_deref()
             .cloned();
-        self.update_fixed_orientation_group(object_index, previous.as_ref(), spatial.as_ref());
+        self.update_fixed_orientation_group(object_index, previous.as_ref(), spatial.as_deref());
         let object = &mut self.objects[object_index as usize];
         object.base_transform = base_transform;
         match spatial {
             Some(next) => {
                 if let Some(current) = object.spatial.as_deref_mut() {
-                    *current = next;
+                    *current = *next;
                 } else {
-                    object.spatial = Some(Box::new(next));
+                    object.spatial = Some(next);
                 }
             }
             None => object.spatial = None,

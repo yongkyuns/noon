@@ -161,6 +161,40 @@
       ]
     },
     {
+      "id": "showcase-three-d-axes", "title": "Coordinates in three dimensions",
+      "lesson": "Place a marker with ThreeDAxes.c2p, then inspect its coordinates from two camera angles.",
+      "primary_feature": "three-dimensional-coordinates", "category": "Geometry and layout",
+      "path": "python/examples/showcase_three_d_axes.py",
+      "features": ["ThreeDScene", "ThreeDAxes", "c2p", "Dot3D", "finite camera movement", "fixed-frame caption"],
+      "duration": 6.0, "thumbnail_time": 5.7,
+      "thumbnail": "thumbnails/showcase/showcase-three-d-axes.png",
+      "thumbnail_alt": "A red point at ThreeDAxes coordinate (2, -1, 1.5), with the axes viewed from a tilted camera",
+      "still_intervals": [[0.0, 0.6], [2.2, 2.7], [4.3, 6.0]],
+      "beats": [
+        {"time": 0.6, "label": "Set the 3D coordinates"},
+        {"time": 2.2, "label": "First camera angle"},
+        {"time": 4.3, "label": "Turn to the second view"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-linear-algebra", "title": "Swap coordinates with a matrix",
+      "lesson": "Apply the same linear transformation twice and follow a yellow vector as its coordinates swap and return.",
+      "primary_feature": "linear-algebra-transformations", "category": "Geometry and layout",
+      "path": "python/examples/showcase_linear_algebra.py",
+      "features": ["LinearTransformationScene", "Vector", "ApplyMatrix", "symmetric axis swap", "deterministic replay"],
+      "duration": 7.5, "thumbnail_time": 7.25,
+      "thumbnail": "thumbnails/showcase/showcase-linear-algebra.png",
+      "thumbnail_alt": "A yellow vector on a number plane after two coordinate swaps return it to its starting direction",
+      "still_intervals": [[0.0, 0.5], [3.5, 4.0], [7.0, 7.5]],
+      "beats": [
+        {"time": 0.5, "label": "Start with (2, 1)"},
+        {"time": 3.5, "label": "Swap x and y"},
+        {"time": 7.0, "label": "Swap back to the start"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
       "id": "showcase-reactive-relationships",
       "title": "Relationships that follow motion",
       "lesson": "Drive two dots with ValueTrackers and keep their connector attached using public updaters.",

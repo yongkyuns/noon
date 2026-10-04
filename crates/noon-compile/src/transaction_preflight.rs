@@ -73,12 +73,11 @@ fn effective_track_interval(
         .expect("validated track has a valid composition time map")
 }
 
-#[derive(Clone)]
 enum ObjectOverlay {
     Present {
         index: u32,
         is_text: bool,
-        spatial: Option<crate::CompiledSpatialState>,
+        spatial: Option<Box<crate::CompiledSpatialState>>,
     },
     Removed {
         index: u32,
@@ -112,8 +111,8 @@ impl PreflightOverlay {
     }
 
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
-        match self.objects.get(&id).cloned() {
-            Some(ObjectOverlay::Present { index, .. }) => Some(index),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { index, .. }) => Some(*index),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
@@ -130,8 +129,8 @@ impl PreflightOverlay {
         scene: &CompiledScene,
         id: ObjectId,
     ) -> Option<crate::CompiledSpatialState> {
-        match self.objects.get(&id).cloned() {
-            Some(ObjectOverlay::Present { spatial, .. }) => spatial,
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { spatial, .. }) => spatial.as_deref().cloned(),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
@@ -151,7 +150,7 @@ impl PreflightOverlay {
             spatial: current, ..
         }) = self.objects.get_mut(&id)
         {
-            *current = spatial;
+            *current = spatial.map(Box::new);
             return;
         }
         if let Some(index) = scene.object_indices.get(&id).copied() {
@@ -161,15 +160,15 @@ impl PreflightOverlay {
                 ObjectOverlay::Present {
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
-                    spatial,
+                    spatial: spatial.map(Box::new),
                 },
             );
         }
     }
 
     fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
-        match self.objects.get(&id).cloned() {
-            Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { is_text, .. }) => Some(*is_text),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
@@ -304,8 +303,8 @@ pub(super) fn preflight_transaction_with_resources(
                     &object.content,
                     object.text_bounds,
                 )?;
-                let index = match overlay.objects.get(&object.id).cloned() {
-                    Some(ObjectOverlay::Removed { index }) => index,
+                let index = match overlay.objects.get(&object.id) {
+                    Some(ObjectOverlay::Removed { index }) => *index,
                     _ => match scene.retired_object_indices.get(&object.id).copied() {
                         Some(index) => index,
                         None => {
@@ -322,7 +321,7 @@ pub(super) fn preflight_transaction_with_resources(
                     ObjectOverlay::Present {
                         index,
                         is_text: object.text().is_some(),
-                        spatial: object.spatial.as_deref().cloned(),
+                        spatial: object.spatial.clone(),
                     },
                 );
             }
@@ -380,7 +379,7 @@ pub(super) fn preflight_transaction_with_resources(
                     ObjectOverlay::Present {
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
-                        spatial,
+                        spatial: spatial.map(Box::new),
                     },
                 );
             }

@@ -1,10 +1,8 @@
 //! Paired VectorScene/LinearTransformationScene matrix fixture.
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, LinearTransformationOptions, RateFunction, Scene,
-};
-use noon_core::{
-    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticFamilyTransformMode,
+    AnimationOptions, Color, ExecutionSession, LinearTransformationOptions, MobjectTarget,
+    RateFunction, Scene,
 };
 
 const SWAP_AXES: [f64; 4] = [0.0, 1.0, 1.0, 0.0];
@@ -40,37 +38,28 @@ pub fn session() -> Result<ExecutionSession, String> {
         .run_time(3.0)
         .rate_func(RateFunction::Smooth)
         .path_arc(0.0);
-    let plane_animation = scene.declare_animation(
-        SemanticAnimationIntent::FamilyTransformTo {
-            source: source_plane.node_id(),
-            target_state: target_plane.node_id(),
-            mode: SemanticFamilyTransformMode::Structural,
-        },
-        options,
-    )?;
     let vectors = lts.basis_vectors().ok_or("basis vectors are disabled")?;
-    let vector_animation = scene.declare_animation(
-        SemanticAnimationIntent::FamilyTransformTo {
-            source: vectors.node_id(),
-            target_state: target_vectors.node_id(),
-            mode: SemanticFamilyTransformMode::Structural,
-        },
-        options,
-    )?;
-    let root = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: vec![plane_animation.node_id(), vector_animation.node_id()],
-        },
-        AnimationOptions::new(),
-    )?;
-    let mut session = scene.execution_session().map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &scene.integration_store().borrow(),
-            root.node_id(),
-            AnimationOptions::new(),
-        )
+    // One structural family payload covers the grid and all arrows, so the
+    // shared execution-session family-transform activation can capture the
+    // complete LTS source and target leaf sets in one atomic publication.
+    let source = scene
+        .family(&[
+            MobjectTarget::Family(source_plane),
+            MobjectTarget::Family(vectors),
+        ])
+        .map_err(|error| error.to_string())?;
+    let target = scene
+        .family(&[
+            MobjectTarget::Family(&target_plane),
+            MobjectTarget::Family(&target_vectors),
+        ])
+        .map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    scene
+        .live(&mut session)
+        .declare_and_activate_family_transform_to(&source, &target, options)
         .map_err(|error| error.to_string())?;
     Ok(session)
 }
@@ -81,7 +70,7 @@ mod tests {
     use noon_runtime::TimelineWakeState;
 
     #[test]
-    fn lts_fixture_uses_parallel_smooth_three_second_ordinary_transforms() {
+    fn lts_fixture_uses_smooth_three_second_ordinary_family_transform() {
         let mut forward = session().unwrap();
         assert_eq!(
             forward.wake_state().timeline(),

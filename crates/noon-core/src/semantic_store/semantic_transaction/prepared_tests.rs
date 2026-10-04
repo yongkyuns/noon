@@ -904,7 +904,7 @@ fn duplicate_camera_motion_mutation_is_atomic_for_existing_and_pending_targets()
     assert_eq!(store.last_mutation_stats().slots_written, 0);
 
     let mut pending = SemanticMutationTransaction::new();
-    let token = pending_path_node(&mut pending, VectorPath::new());
+    let token = pending.create_node(SemanticNodeCreation::object(original.clone()));
     pending
         .set_camera_motions(token, Arc::from([]))
         .set_camera_motions(token, Arc::from([]));

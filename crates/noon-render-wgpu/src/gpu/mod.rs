@@ -841,6 +841,7 @@ impl GpuRenderer {
     /// immutable geometry arena. The supplied context is the worker's exact
     /// installed publication context, so spatial uploads share the same
     /// stale/retry semantics as the runtime-owned publication path.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_spatial_with_resources(
         &mut self,
         device: &wgpu::Device,

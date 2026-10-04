@@ -375,10 +375,11 @@ mod tests {
         let object = scene.square(1.0).unwrap();
         scene.add(&object).unwrap();
         let mut execution = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut execution);
-        live.set_spatial_composition_domain(MobjectTarget::Object(&object), Domain::FixedFrame)
-            .unwrap();
-        drop(live);
+        {
+            let mut live = scene.live(&mut execution);
+            live.set_spatial_composition_domain(MobjectTarget::Object(&object), Domain::FixedFrame)
+                .unwrap();
+        }
         assert_eq!(
             object.state().unwrap().spatial_composition_domain(),
             Domain::FixedFrame

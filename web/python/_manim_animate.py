@@ -94,6 +94,26 @@ class Transform:
         _store_animation_args(self, kwargs)
 
 
+def _matrix_arguments(matrix: object):
+    """Preserve rectangular row boundaries when marshalling a Rust matrix request."""
+    try:
+        raw_rows = list(matrix)
+    except TypeError:
+        raw_rows = [matrix]
+    rows: list[list[object]] = []
+    for raw_row in raw_rows:
+        try:
+            row = list(raw_row)
+        except TypeError:
+            row = [raw_row]
+        rows.append(row)
+    columns = len(rows[0]) if rows else 0
+    if any(len(row) != columns for row in rows):
+        raise ValueError("matrix rows must have equal lengths")
+    values = [float(value) for row in rows for value in row]
+    return rows, columns, values
+
+
 class ApplyMatrix:
     """Inert ManimCE ``ApplyMatrix`` request for shared Rust pointwise target preparation."""
 
