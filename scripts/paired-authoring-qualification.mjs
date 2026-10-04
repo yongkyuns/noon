@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
-import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
+import { browserArgs, rasterFixtureSource, resolveQualifiedBackend } from "./manim-raster-support.mjs";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
@@ -22,6 +22,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
     for (const id of selectedIds) assert.ok(cases.some(fixture => fixture.id === id), `unknown paired case: ${id}`);
     cases = cases.filter(fixture => selectedIds.includes(fixture.id));
   }
+  assert.ok(cases.length > 0, "paired qualification requires at least one fixture");
   const fixtures = await Promise.all(cases.map(async fixture => {
     const rawSource = await readFile(path.join(root, fixture.sourcePath ?? `web/python/examples/${fixture.file}`), "utf8");
     const source = fixture.scene ? rasterFixtureSource(rawSource, fixture.scene) : rawSource;
@@ -144,32 +145,32 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       }
       assert.ok(metrics.objectCount > 0, "paired scenes must contain render objects");
       if (fixture.objectCount !== undefined) assert.equal(metrics.objectCount, fixture.objectCount);
-      assert.equal(metrics.rendererBackend, expectedBackend);
+      const selectedBackend = resolveQualifiedBackend(expectedBackend, metrics.rendererBackend);
       assert.ok(metrics.drawCalls > 0);
       await page.evaluate(() => new Promise(resolve =>
         requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const frame = await page.evaluate(async label => label === "python"
         ? (window.pairedExecution ?? window.noonHostRaster).debugFrame()
         : JSON.parse(window.pairedRenderer.debugSelectionFrameJson()), label);
-      await writeFile(path.join(output, `${fixture.id}-${expectedBackend}-${label}-frame.json`),
+      await writeFile(path.join(output, `${fixture.id}-${selectedBackend}-${label}-frame.json`),
         `${JSON.stringify(frame, null, 2)}\n`);
       const pixels = await page.locator("#scene").screenshot({
-        path: path.join(output, `${fixture.id}-${expectedBackend}-${label}.png`),
+        path: path.join(output, `${fixture.id}-${selectedBackend}-${label}.png`),
       });
-      return { metrics, png: PNG.sync.read(pixels) };
+      return { metrics, png: PNG.sync.read(pixels), backend: selectedBackend };
     } finally {
       await page.close();
     }
   }
 
   try {
-    for (const backend of (browserName === "webkit" ? ["webgl"] : ["webgpu", "webgl"])) {
-      const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
-      const result = { backend: expectedBackend };
+    for (const backend of (browserName === "webkit" ? ["automatic"] : ["WebGPU", "WebGL2"])) {
+      let expectedBackend = backend === "automatic" ? "automatic" : backend;
+      const result = { requestedBackend: backend };
       report.backends.push(result);
       const browserType = playwright[browserName];
       const browser = await browserType.launch(browserName === "chromium"
-        ? { channel: "chromium", headless: true, args: browserArgs(backend) }
+        ? { channel: "chromium", headless: true, args: browserArgs(backend === "WebGPU" ? "webgpu" : "webgl") }
         : playgroundLaunchOptions(browserName));
       try {
         const options = contextOptions ?? { viewport: { width: 1000, height: 600 } };
@@ -179,6 +180,8 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         result.static = {};
         for (const fixture of fixtures) {
           const rust = await capture(context, "rust-wasm", expectedBackend, fixture);
+          expectedBackend = rust.backend;
+          result.backend = expectedBackend;
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: rust-wasm host`);
           const python = await capture(context, "python", expectedBackend, fixture);
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: Python host`);

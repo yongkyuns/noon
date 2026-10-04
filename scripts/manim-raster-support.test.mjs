@@ -4,9 +4,22 @@ import {
   compareEffectiveFrames,
   dominantImageRgba,
   rasterFixtureSource,
+  resolveQualifiedBackend,
 } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("automatic paired qualification records either actual supported backend", () => {
+  assert.equal(resolveQualifiedBackend("automatic", "WebGPU"), "WebGPU");
+  assert.equal(resolveQualifiedBackend("automatic", "WebGL2"), "WebGL2");
+});
+
+test("explicit paired qualification retains strict backend matching", () => {
+  assert.equal(resolveQualifiedBackend("WebGL2", "WebGL2"), "WebGL2");
+  assert.throws(() => resolveQualifiedBackend("WebGL2", "WebGPU"), /expected WebGL2/);
+  assert.throws(() => resolveQualifiedBackend("automatic", "Other"), /unsupported backend/);
+  assert.throws(() => resolveQualifiedBackend("Other", "WebGPU"), /unsupported expected/);
+});
 
 test("full-image background estimate ignores a colored perimeter", () => {
   const width = 7;

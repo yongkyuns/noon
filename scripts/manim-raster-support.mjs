@@ -60,6 +60,25 @@ export function rasterFixtureSource(source, scene, { requires_latex = false } = 
   return `${prepared}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
 }
 
+// Automatic browser selection becomes a strict expectation after the first
+// render; paired hosts must still use exactly the same supported backend.
+export function resolveQualifiedBackend(requestedBackend, actualBackend) {
+  const supportedBackends = ["WebGPU", "WebGL2"];
+  if (requestedBackend === "automatic") {
+    if (!supportedBackends.includes(actualBackend)) {
+      throw new Error(`automatic renderer selected unsupported backend ${actualBackend}`);
+    }
+    return actualBackend;
+  }
+  if (!supportedBackends.includes(requestedBackend)) {
+    throw new Error(`unsupported expected renderer backend ${requestedBackend}`);
+  }
+  if (actualBackend !== requestedBackend) {
+    throw new Error(`renderer selected ${actualBackend}; expected ${requestedBackend}`);
+  }
+  return requestedBackend;
+}
+
 export function browserArgs(backend, { gpuMode = "software" } = {}) {
   if (!new Set(["software", "hardware"]).has(gpuMode)) {
     throw new Error(`unsupported GPU mode: ${gpuMode}`);

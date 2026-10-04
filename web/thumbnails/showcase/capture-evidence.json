@@ -1,30 +1,30 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "0294d3e002ac4094ed7c4da452ee72b309627347",
+  "captureRevision": "fd66911ea9d912ee5acc5a851fd21c3ddaec29c8",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "0294d3e002ac4094ed7c4da452ee72b309627347",
+    "sourceRevision": "fd66911ea9d912ee5acc5a851fd21c3ddaec29c8",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "1c633485e9c6b2d22029344e73189c37f7e82f486793f463f183a245b3d29874"
+        "sha256": "38e2fe643c0d6146c6c6819657d649c8b24d36205d78f236be0006a6ebcc5edf"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "b97ff495ca96ae1272b887e9604fbef7abb40bb5578b9524850bec33147ebb10"
+        "sha256": "d2a2af680e0e9b0277238f853f5371198d69115c8532c319efda9dfc2e57bc77"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "15a2a2638e102fb93418710e753fe047499f6ece12a4d1f788b4f57fe5150753"
+        "sha256": "1a07c26ac69579fb229467959a62e65861e71270550ab1dad7912abb4ea64e53"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "d20778863c6a5b4fad51830b2e0c0dc6bda889c1cb4109be8bd01e1143a2ea04"
+    "buildId": "117440eec88d4c11c2352d4b434788fe5898793605fb53b5661ad1188ebb9455"
   },
   "posters": [
     {
@@ -326,9 +326,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 6603,
-        "pngSha256": "b30b4aaaf0aa6c703a8f058a4ffa33d24fbe523d76992760478bff4852b70a98",
-        "pixelSha256": "1a0e20279a43284b76d75bc73ad42e30188465ea3ebcb7cc01ef58a37c100067"
+        "foregroundPixels": 6184,
+        "pngSha256": "4eefb86db486b47c7cbbcdb0b3ce7dc548eaa6f0b56b99bb44aa9cb3d972d76d",
+        "pixelSha256": "130e8dfc4be98f70924e30bce8215c19f43cf305dda39af6e6ec897a3cdcf48f"
       },
       "sample": {
         "requestedTime": 7.1,
@@ -380,9 +380,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 39652,
-        "pngSha256": "001fe68c53afb018f954d4d7c5677bf73c011cd61c9c3b420dc2b846693820bc",
-        "pixelSha256": "2f2641ba42e423c5815781144bf8dcf0d83a7b9d1f57d07e8de6b3079559f6b0"
+        "foregroundPixels": 35808,
+        "pngSha256": "feee7260c9b623805e30c6bd9d9b16bbc66fb60c1206f088a640304737309ed8",
+        "pixelSha256": "ddf4c22ec36d185b2bb1a217e9908fd8f606d03fdb1306fad58b02d21235923f"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -403,7 +403,7 @@
         "baseMetrics": {
           "channel": "noon.render",
           "protocolVersion": 1,
-          "requestId": 9,
+          "requestId": 10,
           "type": "metrics",
           "metrics": {
             "ready": true,
@@ -411,19 +411,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 51,
-            "lastDeltaApplyMs": 0.5,
-            "lastRendererCallMs": 0.7999999523162842,
+            "presentedFrames": 17,
+            "lastDeltaApplyMs": 0.20000004768371582,
+            "lastRendererCallMs": 0.6999999284744263,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 6771.600000023842,
-            "performanceTimeOriginMs": 1791136217603.1,
-            "rendererReadyAtMs": 3839.600000023842,
-            "firstPresentedAtMs": 3889.8000000715256,
+            "sampledAtMs": 8872.899999976158,
+            "performanceTimeOriginMs": 1791146100236.3,
+            "rendererReadyAtMs": 4918.5,
+            "firstPresentedAtMs": 4994.5,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 6722.200000047684,
+            "firstPresentedSessionAtMs": 8817.600000023842,
             "transitionMode": null,
-            "lastFrameTimestamp": 6280.399999976158,
+            "lastFrameTimestamp": 7575,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -459,9 +459,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 39652,
-          "pngSha256": "001fe68c53afb018f954d4d7c5677bf73c011cd61c9c3b420dc2b846693820bc",
-          "pixelSha256": "2f2641ba42e423c5815781144bf8dcf0d83a7b9d1f57d07e8de6b3079559f6b0"
+          "foregroundPixels": 35808,
+          "pngSha256": "feee7260c9b623805e30c6bd9d9b16bbc66fb60c1206f088a640304737309ed8",
+          "pixelSha256": "ddf4c22ec36d185b2bb1a217e9908fd8f606d03fdb1306fad58b02d21235923f"
         },
         "restoredImage": {
           "width": 960,
@@ -479,9 +479,9 @@
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 39373,
-        "pngSha256": "6e0cce3bb4e54bfb74e77af828b3ae3a4ed249cdbc64c3fd95ad04b370fcb1c3",
-        "pixelSha256": "1456be23be8954aca306f443680ba3a11e6d9ab81b46bcebb3ca18714a1f11c9"
+        "foregroundPixels": 39235,
+        "pngSha256": "87fc5391f9865ff9c3e09727f58c8bf367676c5d253eaee1b19fb4ce54cf7df8",
+        "pixelSha256": "46641db39c819e4284a874fc9c7bb4a5f8c57e79d05e74e91771e3f7ab67db8e"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -514,19 +514,19 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 42,
-            "lastDeltaApplyMs": 0,
-            "lastRendererCallMs": 0.40000009536743164,
+            "presentedFrames": 22,
+            "lastDeltaApplyMs": 0.20000004768371582,
+            "lastRendererCallMs": 0.3999999761581421,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 7030.099999904633,
-            "performanceTimeOriginMs": 1791136238496.1,
-            "rendererReadyAtMs": 3995.0999999046326,
-            "firstPresentedAtMs": 4045.6999999284744,
+            "sampledAtMs": 13666.399999976158,
+            "performanceTimeOriginMs": 1791146129588.4,
+            "rendererReadyAtMs": 10181.799999952316,
+            "firstPresentedAtMs": 10235.399999976158,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 7013.599999904633,
+            "firstPresentedSessionAtMs": 13640.799999952316,
             "transitionMode": null,
-            "lastFrameTimestamp": 6475.399999976158,
+            "lastFrameTimestamp": 12703.200000047684,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -549,7 +549,7 @@
               "droppedLateResults": 0
             }
           },
-          "renderHost": "worker",
+          "renderHost": "main-thread",
           "executionMode": "semantic"
         },
         "baseImage": {
@@ -562,9 +562,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 39373,
-          "pngSha256": "6e0cce3bb4e54bfb74e77af828b3ae3a4ed249cdbc64c3fd95ad04b370fcb1c3",
-          "pixelSha256": "1456be23be8954aca306f443680ba3a11e6d9ab81b46bcebb3ca18714a1f11c9"
+          "foregroundPixels": 39235,
+          "pngSha256": "87fc5391f9865ff9c3e09727f58c8bf367676c5d253eaee1b19fb4ce54cf7df8",
+          "pixelSha256": "46641db39c819e4284a874fc9c7bb4a5f8c57e79d05e74e91771e3f7ab67db8e"
         },
         "restoredImage": {
           "width": 960,
