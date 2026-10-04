@@ -894,7 +894,11 @@
       "direct_factory": "createDirectVectorSpaceSmokeRenderer",
       "expected_duration": 3.0,
       "sample_times": [0.0, 1.5, 2.966666666666667],
-      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed together by the ordinary structural family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0, exercising regenerated Arrow tips without relaxing transform payload support."
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.04
+      },
+      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed together by the ordinary structural family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0. Full-viewport thin-grid Cairo/WGPU antialiasing measured 3.32% differing edge pixels and at most 0.432 mean channel error; the 4% edge budget retains the default 0.5 mean-error limit and adds a strict 0.1% foreground mismatch / 1px neighborhood guard plus numeric Arrow bounds/colors."
     },
     {
       "id": "vector-space-lts-worker",
@@ -904,7 +908,11 @@
       "noon_source": "web/python/examples/noon_vector_space.py",
       "expected_duration": 3.0,
       "sample_times": [0.0, 1.5, 2.966666666666667],
-      "notes": "The same VectorScene/LTS matrix animation through the async Python worker, using Rust-owned matrix path-arc defaults and ordinary shared ApplyMatrix/Transform requests."
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.04
+      },
+      "notes": "The same VectorScene/LTS matrix animation through the async Python worker, using Rust-owned matrix path-arc defaults and ordinary shared ApplyMatrix/Transform requests. Shares the direct fixture's measured thin-grid edge budget, unchanged 0.5 mean-error limit, strict foreground coverage guard, and numeric Arrow bounds/colors."
     },
     {
       "id": "spatial-camera-labels-direct",

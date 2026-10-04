@@ -36,6 +36,10 @@ for (const fixtureReport of report.fixtures) {
   for (const [backend, backendReport] of Object.entries(fixtureReport.backends)) {
     const samples = [];
     for (const sample of backendReport.samples) {
+      if (fixture.id.startsWith("vector-space-lts-")) {
+        assert.equal(sample.foregroundCoverage?.pass, true,
+          `${fixture.id}/${backend}@${sample.time}: missing or failed grid coverage qualification`);
+      }
       const result = evaluateRasterTolerance({
         sample,
         timingDelta: backendReport.durationDelta,

@@ -112,36 +112,27 @@ export function browserArgs(backend, { gpuMode = "software" } = {}) {
   ];
 }
 
-// Infer the canvas background from the modal exact RGBA value on the image
-// border. The first pixel may be occupied by a grid/path that reaches a corner.
-export function dominantBorderRgba({ data, width, height }) {
+// Infer the canvas background from the modal exact RGBA value across the image.
+// A border-only sample is unreliable when a grid or perimeter path covers it.
+export function dominantImageRgba({ data, width, height }) {
   if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1
       || !data || data.length !== width * height * 4) {
     throw new Error("expected RGBA image data with positive integer dimensions");
   }
   const counts = new Map();
-  const addPixel = (pixelIndex) => {
-    const offset = pixelIndex * 4;
-    const rgba = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
-    const key = rgba.join(",");
-    const entry = counts.get(key);
-    if (entry) entry.count += 1;
-    else counts.set(key, { rgba, count: 1 });
-  };
-
-  for (let x = 0; x < width; x += 1) {
-    addPixel(x);
-    if (height > 1) addPixel((height - 1) * width + x);
+  let selected = 0;
+  let maximumCount = 0;
+  for (let offset = 0; offset < data.length; offset += 4) {
+    const key = ((data[offset] << 24) | (data[offset + 1] << 16)
+      | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+    const count = (counts.get(key) ?? 0) + 1;
+    counts.set(key, count);
+    if (count > maximumCount) {
+      selected = key;
+      maximumCount = count;
+    }
   }
-  for (let y = 1; y < height - 1; y += 1) {
-    addPixel(y * width);
-    if (width > 1) addPixel(y * width + width - 1);
-  }
-  let selected = null;
-  for (const entry of counts.values()) {
-    if (selected === null || entry.count > selected.count) selected = entry;
-  }
-  return selected.rgba;
+  return [selected >>> 24, (selected >>> 16) & 255, (selected >>> 8) & 255, selected & 255];
 }
 
 export function isIdentifiedGpuAdapter(info) {

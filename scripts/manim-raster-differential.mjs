@@ -10,11 +10,12 @@ import playwright from "playwright";
 import pngjs from "pngjs";
 import {
   browserArgs,
-  dominantBorderRgba,
+  dominantImageRgba,
   rasterFixtureSource,
   sampleRasterFrames,
 } from "./manim-raster-support.mjs";
 import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
+import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -624,7 +625,7 @@ async function captureNoonBackend(backend, references) {
 
 function pixelStats(buffer) {
   const png = PNG.sync.read(buffer);
-  const background = dominantBorderRgba(png);
+  const background = dominantImageRgba(png);
   let changedPixels = 0;
   let minX = png.width;
   let minY = png.height;
@@ -742,10 +743,22 @@ async function compareAll(references, backendResults) {
         const actualBuffer = await readFile(capture.noonPath);
         const referenceStats = pixelStats(referenceBuffer);
         const noonStats = pixelStats(actualBuffer);
+        let foregroundCoverage;
         if (fixture.id.startsWith("vector-space-lts-")) {
           const oracle = capture.vectorOracle;
           assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
           assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
+          // Full-viewport thin grids differ in Cairo/WGPU antialiasing. Keep a
+          // strict geometric guard so the edge-pixel budget cannot hide gaps.
+          foregroundCoverage = compareForegroundCoverage(
+            PNG.sync.read(referenceBuffer), PNG.sync.read(actualBuffer), {
+              background: referenceStats.background,
+              backgroundDistance: 24, neighborRadius: 1,
+              maxMismatchFraction: 0.001, maxBoundsDelta: 1,
+            },
+          );
+          assert.ok(foregroundCoverage.pass,
+            `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
         }
         const diff = comparePng(referenceBuffer, actualBuffer);
         const diffPath = path.join(
@@ -762,6 +775,7 @@ async function compareAll(references, backendResults) {
           reference: referenceStats,
           noon: noonStats,
           debugFrame: capture.debugFrame,
+          foregroundCoverage,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {
             differingPixels: diff.differingPixels,
