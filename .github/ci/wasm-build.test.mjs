@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { productConfig } from "./product-artifact.mjs";
+import { productConfig, validateProductEnvironment } from "./product-artifact.mjs";
 import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
   validateEnvironment, verify } from "./wasm-build.mjs";
 
@@ -194,7 +194,7 @@ test("dirty tracked source cannot be labeled as the HEAD artifact", async (t) =>
   await assert.rejects(verify(root, env), /tracked checkout was modified/);
 });
 
-for (const role of ["baseline", "candidate"]) {
+for (const role of ["baseline", "candidate", "candidate-fixture"]) {
   test(`${role} product package verifies the release role and exact event source`, async (t) => {
     const { root, git } = await fixture(t);
     const expected = { ...env, GITHUB_SHA: git("rev-parse", "HEAD") };
@@ -203,12 +203,67 @@ for (const role of ["baseline", "candidate"]) {
     const manifest = await stamp(root, identity, expected, build);
     assert.deepEqual(await verify(root, expected, build), manifest);
     assert.equal(manifest.build.profile, "release");
-    // Default dev artifacts and the other release feature set cannot substitute.
+    // Default dev artifacts and other release feature sets cannot substitute.
     await assert.rejects(verify(root, expected), /configuration mismatch/);
-    await assert.rejects(verify(root, expected, productConfig(role === "baseline" ? "candidate" : "baseline")), /configuration mismatch/);
+    if (role === "candidate-fixture") {
+      await assert.rejects(verify(root, expected, productConfig("candidate")), /configuration mismatch/);
+    } else {
+      assert.deepEqual(productConfig(role), productConfig(role === "baseline" ? "candidate" : "baseline"));
+    }
     await assert.rejects(verify(root, { ...expected, GITHUB_SHA: "f".repeat(40) }, build), /checkout differs/);
   });
 }
+
+test("product comparison uses matching optimized production builds", () => {
+  const baseline = productConfig("baseline");
+  const candidate = productConfig("candidate");
+  const fixture = productConfig("candidate-fixture");
+  assert.deepEqual(candidate, baseline);
+  assert.equal(baseline.profile, "release");
+  assert.equal(baseline.features, "default");
+  assert.equal(baseline.skipOpt, "0");
+  assert.equal(baseline.rendererSmoke, "0");
+  assert.equal(baseline.binaryen, "132");
+  assert.deepEqual(
+    { ...fixture, features: baseline.features, rendererSmoke: baseline.rendererSmoke },
+    baseline,
+  );
+  assert.equal(fixture.features, "default,renderer-smoke");
+  assert.equal(fixture.rendererSmoke, "1");
+});
+
+test("product package role rejects build flags that would change its artifact identity", () => {
+  for (const [role, smoke] of [["candidate", "0"], ["candidate-fixture", "1"]]) {
+    validateProductEnvironment({
+      NOON_WASM_PROFILE: "release",
+      NOON_WASM_SKIP_OPT: "0",
+      NOON_RENDERER_SMOKE: smoke,
+    }, role);
+  }
+  assert.throws(() => validateProductEnvironment({
+    NOON_WASM_PROFILE: "release",
+    NOON_WASM_SKIP_OPT: "1",
+    NOON_RENDERER_SMOKE: "0",
+  }, "candidate"), /NOON_WASM_SKIP_OPT/);
+  assert.throws(() => validateProductEnvironment({
+    NOON_WASM_PROFILE: "release",
+    NOON_WASM_SKIP_OPT: "0",
+    NOON_RENDERER_SMOKE: "1",
+  }, "candidate"), /NOON_RENDERER_SMOKE/);
+});
+
+test("product gate resolves the installer and verifies the downloaded package layouts", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  assert.match(workflow, /uses: \.\/candidate\/\.github\/actions\/install-wasm-opt/);
+  const compareJob = workflow.slice(workflow.indexOf("  compare:"));
+  assert.match(compareJob, /NOON_WASM_PROFILE: "release"/);
+  assert.match(compareJob, /NOON_WASM_SKIP_OPT: "0"/);
+  assert.match(compareJob, /NOON_RENDERER_SMOKE: "0"/);
+  assert.match(compareJob, /NOON_RENDERER_SMOKE: "1"[\s\S]*?renderer-init-failure-smoke\.mjs/);
+  assert.match(compareJob, /cp -a \.\.\/candidate-fixture\/\. web\//);
+  const restoration = compareJob.slice(compareJob.indexOf("      - name: Restore candidate production package for benchmark"));
+  assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
+});
 
 test("unknown product roles cannot select a default build", () => {
   assert.throws(() => productConfig("other"), /invalid product artifact role/);

@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/playground-product-gate.yml"
       - ".github/ci/**"
+      - ".github/actions/install-wasm-opt/action.yml"
       - "skills/noon-authoring/**"
       - "scripts/noon-capabilities.py"
       - "Cargo.toml"
@@ -44,12 +45,13 @@ jobs:
     outputs:
       baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
       candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
+      candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
     env:
       NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
-      # Reuse dependency compilations between two fresh builds at one stable path.
+      # Reuse dependency compilations between three fresh builds at one stable path.
       # The cache lives only in this job; no executable or cross-PR seed is restored.
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
@@ -57,7 +59,8 @@ jobs:
       SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
       NOON_SKIP_WEB_PREFLIGHT: "1"
       NOON_WASM_PROFILE: "release"
-      NOON_WASM_SKIP_OPT: "1"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
     steps:
       - name: Checkout candidate
         uses: actions/checkout@v7
@@ -106,6 +109,9 @@ jobs:
           tool: wasm-pack@0.15.0
           fallback: none
 
+      - name: Install pinned wasm-opt
+        uses: ./candidate/.github/actions/install-wasm-opt
+
       - name: Build baseline production package
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
@@ -124,14 +130,43 @@ jobs:
           sccache --show-stats
           node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
 
+      - name: Build candidate renderer-smoke fixture package
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          (cd candidate && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare candidate-fixture candidate
+          mv candidate .product-source
+          trap 'mv .product-source candidate' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Candidate renderer-smoke release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+          node .product-source/.github/ci/product-artifact.mjs stamp candidate-fixture .product-source
+
+      - name: Upload candidate renderer-smoke package
+        id: candidate-fixture-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-candidate-fixture-${{ github.run_attempt }}
+          path: |
+            candidate/web/pkg
+            candidate/web/python-worker.js
+            candidate/web/runtime-build-identity.json
+            candidate/web/python/compat-bundle.*.json
+            candidate/web/ci-artifact.json
+            candidate/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build candidate production package
         env:
           # Compiler results are content-keyed; Cargo outputs are never reused.
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
-          # Exercise release code with only the typed recovery fixture exported.
-          NOON_RENDERER_SMOKE: "1"
         run: |
-          (cd candidate && cargo generate-lockfile)
           node candidate/.github/ci/product-artifact.mjs prepare candidate candidate
           mv candidate .product-source
           trap 'mv .product-source candidate' EXIT
@@ -141,24 +176,7 @@ jobs:
           (cd .product-source && bash scripts/build-web-demo.sh)
           printf 'Candidate release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
-
-      - name: Stamp candidate production package
-        run: node candidate/.github/ci/product-artifact.mjs stamp candidate candidate
-
-      - name: Upload baseline production package
-        id: baseline-artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: product-baseline-${{ github.run_attempt }}
-          path: |
-            baseline/web/pkg
-            baseline/web/python-worker.js
-            baseline/web/runtime-build-identity.json
-            baseline/web/python/compat-bundle.*.json
-            baseline/web/ci-artifact.json
-            baseline/web/ci-Cargo.lock
-          if-no-files-found: error
-          retention-days: 14
+          node .product-source/.github/ci/product-artifact.mjs stamp candidate .product-source
 
       - name: Upload candidate production package
         id: candidate-artifact
@@ -175,6 +193,21 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload baseline production package
+        id: baseline-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-baseline-${{ github.run_attempt }}
+          path: |
+            baseline/web/pkg
+            baseline/web/python-worker.js
+            baseline/web/runtime-build-identity.json
+            baseline/web/python/compat-bundle.*.json
+            baseline/web/ci-artifact.json
+            baseline/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
   compare:
     # Preserve the required check name. Retrying this job reuses the successful
     # producer's exact artifact IDs, including when its run attempt is older.
@@ -185,6 +218,9 @@ jobs:
     timeout-minutes: 20
     env:
       NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
     steps:
       - name: Require successful production builds
         env:
@@ -213,6 +249,12 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
           path: candidate/web
+
+      - name: Download candidate renderer-smoke fixture package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-fixture-artifact }}
+          path: candidate-fixture
 
       - name: Verify source, configuration and package contents
         run: |
@@ -246,8 +288,32 @@ jobs:
       - name: Recheck release renderer initialization
         working-directory: candidate
         env:
+          NOON_RENDERER_SMOKE: "1"
           NOON_RENDERER_FAILURE_ARTIFACTS: browser-smoke-artifacts/product-gate/renderer-init
-        run: node scripts/renderer-init-failure-smoke.mjs
+        run: |
+          rm -rf web/pkg
+          rm -f web/python-worker.js web/runtime-build-identity.json web/ci-artifact.json web/ci-Cargo.lock
+          rm -f web/python/compat-bundle.*.json
+          cp -a ../candidate-fixture/. web/
+          node .github/ci/product-artifact.mjs verify candidate-fixture .
+          node scripts/renderer-init-failure-smoke.mjs
+
+      - name: Clear renderer-smoke package before restoring production
+        working-directory: candidate
+        run: |
+          rm -rf web/pkg
+          rm -f web/python-worker.js web/runtime-build-identity.json web/ci-artifact.json web/ci-Cargo.lock
+          rm -f web/python/compat-bundle.*.json
+
+      - name: Restore candidate production package for benchmark
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Reverify candidate production package
+        working-directory: candidate
+        run: node .github/ci/product-artifact.mjs verify candidate .
 
       - name: Measure baseline playground
         working-directory: candidate
