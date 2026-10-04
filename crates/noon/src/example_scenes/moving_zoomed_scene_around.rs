@@ -323,13 +323,13 @@ pub fn program() -> Result<(LiveProgram<MovingZoomedSceneAround>, RustHostCallba
         )
         .map_err(message)?;
     let zoomed_camera_text = zoomed_camera_text;
-    let center = display.center().map_err(message)?;
-    let mut helper_options = ManimGeometryOptions::rectangle(6.5, 1.5).map_err(message)?;
-    helper_options
-        .set_translation(center.0, center.1)
-        .map_err(message)?;
-    helper_options.set_fill_opacity(0.0).map_err(message)?;
-    helper_options.set_stroke_width(0.0).map_err(message)?;
+    let display_bounds = display
+        .layout_bounds()
+        .map_err(message)?
+        .ok_or("zoomed display has no layout bounds")?;
+    let helper_options =
+        ManimGeometryOptions::background_rectangle(display_bounds, 0.25, 0.25, 0.0, 0.0)
+            .map_err(message)?;
     let display_helper = scene.geometry(helper_options).map_err(message)?;
     scene
         .add_foreground_many(&[(&display_helper).into()])
