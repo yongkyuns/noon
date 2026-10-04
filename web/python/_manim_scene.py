@@ -882,6 +882,8 @@ def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
         "add": _base.Scene.add,
         "remove": _base.Scene.remove,
         "clear": _base.Scene.clear,
+        "add_foreground_mobject": _base.Scene.add_foreground_mobject,
+        "add_foreground_mobjects": _base.Scene.add_foreground_mobjects,
         "on_click": _base.Scene.on_click,
         "set_drag_targets": _base.Scene.set_drag_targets,
     }

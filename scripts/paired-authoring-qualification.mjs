@@ -94,6 +94,11 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         const wasm = await import("./pkg/noon_web.js");
         await wasm.default();
         const canvas = document.querySelector("#scene");
+        // The ordinary Python host sizes its backing store from CSS dimensions
+        // and DPR. Give direct hosts the same physical viewport before transfer
+        // so mobile comparisons exercise identical raster resolution.
+        canvas.width = Math.round(canvas.clientWidth * (window.devicePixelRatio || 1));
+        canvas.height = Math.round(canvas.clientHeight * (window.devicePixelRatio || 1));
         const args = [...factoryArgs];
         if (preparation) {
           const module = await import(preparation.module);
@@ -135,6 +140,11 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       assert.ok(metrics.drawCalls > 0);
       await page.evaluate(() => new Promise(resolve =>
         requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const frame = await page.evaluate(async label => label === "python"
+        ? (window.pairedExecution ?? window.noonHostRaster).debugFrame()
+        : JSON.parse(window.pairedRenderer.debugSelectionFrameJson()), label);
+      await writeFile(path.join(output, `${fixture.id}-${expectedBackend}-${label}-frame.json`),
+        `${JSON.stringify(frame, null, 2)}\n`);
       const pixels = await page.locator("#scene").screenshot({
         path: path.join(output, `${fixture.id}-${expectedBackend}-${label}.png`),
       });

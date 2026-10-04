@@ -535,9 +535,43 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     )
 
 
+def _copy_nested_mobject(
+    value: _base.Mobject,
+    context: object | None,
+    memo: dict[int, object],
+):
+    """Preserve wrapper-specific copy behavior under the parent's live owner."""
+    existing = memo.get(id(value))
+    if existing is not None:
+        return existing
+    if not isinstance(value, _compat.Group):
+        return _clone_mobject(value, context_override=context, memo=memo)
+    members = _compat._leaf_mobjects(value)
+    restore = []
+    for member in members:
+        if getattr(member, "_canonical_live_target_context", None) is None:
+            restore.append((member, hasattr(member, "_canonical_live_target_context")))
+            member._canonical_live_target_context = context
+    try:
+        copied = value.copy()
+        memo[id(value)] = copied
+        return copied
+    finally:
+        for member, had_attribute in restore:
+            if had_attribute:
+                member._canonical_live_target_context = None
+            else:
+                del member._canonical_live_target_context
+
+
 def _clone_mobject(
-    self: _base.Mobject, *, target_state: bool = False, subcurve=None
+    self: _base.Mobject, *, target_state: bool = False, subcurve=None,
+    context_override: object | None = None, memo: dict[int, object] | None = None,
 ) -> _base.Mobject:
+    memo = {} if memo is None else memo
+    existing = memo.get(id(self))
+    if existing is not None:
+        return existing
     handle = _handle_for(self)
     if handle is None:
         from _manim_updaters import _canonical_phase_context
@@ -549,6 +583,8 @@ def _clone_mobject(
             )
         raise RuntimeError("Mobject copy requires a current shared Rust semantic handle")
     context = _live_mutation_context(self)
+    if context is None:
+        context = context_override
     clone = object.__new__(type(self))
     clone._raw = None
     clone._scene = None
@@ -563,6 +599,11 @@ def _clone_mobject(
     clone._semantic_handle_fresh = True
     if context is not None:
         clone._canonical_live_target_context = context
+    memo[id(self)] = clone
+    if _compat._FAMILY_COPY_METADATA not in memo:
+        memo[_compat._FAMILY_COPY_METADATA] = lambda value: _copy_nested_mobject(
+            value, context, memo
+        )
 
     excluded = {
         "_raw",
@@ -582,9 +623,13 @@ def _clone_mobject(
     for name, value in self.__dict__.items():
         if name not in excluded:
             if isinstance(value, _base.Mobject):
-                setattr(clone, name, value.copy())
+                # Snapshot Mobjects such as ``saved_state`` can predate the
+                # live session even when their parent is copied after playback.
+                # Route their detached copies through the same owner so they
+                # cannot advance the semantic store outside its publication.
+                setattr(clone, name, _copy_nested_mobject(value, context, memo))
             else:
-                setattr(clone, name, copy.deepcopy(value))
+                setattr(clone, name, copy.deepcopy(value, memo))
     return clone
 
 

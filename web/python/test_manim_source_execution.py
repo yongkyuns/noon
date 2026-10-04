@@ -274,15 +274,6 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "FollowingGraphCamera.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
-    def test_moving_zoomed_scene_around_retains_source_execution_when_helper_is_nested(self):
-        filename = "manim_example_moving_zoomed_scene_around.py"
-        source = Path(__file__).with_name("examples").joinpath(filename).read_text()
-        _, pairs = compile_authoring_source(source, filename=filename)
-        # The portable compiler does not rewrite scene helper calls nested in
-        # play arguments. Keep this source on its original execution path until
-        # the zoom-popout behavior has a portable shared operation.
-        self.assertEqual(pairs, {})
-
     def test_click_indicate_gallery_uses_portable_continuation(self):
         source = Path(__file__).with_name("examples").joinpath("showcase_pointer_selection.py").read_text()
         _, pairs = compile_authoring_source(source, filename="showcase_pointer_selection.py")
@@ -290,6 +281,28 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         original, portable = next(iter(pairs.items()))
         self.assertEqual(original.co_qualname, "PointerSelection.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_moving_zoomed_example_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "manim_example_moving_zoomed_scene_around.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="moving_zoomed.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "MovingZoomedSceneAround.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        for name in ("add_foreground_mobject", "add_foreground_mobjects"):
+            with self.subTest(name=name):
+                self.assertIs(methods[name], getattr(noon.Scene, name))
+                setattr(scene, name, lambda *args: scene.wait(1))
+                self.assertFalse(has_portable_scene_methods(scene, **methods))
+                delattr(scene, name)
 
     def test_translation_drag_gallery_uses_portable_continuation_and_canonical_drag_binding(self):
         source = Path(__file__).with_name("examples").joinpath("showcase_translation_drag.py").read_text()

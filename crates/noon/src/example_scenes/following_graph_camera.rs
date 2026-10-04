@@ -87,7 +87,7 @@ pub fn program() -> Result<(LiveProgram<FollowingGraphCamera>, RustHostCallbackT
         .axes(&axes_options)
         .map_err(|error| error.to_string())?;
     let mut graph = axes
-        .plot(|x| x.sin(), Some(&[0.0, 3.0 * std::f64::consts::PI]), false)
+        .plot(|x| x.sin(), Some(&[0.0, 3.0 * std::f64::consts::PI]), true)
         .map_err(|error| error.to_string())?;
     graph
         .set_color(
@@ -97,16 +97,15 @@ pub fn program() -> Result<(LiveProgram<FollowingGraphCamera>, RustHostCallbackT
             1.0,
         )
         .map_err(|error| error.to_string())?;
-    let path_query = graph.path_query().map_err(|error| error.to_string())?;
-    let start = path_query
-        .point_from_proportion(0.0)
+    let start = axes
+        .input_to_graph_point(0.0, f64::sin)
         .map_err(|error| error.to_string())?;
-    let end = path_query
-        .point_from_proportion(1.0)
+    let end = axes
+        .input_to_graph_point(3.0 * std::f64::consts::PI, f64::sin)
         .map_err(|error| error.to_string())?;
 
     let mut moving_dot = scene
-        .geometry(ManimGeometryOptions::dot(start.0, start.1, 0.08).map_err(|e| e.to_string())?)
+        .geometry(ManimGeometryOptions::dot(start[0], start[1], 0.08).map_err(|e| e.to_string())?)
         .map_err(|error| error.to_string())?;
     moving_dot
         .set_color(
@@ -117,10 +116,10 @@ pub fn program() -> Result<(LiveProgram<FollowingGraphCamera>, RustHostCallbackT
         )
         .map_err(|error| error.to_string())?;
     let first_dot = scene
-        .geometry(ManimGeometryOptions::dot(start.0, start.1, 0.08).map_err(|e| e.to_string())?)
+        .geometry(ManimGeometryOptions::dot(start[0], start[1], 0.08).map_err(|e| e.to_string())?)
         .map_err(|error| error.to_string())?;
     let last_dot = scene
-        .geometry(ManimGeometryOptions::dot(end.0, end.1, 0.08).map_err(|e| e.to_string())?)
+        .geometry(ManimGeometryOptions::dot(end[0], end[1], 0.08).map_err(|e| e.to_string())?)
         .map_err(|error| error.to_string())?;
     scene
         .add_many(&[
@@ -134,8 +133,8 @@ pub fn program() -> Result<(LiveProgram<FollowingGraphCamera>, RustHostCallbackT
 
     let mut zoomed_frame = frame.target_editor().map_err(|error| error.to_string())?;
     zoomed_frame
-        .set_translation(start.0, start.1)
-        .and_then(|_| zoomed_frame.set_scale(0.5, 0.5))
+        .manim_scale(0.5, 0.5)
+        .and_then(|_| zoomed_frame.manim_move_to_handle(&moving_dot, 0.0, 0.0, 1.0, 1.0))
         .map_err(|error| error.to_string())?;
     let restored_frame = frame.target_editor().map_err(|error| error.to_string())?;
 
