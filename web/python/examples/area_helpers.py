@@ -4,7 +4,7 @@ from noon import *
 
 class AreaHelpers(Scene):
     def construct(self):
-        axes = Axes([-3, 3, 1], [-2, 4, 1], x_length=8, y_length=5)
+        axes = Axes([-3, 3, 1], [-2, 4, 1], x_length=8, y_length=5, tips=False)
         graph = axes.plot(lambda x: 0.25 * x * x - 0.5, [-3, 3, 0.25], color=BLUE, use_smoothing=False)
         area = axes.get_area(graph, [-2, 0], color=GREEN, opacity=0.3)
         rectangles = axes.get_riemann_rectangles(graph, [0, 2], dx=0.25, input_sample_type="center")

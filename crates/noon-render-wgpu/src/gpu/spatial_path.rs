@@ -444,6 +444,10 @@ impl SpatialPathGpuState {
             .map(|(&draw_id, _)| draw_id)
     }
 
+    pub(super) fn painter_rank(&self, index: usize) -> Option<u32> {
+        self.painter_ranks.get(&index).copied()
+    }
+
     fn refresh_painter_ranks(&mut self, painter_order: &[u32]) {
         self.painter_ranks.clear();
         self.painter_ranks.extend(
@@ -566,6 +570,7 @@ impl SpatialPathGpuState {
                     style,
                 } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
+                let style = visible_path_style(style);
                 let keyed = match text_key {
                     Some(source) => PathKey {
                         source,
@@ -931,6 +936,7 @@ fn path_key(
     style: Style,
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
+    let style = visible_path_style(style);
     if style.stroke.is_some()
         && style.stroke_width > 0.0
         && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
@@ -1225,12 +1231,22 @@ fn validate_style(style: Style, object_alpha: f32, domain: Domain) -> Result<(),
             [color.red, color.green, color.blue, color.alpha]
                 .iter()
                 .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
-                || (domain == Domain::World && color.alpha * object_alpha != 1.0)
+                || (domain == Domain::World
+                    && color.alpha != 0.0
+                    && color.alpha * object_alpha != 1.0)
         })
     {
         return Err(SpatialPathError::NonOpaqueStyle);
     }
     Ok(())
+}
+
+// Zero-alpha paint has no surface and must not populate the depth buffer.
+// Partially transparent World paths retain their explicit rejection.
+fn visible_path_style(mut style: Style) -> Style {
+    style.fill = style.fill.filter(|color| color.alpha != 0.0);
+    style.stroke = style.stroke.filter(|color| color.alpha != 0.0);
+    style
 }
 
 /// Resolve one planar vector outline and tessellate it in its own local frame.
@@ -1243,18 +1259,13 @@ pub(super) fn tessellate(
     object_alpha: f32,
     domain: Domain,
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
+    validate_style(style, object_alpha * style.opacity, domain)?;
+    let style = visible_path_style(style);
     if style.stroke.is_some()
         && style.stroke_width > 0.0
         && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
     {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
-    }
-    if !style.stroke_width.is_finite()
-        || style.stroke_width < 0.0
-        || !object_alpha.is_finite()
-        || !(0.0..=1.0).contains(&object_alpha)
-    {
-        return Err(SpatialPathError::InvalidStyle);
     }
     let source = match geometry {
         GeometryRef::External(id) => {
@@ -1276,14 +1287,6 @@ pub(super) fn tessellate(
     let (_, path) = source;
     if path.morph_target().is_some() {
         return Err(SpatialPathError::UnsupportedMorph);
-    }
-    if domain == Domain::World
-        && [style.fill, style.stroke]
-            .into_iter()
-            .flatten()
-            .any(|color| color.alpha * style.opacity * object_alpha != 1.0)
-    {
-        return Err(SpatialPathError::NonOpaqueStyle);
     }
     let fill = style.fill.is_some();
     let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
@@ -1516,6 +1519,41 @@ mod tests {
             SpatialPathError::NonOpaqueStyle
         );
         assert!(tessellate(&geometry, &resources, style, 1.0, Domain::FixedOrientation).is_ok());
+    }
+
+    #[test]
+    fn invisible_world_fill_matches_an_absent_fill_and_never_writes_depth() {
+        let resources = GeometryResourceArena::default();
+        let geometry = GeometryRef::circle(1.0);
+        let style = Style {
+            fill: Some(noon_core::Color::rgba(1.0, 1.0, 1.0, 0.0)),
+            stroke: Some(noon_core::Color::WHITE),
+            stroke_width: 0.04,
+            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            ..Style::default()
+        };
+        let absent_fill = Style {
+            fill: None,
+            ..style
+        };
+        assert_eq!(
+            path_key(&geometry, &resources, style, 0).unwrap(),
+            path_key(&geometry, &resources, absent_fill, 0).unwrap()
+        );
+        let actual = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+        let expected = tessellate(&geometry, &resources, absent_fill, 1.0, Domain::World).unwrap();
+        assert_eq!(actual.indices, expected.indices);
+        assert_eq!(actual.vertices.len(), expected.vertices.len());
+        assert!(actual
+            .vertices
+            .iter()
+            .zip(&expected.vertices)
+            .all(|(a, b)| a.position == b.position && a.surface == b.surface));
+        let invalid = Style {
+            fill: Some(noon_core::Color::rgba(f32::NAN, 1.0, 1.0, 0.0)),
+            ..style
+        };
+        assert!(validate_style(invalid, 1.0, Domain::World).is_err());
     }
 
     #[test]

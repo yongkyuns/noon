@@ -88,6 +88,18 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.assertEqual(session.callbacks, {})
         self.assertEqual(session.targets, {})
         self.context.reject = False
+
+    def test_composition_callback_reserves_callable_without_python_scheduling(self):
+        self.mobject._scene = self.scene
+        callback = lambda mobject, dt: None
+        callback_id = updaters.reserve_composition_callback(
+            self.scene, self.mobject, callback
+        )
+        session = self.scene._noon_canonical_callback_session
+        self.assertEqual(callback_id, 0)
+        self.assertIs(session.callbacks[callback_id], callback)
+        self.assertEqual(session.targets[(7, 3)], self.mobject)
+        self.assertEqual(self.context.calls, [], "Rust composition owns interval scheduling")
         updaters.add_updater(self.mobject, callback)
         self.assertEqual(self.context.calls, [("add", self.handle, "0", 0.0, None)])
         self.assertIs(session.callbacks[0], callback)

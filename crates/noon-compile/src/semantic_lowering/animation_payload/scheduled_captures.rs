@@ -93,7 +93,7 @@ impl ScheduledCaptures {
             if let Some(index) = self.latest_tracks.get(&key) {
                 let track = &tracks[*index];
                 if track.animation == owner {
-                    let alpha = track.timing.easing.evaluate(1.0);
+                    let alpha = track.timing.terminal_progress();
                     if alpha != 0.0 && alpha != 1.0 {
                         continue;
                     }
@@ -127,7 +127,7 @@ pub(super) fn completed_effective_properties_before(
             TrackActivationRelation::Overlapping => return None,
             TrackActivationRelation::Completed => {}
         }
-        let alpha = track.timing.easing.evaluate(1.0);
+        let alpha = track.timing.terminal_progress();
         if alpha != 0.0 && alpha != 1.0 {
             return None;
         }
@@ -161,7 +161,7 @@ pub(super) fn completed_content_before(
             TrackActivationRelation::Overlapping => return None,
             TrackActivationRelation::Completed => {}
         }
-        let alpha = track.timing.easing.evaluate(1.0);
+        let alpha = track.timing.terminal_progress();
         if alpha == 0.0 {
             continue;
         }
@@ -193,6 +193,19 @@ fn apply_effective_track_endpoint(
             Property::Position,
             TrackValues::Vec2 { from, to } | TrackValues::ArcVec2 { from, to, .. },
         ) => value.transform.translation = if at_end { *to } else { *from },
+        (
+            Property::Position,
+            TrackValues::PathVec2 {
+                path,
+                path_transform,
+                target_center_offset,
+            },
+        ) => {
+            let (from, to) = noon_geometry::drawable_endpoints(path)?;
+            let point = if at_end { to } else { from };
+            value.transform.translation =
+                path_transform.transform_point(point) - *target_center_offset;
+        }
         (Property::Scale, TrackValues::Vec2 { from, to }) => {
             value.transform.scale = if at_end { *to } else { *from };
         }

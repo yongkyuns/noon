@@ -155,7 +155,7 @@ impl std::fmt::Display for AnimationOptionsError {
                 "non-zero path_arc={value} requires curved transform paths, which are not yet represented by Noon's deterministic Transform track"
             ),
             Self::UnsupportedReverseRateFunction => formatter.write_str(
-                "reverse_rate_function=True is not yet represented by Noon's deterministic timing semantics",
+                "reverse_rate_function=True is not supported by this animation type's deterministic timing semantics",
             ),
             Self::UnsupportedLagRatio(value) => write!(
                 formatter,
@@ -258,7 +258,13 @@ impl ResolvedAnimationOptions {
 
     pub fn validate_transform(self) -> Result<Self, AnimationOptionsError> {
         self.validate_positive_timing()?;
-        self.validate_common_non_timing()
+        if !self.lag_ratio.is_finite() || self.lag_ratio < 0.0 {
+            return Err(AnimationOptionsError::InvalidLagRatio(self.lag_ratio));
+        }
+        if !self.path_arc.is_finite() {
+            return Err(AnimationOptionsError::InvalidPathArc(self.path_arc));
+        }
+        Ok(self)
     }
 
     fn validate_positive_timing(self) -> Result<(), AnimationOptionsError> {
@@ -405,14 +411,13 @@ mod tests {
             ),
             Err(AnimationOptionsError::InvalidPathArc(value)) if value.is_nan()
         ));
-        assert_eq!(
-            resolve_transform_animation_options(
-                AnimationDefaults::MANIM,
-                AnimationOptions::new().reverse_rate_function(true),
-                AnimationOptions::new(),
-            ),
-            Err(AnimationOptionsError::UnsupportedReverseRateFunction)
-        );
+        let reversed = resolve_transform_animation_options(
+            AnimationDefaults::MANIM,
+            AnimationOptions::new().reverse_rate_function(true),
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert!(reversed.reverse_rate_function);
     }
 
     #[test]

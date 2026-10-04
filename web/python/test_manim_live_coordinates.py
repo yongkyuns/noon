@@ -21,6 +21,7 @@ class LiveCoordinateAdapterTests(TestCase):
         patch.object(plotting,"engine_call",side_effect=lambda fn,*args:fn(*args)).start()
         patch.object(plotting,"_coordinate_style").start()
         patch.object(plotting,"_attach_number_line",side_effect=lambda wrapper,handle:wrapper).start()
+        patch.object(plotting,"_coordinate_family",side_effect=lambda wrapper,handle,members:wrapper).start()
         patch.object(plotting,"_family",side_effect=lambda wrapper,handle,members:wrapper).start()
 
     def construct(self, axes=False):
@@ -37,6 +38,13 @@ class LiveCoordinateAdapterTests(TestCase):
         self.resolve.assert_called_once_with("coordinates")
         self.live.assert_called_once_with(self.options)
         self.cold.assert_not_called(); self.options.free.assert_not_called()
+
+    def test_axes_defaults_and_two_value_ranges_are_forwarded_for_rust_coercion(self):
+        plotting.Axes((-1, 10), (-1, 10))
+        plotting._coordinate_options.axes.assert_called_once_with(
+            [-1.0, 10.0], [-1.0, 10.0], None, None,
+        )
+        self.options.setTips.assert_called_once_with(True)
 
     def test_cold_constructor_still_uses_existing_host(self):
         self.resolve.return_value=None
@@ -66,14 +74,12 @@ class LiveCoordinateAdapterTests(TestCase):
         with self.assertRaises(RuntimeError):self.construct()
         self.resolve.assert_not_called();plotting._coordinate_options.numberLine.assert_not_called()
 
-    def test_unsupported_tips_do_not_allocate_options(self):
+    def test_number_line_tips_remain_unsupported_but_axes_tips_are_options(self):
         with self.assertRaises(NotImplementedError):
             plotting.NumberLine((0,2,1), include_tip=True)
-        with self.assertRaises(NotImplementedError):
-            plotting.Axes((0,2,1),(0,2,1),x_length=2,y_length=2,tips=True)
         plotting._coordinate_options.numberLine.assert_not_called()
-        plotting._coordinate_options.axes.assert_not_called()
-        self.live.assert_not_called(); self.cold.assert_not_called()
+        self.construct(True)
+        self.options.setTips.assert_called_once_with(True)
 
     def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
         shaft=object()
@@ -86,6 +92,7 @@ class LiveCoordinateAdapterTests(TestCase):
             self.resolve.return_value=None
             bound.return_value=False
             self.assertIsNone(plotting._coordinate_context([shaft]))
+
 
     def _plotted_graph(self, axes, callback):
         frame = Mock()
@@ -163,5 +170,34 @@ class LiveCoordinateAdapterTests(TestCase):
             graph = plotting.FunctionGraph(callback, (0, 5, 1))
         self.assertEqual(graph.function(2), noon.Vec2(2, 4))
         callback.assert_called_once_with(2.0)
+
+
+class CoordinateFamilyWrapperTests(TestCase):
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+
+    def test_coordinate_wrapper_reconciles_new_rust_family_members(self):
+        shaft_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=0)
+        tip_handle = SimpleNamespace(semanticSlot=2, semanticGeneration=0)
+        shaft = object.__new__(plotting._compat.VMobject)
+        shaft._semantic_handle = shaft_handle
+        family = Mock()
+        family.memberKeys.return_value = ["1:0", "2:0"]
+        family.memberIsFamily.side_effect = [False, False]
+        family.memberMobject.side_effect = [shaft_handle, tip_handle]
+        owner = object.__new__(plotting._compat.Group)
+
+        def attach_shared_handle(wrapper, handle):
+            wrapper._semantic_handle = handle
+            return wrapper
+
+        with patch.object(plotting._shared, "engine_call", side_effect=lambda function, *args, **kwargs: function(*args, **kwargs)), \
+             patch.object(plotting._shared, "_attach_shared_handle", side_effect=attach_shared_handle):
+            plotting._coordinate_family(owner, family, [shaft])
+
+        self.assertEqual(list(owner._semantic_member_wrappers), ["1:0", "2:0"])
+        self.assertIs(owner._semantic_member_wrappers["1:0"], shaft)
+        self.assertIs(owner._semantic_member_wrappers["2:0"]._semantic_handle, tip_handle)
+        family.memberKeys.assert_called_once_with(operation="family.members")
 
 if __name__=="__main__":main()

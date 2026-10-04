@@ -84,7 +84,7 @@ impl Scene {
             .last()
             .is_some_and(|motion| motion.end().is_none())
         {
-            return Err(AuthoringError::AmbientCameraMotionAlreadyActive);
+            return Err(AuthoringError::CameraMotionAlreadyActive);
         }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_camera_profile(camera.node_id(), profile, near, far);
@@ -169,7 +169,7 @@ impl crate::LiveSession<'_> {
             .last()
             .is_some_and(|motion| motion.end().is_none())
         {
-            return Err(AuthoringError::AmbientCameraMotionAlreadyActive.into());
+            return Err(AuthoringError::CameraMotionAlreadyActive.into());
         }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_camera_profile(camera.node_id(), profile, near, far);

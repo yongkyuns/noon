@@ -124,7 +124,6 @@ pub struct SemanticHostCallbackPlan {
     events: BTreeSet<SemanticHostCallbackEvent>,
     activations: BTreeSet<SemanticHostCallbackEvent>,
     targets: HashMap<SemanticNodeId, (usize, Vec<usize>)>,
-    host_revision_targets: HashSet<SemanticNodeId>,
     native_updaters: BTreeMap<usize, Vec<SemanticNativeUpdater>>,
     next_index: usize,
 }
@@ -260,6 +259,7 @@ impl SemanticHostCallbackPlan {
     ) -> impl Iterator<Item = SemanticHostCallbackEvent> + '_ {
         self.events.range((Self::after(time), Unbounded)).copied()
     }
+    /// Next timestamp requiring a host callback: a start or an opted-in end.
     pub fn next_activation_after(&self, time: Option<f64>) -> Option<f64> {
         self.activations
             .range((Self::after(time), Unbounded))
@@ -288,7 +288,6 @@ impl SemanticHostCallbackPlan {
     }
 
     fn insert(&mut self, target: SemanticNodeId, activation: SemanticUpdaterRegistration) {
-        self.host_revision_targets.insert(target);
         let (order, indices) = self.targets.get_mut(&target).expect("indexed target");
         let index = self.next_index;
         self.next_index += 1;
@@ -308,6 +307,13 @@ impl SemanticHostCallbackPlan {
                     .inactive_from()
                     .is_none_or(|end| end > event.time)
             {
+                self.activations.insert(event);
+            } else if event.kind == SemanticHostCallbackEventKind::Deactivate
+                && activation.endpoint_policy()
+                    == noon_core::SemanticUpdaterEndpointPolicy::InvokeAtEnd
+            {
+                // A finite callback interval can request one final invocation at
+                // this exact boundary before its persistent active state closes.
                 self.activations.insert(event);
             }
         }
@@ -340,9 +346,11 @@ impl SemanticHostCallbackPlan {
     }
 
     /// Prepare only changed target histories, not unrelated callbacks or geometry.
+    /// Unrelated mutations are validated by the ordinary publication contract;
+    /// this projection can accompany animation activation in the same atomic batch.
     /// The first live subset retains target preorder from initial lowering and
     /// therefore admits registration edits only on already indexed targets.
-    pub(super) fn prepare_registration_revision(
+    pub fn prepare_registration_revision(
         &self,
         prepared: &PreparedSemanticMutationTransaction<'_>,
         current_time: f64,
@@ -365,7 +373,7 @@ impl SemanticHostCallbackPlan {
                     target,
                     inactive_from,
                 } => (*target, *inactive_from),
-                _ => return Err(Error::UnsupportedMutation { index }),
+                _ => continue,
             };
             if boundary < current_time {
                 return Err(Error::RetroactiveUpdaterMutation { index });
@@ -394,7 +402,7 @@ impl SemanticHostCallbackPlan {
         }
         let mut targets = Vec::with_capacity(changed.len());
         for target in changed {
-            if !self.host_revision_targets.contains(&target) {
+            if !self.targets.contains_key(&target) {
                 return Err(Error::UpdaterTargetNotIndexed { target });
             }
             targets.push((
@@ -461,7 +469,8 @@ pub(super) fn lower_semantic_host_callbacks(
 const fn event_kind_order(kind: SemanticHostCallbackEventKind) -> u8 {
     match kind {
         // At a zero-width interval, activation is immediately followed by
-        // deactivation so the interval remains empty under [start, end) rules.
+        // deactivation. The endpoint policy determines whether the end event
+        // produces one callback invocation.
         SemanticHostCallbackEventKind::Activate => 0,
         SemanticHostCallbackEventKind::Deactivate => 1,
     }
@@ -582,16 +591,28 @@ mod tests {
     }
 
     #[test]
-    fn live_registration_relowering_is_explicitly_unsupported() {
+    fn first_live_registration_requires_an_initially_indexed_target() {
         let mut store = SemanticStore::new();
         let target = object(&mut store, 1.0);
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(target, HostCallbackId::new(1), 0.0, None);
 
-        assert_eq!(
-            crate::validate_semantic_publication(&transaction),
-            Err(crate::SemanticPublicationLoweringError::UnsupportedMutation { index: 0 })
-        );
+        crate::validate_semantic_publication(&transaction).unwrap();
+        let plan = lower_semantic_host_callbacks(&store, &[]);
+        let prepared = transaction.prepare(&mut store).unwrap();
+        assert!(matches!(
+            plan.prepare_registration_revision(&prepared, 0.0),
+            Err(crate::SemanticPublicationLoweringError::UpdaterTargetNotIndexed { target: node }) if node == target
+        ));
+        let transaction = prepared.into_transaction();
+        store.attach_to_scene(target).unwrap();
+        let plan = lower_semantic_host_callbacks(&store, &[target]);
+        let prepared = transaction.prepare(&mut store).unwrap();
+        assert!(plan
+            .prepare_registration_revision(&prepared, 0.0)
+            .unwrap()
+            .is_some());
+        drop(prepared);
         assert!(store
             .semantic_updater_registrations(target)
             .unwrap()

@@ -1,20 +1,28 @@
 """Bounded Manim-shaped constructors over Noon retained indexed meshes.
 
-These wrappers expose geometry profiles that the shared Rust Mesh3D factories
-actually build. They do not emulate Cairo Surface cell seams, checkerboards,
-mesh strokes, directional shading, partial solids, or arbitrary orientations
-for axial primitives. Mesh resources and transforms remain Rust-owned.
+Surface uses Rust-owned cell families, checkerboard roles, strokes, and point-lit
+materials. Other wrappers expose bounded mesh profiles and reject unsupported
+Cairo decorations, partial solids, and arbitrary axial orientations.
 """
 from __future__ import annotations
 
 import math
+from array import array
 from operator import index as _index
 
 import noon as _base
-from _noon_spatial import Mesh3D as _Mesh3D
-from _manim_compat import _as_color
+import _manim_compat as _compat
+from _noon_spatial import Mesh3D as _Mesh3D, _WorldMobject
+from _manim_compat import _as_color, _manim_stroke_width, _opacity
+from _noon_errors import engine_call
+from _manim_semantic_handles import (
+    _attach_shared_family, _attach_shared_handle,
+    _group_target_context, _initialize_shared_wrapper,
+    _live_constructor_context, _live_mutation_context,
+)
 
 _DEFAULT_CHECKERBOARD = (_base.BLUE_D, _base.BLUE_E)
+_DEFAULT_SURFACE_STROKE = _base.color_from_hex(0xBBBBBB)
 
 
 def _color(value, name="fill_color"):
@@ -270,34 +278,174 @@ class Line3D(_Mesh3D):
         _take_mesh(self, mesh)
 
 
-class Surface(_Mesh3D):
+class Surface(_Mesh3D, _compat.Group):
     """Sampled surface; callback values feed Rust-owned UV topology.
 
-    Pinned checkerboard, stroke, and 3D-shading defaults are retained in the
-    signature and rejected unless explicitly disabled. Cairo face decorations,
-    ``surface_piece_config``, jagged handles and opacity below 1 are unsupported.
+    Python owns only callable sampling and argument coercion. Rust owns UV cell
+    roles, family identity, style publication, point-lit material and transforms.
     """
 
     def __init__(self, func, u_range=(0, 1), v_range=(0, 1), resolution=32,
                  fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
-                 normal=None, point_lit=False, shade_in_3d=True, **kwargs):
+                 checkerboard_colors=_DEFAULT_CHECKERBOARD,
+                 stroke_color=_DEFAULT_SURFACE_STROKE, stroke_width=0.5,
+                 stroke_opacity=1, normal=None, shade_in_3d=True,
+                 point_lit=False, **kwargs):
+        from _noon_spatial import _bulk, _vector, _surface_plan, _mesh_family_options, _create_mesh_family
         _reject(kwargs, ())
-        _require_unshaded(shade_in_3d)
-        _require_no_checkerboard(checkerboard_colors)
-        _require_opaque(fill_opacity)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("per-cell Surface strokes are unsupported")
-        if point_lit and normal is None:
-            raise ValueError("point_lit Surface requires a normal callback")
-        if len(tuple(u_range)) != 2 or len(tuple(v_range)) != 2:
-            raise ValueError("Surface ranges must each contain two endpoints")
-        mesh = _Mesh3D.parametric(
-            func, u_range=u_range, v_range=v_range,
-            resolution=_grid_resolution(resolution, "Surface"),
-            normal=normal, color=_color(fill_color), point_lit=point_lit,
+        if not isinstance(shade_in_3d, bool):
+            raise TypeError("shade_in_3d requires a boolean")
+        if shade_in_3d:
+            raise NotImplementedError(
+                "Manim Cairo Surface shading is unsupported; pass shade_in_3d=False "
+                "and opt into Noon lighting with point_lit=True"
+            )
+        if not isinstance(point_lit, bool):
+            raise TypeError("point_lit requires a boolean")
+        u_range = _surface_range("u_range", u_range)
+        v_range = _surface_range("v_range", v_range)
+        resolution = _grid_resolution(resolution, "Surface")
+        opacity = _opacity("fill opacity", fill_opacity)
+        stroke_opacity = _opacity("stroke opacity", stroke_opacity)
+        stroke_width = _manim_stroke_width(stroke_width)
+        fill = _color(fill_color)
+        stroke = _as_color("stroke_color", stroke_color)
+        if checkerboard_colors is not False:
+            try:
+                checkerboard_colors = tuple(checkerboard_colors)
+            except TypeError as error:
+                raise TypeError("checkerboard_colors requires two colors or False") from error
+            if len(checkerboard_colors) != 2:
+                raise ValueError("checkerboard_colors requires exactly two colors")
+            checkerboard_colors = tuple(_color(value, "checkerboard color")
+                                        for value in checkerboard_colors)
+        if checkerboard_colors is False and stroke_width == 0.0 and not shade_in_3d:
+            _require_opaque(fill_opacity)
+            mesh = _Mesh3D.parametric(
+                func, u_range=u_range, v_range=v_range, resolution=resolution,
+                normal=normal, color=fill, point_lit=point_lit,
+            )
+            _take_mesh(self, mesh)
+            return
+        if _surface_plan is None or _mesh_family_options is None:
+            raise RuntimeError("Surface construction requires the shared Rust authoring host")
+        context = _live_constructor_context("mesh")
+        plan = engine_call(_surface_plan, *u_range, *v_range, *resolution)
+        candidate = None
+        try:
+            parameters = engine_call(plan.parameters)
+            if hasattr(parameters, "to_py"):
+                parameters = parameters.to_py()
+            points = array("d")
+            normals = array("d")
+            for index in range(0, len(parameters), 2):
+                u, v = float(parameters[index]), float(parameters[index + 1])
+                points.extend(_vector(func(u, v)))
+                if normal is not None:
+                    normals.extend(_vector(normal(u, v)))
+            candidate = engine_call(plan.finishCells, _bulk(points), _bulk(normals))
+        finally:
+            plan.free()
+        try:
+            if checkerboard_colors is False:
+                engine_call(candidate.setFill, fill.red, fill.green, fill.blue,
+                            fill.alpha, opacity)
+            else:
+                engine_call(candidate.setCheckerboard,
+                            *(_bulk(tuple(component for component in
+                                           (color.red, color.green, color.blue, color.alpha)))
+                              for color in checkerboard_colors), opacity)
+            engine_call(candidate.setStroke, stroke.red, stroke.green, stroke.blue,
+                        stroke.alpha, stroke_width, stroke_opacity)
+            engine_call(candidate.setPointLit, point_lit)
+            handle = (engine_call(_create_mesh_family, candidate) if context is None
+                      else engine_call(context.createMeshFamily, candidate))
+        except BaseException:
+            candidate.free()
+            raise
+        _initialize_shared_wrapper(self)
+        _attach_shared_family(self, handle, context, _compat.VMobject)
+        if context is not None:
+            self._canonical_live_target_context = context
+
+    def set_fill_by_checkerboard(self, *colors, opacity=1):
+        from _noon_spatial import _bulk
+        if not colors:
+            colors = _DEFAULT_CHECKERBOARD
+        elif len(colors) == 1:
+            colors = colors[0]
+        try:
+            colors = tuple(colors)
+        except TypeError as error:
+            raise TypeError("checkerboard fill requires two colors") from error
+        if len(colors) != 2:
+            raise ValueError("checkerboard fill requires exactly two colors")
+        parsed = tuple(_color(value, "checkerboard color") for value in colors)
+        first = _bulk((parsed[0].red, parsed[0].green, parsed[0].blue, parsed[0].alpha))
+        second = _bulk((parsed[1].red, parsed[1].green, parsed[1].blue, parsed[1].alpha))
+        opacity = _opacity("fill opacity", opacity)
+        family = getattr(self, "_semantic_family_handle", None)
+        if family is None:
+            raise NotImplementedError("single-mesh Surface does not support family checkerboard edits")
+        context = _group_target_context(self)
+        if context is None:
+            engine_call(family.setFillByCheckerboard, first, second, opacity)
+        else:
+            engine_call(context.setSurfaceCheckerboard, family, first, second, opacity)
+        return self
+
+    def shift(self, vector):
+        return _WorldMobject.shift(self, vector)
+
+    def rotate(self, angle, axis=(0, 0, 1), about_point=None):
+        return _WorldMobject.rotate(self, angle, axis=axis, about_point=about_point)
+
+    def scale(self, factor, about_point=None):
+        if about_point is not None:
+            try:
+                about_point = tuple(about_point)
+            except TypeError:
+                pass
+            if isinstance(about_point, tuple) and len(about_point) == 2:
+                about_point = (*about_point, 0.0)
+        return _WorldMobject.scale(self, factor, about_point=about_point)
+
+    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
+                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+        if kwargs:
+            raise TypeError(f"unsupported Surface style option: {sorted(kwargs)[0]}")
+        if not isinstance(family, bool):
+            raise TypeError("family requires a boolean")
+        if not family:
+            raise NotImplementedError("Surface style updates apply to its cell family")
+        from _manim_semantic_handles import _set_style
+        return _set_style(
+            self, fill_color=fill_color, fill_opacity=fill_opacity,
+            stroke_color=stroke_color, stroke_width=stroke_width,
+            stroke_opacity=stroke_opacity, family=family,
         )
-        _take_mesh(self, mesh)
+
+    def copy(self):
+        if getattr(self, "_semantic_family_handle", None) is not None:
+            return _compat.Group.copy(self)
+        return _base.Mobject.copy(self)
+
+    def set_fill(self, color=None, opacity=None):
+        return self.set_style(fill_color=color, fill_opacity=opacity)
+
+    def set_stroke(self, color=None, width=None, opacity=None):
+        return self.set_style(stroke_color=color, stroke_width=width,
+                              stroke_opacity=opacity)
+
+
+def _surface_range(name, value):
+    try:
+        values = tuple(_base._ir._finite_number(name, item) for item in value)
+    except TypeError as error:
+        raise TypeError(f"{name} requires two numeric endpoints") from error
+    if len(values) != 2:
+        raise ValueError(f"{name} requires two endpoints")
+    return values
 
 
 __all__ = ["Cone", "Cube", "Cylinder", "Dot3D", "Line3D", "Prism", "Sphere", "Surface", "Torus"]

@@ -1,6 +1,7 @@
 use super::*;
 use crate::WorldAffineEdit;
 use noon_core::{AnimationOptions, RateFunction, SemanticProjection3D, SemanticRotation3D};
+use noon_geometry::{SurfaceSample, UvSurfacePlan};
 
 fn camera() -> SemanticCamera3D {
     SemanticCamera3D::new(
@@ -27,6 +28,159 @@ fn offset_mesh() -> MeshOptions {
         SemanticVec3::new(12.0, 2.0, 2.0),
     ];
     MeshOptions::new(MeshResource::new(positions, None, vec![0, 1, 2, 1, 3, 2]).unwrap())
+}
+
+fn flat_grid() -> SurfaceGrid {
+    let plan = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [2, 2]).unwrap();
+    let samples = plan
+        .coordinates()
+        .map(|(u, v)| SurfaceSample::position(SemanticVec3::new(u, v, 0.0)))
+        .collect::<Vec<_>>();
+    plan.finish_samples(samples).unwrap()
+}
+
+#[test]
+fn surface_family_retains_uv_roles_and_applies_defaults_and_atomic_checkerboard() {
+    let mut scene = Scene::new();
+    let surface = scene
+        .surface_family(flat_grid(), SurfaceOptions::default())
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(surface.family().node_id())
+        .unwrap();
+    let colors = leaves
+        .iter()
+        .enumerate()
+        .map(|(index, leaf)| {
+            let borrowed = store.borrow();
+            let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+            assert_eq!(state.surface_uv_cell(), Some([index / 2, index % 2]));
+            assert_eq!(state.style.stroke_width, 0.005);
+            assert_eq!(
+                state.style.stroke_width_mode,
+                noon_core::StrokeWidthMode::ScreenSpace
+            );
+            assert_eq!(state.spatial_material(), SemanticSpatialMaterial::PointLit);
+            match state.style.fill.as_ref().unwrap() {
+                SemanticPaint::Solid(color) => *color,
+                _ => panic!("solid cell fill"),
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        colors,
+        [Color::BLUE_D, Color::BLUE_E, Color::BLUE_E, Color::BLUE_D]
+    );
+
+    scene
+        .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.4)
+        .unwrap();
+    let changed = leaves
+        .iter()
+        .map(|leaf| {
+            store
+                .borrow()
+                .semantic_object_state_checked(*leaf)
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(changed[0].style.fill_opacity, 0.4);
+    assert_eq!(changed[1].style.fill_opacity, 0.4);
+    assert_eq!(
+        changed[0].style.fill,
+        Some(SemanticPaint::Solid(Color::RED))
+    );
+    assert_eq!(
+        changed[1].style.fill,
+        Some(SemanticPaint::Solid(Color::GREEN))
+    );
+    let before = changed;
+    let revision = scene.revision();
+    assert!(scene
+        .set_surface_checkerboard(&surface, [Color::BLUE, Color::RED], f64::NAN)
+        .is_err());
+    assert_eq!(scene.revision(), revision);
+    for (leaf, state) in leaves.iter().zip(before) {
+        assert_eq!(
+            store.borrow().semantic_object_state_checked(*leaf).unwrap(),
+            &state
+        );
+    }
+}
+
+#[test]
+fn surface_family_unlit_is_explicit_and_invalid_members_fail_atomically() {
+    let mut scene = Scene::new();
+    let surface = scene
+        .surface_family(
+            flat_grid(),
+            SurfaceOptions {
+                point_lit: false,
+                ..SurfaceOptions::default()
+            },
+        )
+        .unwrap();
+    let leaves = scene
+        .integration_store()
+        .borrow()
+        .ordered_leaf_nodes(surface.family().node_id())
+        .unwrap();
+    assert!(leaves.iter().all(|leaf| {
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_object_state_checked(*leaf)
+            .unwrap()
+            .spatial_material()
+            == SemanticSpatialMaterial::Unlit
+    }));
+    assert!(SurfaceFamily::from_family(surface.family().clone()).is_ok());
+
+    // The wrapper carries no shadow membership list: a later family edit is
+    // observed and checked against each current leaf before any style changes.
+    let ordinary = scene.circle(0.25).unwrap();
+    surface.family().add((&ordinary).into()).unwrap();
+    let before = leaves
+        .iter()
+        .map(|leaf| {
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_object_state_checked(*leaf)
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let revision = scene.revision();
+    assert_eq!(
+        scene.set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.5),
+        Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole
+        ))
+    );
+    assert_eq!(scene.revision(), revision);
+    for (leaf, expected) in leaves.iter().zip(before) {
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_object_state_checked(*leaf)
+                .unwrap(),
+            &expected
+        );
+    }
+
+    let impostor = scene.mesh(cube().with_surface_uv_cell([0, 0])).unwrap();
+    let impostor_family = scene.family(&[(&impostor).into()]).unwrap();
+    assert!(matches!(
+        SurfaceFamily::from_family(impostor_family),
+        Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole
+        ))
+    ));
 }
 
 fn assert_vec3_near(actual: SemanticVec3, expected: SemanticVec3) {

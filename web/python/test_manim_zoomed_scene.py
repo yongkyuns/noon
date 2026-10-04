@@ -1,7 +1,7 @@
 import unittest
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import noon
 _previous_js = sys.modules.get("js")
@@ -10,6 +10,7 @@ try:
     import _manim_camera
     import _manim_scene
     import _manim_semantic_handles
+    import _manim_compat
     import _manim_zoomed_scene as zoomed
 finally:
     if _previous_js is None:
@@ -34,11 +35,23 @@ class _View:
 
 
 class ZoomedSceneFacadeTests(unittest.TestCase):
+    def test_create_accepts_a_frame_already_bound_to_the_same_scene(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        scene = noon.Scene()
+        frame = identity_only_wrapper(noon.Rectangle)
+        frame._semantic_handle = object()
+        frame._scene = scene
+        self.assertIs(_manim_scene._canonical_create_animation(scene, noon.Create(frame)), frame)
+        with self.assertRaisesRegex(ValueError, "another Scene"):
+            _manim_scene._canonical_create_animation(noon.Scene(), noon.Create(frame))
+
     def test_portable_activation_admits_only_the_canonical_zoomed_method(self) -> None:
         source = '''
 class Example(ZoomedScene):
     def construct(self):
+        pop_out = self.get_zoomed_display_pop_out_animation()
         self.activate_zooming()
+        self.play(pop_out)
         self.wait(1)
 '''
         code, pairs = compile_authoring_source(source)
@@ -51,12 +64,17 @@ class Example(ZoomedScene):
         methods = _manim_scene._portable_scene_methods(scene)
         self.assertIsNotNone(methods)
         self.assertTrue(has_portable_scene_methods(scene, **methods))
+        self.assertIn("get_zoomed_display_pop_out_animation", methods)
 
         class ClassOverride(zoomed.ZoomedScene):
             def activate_zooming(self, animate=False):
                 return None
 
-        for candidate in (object.__new__(ClassOverride), scene):
+        class PopOutOverride(zoomed.ZoomedScene):
+            def get_zoomed_display_pop_out_animation(self, **kwargs):
+                return None
+
+        for candidate in (object.__new__(ClassOverride), object.__new__(PopOutOverride), scene):
             if candidate is scene:
                 candidate.activate_zooming = lambda animate=False: None
             methods = _manim_scene._portable_scene_methods(candidate)
@@ -170,6 +188,39 @@ class Override(ZoomedScene):
         with self.assertRaisesRegex(NotImplementedError, "animated"):
             scene.activate_zooming(animate=True)
         self.assertFalse(scene.zoom_activated)
+
+    def test_pop_out_preserves_display_snapshot_and_uses_stretched_camera_frame(self) -> None:
+        view = _View()
+
+        def bind_camera(scene, frame):
+            _manim_semantic_handles._attach_shared_handle(frame, object())
+            frame._scene = scene
+            frame._object = SimpleNamespace(id=0)
+
+        def bind_zoom(scene, frame, display, **options):
+            _manim_semantic_handles._attach_shared_handle(frame, object())
+            _manim_semantic_handles._attach_shared_handle(display, object())
+            frame._scene = display._scene = scene
+            frame._object = SimpleNamespace(id=1)
+            display._object = SimpleNamespace(id=2)
+            return view
+
+        with (
+            patch.object(_manim_scene, "_bind_camera_frame", bind_camera),
+            patch.object(_manim_scene, "_bind_zoomed_view", bind_zoom),
+            patch.object(_manim_compat, "Restore", return_value="restore-animation") as restore,
+        ):
+            scene = zoomed.ZoomedScene()
+            scene.setup()
+            display = scene.zoomed_display
+            display.save_state = Mock(return_value=display)
+            display.replace = Mock(return_value=display)
+            animation = scene.get_zoomed_display_pop_out_animation(rate_func="smooth")
+
+        self.assertEqual(animation, "restore-animation")
+        display.save_state.assert_called_once_with()
+        display.replace.assert_called_once_with(scene.zoomed_camera.frame, stretch=True)
+        restore.assert_called_once_with(display, rate_func="smooth")
 
 
 if __name__ == "__main__":

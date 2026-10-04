@@ -10,6 +10,7 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmImageMobjectOptions,
   WasmMeshOptions,
+  WasmMeshFamilyOptions,
   WasmSurfaceSamplingPlan,
   WasmSceneMembershipBatch,
   WasmTextColorBatch,
@@ -128,6 +129,12 @@ async function initializePyodide() {
       throw new Error("semantic continuation callback session belongs to another context");
     }
     activeAuthoringRun.continuationCallbackSession = { context, sessionId };
+    const continuation = activeAuthoringRun.continuation;
+    if (continuation !== null) {
+      const entry = semanticContexts.get(continuation.contextId);
+      if (!entry || entry.released) throw new Error("semantic continuation context is retired");
+      entry.callbackSessionId = sessionId;
+    }
   };
   self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
     completeContinuationCallback(context, tokenJson, patchBatchJson);
@@ -174,8 +181,10 @@ async function initializePyodide() {
   self.noonAuthoringImageOptions = WasmImageMobjectOptions;
   self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
   self.noonAuthoringMeshOptions = WasmMeshOptions;
+  self.noonAuthoringMeshFamilyOptions = WasmMeshFamilyOptions;
   self.noonSurfaceSamplingPlan = (...args) => new WasmSurfaceSamplingPlan(...args);
   self.noonCreateAuthoringMeshHandle = (options) => authoringStore.createMesh(options);
+  self.noonCreateAuthoringMeshFamilyHandle = (options) => authoringStore.createMeshFamily(options);
   self.noonLoadImageUrl = async (url) => {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);
@@ -967,16 +976,20 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     entry.releaseCallbackSession = () =>
       releaseCanonicalCallbackSession(pyodide, request.callbackSessionId);
   }
-  const runRequiredCallbackPhase = entry.callbackSessionId === undefined
-    ? null
-    : continuationOnly
+  // A source continuation may add its first callback after an earlier play.
+  // Its suspended Python stack is the handler for the whole source lifetime.
+  const runRequiredCallbackPhase = continuationOnly
     ? (frame, player) => requestContinuationCallback(continuation, frame, player)
-    : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
-  const completeRequiredCallbackPhase = entry.callbackSessionId === undefined
-    ? null
-    : continuationOnly
+    : entry.callbackSessionId === undefined ? null
+      : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
+  const completeRequiredCallbackPhase = continuationOnly
     ? (frame) => requestContinuationCallbackCommit(continuation, frame)
-    : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
+    : entry.callbackSessionId === undefined ? null
+      : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
+  if (continuationOnly) {
+    entry.releaseCallbackSession = () => entry.callbackSessionId === undefined
+      ? undefined : releaseCanonicalCallbackSession(pyodide, entry.callbackSessionId);
+  }
   const discardRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
     ? null
     : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, false);

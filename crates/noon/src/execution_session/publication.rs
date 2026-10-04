@@ -275,9 +275,8 @@ impl ExecutionSession {
             validate_semantic_publication(&transaction)
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
         }
-        let prepared = transaction
-            .prepare(store)
-            .map_err(ExecutionSessionPublicationError::Semantic)?;
+        let prepared =
+            self.prepare_semantic_transaction_with_callback_release(store, transaction)?;
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             Vec::new(),
@@ -303,15 +302,50 @@ impl ExecutionSession {
             validate_semantic_publication(&transaction)
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
         }
-        let prepared = transaction
-            .prepare(store)
-            .map_err(ExecutionSessionPublicationError::Semantic)?;
+        let prepared =
+            self.prepare_semantic_transaction_with_callback_release(store, transaction)?;
         self.apply_prepared_semantic_transaction_with_execution(
             prepared,
             execution_prefix,
             effective,
             purpose,
         )
+    }
+
+    fn prepare_semantic_transaction_with_callback_release<'a>(
+        &self,
+        store: &'a mut SemanticStore,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<PreparedSemanticMutationTransaction<'a>, ExecutionSessionPublicationError> {
+        if self.last_callback_receipt.is_none()
+            || !transaction.mutations().iter().any(|mutation| {
+                matches!(
+                    mutation,
+                    SemanticMutation::RemoveUpdater { .. } | SemanticMutation::ClearUpdaters { .. }
+                )
+            })
+        {
+            return transaction
+                .prepare(store)
+                .map_err(ExecutionSessionPublicationError::Semantic);
+        }
+        let (mut transaction, released) = {
+            let prepared = transaction
+                .prepare(store)
+                .map_err(ExecutionSessionPublicationError::Semantic)?;
+            let released = self.released_callback_affine_mutations(&prepared)?;
+            (prepared.into_transaction(), released)
+        };
+        for (target, property, value) in released {
+            transaction.set_property(target, property, value);
+        }
+        if !is_semantic_updater_publication(transaction.mutations()) {
+            validate_semantic_publication(&transaction)
+                .map_err(ExecutionSessionPublicationError::Lowering)?;
+        }
+        transaction
+            .prepare(store)
+            .map_err(ExecutionSessionPublicationError::Semantic)
     }
 
     /// Publish an already-prepared semantic transaction with its preflighted execution prefix.
@@ -530,7 +564,12 @@ impl ExecutionSession {
                     ),
                 }
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
-                (publication, None)
+                let revised = self
+                    .callback_schedule
+                    .plan()
+                    .prepare_registration_revision(&prepared, self.frame().time)
+                    .map_err(ExecutionSessionPublicationError::Lowering)?;
+                (publication, revised)
             };
         let preparation_stats = publication.stats();
         let order_patches = order_root

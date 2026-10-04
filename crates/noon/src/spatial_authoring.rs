@@ -5,7 +5,9 @@ use noon_core::{
     Color, GeometryResource, MeshResource, SemanticCamera3D, SemanticMutationTransaction,
     SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint,
     SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, StoredGeometry,
+    StrokeWidthMode,
 };
+use noon_geometry::SurfaceGrid;
 use std::{rc::Rc, sync::Arc};
 
 /// Inert mesh constructor input. Generation/sampling happens once before admission;
@@ -16,6 +18,7 @@ pub struct MeshOptions {
     pub transform: SemanticWorldTransform3D,
     pub style: SemanticStyle,
     pub material: SemanticSpatialMaterial,
+    pub surface_uv_cell: Option<[usize; 2]>,
 }
 
 impl MeshOptions {
@@ -31,6 +34,7 @@ impl MeshOptions {
                 ..SemanticStyle::default()
             },
             material: SemanticSpatialMaterial::Unlit,
+            surface_uv_cell: None,
         }
     }
 
@@ -49,6 +53,11 @@ impl MeshOptions {
         self
     }
 
+    pub fn with_surface_uv_cell(mut self, uv_cell: [usize; 2]) -> Self {
+        self.surface_uv_cell = Some(uv_cell);
+        self
+    }
+
     fn into_resource(
         self,
     ) -> (
@@ -60,16 +69,236 @@ impl MeshOptions {
             transform,
             style,
             material,
+            surface_uv_cell,
         } = self;
         let state = move |handle| {
             let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
             state.transform = transform.into();
             state.style = style;
             state.set_spatial_material(material);
+            state.set_surface_uv_cell(surface_uv_cell);
             state
         };
         (GeometryResource::Mesh(Arc::new(geometry)), state)
     }
+}
+
+/// Shared Rust appearance profile for a sampled surface. Cell topology and UV
+/// membership come from [`SurfaceGrid`]; this profile only assigns paint and
+/// material to those already sampled cells.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceOptions {
+    pub fill_colors: [Color; 2],
+    pub fill_opacity: f64,
+    pub stroke_color: Color,
+    pub stroke_width: f64,
+    pub stroke_opacity: f64,
+    pub point_lit: bool,
+}
+
+impl Default for SurfaceOptions {
+    fn default() -> Self {
+        Self {
+            fill_colors: [Color::BLUE_D, Color::BLUE_E],
+            fill_opacity: 1.0,
+            stroke_color: Color::from_hex(0xBBBBBB),
+            // Manim Cairo's 0.5-pixel Surface stroke in the normalized scene
+            // units used by Noon (0.01 scene units per pixel).
+            stroke_width: 0.005,
+            stroke_opacity: 1.0,
+            point_lit: true,
+        }
+    }
+}
+
+/// A normal semantic family of sampled cells. Cell UV roles are stored on the
+/// semantic leaves and are recovered from current shared family membership.
+#[derive(Clone, Debug)]
+pub struct SurfaceFamily {
+    family: MobjectFamily,
+}
+
+impl SurfaceFamily {
+    /// Wrap an existing family only when every leaf carries a semantic UV role.
+    pub fn from_family(family: MobjectFamily) -> Result<Self, AuthoringError> {
+        family.validate()?;
+        let leaves = family
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(AuthoringError::from)?;
+        if leaves.is_empty() {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+            ));
+        }
+        let store = family.integration_store();
+        let borrowed = store.borrow();
+        for leaf in leaves {
+            let state = borrowed
+                .semantic_object_state_checked(leaf)
+                .map_err(AuthoringError::from)?;
+            validate_surface_leaf(&borrowed, state)?;
+        }
+        drop(borrowed);
+        Ok(Self { family })
+    }
+
+    pub fn family(&self) -> &MobjectFamily {
+        &self.family
+    }
+
+    pub fn into_family(self) -> MobjectFamily {
+        self.family
+    }
+
+    /// Reassign cell colors from retained UV roles in one atomic authored edit.
+    /// Use [`Scene::set_surface_checkerboard`] when publishing through a live owner.
+    pub fn set_fill_by_checkerboard(
+        &self,
+        colors: [Color; 2],
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        let transaction = self.prepare_checkerboard_transaction(colors, opacity)?;
+        transaction
+            .apply(&mut self.family.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn prepare_checkerboard_transaction(
+        &self,
+        colors: [Color; 2],
+        opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        validate_unit_interval("fill opacity", opacity)?;
+        let leaves = self
+            .family
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(self.family.node_id())
+            .map_err(AuthoringError::from)?;
+        let store = self.family.integration_store();
+        let borrowed = store.borrow();
+        let mut transaction = SemanticMutationTransaction::new();
+        for leaf in leaves {
+            let state = borrowed
+                .semantic_object_state_checked(leaf)
+                .map_err(AuthoringError::from)?;
+            validate_surface_leaf(&borrowed, state)?;
+            let [u, v] = state.surface_uv_cell().ok_or(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+            ))?;
+            let previous = state.style.clone();
+            let mut style = previous.clone();
+            style.fill = Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
+                colors[0]
+            } else {
+                colors[1]
+            }));
+            style.fill_opacity = opacity;
+            if style != previous {
+                transaction.replace_style(leaf, style);
+            }
+        }
+        Ok(transaction)
+    }
+
+    pub fn set_style(&self, update: crate::StyleUpdate) -> Result<(), AuthoringError> {
+        self.family.set_style(update)
+    }
+
+    pub fn set_fill(
+        &self,
+        color: Option<Color>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.family.set_fill(color, opacity)
+    }
+
+    pub fn set_stroke(
+        &self,
+        color: Option<Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.family.set_stroke(color, width, opacity)
+    }
+
+    pub fn world_affine(&mut self, edit: crate::WorldAffineEdit) -> Result<(), AuthoringError> {
+        self.family.world_affine(edit)
+    }
+}
+
+fn validate_unit_interval(name: &str, value: f64) -> Result<(), AuthoringError> {
+    if !(0.0..=1.0).contains(&value) {
+        return Err(AuthoringError::InvalidOpacity {
+            name: name.to_owned(),
+            value,
+        });
+    }
+    Ok(())
+}
+
+fn validate_surface_leaf(
+    store: &noon_core::SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<[usize; 2], AuthoringError> {
+    let cell = state.surface_uv_cell().ok_or(AuthoringError::Unsupported(
+        crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+    ))?;
+    let Some(noon_core::StoredGeometry::Resource(handle)) = state.content.geometry() else {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+        ));
+    };
+    let Some(GeometryResource::Mesh(mesh)) = store.geometry_resources().get(handle) else {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+        ));
+    };
+    // A Surface cell is a retained four-corner quad split along the canonical
+    // v-low/u-high diagonal. UV metadata on an arbitrary mesh is insufficient.
+    if mesh.positions().len() != 4
+        || mesh.normals().is_none_or(|normals| normals.len() != 4)
+        || !mesh.has_usable_normals()
+        || mesh.indices() != [0, 1, 3, 1, 2, 3]
+    {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+        ));
+    }
+    Ok(cell)
+}
+
+fn surface_mesh_options(
+    cell: noon_geometry::SurfaceCell,
+    options: SurfaceOptions,
+) -> Result<MeshOptions, AuthoringError> {
+    let [u, v] = cell.uv_cell;
+    let mesh = cell
+        .into_mesh_resource()
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let mut result = MeshOptions::new(mesh);
+    result.style = SemanticStyle {
+        fill: Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
+            options.fill_colors[0]
+        } else {
+            options.fill_colors[1]
+        })),
+        fill_opacity: options.fill_opacity,
+        stroke: Some(SemanticPaint::Solid(options.stroke_color)),
+        stroke_width: options.stroke_width,
+        stroke_opacity: options.stroke_opacity,
+        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        ..SemanticStyle::default()
+    };
+    result.material = if options.point_lit {
+        SemanticSpatialMaterial::PointLit
+    } else {
+        SemanticSpatialMaterial::Unlit
+    };
+    Ok(result)
 }
 
 pub(crate) fn publish_mesh_creation(
@@ -192,6 +421,42 @@ impl Scene {
             publish_mesh_family(store, options, publish)
         })?;
         MobjectFamily::from_node(Rc::clone(self.integration_store()), node)
+    }
+
+    /// Publish an already sampled UV grid as ordinary semantic mesh leaves,
+    /// retaining its UV roles for later atomic checkerboard changes.
+    pub fn surface_family(
+        &mut self,
+        grid: SurfaceGrid,
+        options: SurfaceOptions,
+    ) -> Result<SurfaceFamily, AuthoringError> {
+        validate_unit_interval("fill opacity", options.fill_opacity)?;
+        validate_unit_interval("stroke opacity", options.stroke_opacity)?;
+        if !options.stroke_width.is_finite() || options.stroke_width < 0.0 {
+            return Err(AuthoringError::NegativeStrokeWidth(options.stroke_width));
+        }
+        let mut meshes = Vec::with_capacity(grid.plan().cell_count());
+        for cell in grid.cells() {
+            let uv_cell = cell.uv_cell;
+            meshes.push(surface_mesh_options(cell, options)?.with_surface_uv_cell(uv_cell));
+        }
+        let family = self.mesh_family(meshes)?;
+        SurfaceFamily::from_family(family)
+    }
+
+    /// Atomically recolor a sampled Surface through the owning Scene. The same
+    /// prepared edit is used for cold authoring and active LiveSession work.
+    pub fn set_surface_checkerboard(
+        &mut self,
+        surface: &SurfaceFamily,
+        colors: [Color; 2],
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), surface.family.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        let transaction = surface.prepare_checkerboard_transaction(colors, opacity)?;
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
     /// Initialize this Scene's one 3D camera before root content is attached.

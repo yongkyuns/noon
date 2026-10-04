@@ -209,10 +209,10 @@ impl From<AuthoringError> for AuthoringFailure {
                 message,
             ),
             AuthoringError::InvalidCameraMotionInput(_) => {
-                Self::new("invalid_input", "camera.invalid_ambient_rotation", message)
+                Self::new("invalid_input", "camera.invalid_motion", message)
             }
-            AuthoringError::AmbientCameraMotionAlreadyActive => {
-                Self::new("lifecycle", "camera.ambient_rotation_active", message)
+            AuthoringError::CameraMotionAlreadyActive => {
+                Self::new("lifecycle", "camera.motion_active", message)
             }
             AuthoringError::NonFiniteTransform => {
                 Self::new("invalid_input", "authoring.non_finite_transform", message)

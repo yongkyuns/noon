@@ -516,8 +516,9 @@ class PlottingQualification(Scene):
 export async function qualifyPlotting(runLive) {
   directWasmPreparation();
   const result = await runLive(source);
+  // Six ticks, two shafts, two tips, and four retained data/curve objects.
   if (Math.abs(result.duration - 0.8) > 1e-6 || result.metrics.objectCount !== 14) {
-    throw new Error(`plotting lifecycle produced unexpected duration/membership: ${JSON.stringify(result)}`);
+    throw new Error(`plotting lifecycle produced unexpected duration/membership: duration=${result.duration}, objectCount=${result.metrics.objectCount}`);
   }
   if (!result.metrics.ready || !result.metrics.retained || result.metrics.presentedFrames < 1 ||
       result.metrics.drawCalls < 1 || result.metrics.instancesDrawn < 1) {

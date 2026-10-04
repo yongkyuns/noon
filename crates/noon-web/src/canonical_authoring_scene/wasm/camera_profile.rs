@@ -126,6 +126,34 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = begin3DIllusionCameraRotation)]
+    pub fn begin_3dillusion_camera_rotation(
+        &mut self,
+        camera: &WasmAuthoringMobjectHandle,
+        rate: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .begin_3dillusion_camera_rotation(
+                camera.semantic_mobject(),
+                rate,
+                origin_phi,
+                origin_theta,
+            )
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = stop3DIllusionCameraRotation)]
+    pub fn stop_3dillusion_camera_rotation(
+        &mut self,
+        camera: &WasmAuthoringMobjectHandle,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .stop_3dillusion_camera_rotation(camera.semantic_mobject())
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = declareCameraProfileMove)]
     pub fn declare_camera_profile_move(
         &mut self,

@@ -9,6 +9,54 @@ use noon_runtime::TimelineWakeState;
 use super::*;
 
 #[test]
+fn an_invisible_camera_has_effective_callback_bounds_without_a_spatial_index_entry() {
+    let mut store = SemanticStore::new();
+    let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+        size: Vec2::new(8.0, 4.0),
+    });
+    state.style.object_opacity = 0.0;
+    state.set_role(noon_core::SemanticObjectRole::Camera2D);
+    let camera = store.insert_semantic_object(state);
+    store.attach_to_scene(camera).unwrap();
+    let mut register = SemanticMutationTransaction::new();
+    register.add_updater(camera, HostCallbackId::new(1), 0.0, None);
+    register.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    for time in [0.0, 0.5] {
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(time).unwrap()
+        else {
+            panic!("callback phase")
+        };
+        let bounds = overlay
+            .object(camera)
+            .unwrap()
+            .bounds
+            .expect("invisible objects still have geometric bounds");
+        assert_eq!((bounds.min + bounds.max) * 0.5, Vec2::ZERO);
+        assert!(bounds.max.x - bounds.min.x >= 8.0);
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+    }
+}
+
+#[test]
+fn callback_store_preflight_rejects_a_foreign_scene_store() {
+    let store = SemanticStore::new();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    let overlay = session.begin_required_callback_phase(0.5, []).unwrap();
+    let foreign = SemanticStore::new();
+
+    assert!(matches!(
+        session.validate_callback_store(&foreign, overlay.token()),
+        Err(crate::FamilyCallbackPaintError::Authoring(
+            crate::AuthoringError::ForeignStore
+        ))
+    ));
+}
+
+#[test]
 fn contiguous_host_declarations_share_one_region_without_native_between() {
     let mut store = SemanticStore::new();
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -209,6 +257,109 @@ fn native_only_binding_keeps_the_ready_fast_path() {
     ));
     assert_eq!(session.frame().objects[0].style.stroke_width, 2.0);
     assert!(session.pending_callback_token().is_none());
+}
+
+#[test]
+fn finite_callback_interval_runs_inside_its_bounds_and_is_exclusive_at_end() {
+    let mut store = SemanticStore::new();
+    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(object).unwrap();
+    let mut registration = SemanticMutationTransaction::new();
+    registration.add_updater_interval(object, HostCallbackId::new(19), 1.0, 2.0, None);
+    registration.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+    assert!(matches!(
+        session.advance_to_callback_barrier(0.5).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+    for time in [1.0, 1.5] {
+        let CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } = session.advance_to_callback_barrier(time).unwrap()
+        else {
+            panic!("callback interval must invoke at {time}")
+        };
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].callback_id(), HostCallbackId::new(19));
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+    }
+    assert!(matches!(
+        session.advance_to_callback_barrier(2.0).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+    assert!(matches!(
+        session.advance_to_callback_barrier(2.5).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+}
+
+#[test]
+fn finite_callback_interval_invokes_once_at_its_inclusive_endpoint() {
+    let mut store = SemanticStore::new();
+    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(object).unwrap();
+    let mut registration = SemanticMutationTransaction::new();
+    registration.add_updater_interval_with_endpoint_policy(
+        object,
+        HostCallbackId::new(20),
+        1.0,
+        2.0,
+        noon_core::SemanticUpdaterEndpointPolicy::InvokeAtEnd,
+        None,
+    );
+    registration.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+    assert!(matches!(
+        session.advance_to_callback_barrier(0.5).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+    for time in [1.0, 1.5, 2.0] {
+        let CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } = session.advance_to_callback_barrier(time).unwrap()
+        else {
+            panic!("inclusive callback interval must invoke at {time}")
+        };
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].callback_id(), HostCallbackId::new(20));
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+    }
+    // A repeated request at the same exact frame is idempotent, and the
+    // endpoint occurrence is absent immediately after its single invocation.
+    assert!(matches!(
+        session.advance_to_callback_barrier(2.0).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+    // Revising this target at the endpoint must not revive the closed interval.
+    let mut next = SemanticMutationTransaction::new();
+    next.add_updater(object, HostCallbackId::new(21), 2.0, None);
+    session
+        .apply_semantic_transaction(&mut store, next)
+        .unwrap();
+    let CallbackAdvance::HostRequired {
+        invocations,
+        overlay,
+    } = session.advance_to_callback_barrier(2.000001).unwrap()
+    else {
+        panic!("the new registration must invoke")
+    };
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].callback_id(), HostCallbackId::new(21));
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
 }
 
 #[test]

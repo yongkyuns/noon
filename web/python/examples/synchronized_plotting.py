@@ -15,7 +15,7 @@ RUN_TIME = 6.0
 
 class SynchronizedPlotting(Scene):
     def construct(self):
-        axes = Axes((0, 10, 2), (0, 3, 1), x_length=10, y_length=4)
+        axes = Axes((0, 10, 2), (0, 3, 1), x_length=10, y_length=4, tips=False)
         plan = axes.synchronized_series_plan(RECORDINGS, time_range=(0, 10), run_time=RUN_TIME)
         self.add(axes)
         for axis, direction, exclude_zero in ((axes.x_axis, DOWN, False), (axes.y_axis, LEFT, True)):

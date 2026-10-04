@@ -157,6 +157,19 @@ class ZoomedScene(_camera.MovingCameraScene):
         import _manim_scene as _scene
         return _scene._zoomed_view_factor(self, self._zoomed_view_handle)
 
+    def get_zoomed_display_pop_out_animation(self, **kwargs: Any) -> object:
+        """Stretch the display to the camera frame, then Transform it back.
+
+        This mirrors Manim v0.21's saved-state/``replace(..., stretch=True)``
+        sequence while leaving interpolation and publication to shared Transform.
+        """
+        if self._zoomed_view_handle is None:
+            raise RuntimeError("ZoomedScene.setup() must run before pop-out animation")
+        display = self.zoomed_display
+        display.save_state()
+        display.replace(self.zoomed_camera.frame, stretch=True)
+        return _compat.Restore(display, **kwargs)
+
 
 
 __all__ = ["ZoomedScene"]

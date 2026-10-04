@@ -1,7 +1,8 @@
 """Linear coordinate families and preparation-only plots over shared Rust handles.
 
-The 2D coordinate constructors require explicit three-value ranges and do not
-support tips. The bounded ThreeDAxes constructor retains its three default tips.
+The 2D Axes wrapper accepts Manim-style two- or three-value ranges and delegates
+range normalization, defaults, ticks, and retained filled tips to Rust. The
+bounded ThreeDAxes constructor retains its three default tips.
 Coordinates may be constructed after ordinary plays/waits;
 add late coordinates to the Scene before querying or plotting against them.
 Numeric native Text label families must be constructed before the first play/wait.
@@ -122,6 +123,14 @@ def _family(wrapper, handle, members):
     return wrapper
 
 
+def _coordinate_family(wrapper, handle, members):
+    """Seed known coordinate wrappers, then reconcile Rust-owned membership."""
+    wrapper._semantic_member_wrappers = {
+        _shared._family_wrapper_key(member): member for member in members
+    }
+    return _shared._attach_shared_family(wrapper, handle, leaf_type=_compat.VMobject)
+
+
 def _leaf(handle, kind=_compat.Line):
     wrapper = object.__new__(kind)
     _shared._attach_shared_handle(wrapper, handle)
@@ -135,7 +144,7 @@ def _attach_number_line(wrapper, handle):
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
-    return _family(wrapper, handle, [shaft, ticks])
+    return _coordinate_family(wrapper, handle, [shaft, ticks])
 
 
 def _coordinate_style(options, color, kwargs):
@@ -265,19 +274,21 @@ class UnitInterval(NumberLine):
 
 
 class Axes(_compat.Group):
-    """Explicitly sized, linear 2D axes. Curves are independent retained paths."""
+    """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
 
-    def __init__(self, x_range, y_range, *, x_length, y_length, tips=False,
+    def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, color=None, **kwargs):
         context = _coordinate_constructor_context()
-        if tips:
-            raise NotImplementedError("Axes tips are not yet supported")
         options = engine_call(
-            _coordinate_options.axes, _array(x_range), _array(y_range),
-            float(x_length), float(y_length),
+            _coordinate_options.axes,
+            _array(() if x_range is None else x_range),
+            _array(() if y_range is None else y_range),
+            None if x_length is None else float(x_length),
+            None if y_length is None else float(y_length),
         )
         try:
             engine_call(options.setTicks, bool(include_ticks), float(tick_size), True)
+            engine_call(options.setTips, bool(tips))
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
@@ -285,7 +296,7 @@ class Axes(_compat.Group):
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
         members = [_attach_number_line(object.__new__(NumberLine), engine_call(handle.coordinateAxis, index))
                    for index in (0, 1)]
-        _family(self, handle, members)
+        _coordinate_family(self, handle, members)
 
     @property
     def x_axis(self):

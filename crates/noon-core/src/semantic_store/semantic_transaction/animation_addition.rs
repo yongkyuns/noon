@@ -31,6 +31,10 @@ pub enum SemanticTransactionAnimationIntent {
         timing: crate::TrackTiming,
         time_map: crate::CompositionTimeMap,
     },
+    MoveAlongPath {
+        target: SemanticTransactionNodeRef,
+        path: SemanticTransactionNodeRef,
+    },
     TransformTo {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -120,6 +124,7 @@ impl SemanticTransactionAnimationIntent {
                 }
                 _ => Some([Some(*target), None, None]),
             },
+            Self::MoveAlongPath { target, path } => Some([Some(*target), Some(*path), None]),
             Self::TransformTo {
                 target,
                 target_state,
@@ -156,6 +161,7 @@ impl SemanticTransactionAnimationIntent {
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
@@ -219,6 +225,12 @@ impl SemanticTransactionAnimation {
                 timing: *timing,
                 time_map: time_map.clone(),
             },
+            SemanticAnimationIntent::MoveAlongPath { target, path } => {
+                SemanticTransactionAnimationIntent::MoveAlongPath {
+                    target: (*target).into(),
+                    path: (*path).into(),
+                }
+            }
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -373,6 +385,12 @@ impl SemanticTransactionAnimation {
                 timing: *timing,
                 time_map: time_map.clone(),
             },
+            SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
+                SemanticAnimationIntent::MoveAlongPath {
+                    target: resolve_node_ref(*target, committed),
+                    path: resolve_node_ref(*path, committed),
+                }
+            }
             SemanticTransactionAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -588,6 +606,22 @@ pub(super) fn preflight_transaction_animation(
         preflight_animation_options(animation.options(), index)?;
     }
     match animation.intent() {
+        SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.ensure_animation_target(*path, index)?;
+            let target_state = catalog
+                .staged_object_state(staged_objects, staged_object_order, *target, index)?
+                .clone();
+            let path_state = catalog
+                .staged_object_state(staged_objects, staged_object_order, *path, index)?
+                .clone();
+            if target == path
+                || target_state.content.image().is_some()
+                || !catalog.is_static_vector_path(*path, &path_state)
+            {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
+            }
+        }
         SemanticTransactionAnimationIntent::ObjectPropertyTrack {
             target,
             property,
@@ -955,6 +989,9 @@ pub(super) fn commit_add_animation(
                 time_map.clone(),
             )
             .expect("preflighted object property track insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::MoveAlongPath { target, path } => store
+            .insert_semantic_move_along_path_animation(*target, *path, options)
+            .expect("preflighted MoveAlongPath insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,

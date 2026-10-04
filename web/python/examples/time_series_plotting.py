@@ -13,7 +13,7 @@ RUN_TIME = 6.0
 
 class TimeSeriesPlotting(Scene):
     def construct(self):
-        axes = Axes((0, 10, 2), (0, 2.5, 0.5), x_length=10, y_length=4)
+        axes = Axes((0, 10, 2), (0, 2.5, 0.5), x_length=10, y_length=4, tips=False)
         self.add(axes)
         axes.add_coordinates(
             x_config={"decimal_places": 0, "exclude_zero": False},

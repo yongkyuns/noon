@@ -123,6 +123,7 @@ mod tests {
                 start_time: start,
                 duration,
                 easing: RateFunction::Linear,
+                reverse_rate_function: false,
             },
             time_map: CompositionTimeMap::default(),
             transform_geometry_plan: None,

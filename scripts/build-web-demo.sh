@@ -69,6 +69,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
   node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs

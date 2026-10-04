@@ -206,6 +206,18 @@ pub enum AnimationCompositionRequest<'a> {
         options: AnimationOptions,
     },
     TransformTo(TransformToRequest<'a>),
+    /// Move one target's bounds center along an activation-time retained path.
+    MoveAlongPath {
+        target: &'a Mobject,
+        path: &'a Mobject,
+        options: AnimationOptions,
+    },
+    /// Invoke a registered host callback during this compiler-scheduled interval.
+    CallbackInterval {
+        target: &'a Mobject,
+        callback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
     /// Animate one mesh/camera/light through the shared effective world-pose track.
     WorldTransform {
         target: &'a Mobject,
@@ -1543,6 +1555,26 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically animate a mobject's effective bounds center along a retained path.
+    pub fn declare_and_activate_move_along_path(
+        &mut self,
+        target: &Mobject,
+        path: &Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        self.require_mobject(path)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_move_along_path(
+                &mut store,
+                target.node_id(),
+                path.node_id(),
+                options,
+            )
+            .map_err(Into::into)
+    }
+
     /// Transform two equivalent semantic families through one ordered composition.
     pub fn declare_and_activate_family_transform_to(
         &mut self,
@@ -2043,6 +2075,31 @@ impl<'a> LiveSession<'a> {
                     interpolation: child.interpolation,
                     complete_priority: child.complete_priority,
                     options: child.options,
+                }
+            }
+            AnimationCompositionRequest::MoveAlongPath {
+                target,
+                path,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                self.require_mobject(path)?;
+                Request::MoveAlongPath {
+                    target: target.node_id(),
+                    path: path.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::CallbackInterval {
+                target,
+                callback,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::CallbackInterval {
+                    target: target.node_id(),
+                    callback: *callback,
+                    options: *options,
                 }
             }
             AnimationCompositionRequest::WorldTransform {
@@ -3692,6 +3749,56 @@ mod tests {
                 -2.0
             );
         }
+    }
+
+    #[test]
+    fn reverse_smooth_transform_returns_to_and_freezes_the_activation_source() {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.4).unwrap();
+        source.set_translation(1.25, -0.75).unwrap();
+        scene.add(&source).unwrap();
+        let original = source.state().unwrap();
+        let mut target = source.target_editor().unwrap();
+        target.set_translation(3.25, 1.25).unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Smooth)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(3.25, 1.25)
+        );
+        live.advance_segment_to(segment, 1.0).unwrap();
+        let at_finish = live.effective(&source).unwrap();
+        assert_eq!(
+            at_finish.transform.translation,
+            noon_core::Vec2::new(
+                original.transform.translation.x as f32,
+                original.transform.translation.y as f32,
+            )
+        );
+        live.complete_segment(segment).unwrap();
+        assert_eq!(live.authored(&source).unwrap(), original);
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            at_finish.transform.translation
+        );
+        live.set_translation(&source, -2.0, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation.x,
+            -2.0
+        );
     }
 
     #[test]

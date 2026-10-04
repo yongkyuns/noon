@@ -3,8 +3,8 @@ use noon_compile::semantic_execution_object_id;
 use noon_core::{
     AnimationOptions, GeometryRef, GeometryResourceLookup, MeshResource, RateFunction,
     SemanticAnimationIntent, SemanticAnimationState, SemanticMutationImpact, SemanticNodeCreation,
-    SemanticObjectProperty, SemanticObjectState, SemanticOrientation, SemanticRotation3D,
-    SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticOrientation,
+    SemanticRotation3D, SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
 };
 
 fn fixture(count: usize) -> (SemanticStore, ExecutionSession, Vec<SemanticNodeId>) {
@@ -837,15 +837,41 @@ fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
     assert_eq!(session.frame().objects[0].transform.translation.x, 1.0);
     let mut clear = SemanticMutationTransaction::new();
     clear.clear_updaters(node, 3.0);
+    clear.set_property(
+        node,
+        SemanticObjectProperty::Scale,
+        SemanticVec3::new(0.75, 1.0, 1.0),
+    );
     session
         .apply_semantic_transaction(&mut store, clear)
         .unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .scale
+            .x,
+        0.75,
+        "an explicit authored channel in the same transaction takes precedence"
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        1.0,
+        "the released callback translation is reconciled through authored state"
+    );
     callbacks.advance_to(&mut session, 4.0).unwrap();
     assert_eq!(
         session.frame().objects[0].transform.translation.x,
         1.0,
         "removal must freeze the last effective value, not restore authored state"
     );
+    assert_eq!(session.frame().objects[0].transform.scale.x, 0.75);
     assert_eq!(session.runtime_identity(), runtime);
     assert_eq!(
         session.wake_state().timeline(),
@@ -861,6 +887,220 @@ fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
 }
 
 #[test]
+fn callback_release_persists_owned_camera_channels_and_leaves_active_targets_alone() {
+    use crate::RustHostCallbackTable;
+    use noon_core::HostCallbackId;
+
+    let mut store = SemanticStore::new();
+    let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
+        size: noon_core::Vec2::new(8.0, 4.0),
+    });
+    camera_state.style.object_opacity = 0.0;
+    camera_state.set_role(SemanticObjectRole::Camera2D);
+    let camera = store.insert_semantic_object(camera_state);
+    let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 0.5,
+    }));
+    store.attach_to_scene(camera).unwrap();
+    store.attach_to_scene(other).unwrap();
+
+    let camera_callback = HostCallbackId::new(31);
+    let other_callback = HostCallbackId::new(32);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(camera_callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += 2.0 * context.delta_time() as f32;
+            transform.scale.x = 0.5;
+            transform.scale.y = 0.5;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .insert(other_callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += 3.0 * context.delta_time() as f32;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, camera, camera_callback, 0.0, None)
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, other, other_callback, 0.0, None)
+        .unwrap();
+
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    callbacks.advance_to(&mut session, 1.0).unwrap();
+    let effective_before_release = session.frame().clone();
+    let revision_before_rejected_release = store.scene_revision();
+
+    let mut rejected = SemanticMutationTransaction::new();
+    rejected.remove_updater(camera, camera_callback, 1.0);
+    rejected.set_property(camera, SemanticObjectProperty::ObjectOpacity, f64::NAN);
+    assert!(session
+        .apply_semantic_transaction(&mut store, rejected)
+        .is_err());
+    assert_eq!(store.scene_revision(), revision_before_rejected_release);
+    assert_eq!(session.frame(), &effective_before_release);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(camera)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "a rejected release must not partially reconcile authored state"
+    );
+
+    let mut remove_camera = SemanticMutationTransaction::new();
+    remove_camera.remove_updater(camera, camera_callback, 1.0);
+    session
+        .apply_semantic_transaction(&mut store, remove_camera)
+        .unwrap();
+    let authored_camera = store
+        .semantic_object_state_checked(camera)
+        .unwrap()
+        .transform;
+    assert_eq!(authored_camera.translation.x, 2.0);
+    assert_eq!(authored_camera.scale.x, 0.5);
+    assert_eq!(authored_camera.planar_rotation(), Some(0.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(other)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "an unrelated callback that remains active keeps its authored baseline"
+    );
+
+    callbacks.advance_to(&mut session, 1.5).unwrap();
+    let camera_frame = session
+        .effective_semantic_object(&store, camera)
+        .unwrap()
+        .object
+        .transform;
+    assert_eq!(camera_frame.translation.x, 2.0);
+    assert_eq!(camera_frame.scale.x, 0.5);
+    assert_eq!(
+        session.camera().unwrap().center,
+        noon_core::Vec2::new(2.0, 0.0)
+    );
+    assert_eq!(session.camera().unwrap().height, 2.0);
+    assert_eq!(
+        session
+            .effective_semantic_object(&store, other)
+            .unwrap()
+            .object
+            .transform
+            .translation
+            .x,
+        4.5,
+        "the still-active callback continues advancing its own target"
+    );
+
+    let mut add_restore_target = SemanticMutationTransaction::new();
+    add_restore_target.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Rectangle {
+            size: noon_core::Vec2::new(8.0, 4.0),
+        },
+    )));
+    let result = session
+        .apply_semantic_transaction(&mut store, add_restore_target)
+        .unwrap();
+    let [SemanticMutationImpact::NodeAdded {
+        node: restore_target,
+    }] = result.impacts()
+    else {
+        panic!("Restore target allocation")
+    };
+    let restore_options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
+    let mut add_restore = SemanticMutationTransaction::new();
+    add_restore.add_animation(SemanticAnimationState::new(
+        SemanticAnimationIntent::TransformTo {
+            target: camera,
+            target_state: *restore_target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            complete_priority: false,
+        },
+        restore_options,
+    ));
+    let result = session
+        .apply_semantic_transaction(&mut store, add_restore)
+        .unwrap();
+    let [SemanticMutationImpact::AnimationAdded {
+        animation: restore_animation,
+    }] = result.impacts()
+    else {
+        panic!("Restore animation declaration")
+    };
+    let segment = session
+        .activate_animation_segment(&store, *restore_animation, restore_options)
+        .unwrap();
+    callbacks
+        .advance_segment_to(&mut session, segment, segment.start_time())
+        .unwrap();
+    let restore_start = session
+        .effective_semantic_object(&store, camera)
+        .unwrap()
+        .object
+        .transform;
+    assert_eq!(restore_start.translation.x, 2.0);
+    assert_eq!(restore_start.scale.x, 0.5);
+    assert_eq!(restore_start.rotation, 0.0);
+}
+
+#[test]
+fn removing_one_duplicate_callback_registration_does_not_release_its_driver() {
+    use crate::RustHostCallbackTable;
+    use noon_core::HostCallbackId;
+
+    let (mut store, _, nodes) = fixture(1);
+    let node = nodes[0];
+    let callback = HostCallbackId::new(41);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += context.delta_time() as f32;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, node, callback, 0.0, None)
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, node, callback, 0.0, None)
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    callbacks.advance_to(&mut session, 1.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+
+    let mut remove_one = SemanticMutationTransaction::new();
+    remove_one.remove_updater(node, callback, 1.0);
+    session
+        .apply_semantic_transaction(&mut store, remove_one)
+        .unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "the second active occurrence still owns this callback target"
+    );
+    callbacks.advance_to(&mut session, 1.5).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.5);
+}
+
+#[test]
 fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_atomically() {
     use crate::execution_session::CallbackAdvance;
     use noon_core::HostCallbackId;
@@ -872,7 +1112,6 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
     let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
-    store.attach_to_scene(other).unwrap();
     let mut initial = SemanticMutationTransaction::new();
     initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
     initial.apply(&mut store).unwrap();
@@ -903,12 +1142,28 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
     let before = session.publication_context();
+    let before_authored_transform = store.semantic_object_state_checked(node).unwrap().transform;
+    let before_effective_transform = session.frame().objects[0].transform;
     for (target, time) in [(node, 0.5), (other, 1.0)] {
         let mut tx = SemanticMutationTransaction::new();
+        // A rejected callback revision also rolls back unrelated authored edits.
+        tx.set_property(
+            node,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(3.0, 0.0, 0.0),
+        );
         tx.add_updater(target, HostCallbackId::new(2), time, None);
         assert!(session.apply_semantic_transaction(&mut store, tx).is_err());
         assert_eq!(session.publication_context(), before);
         assert_eq!(store.scene_revision(), before.scene_revision());
+        assert_eq!(
+            store.semantic_object_state_checked(node).unwrap().transform,
+            before_authored_transform
+        );
+        assert_eq!(
+            session.frame().objects[0].transform,
+            before_effective_transform
+        );
     }
     let mut remove = SemanticMutationTransaction::new();
     remove.clear_updaters(node, 1.0);

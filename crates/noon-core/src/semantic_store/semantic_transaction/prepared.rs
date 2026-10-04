@@ -1377,12 +1377,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     target,
                     callback,
                     active_from,
+                    inactive_from,
+                    endpoint_policy,
                     position,
                 } => {
                     let target = resolve_node_ref(target, &committed_nodes);
-                    let registration =
-                        SemanticUpdaterRegistration::new(callback, active_from, None)
-                            .expect("preflighted updater activation interval remains valid");
+                    let registration = SemanticUpdaterRegistration::with_endpoint_policy(
+                        callback,
+                        active_from,
+                        inactive_from,
+                        endpoint_policy,
+                    )
+                    .expect("preflighted updater activation interval remains valid");
                     store
                         .insert_semantic_updater_registration(target, registration, position)
                         .expect("preflighted updater insertion remains valid");

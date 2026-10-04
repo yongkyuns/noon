@@ -435,6 +435,7 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyHandle {
         family: noon::MobjectFamily,
+        surface: Option<noon::SurfaceFamily>,
     }
 
     /// Host-normalized options for one shared arrangement transaction.
@@ -951,12 +952,29 @@ mod wasm {
 
     impl WasmAuthoringFamilyHandle {
         pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
-            Self { family }
+            Self {
+                family,
+                surface: None,
+            }
+        }
+
+        pub(crate) fn from_surface_family(surface: noon::SurfaceFamily) -> Self {
+            Self {
+                family: surface.family().clone(),
+                surface: Some(surface),
+            }
         }
 
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
             self.family.validate().map_err(typed_js_error)?;
             Ok(self.family.clone())
+        }
+
+        pub(crate) fn semantic_surface_family(
+            &self,
+        ) -> Result<Option<&noon::SurfaceFamily>, JsValue> {
+            self.semantic_family()?;
+            Ok(self.surface.as_ref())
         }
     }
 

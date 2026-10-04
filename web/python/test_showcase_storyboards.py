@@ -12,6 +12,7 @@ LESSONS = {
     "showcase-bezier-paths",
     "showcase-reactive-relationships",
     "showcase-always-redraw",
+    "showcase-camera-follows-path",
 }
 
 
@@ -112,6 +113,33 @@ class FeatureLessonStoryboards(unittest.TestCase):
         self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                             and node.func.id == "WorldTransformTo" for node in ast.walk(scene)))
         self.assertEqual(entry["thumbnail"], "thumbnails/showcase/showcase-spatial-scene.png")
+
+    def test_camera_path_lesson_uses_a_finite_updater_and_retained_path_motion(self):
+        manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+        entry = next(item for item in manifest["entries"] if item["id"] == "showcase-camera-follows-path")
+        self.assertEqual(entry["duration"], 9.8)
+        self.assertEqual(entry["primary_feature"], "camera-following-path-motion")
+        self.assertEqual(entry["playback_capability"], "nonreplayable-host-callbacks")
+        source = (WEB / entry["path"]).read_text()
+        tree = ast.parse(source, filename=entry["path"])
+        scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+        construct = next(node for node in scene.body if isinstance(node, ast.AsyncFunctionDef))
+        self.assertEqual([base.id for base in scene.bases if isinstance(base, ast.Name)], ["MovingCameraScene"])
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "MoveAlongPath" for node in ast.walk(construct)))
+        updater_calls = [node for node in ast.walk(construct) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Attribute)
+                         and node.func.attr in {"add_updater", "remove_updater"}]
+        self.assertEqual(len(updater_calls), 2)
+        self.assertCountEqual([node.func.attr for node in updater_calls], ["add_updater", "remove_updater"])
+        for call in updater_calls:
+            self.assertEqual(ast.unparse(call.func.value), "camera_frame")
+            self.assertEqual(ast.unparse(call.args[0]), "follow_point")
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "Restore"
+                            and ast.unparse(node.args[0]) == "camera_frame"
+                            for node in ast.walk(construct)))
+        self.assertIn("fixed axes and path", entry["features"])
 
     def test_reactive_lesson_removes_exact_registered_callbacks(self):
         source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()

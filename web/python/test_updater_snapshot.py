@@ -732,7 +732,7 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             reads.append(key)
             return 0.0
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([callback, callback], self.Tracker)
+        await context.prefetch_captured_phase_reads([callback, callback], self.Tracker)
         self.assertEqual(calls, [])
         self.assertEqual(reads, [(7, 3)])
         self.assertEqual(context.effective_batch()["writes"], [])
@@ -759,7 +759,7 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             return 2.5
 
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([callback], self.Tracker)
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
         self.assertEqual(calls, [])
         self.assertEqual(reads, [(9, 3)])
         self.assertEqual(callback(None), 2.5)
@@ -778,7 +778,7 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         async def read(key):
             raise failure
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([callback], self.Tracker)
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
         callback(None)
         self.assertEqual(calls, ["once"])
         with self.assertRaises(ValueError) as caught:
@@ -800,8 +800,8 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             reads.append(key)
             return 1.0
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([lambda m: foreign], self.Tracker)
-        await context.prefetch_captured_scalars([lambda m: descriptor], DescriptorTracker)
+        await context.prefetch_captured_phase_reads([lambda m: foreign], self.Tracker)
+        await context.prefetch_captured_phase_reads([lambda m: descriptor], DescriptorTracker)
         self.assertEqual(reads, [])
 
     async def test_capture_cache_does_not_cross_phase_contexts(self):
@@ -813,10 +813,92 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         async def later(key): return 5.0
         first._read_scalar_async = earlier
         second._read_scalar_async = later
-        await first.prefetch_captured_scalars([callback], self.Tracker)
-        await second.prefetch_captured_scalars([callback], self.Tracker)
+        await first.prefetch_captured_phase_reads([callback], self.Tracker)
+        await second.prefetch_captured_phase_reads([callback], self.Tracker)
         self.assertEqual(first.scalar((2, 3)), 2.0)
         self.assertEqual(second.scalar((2, 3)), 5.0)
+
+    def typed_mobject(self, owner, slot, *, scene_owner=None):
+        value = identity_only_wrapper(compat.Mobject)
+        value._scene = SimpleNamespace(
+            _canonical_authoring_context=owner if scene_owner is None else scene_owner
+        )
+        value._semantic_handle = SimpleNamespace(
+            semanticSlot=slot, semanticGeneration=3
+        )
+        value._semantic_handle_fresh = True
+        return value
+
+    @staticmethod
+    def object_item(key):
+        item = _object(key[0])
+        item["node"] = {"slot": key[0], "generation": key[1]}
+        return item
+
+    async def test_direct_mobject_capture_is_prefetched_without_js_pi_or_invocation(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 31)
+        reads, calls = [], []
+        async def read(kind, key):
+            reads.append((kind, key))
+            return {"kind": "object", "object": self.object_item(key)}
+        context._read_async = read
+
+        def callback(_mobject):
+            calls.append("callback")
+            return context.row(captured)[1]
+
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
+        self.assertEqual(reads, [("object", (31, 3))])
+        self.assertEqual(calls, [])
+        self.assertEqual(callback(None).transform.translation_x, 31.0)
+        self.assertEqual(calls, ["callback"])
+
+    async def test_foreign_and_family_mobjects_are_not_prefetched(self):
+        owner = object()
+        context = self.context(owner)
+        foreign = self.typed_mobject(owner, 41, scene_owner=object())
+        family = self.typed_mobject(owner, 42)
+        family._semantic_family_handle = object()
+        reads = []
+        async def read(kind, key):
+            reads.append((kind, key))
+            return {"kind": "object", "object": self.object_item(key)}
+        context._read_async = read
+        await context.prefetch_captured_phase_reads(
+            [lambda _mobject: (foreign, family)], self.Tracker
+        )
+        self.assertEqual(reads, [])
+
+    async def test_malformed_mobject_prefetch_is_deferred_until_row_read(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 51)
+        async def read(kind, key):
+            return {"kind": "object", "object": self.object_item((999, key[1]))}
+        context._read_async = read
+        await context.prefetch_captured_phase_reads([lambda _mobject: captured], self.Tracker)
+        with self.assertRaisesRegex(RuntimeError, "foreign semantic node"):
+            context.row(captured)
+
+    async def test_mobject_read_error_is_deferred_until_actual_read(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 61)
+        failure = ValueError("stale phase object")
+        calls = []
+        async def read(kind, key):
+            raise failure
+        context._read_async = read
+        def callback(_mobject):
+            calls.append("once")
+        await context.prefetch_captured_phase_reads([callback, lambda _mobject: captured], self.Tracker)
+        callback(None)
+        self.assertEqual(calls, ["once"])
+        with self.assertRaises(ValueError) as caught:
+            context.row(captured)
+        self.assertIs(caught.exception, failure)
 
 
 class CallbackMembershipFinalizerTests(unittest.TestCase):

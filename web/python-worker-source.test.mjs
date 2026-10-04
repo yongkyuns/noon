@@ -450,6 +450,35 @@ test("explicit endpoint reconnect returns the existing runtime lease before reat
   assert.equal(leased, true);
 });
 
+test("a first callback added after attachment uses the suspended source handler and retires its session", async () => {
+  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const context = {};
+  const entry = { context, endpoints: new Set(), released: false };
+  const contexts = new Map([["scene", entry]]);
+  const continuation = { contextId: "scene", context, generation: 7, runRequestId: 41, terminal: false, endpoint: null };
+  const run = { requestId: 41, continuation, continuationCallbackSession: null };
+  const calls = [];
+  const attach = new Function("semanticContexts", "activeAuthoringRun", "attachSemanticEngine", "requestContinuationCallback", "requestContinuationCallbackCommit", "releaseCanonicalCallbackSession", `
+    ${attachSource}
+    return attachSemanticExecutionRequest;
+  `)(contexts, run, async (_context, _request, _stop, callback, _continuation, complete) => {
+    calls.push(callback, complete);
+    return {};
+  }, (owner, phase) => ({ owner, phase }), (owner, phase) => ({ owner, phase }), (_pyodide, id) => calls.push(id));
+  await attach({ contextId: "scene", continuationGeneration: 7, continuationRunRequestId: 41 }, true, {});
+  assert.equal(typeof calls[0], "function");
+  assert.equal(typeof calls[1], "function");
+  const self = {};
+  const setterSource = source.slice(source.indexOf("self.noonSetSemanticContinuationCallbackSession ="), source.indexOf("self.noonCompleteSemanticContinuationCallback ="));
+  new Function("self", "activeAuthoringRun", "semanticContexts", setterSource)(self, run, contexts);
+  self.noonSetSemanticContinuationCallbackSession(context, 9);
+  assert.equal(entry.callbackSessionId, 9);
+  assert.deepEqual(calls[0]({ time: 1 }, {}), { owner: continuation, phase: { time: 1 } });
+  assert.throws(() => self.noonSetSemanticContinuationCallbackSession({}, 10), /changed during authoring/);
+  entry.releaseCallbackSession();
+  assert.equal(calls.at(-1), 9);
+});
+
 test("continuation membership helpers retain the endpoint player pinned to the phase", () => {
   const start = source.indexOf("function stageContinuationCallbackMembership");
   const end = source.indexOf("function readContinuationCallback", start);

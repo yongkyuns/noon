@@ -123,6 +123,7 @@ pub struct ZoomedView {
     camera_frame: Mobject,
     display: Mobject,
     capture_own_display: bool,
+    scene_root: noon_core::SemanticNodeId,
 }
 
 impl ZoomedView {
@@ -210,6 +211,7 @@ impl Scene {
             camera_frame: Mobject::from_node(Rc::clone(self.integration_store()), frame)?,
             display: Mobject::from_node(Rc::clone(self.integration_store()), display)?,
             capture_own_display: options.capture_own_display,
+            scene_root: self.root(),
         })
     }
 
@@ -249,6 +251,39 @@ impl Scene {
             view.capture_own_display,
         );
         Ok(transaction)
+    }
+}
+
+impl crate::LiveSession<'_> {
+    /// Activate an authored zoomed view at the current live publication.
+    ///
+    /// This lets a continuation defer foreground membership and the inset
+    /// relation until the same authored barrier as a source-level
+    /// `activate_zooming()` call.
+    pub fn activate_zooming(&mut self, view: &ZoomedView) -> Result<(), crate::LiveSessionError> {
+        if !Rc::ptr_eq(
+            view.camera_frame.integration_store(),
+            self.integration_store(),
+        ) || !Rc::ptr_eq(view.display.integration_store(), self.integration_store())
+        {
+            return Err(crate::AuthoringError::ForeignStore.into());
+        }
+        let store = view.camera_frame.integration_store();
+        let targets = [
+            crate::MobjectTarget::Object(view.camera_frame()),
+            crate::MobjectTarget::Object(view.display()),
+        ];
+        let mut transaction = crate::scene_membership::prepare_scene_membership(
+            store,
+            view.scene_root,
+            crate::SceneMembershipRequest::AddForeground(&targets),
+        )?;
+        transaction.set_inset_2d_view(
+            view.display.node_id(),
+            view.camera_frame.node_id(),
+            view.capture_own_display,
+        );
+        self.apply(transaction).map(|_| ())
     }
 }
 

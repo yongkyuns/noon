@@ -11,11 +11,11 @@ fn state_without_open_motion(
 ) -> Result<Vec<CameraAngularMotion>, AuthoringError> {
     let motions = state.camera_motions();
     if motions.last().is_some_and(|motion| motion.end().is_none()) {
-        return Err(AuthoringError::AmbientCameraMotionAlreadyActive);
+        return Err(AuthoringError::CameraMotionAlreadyActive);
     }
     if motions.len() >= noon_core::MAX_CAMERA_MOTION_INTERVALS {
         return Err(AuthoringError::InvalidCameraMotionInput(
-            "ambient camera history is limited to 256 intervals per camera",
+            "camera motion history is limited to 256 intervals per camera",
         ));
     }
     Ok(motions.to_vec())
@@ -35,7 +35,7 @@ pub(crate) fn ensure_camera_motion_closed(camera: &Mobject) -> Result<(), Author
         .last()
         .is_some_and(|motion| motion.end().is_none())
     {
-        Err(AuthoringError::AmbientCameraMotionAlreadyActive)
+        Err(AuthoringError::CameraMotionAlreadyActive)
     } else {
         Ok(())
     }
@@ -59,6 +59,44 @@ pub(crate) fn begin_motion(
     let motion = CameraAngularMotion::new(profile, axis, rate, start, None, near, far).ok_or(
         AuthoringError::InvalidCameraMotionInput("ambient camera rotation inputs are invalid"),
     )?;
+    motions.push(motion);
+    noon_core::camera_motion_history_is_valid(&motions)
+        .then(|| Arc::from(motions))
+        .ok_or(AuthoringError::InvalidCameraMotionInput(
+            "ambient camera rotation history is invalid",
+        ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn begin_illusion_motion(
+    state: &SemanticObjectState,
+    profile: noon_core::ManimCamera3DProfile,
+    near: f64,
+    far: f64,
+    rate: f64,
+    start: f64,
+    origin_phi: Option<f64>,
+    origin_theta: Option<f64>,
+) -> Result<Arc<[CameraAngularMotion]>, AuthoringError> {
+    if !rate.is_finite() {
+        return Err(AuthoringError::InvalidCameraMotionInput(
+            "3D illusion camera rotation rate must be finite",
+        ));
+    }
+    let mut motions = state_without_open_motion(state)?;
+    let motion = CameraAngularMotion::three_d_illusion(
+        profile,
+        rate,
+        start,
+        None,
+        near,
+        far,
+        origin_phi,
+        origin_theta,
+    )
+    .ok_or(AuthoringError::InvalidCameraMotionInput(
+        "3D illusion camera rotation inputs are invalid",
+    ))?;
     motions.push(motion);
     noon_core::camera_motion_history_is_valid(&motions)
         .then(|| Arc::from(motions))
@@ -153,6 +191,40 @@ impl Scene {
         transaction.set_camera_profile(camera.node_id(), profile, near, far);
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
+
+    /// Begin Manim's authored-time camera-orbit illusion around a captured pose.
+    pub fn begin_3dillusion_camera_rotation(
+        &mut self,
+        camera: &Mobject,
+        rate: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(camera)?;
+        let (profile, near, far, time) = scene_profile(self, camera)?;
+        let state = camera.state()?;
+        let motions = begin_illusion_motion(
+            &state,
+            profile,
+            near,
+            far,
+            rate,
+            time,
+            origin_phi,
+            origin_theta,
+        )?;
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        transaction.set_camera_motions(camera.node_id(), motions);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
+    /// Stop the illusion at the exact sampled effective endpoint.
+    pub fn stop_3dillusion_camera_rotation(
+        &mut self,
+        camera: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        self.stop_ambient_camera_rotation(camera)
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +272,50 @@ mod tests {
         );
         scene.stop_ambient_camera_rotation(&camera).unwrap();
         assert_eq!(camera.state().unwrap().camera_motions()[0].end(), Some(2.0));
+    }
+
+    #[test]
+    fn illusion_camera_rotation_is_authored_time_owned_and_stops_at_its_sample() {
+        let source = noon_core::ManimCamera3DProfile {
+            phi: 75_f64.to_radians(),
+            theta: 30_f64.to_radians(),
+            ..profile()
+        };
+        let mut scene = Scene::new();
+        let camera = scene.camera_3d_profile(source, 0.1, 100.0).unwrap();
+        scene
+            .begin_3dillusion_camera_rotation(&camera, 2.0, None, None)
+            .unwrap();
+        assert!(scene
+            .begin_ambient_camera_rotation(&camera, CameraRotationAxis::Theta, 1.0)
+            .is_err());
+
+        scene.wait(std::f64::consts::FRAC_PI_2).unwrap();
+        let expected = noon_core::CameraAngularMotion::three_d_illusion(
+            source,
+            2.0,
+            0.0,
+            Some(std::f64::consts::FRAC_PI_2),
+            0.1,
+            100.0,
+            None,
+            None,
+        )
+        .unwrap()
+        .sample(std::f64::consts::FRAC_PI_2)
+        .unwrap();
+        scene.stop_3dillusion_camera_rotation(&camera).unwrap();
+
+        let state = camera.state().unwrap();
+        assert_eq!(
+            state.camera_motions()[0].end(),
+            Some(std::f64::consts::FRAC_PI_2)
+        );
+        assert_eq!(state.camera_profile(), Some(expected));
+        assert!(scene
+            .begin_3dillusion_camera_rotation(&camera, 1.0, Some(f64::NAN), None)
+            .is_err());
+        assert_eq!(camera.state().unwrap().camera_profile(), Some(expected));
     }
 
     #[test]
@@ -254,7 +370,7 @@ mod tests {
         assert!(matches!(
             error,
             AuthoringError::InvalidCameraMotionInput(
-                "ambient camera history is limited to 256 intervals per camera"
+                "camera motion history is limited to 256 intervals per camera"
             )
         ));
 

@@ -76,6 +76,21 @@ impl From<&MobjectFamily> for LayoutAnchor {
 }
 
 impl LayoutAnchor {
+    /// Check that this anchor belongs to an expected semantic store without
+    /// resolving its identity there.
+    pub fn belongs_to_store(&self, expected: &Rc<RefCell<SemanticStore>>) -> bool {
+        Rc::ptr_eq(&self.store, expected)
+    }
+
+    /// Resolve this checked layout anchor to its semantic node identity.
+    ///
+    /// Callers that accept handles from another authoring context should first
+    /// use [`Self::belongs_to_store`] to ensure resolution occurs in the expected
+    /// store.
+    pub fn resolve_checked(&self) -> Result<SemanticNodeId, AuthoringError> {
+        self.resolve()
+    }
+
     /// Select a direct semantic family member, without traversing wrapper trees.
     pub fn member(mut self, index: isize) -> Self {
         self.index = Some(index);

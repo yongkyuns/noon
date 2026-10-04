@@ -61,14 +61,15 @@ use crate::execution_segment::{
 use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
     derive_prepared_scalar_animation_tracks, lower_prepared_family_transform_channels,
-    lower_prepared_matching_family_transform_payload,
+    lower_prepared_matching_family_transform_payload, lower_prepared_path_motion_tracks,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    lower_semantic_execution_root_with_animation_root_at, prepare_family_transform_activations,
-    prepare_matching_family_transform_activation, CompilePatchError, EffectiveAnimationProperties,
-    ExecutionMutationTransaction, ExecutionPatch, PreparedScalarAnimationTrackError,
+    lower_semantic_execution_root_with_animation_root_at, lower_semantic_path_motion_tracks,
+    prepare_family_transform_activations, prepare_matching_family_transform_activation,
+    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
+    PathMotionActivationProperties, PreparedScalarAnimationTrackError,
     PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
     PreparedSemanticAnimationScheduleError, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
@@ -126,6 +127,11 @@ struct CompositionStaging<'a> {
     declaration: &'a mut SemanticMutationTransaction,
     admitted: &'a mut AnimationAdmissions,
     removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+    callback_intervals: &'a mut Vec<(
+        noon_core::SemanticLocalNodeToken,
+        SemanticNodeId,
+        noon_core::HostCallbackId,
+    )>,
 }
 
 fn stage_animation_admissions(
@@ -151,6 +157,11 @@ enum PreparedAnimationLifecycle {
         root: SemanticNodeId,
         admits: bool,
         removals: Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
+        callback_intervals: Vec<(
+            noon_core::SemanticLocalNodeToken,
+            SemanticNodeId,
+            noon_core::HostCallbackId,
+        )>,
     },
 }
 
@@ -170,6 +181,16 @@ pub(crate) enum SemanticCompositionRequest {
         target_state: SemanticNodeId,
         interpolation: noon_core::SemanticTransformInterpolation,
         complete_priority: bool,
+        options: AnimationOptions,
+    },
+    MoveAlongPath {
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    CallbackInterval {
+        target: SemanticNodeId,
+        callback: noon_core::HostCallbackId,
         options: AnimationOptions,
     },
     WorldTransform {
@@ -310,6 +331,8 @@ impl SemanticCompositionRequest {
             | Self::FamilyTransformTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
+            Self::CallbackInterval { target, .. } => Some(*target),
+            Self::MoveAlongPath { target, .. } => Some(*target),
             Self::Indicate { target, .. }
             | Self::FamilyIndicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
@@ -1566,7 +1589,7 @@ impl ExecutionSession {
         )?;
         let mut segment =
             ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
-        let tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
+        let mut tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
             let index = self.runtime.frame_index_for_object(object)?;
             let frame = self.runtime.frame();
             let row = frame.objects.get(index)?;
@@ -1580,6 +1603,20 @@ impl ExecutionSession {
                 camera_profile: row.camera_profile(),
             })
         })?;
+        let path_tracks =
+            lower_semantic_path_motion_tracks(store, &schedule, tracks.tracks(), |object| {
+                if self.runtime.object_has_effective_driver(object) {
+                    return None;
+                }
+                let index = self.runtime.frame_index_for_object(object)?;
+                let row = self.runtime.frame().objects.get(index)?;
+                let bounds_center = self.runtime.effective_object_bounds(object)?.center();
+                Some(PathMotionActivationProperties {
+                    transform: row.transform,
+                    bounds_center,
+                })
+            })?;
+        tracks.append(path_tracks);
         let family_animations =
             noon_compile::lower_semantic_text_glyph_animations(store, &schedule)
                 .map_err(ExecutionSessionAnimationError::TextGlyph)?;
@@ -1664,6 +1701,26 @@ impl ExecutionSession {
         let target_state =
             self.stage_animation_target_state(store, &mut declaration, target_state)?;
         let root = declaration.create_transform_animation(source, target_state, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            root,
+            AnimationOptions::new(),
+            None,
+        )
+    }
+
+    /// Atomically declare and activate one path-motion timeline leaf.
+    pub fn declare_and_activate_move_along_path(
+        &mut self,
+        store: &mut SemanticStore,
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        let root = declaration.create_move_along_path_animation(target, path, options);
         self.declare_and_activate_prepared_animation(
             store,
             declaration,
@@ -2033,6 +2090,7 @@ impl ExecutionSession {
         let mut declaration = SemanticMutationTransaction::new();
         let mut admitted = AnimationAdmissions::default();
         let mut removals = Vec::new();
+        let mut callback_intervals = Vec::new();
         let animation = self.stage_composition_request(
             store,
             root,
@@ -2041,6 +2099,7 @@ impl ExecutionSession {
                 declaration: &mut declaration,
                 admitted: &mut admitted,
                 removals: &mut removals,
+                callback_intervals: &mut callback_intervals,
             },
             false,
         )?;
@@ -2054,6 +2113,7 @@ impl ExecutionSession {
                 root,
                 admits: !admitted.is_empty(),
                 removals,
+                callback_intervals,
             }),
         )
     }
@@ -2122,6 +2182,7 @@ impl ExecutionSession {
             declaration,
             admitted,
             removals,
+            callback_intervals,
         } = staging;
         let admit = |target: SemanticNodeId,
                      admitted: &mut AnimationAdmissions|
@@ -2192,6 +2253,17 @@ impl ExecutionSession {
                 );
                 Ok(animation)
             }
+            SemanticCompositionRequest::MoveAlongPath {
+                target,
+                path,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
+                admit(*path, admitted)?;
+                Ok(declaration.create_move_along_path_animation(*target, *path, *options))
+            }
             SemanticCompositionRequest::WorldTransform {
                 target,
                 transform,
@@ -2211,6 +2283,27 @@ impl ExecutionSession {
                     admit(*target, admitted)?;
                 }
                 Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
+            }
+            SemanticCompositionRequest::CallbackInterval { options, .. } => {
+                let SemanticCompositionRequest::CallbackInterval {
+                    target, callback, ..
+                } = request
+                else {
+                    unreachable!()
+                };
+                if !self.reachability.is_object_reachable(*target) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "callback interval target must belong to the execution domain".into(),
+                    ));
+                }
+                store
+                    .semantic_object_state_checked(*target)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                let marker = declaration.create_wait_animation(options.run_time.unwrap_or(1.0));
+                callback_intervals.push((marker, *target, *callback));
+                Ok(marker)
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,
@@ -2378,6 +2471,7 @@ impl ExecutionSession {
                                 declaration,
                                 admitted,
                                 removals,
+                                callback_intervals: &mut *callback_intervals,
                             },
                             false,
                         )
@@ -2507,6 +2601,7 @@ impl ExecutionSession {
                                 declaration,
                                 admitted,
                                 removals,
+                                callback_intervals: &mut *callback_intervals,
                             },
                             false,
                         )
@@ -2908,6 +3003,7 @@ impl ExecutionSession {
                                 declaration,
                                 admitted,
                                 removals,
+                                callback_intervals: &mut *callback_intervals,
                             },
                             reuse_admission,
                         )
@@ -2931,6 +3027,17 @@ impl ExecutionSession {
                 }
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
+            }
+            SemanticCompositionRequest::MoveAlongPath { target, path, options } => {
+                if !self.reachability.is_object_reachable(*target)
+                    || !self.reachability.is_object_reachable(*path)
+                {
+                    return Err(ExecutionSessionAnimationError::CreateTarget {
+                        target: *target,
+                        error: ExecutionSessionCreateError::TargetIsNotDetached,
+                    });
+                }
+                Ok(declaration.create_move_along_path_animation(*target, *path, *options))
             }
             SemanticCompositionRequest::WorldTransform { target, transform, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -3735,11 +3842,70 @@ impl ExecutionSession {
     fn declare_and_activate_prepared_animation(
         &mut self,
         store: &mut SemanticStore,
-        declaration: SemanticMutationTransaction,
+        mut declaration: SemanticMutationTransaction,
         root: noon_core::SemanticLocalNodeToken,
         play_options: AnimationOptions,
         lifecycle: Option<PreparedAnimationLifecycle>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        let callback_markers = match lifecycle.as_ref() {
+            Some(PreparedAnimationLifecycle::Composition {
+                callback_intervals, ..
+            }) => callback_intervals.as_slice(),
+            _ => &[],
+        };
+        // Ordinary animation keeps its single preparation path. Only finite
+        // host-callback children need this schedule-derived interval preflight.
+        if !callback_markers.is_empty() {
+            let (callback_timings, recovered_declaration) = {
+                let preliminary = declaration.prepare(store).map_err(|error| {
+                    ExecutionSessionAnimationError::AuthoredPublication(
+                        ExecutionSessionPublicationError::Semantic(error),
+                    )
+                })?;
+                let preliminary_schedule = lower_prepared_semantic_animation_schedule(
+                    &preliminary,
+                    &self.execution_index,
+                    root,
+                    self.runtime.frame().time,
+                    play_options,
+                )?;
+                let timings = callback_markers.iter().map(|(marker, target, callback)| {
+                    let marker: SemanticTransactionNodeRef = (*marker).into();
+                    let wait = preliminary_schedule.waits().iter().find(|wait| wait.animation == marker)
+                        .ok_or_else(|| ExecutionSessionAnimationError::InvalidComposition(
+                            "callback interval marker is missing from the compiled composition schedule".into(),
+                        ))?;
+                    let start_alpha = wait.time_map.monotone_root_alpha(0.0).map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(format!(
+                            "callback interval requires a monotone composition time map: {error}"
+                        ))
+                    })?;
+                    let end_alpha = wait.time_map.monotone_root_alpha(1.0).map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(format!(
+                            "callback interval requires a monotone composition time map: {error}"
+                        ))
+                    })?;
+                    Ok((
+                        *target,
+                        *callback,
+                        wait.timing.start_time + wait.timing.duration * start_alpha,
+                        wait.timing.start_time + wait.timing.duration * end_alpha,
+                    ))
+                }).collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
+                (timings, preliminary.into_transaction())
+            };
+            declaration = recovered_declaration;
+            for (target, callback, active_from, inactive_from) in callback_timings {
+                declaration.add_updater_interval_with_endpoint_policy(
+                    target,
+                    callback,
+                    active_from,
+                    inactive_from,
+                    noon_core::SemanticUpdaterEndpointPolicy::InvokeAtEnd,
+                    None,
+                );
+            }
+        }
         let prepared = declaration.prepare(store).map_err(|error| {
             ExecutionSessionAnimationError::AuthoredPublication(
                 ExecutionSessionPublicationError::Semantic(error),
@@ -3782,6 +3948,27 @@ impl ExecutionSession {
                 })
             },
         )?;
+
+        let mut activation_tracks = projection.tracks().to_vec();
+        let path_tracks = lower_prepared_path_motion_tracks(
+            &prepared,
+            &schedule,
+            &activation_tracks,
+            |object| {
+                if self.runtime.object_has_effective_driver(object) {
+                    return None;
+                }
+                let index = self.runtime.frame_index_for_object(object)?;
+                let frame = self.runtime.frame();
+                let row = frame.objects.get(index)?;
+                let bounds_center = self.runtime.effective_object_bounds(object)?.center();
+                Some(noon_compile::PathMotionActivationProperties {
+                    transform: row.transform,
+                    bounds_center,
+                })
+            },
+        )?;
+        activation_tracks.extend(path_tracks);
 
         if schedule.family_transforms().len() > 1 {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
@@ -3848,7 +4035,7 @@ impl ExecutionSession {
                         &prepared,
                         &self.execution_index,
                         family,
-                        projection.tracks(),
+                        &activation_tracks,
                         |object| {
                             let index = self.runtime.frame_index_for_object(object)?;
                             let frame = self.runtime.frame();
@@ -4009,13 +4196,12 @@ impl ExecutionSession {
         let mut segment =
             ExecutionSegment::from_duration(projection.start_time(), projection.run_time())?;
         let mut next_track_id = self.next_activation_track_id;
-        let track_capacity = projection
-            .tracks()
+        let track_capacity = activation_tracks
             .len()
             .saturating_add(family_transform_tracks.len());
         let mut definitions = Vec::with_capacity(track_capacity);
         let mut completions = Vec::with_capacity(track_capacity);
-        for track in projection.tracks() {
+        for track in &activation_tracks {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
             let definition = track

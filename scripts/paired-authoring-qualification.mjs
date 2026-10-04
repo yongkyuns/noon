@@ -8,21 +8,32 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
-import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
+import { browserArgs, rasterFixtureSource, resolveQualifiedBackend } from "./manim-raster-support.mjs";
+import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
-export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels }) {
+export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels, prepareContext,
+  browserName = "chromium", contextOptions }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const output = path.resolve(root, artifactDirectory);
+  assert.ok(["chromium", "webkit"].includes(browserName), `unknown camera browser: ${browserName}`);
   const selectedIds = process.env.NOON_PAIRED_CASES?.split(",").map(id => id.trim()).filter(Boolean);
   if (selectedIds) {
     for (const id of selectedIds) assert.ok(cases.some(fixture => fixture.id === id), `unknown paired case: ${id}`);
     cases = cases.filter(fixture => selectedIds.includes(fixture.id));
   }
+  assert.ok(cases.length > 0, "paired qualification requires at least one fixture");
   const fixtures = await Promise.all(cases.map(async fixture => {
     const rawSource = await readFile(path.join(root, fixture.sourcePath ?? `web/python/examples/${fixture.file}`), "utf8");
     const source = fixture.scene ? rasterFixtureSource(rawSource, fixture.scene) : rawSource;
     return { ...fixture, source, sourceHash: createHash("sha256").update(source).digest("hex") };
   }));
+  let resourceCache;
+  try {
+    resourceCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const server = await serveRepository(root, port);
   await mkdir(output, { recursive: true });
   const report = { fixtures: fixtures.map(({ id, sourceHash }) => ({ id, sourceHash })), backends: [] };
@@ -84,6 +95,11 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         const wasm = await import("./pkg/noon_web.js");
         await wasm.default();
         const canvas = document.querySelector("#scene");
+        // The ordinary Python host sizes its backing store from CSS dimensions
+        // and DPR. Give direct hosts the same physical viewport before transfer
+        // so mobile comparisons exercise identical raster resolution.
+        canvas.width = Math.round(canvas.clientWidth * (window.devicePixelRatio || 1));
+        canvas.height = Math.round(canvas.clientHeight * (window.devicePixelRatio || 1));
         const args = [...factoryArgs];
         if (preparation) {
           const module = await import(preparation.module);
@@ -92,6 +108,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         }
         const renderer = await wasm[factory](canvas.transferControlToOffscreen(), ...args);
         window.pairedRenderer = renderer;
+        if (playback === "live") renderer.advanceDirectRealtime(0);
         const present = async () => {
           for (let attempt = 0; attempt < 60; attempt++) {
             if (renderer.render()) return true;
@@ -101,55 +118,77 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         };
         // Direct hosts must consume the initial publication before a seek.
         let presented = await present();
+        let sample;
         if (presented && playback === "live") {
           const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
           const times = [...new Set([0, ...boundaries.filter(time => time < sampleTime), sampleTime])]
             .sort((a, b) => a - b);
-          for (const time of times) await sampleDirectProgram(renderer, time);
+          for (const time of times) sample = await sampleDirectProgram(renderer, time);
         } else if (presented && sampleTime > 0) {
           renderer.seekDirect(sampleTime);
           presented = await present();
         }
         return { presented, time: renderer.time(), objectCount: renderer.objectCount(),
-          drawCalls: renderer.lastDrawCalls(), rendererBackend: renderer.rendererBackend() };
+          drawCalls: renderer.lastDrawCalls(), rendererBackend: renderer.rendererBackend(),
+          cadence: sample?.cadence, delayMs: sample?.delayMs };
       }, { label, source: fixture.source, factory: fixture.factory, factoryArgs: fixture.factoryArgs ?? [],
         preparation: fixture.preparation, playback: fixture.playback, boundaries: fixture.boundaries ?? [],
         duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0 });
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
-      assert.ok(Math.abs(metrics.time - (fixture.sampleTime ?? 0)) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${fixture.sampleTime ?? 0}`);
+      const expectedTime = label === "rust-wasm"
+        ? fixture.directHeldSampleTime ?? fixture.sampleTime ?? 0 : fixture.sampleTime ?? 0;
+      assert.ok(Math.abs(metrics.time - expectedTime) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${expectedTime}`);
+      if (label === "rust-wasm" && fixture.directHeldSampleTime !== undefined) {
+        assert.equal(metrics.cadence, "timer", "quiet waits must retain deadline scheduling");
+        assert.ok(metrics.delayMs > 0, "quiet waits must not request continuous frames");
+      }
       assert.ok(metrics.objectCount > 0, "paired scenes must contain render objects");
       if (fixture.objectCount !== undefined) assert.equal(metrics.objectCount, fixture.objectCount);
-      assert.equal(metrics.rendererBackend, expectedBackend);
+      const selectedBackend = resolveQualifiedBackend(expectedBackend, metrics.rendererBackend);
       assert.ok(metrics.drawCalls > 0);
       await page.evaluate(() => new Promise(resolve =>
         requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const frame = await page.evaluate(async label => label === "python"
+        ? (window.pairedExecution ?? window.noonHostRaster).debugFrame()
+        : JSON.parse(window.pairedRenderer.debugSelectionFrameJson()), label);
+      await writeFile(path.join(output, `${fixture.id}-${selectedBackend}-${label}-frame.json`),
+        `${JSON.stringify(frame, null, 2)}\n`);
       const pixels = await page.locator("#scene").screenshot({
-        path: path.join(output, `${fixture.id}-${expectedBackend}-${label}.png`),
+        path: path.join(output, `${fixture.id}-${selectedBackend}-${label}.png`),
       });
-      return { metrics, png: PNG.sync.read(pixels) };
+      return { metrics, png: PNG.sync.read(pixels), backend: selectedBackend };
     } finally {
       await page.close();
     }
   }
 
   try {
-    for (const backend of ["webgpu", "webgl"]) {
-      const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
-      const result = { backend: expectedBackend };
+    for (const backend of (browserName === "webkit" ? ["automatic"] : ["WebGPU", "WebGL2"])) {
+      let expectedBackend = backend === "automatic" ? "automatic" : backend;
+      const result = { requestedBackend: backend };
       report.backends.push(result);
-      const browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
+      const browserType = playwright[browserName];
+      const browser = await browserType.launch(browserName === "chromium"
+        ? { channel: "chromium", headless: true, args: browserArgs(backend === "WebGPU" ? "webgpu" : "webgl") }
+        : playgroundLaunchOptions(browserName));
       try {
-        const context = await browser.newContext({ viewport: { width: 1000, height: 600 } });
+        const options = contextOptions ?? { viewport: { width: 1000, height: 600 } };
+        const context = await browser.newContext(options);
+        await resourceCache?.install(context);
+        await prepareContext?.(context);
         result.static = {};
         for (const fixture of fixtures) {
           const rust = await capture(context, "rust-wasm", expectedBackend, fixture);
+          expectedBackend = rust.backend;
+          result.backend = expectedBackend;
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: rust-wasm host`);
           const python = await capture(context, "python", expectedBackend, fixture);
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: Python host`);
           assert.equal(python.metrics.objectCount, rust.metrics.objectCount, "paired hosts must publish the same object count");
-          assert.equal(rust.png.width, fixture.canvasSize?.[0] ?? 960);
-          assert.equal(rust.png.height, fixture.canvasSize?.[1] ?? 540);
+          const pixelRatio = contextOptions?.deviceScaleFactor ?? 1;
+          assert.equal(rust.png.width, (fixture.canvasSize?.[0] ?? 960) * pixelRatio);
+          assert.equal(rust.png.height, (fixture.canvasSize?.[1] ?? 540) * pixelRatio);
           assert.equal(python.png.width, rust.png.width);
           assert.equal(python.png.height, rust.png.height);
           let foregroundPixels = 0;
@@ -186,6 +225,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       }
     }
   } finally {
+    if (resourceCache) report.pyodideResourceCache = resourceCache.stats();
     await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     await server.close();
   }

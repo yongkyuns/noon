@@ -194,6 +194,21 @@ class CameraFacadeTests(unittest.TestCase):
         self.assertIs(other, extra)
         self.assertEqual(play.call_args.kwargs, {"run_time": 2})
 
+    def test_illusion_camera_rotation_is_a_thin_typed_camera_binding(self):
+        from types import SimpleNamespace
+        scene = object.__new__(spatial.ThreeDScene)
+        scene.camera = object()
+        camera_handle = object()
+        context = Mock()
+        with patch.dict(sys.modules, {"_manim_scene": SimpleNamespace(_context=lambda _: context)}), \
+             patch.object(spatial, "_handle_for", return_value=camera_handle):
+            self.assertIs(scene.begin_3dillusion_camera_rotation(2, 1.25, -0.5), scene)
+            self.assertIs(scene.stop_3dillusion_camera_rotation(), scene)
+        context.begin3DIllusionCameraRotation.assert_called_once_with(
+            camera_handle, 2.0, 1.25, -0.5
+        )
+        context.stop3DIllusionCameraRotation.assert_called_once_with(camera_handle)
+
     def test_fixed_labels_use_atomic_existing_membership_batch(self):
         scene = object.__new__(spatial.SpatialScene)
         first, second = object(), object()

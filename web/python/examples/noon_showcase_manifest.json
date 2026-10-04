@@ -212,6 +212,30 @@
       "playback_limitation": "This lesson uses Python updater callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
     },
     {
+      "id": "showcase-camera-follows-path",
+      "title": "Follow a moving point",
+      "lesson": "Move a point along a fixed curve while a finite camera-frame updater keeps it in view, then restore the full graph.",
+      "primary_feature": "camera-following-path-motion",
+      "category": "Camera motion",
+      "path": "python/examples/showcase_camera_follows_path.py",
+      "features": ["MovingCameraScene", "MoveAlongPath", "camera.frame updater", "fixed axes and path", "Restore"],
+      "duration": 9.8,
+      "thumbnail_time": 7.1,
+      "thumbnail": "thumbnails/showcase/showcase-camera-follows-path.png",
+      "thumbnail_alt": "A yellow point at the end of a blue curve, with the camera following it along the fixed axes",
+      "still_intervals": [[2.6, 3.0], [6.9, 7.3], [8.8, 9.8]],
+      "beats": [
+        {"time": 0.6, "label": "Introduce the graph"},
+        {"time": 3.0, "label": "Keep the curve as a reference"},
+        {"time": 3.7, "label": "Zoom to the moving point"},
+        {"time": 5.3, "label": "Follow the path"},
+        {"time": 7.3, "label": "Reach the endpoint"},
+        {"time": 8.8, "label": "Restore the full graph"}
+      ],
+      "playback_capability": "nonreplayable-host-callbacks",
+      "playback_limitation": "This lesson uses a Python camera updater that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
+    },
+    {
       "id": "showcase-always-redraw",
       "title": "Redraw from animated values",
       "lesson": "Rebuild two bounded shapes from animated values with always_redraw producers.",

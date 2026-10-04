@@ -68,7 +68,11 @@ def authoring_source_scope():
 
 # Calls on the scene that cannot suspend the authoring continuation. Unknown
 # methods (including super().construct()) are not silently converted.
-_SCENE_CALLS = frozenset({"play", "wait", "add", "remove", "clear", "on_click", "set_drag_targets", "activate_zooming"})
+_SCENE_CALLS = frozenset({
+    "play", "wait", "add", "remove", "clear", "on_click", "set_drag_targets",
+    "add_foreground_mobject", "add_foreground_mobjects",
+    "activate_zooming", "get_zoomed_display_pop_out_animation",
+})
 
 
 class _ConstructBody(ast.NodeTransformer):

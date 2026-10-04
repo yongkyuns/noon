@@ -19,8 +19,8 @@ const base = external ?? `http://127.0.0.1:${port}/web/`;
 const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
-const spatialLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra'];
-const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...spatialLessons];
+const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path'];
+const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
@@ -82,7 +82,7 @@ try {
   // Curated performance scenes need the same mobile/WebKit lifecycle coverage.
   const showcase = await json('python/examples/noon_showcase_manifest.json');
   entries.push(...showcase.entries.filter(entry => entry.performance ||
-    entry.id === 'showcase-always-redraw' || spatialLessons.includes(entry.id))
+    entry.id === 'showcase-always-redraw' || curatedLessons.includes(entry.id))
     .map(entry => ({ ...entry, expected_duration: entry.duration })));
   assert.equal(new Set(entries.map(e => e.id)).size, entries.length, 'duplicate gallery IDs');
   for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);

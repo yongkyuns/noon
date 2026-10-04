@@ -114,6 +114,21 @@ def resolve_transform(
     play_lag_ratio: float | None,
     play_path_arc: float | None,
 ) -> ResolvedAnimationOptions:
+    builder_args = dict(builder_args)
+    reverse_smooth = _rate_functions.is_reverse_smooth_rate_func(
+        builder_args.get("rate_func")
+    )
+    if reverse_smooth:
+        builder_args["rate_func"] = _rate_functions.smooth
+        builder_args["reverse_rate_function"] = not bool(
+            builder_args.get("reverse_rate_function", False)
+        )
+    if play_easing is None and _rate_functions.is_reverse_smooth_rate_func(play_rate_func):
+        builder_args["rate_func"] = _rate_functions.smooth
+        builder_args["reverse_rate_function"] = not bool(
+            builder_args.get("reverse_rate_function", False)
+        )
+        play_rate_func = None
     if _resolve_transform_animation_options is None:
         animation_path_arc = float(builder_args.get("path_arc", 0.0))
         effective_path_arc = (

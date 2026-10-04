@@ -145,6 +145,7 @@ impl ExecutionSession {
         segment: ExecutionSegment,
     ) -> Result<&FrameState, ExecutionSegmentCompletionError> {
         let actual_time = self.frame().time;
+        let callback_publication = self.publication_context();
         let token = segment.token();
         if let Some(token) = token {
             let runtime = self.runtime.runtime_identity();
@@ -654,8 +655,12 @@ impl ExecutionSession {
         } else if self.derived_display_plan.is_some() {
             self.derived_display_expire_after_publication = true;
         }
-        self.last_callback_receipt = None;
         let publication = self.publication_context();
+        // Completion preserves continuing callback domains in this exact-time
+        // frame. Carry their ownership receipt through the same publication so
+        // a subsequent updater removal can retain the endpoint without calling
+        // the host again. Stale receipts remain invalid.
+        self.carry_callback_ownership_through_completion(actual_time, callback_publication);
         self.callback_schedule
             .carry_completed_publication(actual_time, publication);
         Ok(self.frame())
@@ -1649,6 +1654,29 @@ mod tests {
             session.advance_to_callback_barrier(1.0).unwrap(),
             crate::execution_session::CallbackAdvance::Ready(_)
         ));
+        let mut remove = SemanticMutationTransaction::new();
+        remove.remove_updater(object, HostCallbackId::new(1), 1.0);
+        session
+            .apply_semantic_transaction(&mut store, remove)
+            .unwrap();
+        assert_eq!(
+            store
+                .semantic_object_state_checked(object)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(5.0, 1.0, 0.0),
+            "removal after segment completion retains the last callback endpoint"
+        );
+        assert!(matches!(
+            session.advance_to_callback_barrier(1.5).unwrap(),
+            crate::execution_session::CallbackAdvance::Ready(_)
+        ));
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(5.0, 1.0)
+        );
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.75);
     }
 
     #[test]

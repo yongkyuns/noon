@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReplayLimits {
     pub revisions: usize,
-    /// Number of saved object/channel/track payloads. Shared resource bytes are
-    /// owned by the execution's immutable resource arena, not duplicated here.
+    /// Finite saved-payload budget. Variable path snapshots are charged by
+    /// retained command count; immutable resource bytes remain arena-owned.
     pub payloads: usize,
 }
 impl Default for ReplayLimits {
@@ -328,6 +328,7 @@ impl SceneInstance {
                 history.applied += 1;
             }
         }
+        self.path_motion_plans = crate::prepare_path_motion_plans(&self.compiled);
         history.stats.objects_restored = rows.len();
         history.stats.channels_restored = channels.len();
         for channel in channels {

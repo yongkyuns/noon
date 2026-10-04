@@ -580,6 +580,10 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
+            SemanticAnimationIntent::MoveAlongPath { target, path } => {
+                references.push((*target, SemanticReferenceKind::AnimationTarget));
+                references.push((*path, SemanticReferenceKind::AnimationTargetState));
+            }
             SemanticAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,

@@ -2,7 +2,8 @@
 //!
 //! Ranges live on semantic shafts; wrappers retain family identity, never
 //! endpoints or a second scene. Two-dimensional constructors stay tipless and
-//! label-free. The bounded ThreeDAxes request uses retained tips by default.
+//! label-free unless requested. Axes profiles can opt into retained filled tips;
+//! the bounded ThreeDAxes request uses retained tips by default.
 
 mod number_plane;
 mod three_d_axes;
@@ -20,7 +21,7 @@ use noon_core::{
     SemanticFunctionPlotRole, SemanticLocalNodeToken, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
     SemanticNumberLineRole, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
-    SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, WHITE,
+    SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath, WHITE,
 };
 use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
 
@@ -220,8 +221,9 @@ impl ManimNumberLineOptions {
     }
 }
 
-/// Inert explicitly sized, tipless linear Axes request. Coordinate ranges, not
-/// tick or label bounds, determine placement. Rotate/shift the resulting family.
+/// Linear Axes request. Coordinate ranges, not tick or label bounds, determine
+/// placement. [`Self::new`] is explicitly sized and tipless; [`Default`] selects
+/// the pinned Manim profile with optional retained tips.
 #[derive(Clone, Debug)]
 pub struct ManimAxesOptions {
     pub x_range: [f64; 3],
@@ -229,6 +231,9 @@ pub struct ManimAxesOptions {
     pub x_length: f64,
     pub y_length: f64,
     pub ticks: CoordinateTicks,
+    /// Match Manim Axes' default filled triangular arrowheads.
+    pub tips: bool,
+    pub tip_length: f64,
     pub style: SemanticStyle,
 }
 
@@ -243,8 +248,67 @@ impl ManimAxesOptions {
                 exclude_origin: true,
                 ..CoordinateTicks::default()
             },
+            tips: false,
+            tip_length: 0.35,
             style: default_axis_style(),
         }
+    }
+
+    /// Manim v0.21 Axes defaults for the fixed 16:9, height-8 camera profile.
+    /// Explicit [`Self::new`] requests remain tipless for stable authored output.
+    pub fn manim_default() -> Self {
+        Self {
+            tips: true,
+            ..Self::new(
+                [-7.0, 7.0, 1.0],
+                [-4.0, 4.0, 1.0],
+                f64::from(noon_core::DEFAULT_FRAME_WIDTH).round() - 2.0,
+                f64::from(noon_core::DEFAULT_FRAME_HEIGHT).round() - 2.0,
+            )
+        }
+    }
+
+    /// Normalize Manim-style two- or three-value ranges and fill omitted
+    /// values from the pinned v0.21 default profile.
+    pub fn from_ranges(
+        x_range: Option<&[f64]>,
+        y_range: Option<&[f64]>,
+        x_length: Option<f64>,
+        y_length: Option<f64>,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let defaults = Self::manim_default();
+        let mut options = defaults.clone();
+        options.x_range = normalize_axes_range(x_range, defaults.x_range)?;
+        options.y_range = normalize_axes_range(y_range, defaults.y_range)?;
+        options.x_length = x_length.unwrap_or(defaults.x_length);
+        options.y_length = y_length.unwrap_or(defaults.y_length);
+        // A partially specified request follows Python Manim's constructor
+        // defaults, including tips. `new` remains the explicit tipless API.
+        Ok(options)
+    }
+}
+
+pub(crate) fn normalize_axes_range(
+    values: Option<&[f64]>,
+    default: [f64; 3],
+) -> Result<[f64; 3], CoordinateAuthoringError> {
+    let range = match values {
+        None | Some([]) => default,
+        Some([start, end]) => [*start, *end, 1.0],
+        Some([start, end, step]) => [*start, *end, *step],
+        Some(_) => {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "coordinate range requires two or three values",
+            ));
+        }
+    };
+    noon_geometry::validate_coordinate_range(range)?;
+    Ok(range)
+}
+
+impl Default for ManimAxesOptions {
+    fn default() -> Self {
+        Self::manim_default()
     }
 }
 
@@ -352,11 +416,15 @@ impl ManimAxes {
         store: Rc<RefCell<SemanticStore>>,
         options: &ManimAxesOptions,
     ) -> Result<Self, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_axes(options)?;
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        Self::from_family(resolve_family(store, &result, root)?)
+        let prepared = prepare_axes(options)?;
+        let root = publish_prepared_axes(
+            options,
+            prepared.axes,
+            prepared.tip_paths,
+            &mut store.borrow_mut(),
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_family(MobjectFamily::from_node(store, root)?)
     }
 
     pub fn from_family(family: MobjectFamily) -> Result<Self, CoordinateAuthoringError> {
@@ -592,11 +660,12 @@ impl Scene {
         &mut self,
         options: &ManimAxesOptions,
     ) -> Result<ManimAxes, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_axes(options)?;
-        let result = self.apply_semantic_transaction(transaction)?;
-        ManimAxes::from_family(resolve_family(
+        let prepared = prepare_axes(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_axes(options, prepared.axes, prepared.tip_paths, store, publish)
+        })?;
+        ManimAxes::from_family(MobjectFamily::from_node(
             Rc::clone(self.integration_store()),
-            &result,
             root,
         )?)
     }
@@ -809,22 +878,132 @@ pub(crate) fn prepare_number_line(
 
 pub(crate) fn prepare_axes(
     options: &ManimAxesOptions,
-) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
+) -> Result<PreparedAxes, CoordinateAuthoringError> {
     let frame = AxesFrame::centered(
         options.x_range,
         options.y_range,
         options.x_length,
         options.y_length,
     )?;
-    let x = prepare_line(frame.x(), options.ticks, &options.style)?;
-    let y = prepare_line(frame.y(), options.ticks, &options.style)?;
-    let mut transaction = SemanticMutationTransaction::new();
-    let root = transaction.create_node(SemanticNodeCreation::family());
-    let x = stage_line(&mut transaction, x);
-    let y = stage_line(&mut transaction, y);
-    transaction.add_member(root, x);
-    transaction.add_member(root, y);
-    Ok((transaction, root))
+    if options.tips
+        && (!options.tip_length.is_finite()
+            || options.tip_length <= 0.0
+            || !matches!(options.style.stroke.as_ref(), Some(SemanticPaint::Solid(_))))
+    {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid Axes tip dimensions or tip color",
+        ));
+    }
+    let prepare_axis = |axis: NumberLineFrame| {
+        if options.tips {
+            prepare_line_with_elongated_ticks(axis, options.ticks, &options.style, &[], 2.0, true)
+        } else {
+            prepare_line(axis, options.ticks, &options.style)
+        }
+    };
+    let axes = [prepare_axis(frame.x())?, prepare_axis(frame.y())?];
+    let tip_paths = if options.tips {
+        let direction = |axis: NumberLineFrame| {
+            let start = axis.start();
+            let end = axis.end();
+            let dx = end[0] - start[0];
+            let dy = end[1] - start[1];
+            let length = dx.hypot(dy);
+            (dx / length, dy / length)
+        };
+        vec![
+            filled_tip_path(frame.x().end(), direction(frame.x()), options.tip_length)?,
+            filled_tip_path(frame.y().end(), direction(frame.y()), options.tip_length)?,
+        ]
+    } else {
+        Vec::new()
+    };
+    Ok(PreparedAxes { axes, tip_paths })
+}
+
+pub(crate) struct PreparedAxes {
+    pub(crate) axes: [Vec<SemanticObjectState>; 2],
+    pub(crate) tip_paths: Vec<VectorPath>,
+}
+
+pub(crate) fn publish_prepared_axes(
+    options: &ManimAxesOptions,
+    axes: [Vec<SemanticObjectState>; 2],
+    tip_paths: Vec<VectorPath>,
+    store: &mut SemanticStore,
+    mut publish: impl FnMut(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    store.with_geometry_paths(tip_paths, |store, tip_handles| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let root = transaction.create_node(SemanticNodeCreation::family());
+        let mut tip_index = 0;
+        for mut states in axes {
+            let group = transaction.create_node(SemanticNodeCreation::family());
+            let shaft = transaction.create_node(SemanticNodeCreation::object(states.remove(0)));
+            let ticks = transaction.create_node(SemanticNodeCreation::family());
+            transaction.add_member(group, shaft);
+            transaction.add_member(group, ticks);
+            for state in states {
+                let tick = transaction.create_node(SemanticNodeCreation::object(state));
+                transaction.add_member(ticks, tick);
+            }
+            if options.tips {
+                let handle = tip_handles
+                    .get(tip_index)
+                    .copied()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?;
+                let mut tip = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                tip.style = filled_tip_style(&options.style)
+                    .map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                let token = transaction.create_node(SemanticNodeCreation::object(tip));
+                transaction.add_member(group, token);
+                tip_index += 1;
+            }
+            transaction.add_member(root, group);
+        }
+        let result = publish(store, transaction)?;
+        result
+            .resolve(root)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(root))
+    })
+}
+
+/// Shared retained filled-tip geometry used by 2D and 3D coordinate families.
+pub(crate) fn filled_tip_path(
+    apex: [f64; 2],
+    direction: (f64, f64),
+    length: f64,
+) -> Result<VectorPath, AuthoringError> {
+    let vertices = noon_geometry::arrow_tip_vertices((apex[0], apex[1]), direction, length);
+    let point = |xy: (f64, f64)| -> Result<Vec2, AuthoringError> {
+        Ok(Vec2::new(
+            crate::integration::authoring_render_f64("coordinate tip x", xy.0)? as f32,
+            crate::integration::authoring_render_f64("coordinate tip y", xy.1)? as f32,
+        ))
+    };
+    Ok(VectorPath::new()
+        .move_to(point(vertices[0])?)
+        .line_to(point(vertices[1])?)
+        .line_to(point(vertices[2])?)
+        .close())
+}
+
+pub(crate) fn filled_tip_style(
+    style: &SemanticStyle,
+) -> Result<SemanticStyle, CoordinateAuthoringError> {
+    let Some(SemanticPaint::Solid(color)) = style.stroke.as_ref() else {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "coordinate tips require a solid stroke color",
+        ));
+    };
+    let mut tip = style.clone();
+    tip.fill = Some(SemanticPaint::Solid(*color));
+    tip.fill_opacity = 1.0;
+    tip.stroke = Some(SemanticPaint::Solid(*color));
+    Ok(tip)
 }
 
 fn prepare_line(

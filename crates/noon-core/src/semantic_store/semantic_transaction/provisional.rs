@@ -107,6 +107,34 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn is_static_vector_path(
+        &self,
+        node: SemanticTransactionNodeRef,
+        state: &crate::SemanticObjectState,
+    ) -> bool {
+        if !state.signal_bindings().is_empty() {
+            return false;
+        }
+        if let SemanticTransactionNodeRef::Pending(token) = node {
+            if self.pending.get(&token).is_some_and(|pending| {
+                matches!(
+                    pending,
+                    PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject { .. })
+                )
+            }) {
+                return true;
+            }
+        }
+        state
+            .content
+            .geometry()
+            .and_then(crate::StoredGeometry::resource_handle)
+            .and_then(|handle| self.store.geometry_resources().get(handle))
+            .is_some_and(|resource| {
+                matches!(resource, crate::GeometryResource::VectorPath(path) if path.has_drawable_segments() && path.retained_command_count() <= crate::MAX_PATH_MOTION_COMMANDS)
+            })
+    }
+
     pub(super) fn last_member(
         &self,
         family: SemanticTransactionNodeRef,

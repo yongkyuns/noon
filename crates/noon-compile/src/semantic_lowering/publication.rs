@@ -470,6 +470,9 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::AddUpdater { .. }
+                | SemanticMutation::RemoveUpdater { .. }
+                | SemanticMutation::ClearUpdaters { .. }
                 | SemanticMutation::SetClickIndicate { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
@@ -1250,6 +1253,9 @@ fn lower_semantic_publication(
             | SemanticMutation::SetGraphDeclaration { .. }
             | SemanticMutation::SetTableLayout { .. }
             | SemanticMutation::SetInset2DView { .. }
+            | SemanticMutation::AddUpdater { .. }
+            | SemanticMutation::RemoveUpdater { .. }
+            | SemanticMutation::ClearUpdaters { .. }
             | SemanticMutation::SetClickIndicate { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }

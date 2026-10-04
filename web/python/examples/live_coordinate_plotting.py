@@ -12,7 +12,7 @@ class LiveCoordinatePlotting(Scene):
         sentinel = Circle(radius=0.12, color=GREEN, fill_opacity=1, stroke_width=0).move_to((-5, 2.6))
         self.add(title, sentinel)
         self.wait(0.25)
-        axes = Axes((-2, 2, 1), (-1, 1, 1), x_length=8, y_length=3).shift((0, -0.5))
+        axes = Axes((-2, 2, 1), (-1, 1, 1), x_length=8, y_length=3, tips=False).shift((0, -0.5))
         line = NumberLine((0, 4, 1), length=4, color=ORANGE).shift((0, 2))
         self.add(axes, line)
         assert abs(line.p2n(line.n2p(2)) - 2) < 2e-5

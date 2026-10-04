@@ -6,6 +6,16 @@ use noon::MobjectFamily;
 use noon::{MeshOptions, Mobject, SemanticWorldTransform3D, WorldAffineEdit};
 
 impl super::SemanticExecutionPlayer {
+    pub(crate) fn live_set_surface_checkerboard(
+        &mut self,
+        surface: &noon::SurfaceFamily,
+        colors: [noon::Color; 2],
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_surface_checkerboard(surface, colors, opacity))
+            .map(|_| ())
+    }
+
     pub(crate) fn live_add_spatial_membership(
         &mut self,
         targets: &[noon::MobjectTarget<'_>],

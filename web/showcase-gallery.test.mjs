@@ -132,10 +132,13 @@ test("playback capability is finite and all nonreplayable capabilities require a
   const redraw = gallery.examples.find((entry) => entry.id === "showcase-always-redraw");
   assert.equal(redraw.playbackCapability, "nonreplayable-host-callbacks");
   assert.match(redraw.summary, /always_redraw callbacks/);
+  const camera = gallery.examples.find((entry) => entry.id === "showcase-camera-follows-path");
+  assert.equal(camera.playbackCapability, "nonreplayable-host-callbacks");
+  assert.match(camera.playbackLimitation, /Run/);
   const nativeDrag = gallery.examples.find((entry) => entry.id === "showcase-translation-drag");
   assert.equal(nativeDrag.playbackCapability, "nonreplayable-native-input");
   assert.equal(nativeDrag.playbackLimitation, "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable.");
-  assert.ok(gallery.examples.filter((entry) => ![normalizedReactive.id, redraw.id, nativeDrag.id].includes(entry.id))
+  assert.ok(gallery.examples.filter((entry) => ![normalizedReactive.id, redraw.id, camera.id, nativeDrag.id].includes(entry.id))
     .every((entry) => entry.playbackCapability === "deterministic-retained-replay"));
 });
 
@@ -144,6 +147,7 @@ test("the checked-in catalog declares callback and native-input lessons nonrepla
     manifest.entries.filter((entry) => entry.playback_capability?.startsWith("nonreplayable-"))
       .map((entry) => [entry.id, entry.playback_capability]),
     [["showcase-reactive-relationships", "nonreplayable-host-callbacks"],
+      ["showcase-camera-follows-path", "nonreplayable-host-callbacks"],
       ["showcase-always-redraw", "nonreplayable-host-callbacks"],
       ["showcase-translation-drag", "nonreplayable-native-input"]],
   );

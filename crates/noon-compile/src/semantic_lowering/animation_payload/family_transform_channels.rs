@@ -398,7 +398,7 @@ fn push_stable_channel(
             target: occurrence.source.into(),
             execution_object_id: occurrence.source_execution_object_id,
             property: channel.property,
-            completion: completion_at_endpoint(channel.completion, occurrence.timing.easing),
+            completion: completion_at_endpoint(channel.completion, occurrence.timing),
             values: channel.values,
             timing: occurrence.timing,
             time_map: occurrence.time_map.clone(),

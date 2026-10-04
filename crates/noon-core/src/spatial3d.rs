@@ -78,6 +78,7 @@ pub struct SemanticSpatialProperties {
     material: SemanticSpatialMaterial,
     composition_domain: SemanticSpatialCompositionDomain,
     anchor_family: Option<crate::SemanticNodeId>,
+    surface_uv_cell: Option<[usize; 2]>,
 }
 
 impl SemanticSpatialProperties {
@@ -95,6 +96,7 @@ impl SemanticSpatialProperties {
             material,
             composition_domain,
             anchor_family,
+            surface_uv_cell: None,
         }
     }
 
@@ -120,6 +122,15 @@ impl SemanticSpatialProperties {
     /// FixedOrientation composition. `None` uses the object's own center.
     pub const fn anchor_family(&self) -> Option<crate::SemanticNodeId> {
         self.anchor_family
+    }
+
+    pub const fn surface_uv_cell(&self) -> Option<[usize; 2]> {
+        self.surface_uv_cell
+    }
+
+    pub(crate) fn with_surface_uv_cell(mut self, cell: Option<[usize; 2]>) -> Self {
+        self.surface_uv_cell = cell;
+        self
     }
 
     pub fn camera_motions(&self) -> &[crate::CameraAngularMotion] {
@@ -150,6 +161,7 @@ impl SemanticSpatialProperties {
                 SemanticSpatialCompositionDomain::World
             )
             && self.anchor_family.is_none()
+            && self.surface_uv_cell.is_none()
     }
 }
 

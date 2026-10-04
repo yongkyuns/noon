@@ -579,6 +579,22 @@ impl SemanticObjectState {
         self.spatial_properties.as_deref().cloned()
     }
 
+    /// Authored UV-cell identity for one leaf in a sampled Surface family.
+    pub fn surface_uv_cell(&self) -> Option<[usize; 2]> {
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.surface_uv_cell())
+    }
+
+    /// Retain the sampled cell's UV role in this object's shared semantic state.
+    pub fn set_surface_uv_cell(&mut self, cell: Option<[usize; 2]>) {
+        let properties = self
+            .spatial_properties()
+            .unwrap_or_default()
+            .with_surface_uv_cell(cell);
+        self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
+    }
+
     fn update_spatial_properties(
         &mut self,
         camera_projection: Option<SemanticProjection3D>,
@@ -598,6 +614,11 @@ impl SemanticObjectState {
             self.spatial_properties
                 .as_deref()
                 .and_then(|properties| properties.camera_motions_arc()),
+        )
+        .with_surface_uv_cell(
+            self.spatial_properties
+                .as_deref()
+                .and_then(|properties| properties.surface_uv_cell()),
         );
         self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
     }

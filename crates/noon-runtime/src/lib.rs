@@ -193,6 +193,7 @@ impl RuntimeIdentity {
 pub struct SceneInstance {
     identity: RuntimeIdentity,
     compiled: CompiledScene,
+    path_motion_plans: BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
     replay_history: Option<replay::ReplayHistory>,
     frame: FrameState,
     painter_order: Vec<u32>,
@@ -245,6 +246,7 @@ impl Clone for SceneInstance {
         Self {
             identity,
             compiled: self.compiled.clone(),
+            path_motion_plans: self.path_motion_plans.clone(),
             replay_history: self.replay_history.clone(),
             frame: self.frame.clone(),
             painter_order: self.painter_order.clone(),
@@ -333,6 +335,7 @@ impl SceneInstance {
 
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
+        let path_motion_plans = prepare_path_motion_plans(&compiled);
         let numeric_text = NumericTextRuntime::new(&compiled);
         let groups = build_groups(&compiled);
         let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
@@ -343,6 +346,7 @@ impl SceneInstance {
                 .map(|index| compiled.painter_rank(index as u32))
                 .collect(),
             compiled,
+            path_motion_plans,
             replay_history: None,
             frame,
             groups,
@@ -380,6 +384,32 @@ impl SceneInstance {
         &self.frame
     }
 
+    /// Current effective visual bounds for one live retained object.
+    pub fn effective_object_bounds(&self, id: ObjectId) -> Option<noon_core::Rect> {
+        let index = self.frame_index_for_object(id)?;
+        let object = self.frame.objects.get(index)?;
+        crate::spatial_index::effective_object_conservative_bounds_with_resources(
+            self.frame.render_geometry(index),
+            object
+                .text_bounds
+                .or_else(|| object.content.image().map(|image| image.local_bounds())),
+            self.frame.render_transform(index),
+            object.style,
+            self,
+        )
+    }
+
+    /// Logical heap held by the prepared path-motion cache. Plans shared by
+    /// tracks with the same activation snapshot are counted once.
+    pub fn path_motion_plan_retained_bytes(&self) -> usize {
+        let mut seen = BTreeSet::new();
+        self.path_motion_plans
+            .values()
+            .filter(|plan| seen.insert(Arc::as_ptr(plan) as usize))
+            .map(|plan| plan.retained_bytes())
+            .sum()
+    }
+
     pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
         RetainedPlannedFamilyFrame {
             retained: &self.frame,
@@ -402,6 +432,8 @@ impl SceneInstance {
         cached_bounds: Option<noon_core::Rect>,
     ) -> Option<EffectiveObjectProperties> {
         self.object_slot_is_live(object_index).then(|| {
+            let cached_bounds = cached_bounds
+                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id));
             EffectiveObjectProperties::from_frame(&self.frame, object_index, cached_bounds)
         })
     }
@@ -663,8 +695,29 @@ impl SceneInstance {
                 .map(|group| vec![group]),
             _ => None,
         };
+        let affected_path_tracks = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
+                BTreeSet::from([track.id])
+            }
+            ExecutionPatch::RemoveTrack(track) | ExecutionPatch::ReconcileTrack { track, .. } => {
+                BTreeSet::from([*track])
+            }
+            ExecutionPatch::RemoveObject(object) => self
+                .compiled
+                .object_channels(*object)
+                .into_iter()
+                .flat_map(|channel| self.compiled.channel_tracks(channel))
+                .map(|track| track.id)
+                .collect(),
+            _ => BTreeSet::new(),
+        };
         let inverse = self.prepare_replay_change(patch);
         self.apply_patch_without_history(patch)?;
+        if matches!(patch, ExecutionPatch::RemoveObject(_)) {
+            for track in affected_path_tracks {
+                self.path_motion_plans.remove(&track);
+            }
+        }
         if let Some(groups) = previous_anchor_groups {
             self.pending_fixed_orientation_anchor_groups.extend(groups);
         }
@@ -982,6 +1035,21 @@ impl SceneInstance {
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
         self.compiled.apply_execution_patch(patch)?;
+        let changed_path_track = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => Some(track.id),
+            ExecutionPatch::RemoveTrack(track) | ExecutionPatch::ReconcileTrack { track, .. } => {
+                Some(*track)
+            }
+            _ => None,
+        };
+        if let Some(track_id) = changed_path_track {
+            self.path_motion_plans.remove(&track_id);
+            if let Some(track) = self.compiled.track(track_id) {
+                if let Some(plan) = prepare_path_motion_plan(track) {
+                    self.path_motion_plans.insert(track_id, plan);
+                }
+            }
+        }
         let new_channel = match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
                 self.compiled.channel_for_track(track.id)
@@ -1302,6 +1370,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -1329,6 +1398,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -1399,6 +1469,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -1460,6 +1531,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             ) {
                 if channel.property == Property::ZIndex {
                     self.reposition_painter_row(channel.object_index as usize);
@@ -1896,6 +1968,7 @@ fn affine_base_at_time(
                 Property::Position,
                 TrackValues::Vec2 { from, .. } | TrackValues::ArcVec2 { from, .. },
             ) => transform.translation = *from,
+            (Property::Position, TrackValues::PathVec2 { .. }) => {}
             (Property::Rotation, TrackValues::Scalar { from, .. }) => transform.rotation = *from,
             (Property::Scale, TrackValues::Vec2 { from, .. }) => transform.scale = *from,
             _ => unreachable!("validated affine track must carry matching values"),
@@ -2067,6 +2140,7 @@ fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> 
     low
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_group(
     compiled: &CompiledScene,
     frame: &mut FrameState,
@@ -2075,6 +2149,7 @@ fn apply_group(
     time: f64,
     base_transform: Transform2D,
     base_style: Style,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
     let object_index = group.channel.object_index as usize;
     apply_group_to_row(
@@ -2085,9 +2160,11 @@ fn apply_group(
         time,
         base_transform,
         base_style,
+        path_motion_plans,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_group_to_row(
     compiled: &CompiledScene,
     mut row: FrameRowMut<'_>,
@@ -2096,6 +2173,7 @@ fn apply_group_to_row(
     time: f64,
     base_transform: Transform2D,
     base_style: Style,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
     if matches!(
         group.channel.property,
@@ -2325,7 +2403,11 @@ fn apply_group_to_row(
     {
         return apply_prepared_morph_track(&mut row, track, progress);
     }
-    let value = interpolate(track, progress);
+    let value = interpolate(
+        track,
+        progress,
+        path_motion_plans.get(&track.id).map(AsRef::as_ref),
+    );
     apply_evaluated_value(
         &mut row,
         group.channel.property,
@@ -2915,7 +2997,7 @@ fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
         return 1.0;
     }
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
-    track.timing.easing.evaluate(raw)
+    track.timing.evaluate_progress(raw)
 }
 
 fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
@@ -2931,7 +3013,7 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
     }
     if track.time_map.is_identity() {
         let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0);
-        return Some(track.timing.easing.evaluate_f64(raw));
+        return Some(track.timing.evaluate_progress_f64(raw));
     }
     mapped_continuous_progress_f64(track.timing, &track.time_map, time)
 }
@@ -2947,12 +3029,24 @@ fn sample_camera_profile(
     Some((profile, profile.camera(near, far)?))
 }
 
-fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
-    interpolate_track_values(&track.values, progress)
+fn interpolate(
+    track: &CompiledTrack,
+    progress: f32,
+    path_plan: Option<&noon_geometry::PathProportionPlan>,
+) -> EvaluatedValue {
+    interpolate_track_values_with_path_plan(&track.values, progress, path_plan)
         .expect("compiled continuous track carries an interpolable value kind")
 }
 
 fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<EvaluatedValue> {
+    interpolate_track_values_with_path_plan(values, progress, None)
+}
+
+fn interpolate_track_values_with_path_plan(
+    values: &TrackValues,
+    progress: f32,
+    path_plan: Option<&noon_geometry::PathProportionPlan>,
+) -> Option<EvaluatedValue> {
     match values {
         TrackValues::Scalar { from, to } => {
             Some(EvaluatedValue::Scalar(lerp(*from, *to, progress)))
@@ -2968,6 +3062,17 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
         } => Some(EvaluatedValue::Vec2(interpolate_arc_vec2(
             *from, *to, *arc_angle, progress,
         ))),
+        TrackValues::PathVec2 {
+            path_transform,
+            target_center_offset,
+            ..
+        } => {
+            let point = path_plan?.point_f64(f64::from(progress)).ok()?;
+            let local = Vec2::new(point.x as f32, point.y as f32);
+            Some(EvaluatedValue::Vec2(
+                path_transform.transform_point(local) - *target_center_offset,
+            ))
+        }
         TrackValues::Color { from, to } => Some(EvaluatedValue::Color(interpolate_optional_color(
             *from, *to, progress,
         ))),
@@ -2990,6 +3095,70 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
         | TrackValues::Object { .. }
         | TrackValues::PreparedMorph { .. } => None,
     }
+}
+
+pub(crate) fn prepare_path_motion_plans(
+    compiled: &CompiledScene,
+) -> BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>> {
+    let mut plans = BTreeMap::new();
+    let mut by_snapshot =
+        BTreeMap::<(usize, u32, u32), Arc<noon_geometry::PathProportionPlan>>::new();
+    for track in compiled.tracks_iter() {
+        let TrackValues::PathVec2 {
+            path,
+            path_transform,
+            ..
+        } = &track.values
+        else {
+            continue;
+        };
+        let key = path_motion_cache_key(path, *path_transform);
+        let plan = by_snapshot.entry(key).or_insert_with(|| {
+            Arc::new(
+                noon_geometry::PathProportionPlan::with_scale(
+                    path,
+                    (
+                        f64::from(path_transform.scale.x),
+                        f64::from(path_transform.scale.y),
+                    ),
+                )
+                .expect("compiled MoveAlongPath track must contain a measurable retained path"),
+            )
+        });
+        plans.insert(track.id, Arc::clone(plan));
+    }
+    plans
+}
+
+fn prepare_path_motion_plan(
+    track: &CompiledTrack,
+) -> Option<Arc<noon_geometry::PathProportionPlan>> {
+    let TrackValues::PathVec2 {
+        path,
+        path_transform,
+        ..
+    } = &track.values
+    else {
+        return None;
+    };
+    Some(Arc::new(
+        noon_geometry::PathProportionPlan::with_scale(
+            path,
+            (
+                f64::from(path_transform.scale.x),
+                f64::from(path_transform.scale.y),
+            ),
+        )
+        .expect("compiled MoveAlongPath track must contain a measurable retained path"),
+    ))
+}
+
+fn path_motion_cache_key(path: &Arc<VectorPath>, transform: Transform2D) -> (usize, u32, u32) {
+    (
+        Arc::as_ptr(path) as usize,
+        transform.scale.x.to_bits(),
+        transform.scale.y.to_bits(),
+    )
 }
 
 fn interpolate_arc_vec2(from: Vec2, to: Vec2, arc_angle: f64, progress: f32) -> Vec2 {
@@ -3069,6 +3238,222 @@ mod tests {
             time_map: CompositionTimeMap::identity(),
         });
         CompiledScene::compile_objects(objects, &tracks).expect("scene must compile")
+    }
+
+    #[test]
+    fn retained_path_motion_uses_one_prepared_plan_and_retires_it_with_its_track() {
+        let object = ObjectId::new(900);
+        let path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(4.0, 0.0))
+                .line_to(Vec2::new(4.0, 4.0)),
+        );
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track_id = TrackId::new(901);
+        let track = TrackDefinition {
+            id: track_id,
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path,
+                path_transform: Transform2D {
+                    translation: Vec2::new(1.0, -1.0),
+                    rotation: 0.0,
+                    scale: Vec2::new(2.0, 0.5),
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], std::slice::from_ref(&track))
+                .unwrap(),
+        );
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+        let prepared_plan = Arc::clone(instance.path_motion_plans.get(&track_id).unwrap());
+        let prepared_bytes = instance.path_motion_plan_retained_bytes();
+
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(6.0, -1.0)
+        );
+        instance.seek(0.5).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(3.5, -1.0)
+        );
+        assert!(Arc::ptr_eq(
+            &prepared_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+        assert_eq!(instance.path_motion_plan_retained_bytes(), prepared_bytes);
+
+        // An unrelated channel patch must not rebuild the retained path sampler.
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(902),
+                object,
+                property: Property::Opacity,
+                values: TrackValues::Scalar { from: 1.0, to: 0.5 },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &prepared_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+
+        instance
+            .apply_execution_patch(&ExecutionPatch::RemoveTrack(track_id))
+            .unwrap();
+        assert_eq!(instance.path_motion_plan_retained_bytes(), 0);
+    }
+
+    #[test]
+    fn zero_scale_path_motion_keeps_a_finite_deterministic_endpoint_contract() {
+        let object = ObjectId::new(905);
+        let track = TrackDefinition {
+            id: TrackId::new(906),
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path: Arc::new(
+                    VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(4.0, 0.0)),
+                ),
+                path_transform: Transform2D {
+                    translation: Vec2::new(2.0, -1.0),
+                    scale: Vec2::ZERO,
+                    ..Transform2D::IDENTITY
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], &[track]).unwrap(),
+        );
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        instance.seek(2.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn replay_restores_the_activation_time_path_snapshot_and_prepared_sampler() {
+        let object = ObjectId::new(910);
+        let original_path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(10.0, 0.0)),
+        );
+        let track_id = TrackId::new(911);
+        let track = TrackDefinition {
+            id: track_id,
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path: original_path.clone(),
+                path_transform: Transform2D::IDENTITY,
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], std::slice::from_ref(&track))
+                .unwrap(),
+        );
+        instance
+            .begin_replay_retention(ReplayLimits {
+                revisions: 16,
+                payloads: 4096,
+            })
+            .unwrap();
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(5.0, 0.0)
+        );
+
+        let original_plan = Arc::clone(instance.path_motion_plans.get(&track_id).unwrap());
+        let replacement_path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(0.0, 8.0)),
+        );
+        let replacement = TrackDefinition {
+            values: TrackValues::PathVec2 {
+                path: replacement_path.clone(),
+                path_transform: Transform2D::IDENTITY,
+                target_center_offset: Vec2::ZERO,
+            },
+            ..track.clone()
+        };
+        instance
+            .apply_execution_patch(&ExecutionPatch::ReplaceTrack(replacement))
+            .unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(0.0, 4.0)
+        );
+        assert!(!Arc::ptr_eq(
+            &original_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+        assert!(instance.replay_stats().payloads_retained > 0);
+        instance.seal_replay().unwrap();
+
+        instance.seek(0.5).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.5, 0.0)
+        );
+        match &instance.compiled.tracks()[0].values {
+            TrackValues::PathVec2 { path, .. } => assert!(Arc::ptr_eq(path, &original_path)),
+            _ => panic!("replay must restore the captured path-valued track"),
+        }
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(0.0, 4.0)
+        );
+        match &instance.compiled.tracks()[0].values {
+            TrackValues::PathVec2 { path, .. } => assert!(Arc::ptr_eq(path, &replacement_path)),
+            _ => panic!("replay must reapply the replacement path snapshot"),
+        }
     }
 
     #[test]
