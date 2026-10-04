@@ -468,7 +468,11 @@ mod admission {
                     }
                 }
             }
-            if let (Some(receipt), Some(issued)) = (receipt, self.issued.as_ref()) {
+            // A captured gesture cannot fall back to a newer camera mapping or
+            // ordinary picking after its acquired mapping fails validation.
+            if let (false, Some(receipt), Some(issued)) =
+                (captured_continuation, receipt, self.issued.as_ref())
+            {
                 if self.presented == Some(receipt)
                     && receipt.session == issued.session
                     && receipt.sequence == issued.sequence

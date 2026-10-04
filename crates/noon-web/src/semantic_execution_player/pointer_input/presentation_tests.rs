@@ -657,6 +657,71 @@ fn captured_drag_mapping_is_retired_by_surface_invalidation() {
 }
 
 #[test]
+fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
+    let mut scene = noon::Scene::new();
+    let camera = scene.camera_frame().unwrap();
+    let mut circle = scene.circle(1.0).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut target = camera.target_editor().unwrap();
+    target.set_translation(2.0, 0.0).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &camera,
+            &target,
+            noon_core::AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(noon_core::RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            animation.node_id(),
+            noon_core::AnimationOptions::new(),
+        )
+        .unwrap();
+    let mut p = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        7,
+    )
+    .unwrap();
+    p.set_translation_drag_targets(std::slice::from_ref(&circle))
+        .unwrap();
+    p.pause();
+    register(&mut p, 1);
+    let acquired = receipt(&delta(&mut p), 1);
+    assert!(acknowledge(&mut p, acquired));
+    assert!(input(&mut p, "press", 1, Some(acquired), 1, 400.0).unwrap());
+    assert!(p.session.translation_drag_active());
+
+    p.session.advance_to(0.5).unwrap();
+    assert_eq!(p.session.camera().unwrap().center, Vec2::new(1.0, 0.0));
+    assert!(p.session.translation_drag_active());
+    let moved_camera = receipt(&delta(&mut p), 2);
+    assert!(acknowledge(&mut p, moved_camera));
+    assert!(!input(&mut p, "move", 1, Some(moved_camera), 1, 450.0).unwrap());
+    assert!(!p.session.translation_drag_active());
+    assert_eq!(
+        circle.state().unwrap().transform.translation,
+        noon_core::SemanticVec3::ZERO
+    );
+    assert_eq!(
+        scene
+            .live(&mut p.session)
+            .effective(&circle)
+            .unwrap()
+            .transform
+            .translation,
+        Vec2::ZERO
+    );
+}
+
+#[test]
 fn a_new_pointer_source_cancels_a_captured_drag_before_rebinding() {
     let (mut p, circle, presented) = drag_player();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
