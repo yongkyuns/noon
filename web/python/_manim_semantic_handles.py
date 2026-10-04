@@ -647,7 +647,7 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
     observed = _bound_layout_observation(self)
@@ -662,7 +662,7 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
                           float(engine_call(layout.criticalY, axis.x, axis.y)))
@@ -676,7 +676,7 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
 
 
 def _width(self: _base.Mobject) -> float:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         return float(_group_layout_observation(self).width)
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -688,7 +688,7 @@ def _width(self: _base.Mobject) -> float:
 
 
 def _height(self: _base.Mobject) -> float:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         return float(_group_layout_observation(self).height)
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -736,7 +736,7 @@ def _move_to(
     mask = _alignment_mask2(coor_mask)
     args = (edge.x, edge.y, mask.x, mask.y)
     context = _live_mutation_context(self)
-    if isinstance(point_or_mobject, _compat.Group):
+    if _is_shared_family(point_or_mobject):
         target = _layout_anchor(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
@@ -767,7 +767,7 @@ def _dimension_fit_source(self, dim):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     return anchor, context
 
@@ -873,7 +873,7 @@ def _planar_affine(self, operation, arguments, about_point, about_edge):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("affine edits require the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     arguments = (*arguments, *_pivot_arguments(about_point, about_edge))
     if context is None:
@@ -887,7 +887,7 @@ def _get_z_index(self):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     if context is not None:
         return float(engine_call(context.liveZIndex, anchor))
@@ -896,13 +896,13 @@ def _get_z_index(self):
 
 def _set_z_index(self, value, family=True):
     from _manim_updaters import _canonical_phase_context
-    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
+    if not _is_shared_family(self) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("z-index during a host callback requires phase-local publication")
     value = float(value)
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     if context is None:
         engine_call(anchor.setZIndex, value, bool(family))
@@ -913,7 +913,7 @@ def _set_z_index(self, value, family=True):
 
 def _flip(self, axis=_base.UP, *, about_point=None, about_edge=None):
     from _manim_updaters import _canonical_phase_context
-    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
+    if not _is_shared_family(self) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("flip during a host callback needs shared phase-local affine capture")
     try:
         components = tuple(float(component) for component in axis)
@@ -985,8 +985,8 @@ def _become(
         context.replace_effective_provisional(self, mobject)
         return self
 
-    if isinstance(self, _compat.Group) or isinstance(mobject, _compat.Group):
-        if not isinstance(self, _compat.Group) or not isinstance(mobject, _compat.Group):
+    if _is_shared_family(self) or _is_shared_family(mobject):
+        if not _is_shared_family(self) or not _is_shared_family(mobject):
             raise NotImplementedError("become between an object and a family requires topology alignment")
         source = self._semantic_family_handle
         target = mobject._semantic_family_handle
@@ -1048,7 +1048,7 @@ def _replace(
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
     if context is None:
-        context = (_group_live_layout_context(mobject) if isinstance(mobject, _compat.Group)
+        context = (_group_live_layout_context(mobject) if _is_shared_family(mobject)
                    else _live_mutation_context(mobject))
     if context is None:
         context = _live_constructor_context("replace")
@@ -1097,7 +1097,7 @@ def _layout_reference_handle(value, callback_context=None):
 
 
 def _layout_anchor(value, index=None, *, callback_context=None):
-    if isinstance(value, _compat.Group):
+    if _is_shared_family(value):
         handle = getattr(value, "_semantic_family_handle", None)
         if handle is None or not hasattr(handle, "layoutAnchor"):
             return None
@@ -1128,7 +1128,7 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
     arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self) or _live_constructor_context())
     try:
         if target_anchor is not None:
@@ -1174,7 +1174,7 @@ def _align_to(
             "canonical live affine targets do not support layout alignment"
         )
     axis = _base._as_vec2(direction)
-    if isinstance(mobject_or_point, _compat.Group):
+    if _is_shared_family(mobject_or_point):
         target = _layout_anchor(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment requires current shared Rust semantic handles")
@@ -1285,9 +1285,9 @@ def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
-    if isinstance(self, _compat.Group) != isinstance(vmobject, _compat.Group):
+    if _is_shared_family(self) != _is_shared_family(vmobject):
         raise NotImplementedError("mixed object/family style matching requires shared family style state")
-    if not family and isinstance(self, _compat.Group):
+    if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group style requires shared family style state")
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
@@ -1474,7 +1474,7 @@ def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
 
 
 def _shared_family_layout(value: object, *, mutation: bool = False):
-    if not isinstance(value, _compat.Group):
+    if not _is_shared_family(value):
         return None
     family_handle = getattr(value, "_semantic_family_handle", None)
     if family_handle is None or not hasattr(family_handle, "layout"):
@@ -1649,7 +1649,7 @@ def _group_live_layout_context(value: _compat.Group):
 
 
 def _live_family_placement(context, family, target, operation, *arguments):
-    if isinstance(target, _compat.Group):
+    if _is_shared_family(target):
         method = getattr(context, f"live{operation}FamilyToFamily")
         engine_call(method, family, target._semantic_family_handle, *arguments)
     elif isinstance(target, _base.Mobject):
@@ -1681,7 +1681,7 @@ def _group_move_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    if isinstance(point_or_mobject, _compat.Group):
+    if _is_shared_family(point_or_mobject):
         target = _shared_family_layout(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
@@ -1729,7 +1729,7 @@ def _group_align_to(
     session = shared
     axis = _base._as_vec2(direction)
 
-    if isinstance(mobject_or_point, _compat.Group):
+    if _is_shared_family(mobject_or_point):
         target = _shared_family_layout(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")

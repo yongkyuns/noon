@@ -160,6 +160,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             surface.rotate(0.5, axis=(0, 0, 1), about_point=(1, 2, 3))
             surface.scale(2, about_point=(1, 2, 3))
             surface.set_style(fill_color=noon.RED, stroke_color=noon.BLUE)
+            surface.set_color(noon.PURPLE)
+            surface.set_opacity(0.5)
             surface.set_fill_by_checkerboard((noon.RED, noon.BLUE), opacity=0.25)
         context.shiftFamilyWorld.assert_called_once_with(handle, 1.0, 2.0, 3.0)
         context.rotateFamilyWorld.assert_called_once_with(
@@ -167,6 +169,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         )
         context.scaleFamilyWorld.assert_called_once_with(handle, 2.0, (1.0, 2.0, 3.0))
         context.liveSetFamilyStyle.assert_called_once()
+        context.liveSetFamilyColor.assert_called_once()
+        context.liveSetFamilyOpacity.assert_called_once()
         context.setSurfaceCheckerboard.assert_called_once_with(
             handle,
             (noon.RED.red, noon.RED.green, noon.RED.blue, noon.RED.alpha),
@@ -178,6 +182,9 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             surface.get_center()
         with self.assertRaisesRegex(NotImplementedError, "world observations"):
             _ = surface.world_transform
+        for name in ("id", "geometry", "transform", "style"):
+            with self.subTest(property=name), self.assertRaises(AttributeError):
+                getattr(surface, name)
 
     def test_surface_checkerboard_uses_canonical_owner_when_live(self):
         import _noon_spatial as native
@@ -221,9 +228,55 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         context.liveExecutionOwnership.return_value = "active"
         surface._canonical_live_target_context = None
         surface._scene = SimpleNamespace(_canonical_authoring_context=context)
+        surface._object = SimpleNamespace(id=42)
         surface.set_style(fill_color=noon.RED)
         context.liveSetStyle.assert_called_once()
         context.liveSetFamilyStyle.assert_not_called()
+
+        mesh_handle.width.return_value = 2.5
+        mesh_handle.height.return_value = 1.25
+        mesh_handle.criticalX.return_value = 0.75
+        mesh_handle.criticalY.return_value = -0.5
+        live_layout = context.queryMobjectLayout.return_value
+        live_layout.width = 2.5
+        live_layout.height = 1.25
+        live_layout.criticalX.return_value = 0.75
+        live_layout.criticalY.return_value = -0.5
+        self.assertEqual(surface.width, 2.5)
+        self.assertEqual(surface.height, 1.25)
+        self.assertEqual(surface.get_critical_point(noon.RIGHT), noon.Vec2(0.75, -0.5))
+        self.assertEqual(surface.id, 42)
+
+        raw = SimpleNamespace(geometry={"mesh": True}, transform={"scale": 2},
+                              style={"opacity": 0.5})
+        operations = SimpleNamespace(_current_raw=Mock(return_value=raw))
+        with patch.object(noon, "_semantic_operations", return_value=operations):
+            self.assertEqual(surface.geometry, raw.geometry)
+            self.assertEqual(surface.transform, raw.transform)
+            self.assertEqual(surface.style, raw.style)
+
+        target_handle = Mock()
+        target = object.__new__(spatial.Surface)
+        semantic._attach_shared_handle(target, target_handle)
+        target._scene = surface._scene
+        target._object = SimpleNamespace(id=43)
+        target._canonical_live_target_context = None
+        surface.set_color(noon.BLUE)
+        surface.set_opacity(0.4)
+        surface.match_style(target)
+        context.liveSetColor.assert_called_once()
+        context.liveSetObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
+        context.liveMatchStyle.assert_called_once_with(mesh_handle, target_handle)
+
+        with patch("_manim_geometry._mobject_get_color", return_value=noon.BLUE) as get_color:
+            self.assertIs(surface.get_color(), noon.BLUE)
+        get_color.assert_called_once_with(surface)
+
+        target_clone = object()
+        operations = SimpleNamespace(_target_mobject=Mock(return_value=target_clone))
+        with patch.object(noon, "_semantic_operations", return_value=operations):
+            self.assertIs(surface._copy_for_animate_target(), target_clone)
+        operations._target_mobject.assert_called_once_with(surface)
 
         clone = object()
         with patch.object(semantic, "_clone_mobject", return_value=clone) as clone_mobject:

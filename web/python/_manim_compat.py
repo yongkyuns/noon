@@ -371,18 +371,26 @@ class Group(Mobject):
 
     @property
     def id(self) -> int:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.id.fget(self)
         raise AttributeError("Group has no single runtime object id in Noon")
 
     @property
     def geometry(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.geometry.fget(self)
         raise AttributeError("Group has no single runtime geometry in Noon")
 
     @property
     def transform(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.transform.fget(self)
         raise AttributeError("Group has no single runtime transform in Noon")
 
     @property
     def style(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.style.fget(self)
         raise AttributeError("Group has no single runtime style in Noon")
 
     def __iter__(self) -> Iterator[object]:
@@ -455,19 +463,27 @@ class Group(Mobject):
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
     def set_color(self, color: object) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_color(self, color)
         from _manim_semantic_handles import _group_set_color
         return _group_set_color(self, color)
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_fill(self, color, opacity)
         from _manim_semantic_handles import _group_set_fill
         return _group_set_fill(self, color, opacity)
 
     def set_stroke(self, color: object = None, width: float | None = None,
                    opacity: float | None = None) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_stroke(self, color, width, opacity)
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 
     def set_opacity(self, opacity: float) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_opacity(self, opacity)
         from _manim_semantic_handles import _group_set_opacity
         return _group_set_opacity(self, opacity)
 
@@ -484,6 +500,8 @@ class Group(Mobject):
         return _base._semantic_operations()._next_to(self, mobject_or_point, direction, buff, aligned_edge, submobject_to_align, index_of_submobject_to_align, coor_mask)
 
     def align_to(self, mobject_or_point: object, direction: object = _base.ORIGIN) -> Group:
+        if not _is_shared_family(self):
+            return _base.Mobject.align_to(self, mobject_or_point, direction)
         return _base._semantic_operations()._group_align_to(self, mobject_or_point, direction)
 
     def to_edge(
@@ -530,12 +548,16 @@ class Group(Mobject):
         return _AlignedGroupAnimationBuilder(self)
 
     def _copy_for_animate_target(self) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject._copy_for_animate_target(self)
         return _base._semantic_operations()._group_copy(self)
 
     def __deepcopy__(self, memo):
         return deepcopy_semantic_wrapper(self, memo)
 
     def get_color(self) -> _base.Color:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.get_color(self)
         from _manim_geometry import _group_get_color
         return _group_get_color(self)
 

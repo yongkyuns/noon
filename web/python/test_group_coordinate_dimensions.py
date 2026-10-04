@@ -33,6 +33,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
             moveToFamily=lambda *args: self.calls.append(("family", args)),
         )
         target = object.__new__(noon.Group)
+        target._semantic_family_handle = object()
         with patch.object(semantic, "_group_live_layout_context", return_value=None), \
              patch.object(semantic, "_shared_family_layout", return_value=layout):
             self.assertIs(self.group.set_x(3, noon.RIGHT), self.group)

@@ -190,8 +190,9 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         )
         single_mesh._scene = None
         single_mesh._object = None
-        self.scene.add(single_mesh)
+        self.scene.add(single_mesh, key="single-surface")
         self.assertEqual([slot for _, slot in self.context.edits[-1][2]], [71])
+        self.assertEqual(self.scene._object_keys[single_mesh.id], "single-surface")
 
     def test_keyed_readd_after_foreground_binding_stays_single_object(self):
         child, target = self.mobject(10), self.mobject(11)
