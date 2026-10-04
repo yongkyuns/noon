@@ -153,6 +153,8 @@ async function runtimeSnapshot(page) {
     const execution = status?.dataset.executionMode && patch?.dataset.state !== "error"
       ? await window.__noonExampleGallery?.executionMetrics?.()
       : null;
+    const controls = document.querySelector(".playback-controls");
+    const toggle = controls?.querySelector(".playback-toggle");
     return {
       rendererBackend: status?.dataset.rendererBackend ?? null,
       renderHost: execution?.renderHost ?? null,
@@ -166,6 +168,15 @@ async function runtimeSnapshot(page) {
         document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
       visibleExampleCount: window.__noonExampleGallery?.visibleExampleCount ?? null,
       hasPlaybackControls: document.querySelector(".playback-controls") !== null,
+      playbackControls: controls === null ? null : {
+        data: { ...controls.dataset },
+        toggle: toggle === null ? null : {
+          ariaLabel: toggle.getAttribute("aria-label"),
+          disabled: toggle.disabled,
+          text: toggle.textContent,
+        },
+      },
+      playbackTrace: window.__matrixPlaybackTrace?.events?.slice() ?? [],
       canvases: document.querySelectorAll("canvas").length,
     };
   });
@@ -286,6 +297,53 @@ async function runShowcaseFromPublicUi(page, exampleId) {
 }
 
 async function completeShowcasePlayback(page, replayLoops) {
+  // Test-only, bounded observations preserve real UI clicks and commands. The
+  // browser context owns the wrappers and discards them when this case closes.
+  await page.evaluate(async () => {
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const trace = { events: [], nextId: 0 };
+    const record = (event) => {
+      const controls = document.querySelector(".playback-controls");
+      const toggle = controls?.querySelector(".playback-toggle");
+      trace.events.push({
+        at: performance.now(),
+        ...event,
+        controls: controls === null ? null : {
+          data: { ...controls.dataset },
+          toggle: toggle === null ? null : {
+            ariaLabel: toggle.getAttribute("aria-label"),
+            disabled: toggle.disabled,
+            text: toggle.textContent,
+          },
+        },
+      });
+      if (trace.events.length > 32) trace.events.shift();
+    };
+    window.__matrixPlaybackTrace = trace;
+    document.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest(".playback-toggle") : null;
+      if (button !== null) record({ type: "toggle-click", trusted: event.isTrusted });
+    }, true);
+    for (const method of ["pause", "resume"]) {
+      const original = ExecutionWorkerClient.prototype[method];
+      ExecutionWorkerClient.prototype[method] = async function (...args) {
+        const id = ++trace.nextId;
+        record({ type: method, phase: "entered", id });
+        try {
+          const result = await original.apply(this, args);
+          record({ type: method, phase: "resolved", id, result: {
+            playing: result?.playing ?? null,
+            time: result?.time ?? null,
+          } });
+          return result;
+        } catch (error) {
+          record({ type: method, phase: "rejected", id, error: String(error) });
+          throw error;
+        }
+      };
+    }
+  });
   const restart = page.locator(".playback-restart");
   await restart.waitFor({ state: "visible", timeout: 10_000 });
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.controllable === "true", null, { timeout: 10_000 });
