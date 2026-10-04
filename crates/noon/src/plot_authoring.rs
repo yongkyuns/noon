@@ -93,7 +93,8 @@ impl ManimGeometryOptions {
 
 impl Mobject {
     /// Read a function plot's declared interval in constant time. Affine edits
-    /// preserve the interval; copy and replacement use normal semantic ownership.
+    /// preserve the interval; copy carries it to the new identity. Manim `become`
+    /// replaces appearance while preserving the receiver's declared interval.
     pub fn function_plot_range(&self) -> Result<[f64; 2], crate::CoordinateAuthoringError> {
         match self.state()?.role() {
             noon_core::SemanticObjectRole::FunctionPlot(role) if role.is_valid() => {
@@ -174,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn function_range_follows_semantic_copy_affine_edits_and_replacement() {
+    fn function_range_survives_copy_affine_edits_and_become_appearance_changes() {
         let mut scene = Scene::new();
         let sampling = PlotSamplingOptions::parametric(&[-1.0, 1.0, 0.5]).unwrap();
         let graph = scene.function_plot(&sampling, |x| x * x, false).unwrap();
@@ -207,13 +208,14 @@ mod tests {
             .unwrap();
         copy.become_handle(&replacement, crate::ManimBecomeOptions::default())
             .unwrap();
-        assert_eq!(copy.function_plot_range().unwrap(), [2.0, 5.0]);
+        assert_eq!(copy.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert_eq!(replacement.function_plot_range().unwrap(), [2.0, 5.0]);
         assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
         let path = scene.parametric_plot(&sampling, |t| [t, t], false).unwrap();
         assert!(path.function_plot_range().is_err());
         copy.become_handle(&path, crate::ManimBecomeOptions::default())
             .unwrap();
-        assert!(copy.function_plot_range().is_err());
+        assert_eq!(copy.function_plot_range().unwrap(), [-1.0, 1.0]);
         assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
     }
 

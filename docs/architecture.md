@@ -1218,8 +1218,9 @@ Callable-backed graph input queries reevaluate the author's scalar function and
 use the creating axes' current authored or effective Rust coordinate frame.
 The runtime retains only the sampled path and its declared parameter interval;
 queries do not resample the path or add frame work. Python `t_min`/`t_max` read
-that semantic interval through the typed handle, including after copy or
-replacement. Retained-path inversion and default 2D axis tips remain outside
+that semantic interval through the typed handle. Copy carries the declaration;
+Manim `become` changes appearance while preserving the receiver's callable and
+interval. Retained-path inversion and default 2D axis tips remain outside
 this bounded graph-query profile.
 
 **Phase B exit:** representative common 2D Manim scenes require only the intended language/browser adaptation and run through the same semantic/runtime path from Python and Rust, with representative paired examples usable on the supported Rust execution targets.

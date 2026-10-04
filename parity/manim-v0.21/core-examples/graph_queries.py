@@ -16,10 +16,17 @@ class CallableGraphQueries(Scene):
         end = receiver.input_to_graph_point(graph.t_max, graph)
         axes.shift(0.75 * UP)
         current = graph.function(0)
+        copied = graph.copy()
+        replacement = axes.plot(lambda x: -x, [2, 5, 1], use_smoothing=False)
+        copied.become(replacement)
+        # become changes appearance, preserving the receiver's callable/range.
+        copy_start = receiver.i2gp(copied.t_min, copied)
+        copy_end = receiver.i2gp(copied.t_max, copied)
         world_graph = FunctionGraph(lambda x: -2 + 0.25 * x, [-1, 1, 0.5],
                                     use_smoothing=False)
         for point, color in ((start, ORANGE), (end, YELLOW), (current, RED),
                              (world_graph.function(world_graph.t_min), ORANGE),
-                             (world_graph.function(world_graph.t_max), YELLOW)):
+                             (world_graph.function(world_graph.t_max), YELLOW),
+                             (copy_start, GREEN), (copy_end, PURPLE)):
             self.add(Dot(point, color=color))
         self.wait(0.2)
