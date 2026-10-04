@@ -159,7 +159,7 @@ jobs:
             echo
             echo "- noon_web_bg.wasm: ${bytes} bytes"
             echo '- wasm-pack: 0.15.0'
-            echo "- Binaryen/wasm-opt: version ${BINARYEN_VERSION}"
+            echo "- Binaryen/wasm-opt: $(wasm-opt --version)"
           } >> "$GITHUB_STEP_SUMMARY"
       # Retain production before replacing web/pkg with the diagnostic build.
       - name: Upload optimized production package
